@@ -4,11 +4,15 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
+from orchestra.db.dao.recording_dao import RecordingDAO
+from orchestra.services.call_recording_service import CallRecordingService
 from orchestra.web.api.assistant.schema import (
     AssistantCreate,
     AssistantRead,
     AssistantUpdate,
     InfoResponse,
+    RecordingCreate,
+    RecordingInfo,
 )
 
 router = APIRouter()
@@ -356,4 +360,227 @@ def update_assistant_config(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Error updating assistant config: {str(e)}",
+        )
+
+
+@router.post(
+    "/assistant/{assistant_id}/recordings",
+    response_model=InfoResponse[RecordingInfo],
+    status_code=status.HTTP_200_OK,
+    summary="Add a call recording for an assistant",
+    description="Uploads a new call recording for the specified assistant.",
+    responses={
+        200: {
+            "description": "Recording added successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": {
+                            "id": 123,
+                            "url": "https://storage.example.com/recordings/call_123.mp3",
+                            "created_at": "2025-05-08T14:30:00Z",
+                        },
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Assistant Not Found",
+            "content": {
+                "application/json": {"example": {"detail": "Assistant not found."}},
+            },
+        },
+        400: {
+            "description": "Recording Error",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Error processing recording."},
+                },
+            },
+        },
+    },
+)
+async def create_recording(
+    assistant_id: int,
+    recording: RecordingCreate,
+    request: Request,
+    recording_service: CallRecordingService = Depends(),
+) -> InfoResponse[RecordingInfo]:
+    """
+    Add a new call recording for the specified assistant.
+
+    This endpoint allows uploading a call recording by providing base64-encoded audio data.
+    The system will decode the audio, store it securely, and associate it with the assistant.
+    """
+    try:
+        mime = recording.content_type or "application/octet-stream"
+        recording_model = await recording_service.record_call_from_raw(
+            user_id=request.state.user_id,
+            agent_id=assistant_id,
+            recording_raw=recording.recording_raw,
+            content_type=mime,
+        )
+
+        return InfoResponse(
+            info=RecordingInfo(
+                id=recording_model.id,
+                url=recording_model.url,
+                created_at=recording_model.created_at,
+            ),
+        )
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Error processing recording: {str(e)}",
+        )
+
+
+@router.get(
+    "/assistant/{assistant_id}/recordings",
+    response_model=InfoResponse[List[RecordingInfo]],
+    status_code=status.HTTP_200_OK,
+    summary="List all recordings for an assistant",
+    description="Returns a list of all call recordings for the specified assistant.",
+    responses={
+        200: {
+            "description": "List of recordings retrieved successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": [
+                            {
+                                "id": 123,
+                                "url": "https://storage.example.com/recordings/call_123.mp3",
+                                "created_at": "2025-05-08T14:30:00Z",
+                            },
+                            {
+                                "id": 124,
+                                "url": "https://storage.example.com/recordings/call_124.mp3",
+                                "created_at": "2025-05-09T10:15:00Z",
+                            },
+                        ],
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Assistant Not Found",
+            "content": {
+                "application/json": {"example": {"detail": "Assistant not found."}},
+            },
+        },
+    },
+)
+def list_recordings(
+    assistant_id: int,
+    request: Request,
+    recording_dao: RecordingDAO = Depends(),
+    assistant_dao: AssistantDAO = Depends(),
+) -> InfoResponse[List[RecordingInfo]]:
+    """
+    List all call recordings for the specified assistant.
+
+    Retrieves all call recordings associated with the assistant, including their
+    URLs and creation timestamps.
+    """
+    try:
+        # Verify assistant exists and belongs to user
+        assistant = assistant_dao.get_assistant_by_id(
+            user_id=request.state.user_id,
+            agent_id=assistant_id,
+        )
+        if not assistant:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Assistant not found.",
+            )
+
+        recordings = recording_dao.list_recordings(agent_id=assistant_id)
+
+        return InfoResponse(
+            info=[
+                RecordingInfo(
+                    id=recording.id,
+                    url=recording.url,
+                    created_at=recording.created_at,
+                )
+                for recording in recordings
+            ],
+        )
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Error fetching recordings: {str(e)}",
+        )
+
+
+@router.delete(
+    "/assistant/{assistant_id}/recordings/{recording_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Delete a recording",
+    description="Deletes a specific call recording by ID for the specified assistant.",
+    responses={
+        200: {
+            "description": "Recording deleted successfully",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Recording deleted successfully"},
+                },
+            },
+        },
+        404: {
+            "description": "Recording Not Found",
+            "content": {
+                "application/json": {"example": {"detail": "Recording not found."}},
+            },
+        },
+    },
+)
+def delete_recording(
+    assistant_id: int,
+    recording_id: int,
+    request: Request,
+    recording_dao: RecordingDAO = Depends(),
+    assistant_dao: AssistantDAO = Depends(),
+) -> InfoResponse[str]:
+    """
+    Delete a call recording by ID for the specified assistant.
+
+    Permanently removes the specified recording from the system.
+    This action cannot be undone.
+    """
+    try:
+        # Verify assistant exists and belongs to user
+        assistant = assistant_dao.get_assistant_by_id(
+            user_id=request.state.user_id,
+            agent_id=assistant_id,
+        )
+        if not assistant:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Assistant not found.",
+            )
+
+        # Delete the recording
+        success = recording_dao.delete_recording(
+            recording_id=recording_id,
+            agent_id=assistant_id,
+        )
+        if not success:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Recording not found.",
+            )
+
+        return InfoResponse(info="Recording deleted successfully")
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Error deleting recording: {str(e)}",
         )
