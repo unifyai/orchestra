@@ -69,6 +69,36 @@ class BucketService:
         except exceptions.GoogleAPIError as e:
             raise Exception(f"Failed to upload image: {str(e)}")
 
+    def upload_recording(self, content: bytes, content_type: str) -> Tuple[str, str]:
+        """
+        Upload raw audio bytes to GCS and return (url, filename).
+
+        Args:
+            content: Raw audio bytes to upload
+            content_type: MIME type of the audio content (e.g., 'audio/wav', 'audio/mp3')
+
+        Returns:
+            Tuple containing the recording URL and filename
+
+        Raises:
+            Exception: If upload fails
+        """
+        try:
+            # Generate unique filename
+            filename = self._generate_unique_filename(content)
+
+            # Upload to GCS
+            blob = self.bucket.blob(filename)
+            blob.upload_from_string(content, content_type=content_type)
+
+            # Generate URL
+            url = blob.public_url
+
+            return url, filename
+
+        except exceptions.GoogleAPIError as e:
+            raise Exception(f"Failed to upload recording: {str(e)}")
+
     def get_image(self, filename: str) -> Optional[str]:
         """
         Retrieve an image from the bucket and return it as base64.
