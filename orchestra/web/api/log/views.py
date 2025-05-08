@@ -3544,11 +3544,12 @@ def delete_fields(
     project_dao: ProjectDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
     context_dao: ContextDAO = Depends(),
+    log_event_dao: LogEventDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
     Deletes one or more fields from a project. This will:
-    1. Delete all log entries with the specified field names
+    1. Delete all log events with the specified field names (which cascades to logs and derived logs)
     2. Delete the field type records for those fields
 
     This operation cannot be undone, so use with caution.
@@ -3584,58 +3585,52 @@ def delete_fields(
         )
     context_id = context[0][0].id
 
-    # Get all log events for this project
-    all_log_events_subq = select(
-        session.query(LogEvent.id)
-        .filter(LogEvent.project_id == project_id)
-        .subquery(name="all_log_events"),
-    )
-
     deleted_fields = []
     for field_name in request.fields:
-        # Delete from base logs
         try:
-            deleted_count = (
-                session.query(Log)
+            # Get all log event IDs that have this field in either base logs or derived logs
+            base_log_events = (
+                session.query(Log.log_event_id)
+                .join(LogEvent, LogEvent.id == Log.log_event_id)
                 .filter(
-                    Log.log_event_id.in_(all_log_events_subq),
+                    LogEvent.project_id == project_id,
                     Log.key == field_name,
                 )
-                .delete(synchronize_session=False)
-            )
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error deleting field '{field_name}' from logs: {str(e)}",
+                .distinct()
             )
 
-        # Delete from derived logs
-        try:
-            derived_deleted_count = (
-                session.query(DerivedLog)
+            derived_log_events = (
+                session.query(DerivedLog.log_event_id)
+                .join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
                 .filter(
-                    DerivedLog.log_event_id.in_(all_log_events_subq),
+                    LogEvent.project_id == project_id,
                     DerivedLog.key == field_name,
                 )
-                .delete(synchronize_session=False)
-            )
-        except Exception as e:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Error deleting field '{field_name}' from derived logs: {str(e)}",
+                .distinct()
             )
 
-        # Delete field type record
-        try:
+            # Combine both queries with UNION
+            all_event_ids = base_log_events.union(derived_log_events).all()
+            event_ids = [event_id[0] for event_id in all_event_ids]
+
+            # If we found events with this field, delete them
+            if event_ids:
+                # Use LogEventDAO to delete events (which cascades to logs, derived logs, etc.)
+                log_event_dao.delete(event_ids)
+
+            # Delete field type record
             field_type_dao.delete_field_type(
                 project_id=project_id,
                 field_name=field_name,
                 context_id=context_id,
             )
+
             deleted_fields.append(field_name)
         except Exception as e:
-            # Continue with other fields even if one fails
-            continue
+            raise HTTPException(
+                status_code=500,
+                detail=f"Error deleting field {field_name}: {str(e)}",
+            )
 
     if not deleted_fields:
         return {
