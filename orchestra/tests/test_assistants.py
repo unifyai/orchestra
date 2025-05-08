@@ -1,7 +1,15 @@
+import base64
+from pathlib import Path
+
 import pytest
 from httpx import AsyncClient
 
 from orchestra.tests.utils import HEADERS
+
+
+def _get_sample_wav_bytes() -> bytes:
+    sample_path = Path(__file__).parent / "sample_datasets" / "sample_recording.wav"
+    return sample_path.read_bytes()
 
 
 @pytest.mark.anyio
@@ -338,3 +346,66 @@ async def test_update_multiple_fields(client: AsyncClient):
     assert updated["email"] == update_payload["email"]
     assert updated["first_name"] == payload["first_name"]
     assert updated["region"] == payload["region"]
+
+
+@pytest.mark.anyio
+async def test_assistant_recordings_audio_lifecycle(client: AsyncClient):
+    # Create a new assistant
+    payload = {
+        "first_name": "Kevin",
+        "surname": "Brown",
+        "age": 29,
+        "weekly_limit": 18.0,
+        "max_parallel": 2,
+        "region": "Africa",
+        "profile_photo": "https://example.com/photos/kevin.jpg",
+        "about": "Original bio information",
+    }
+    create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert create.status_code == 200
+    assistant_info = create.json()["info"]
+    agent_id = assistant_info["agent_id"]
+
+    # Read and encode sample WAV file
+    raw_bytes = _get_sample_wav_bytes()
+    b64_audio = base64.b64encode(raw_bytes).decode()
+
+    # Upload raw recording
+    record_payload = {"recording_raw": b64_audio, "content_type": "audio/wav"}
+    record_resp = await client.post(
+        f"/v0/assistant/{agent_id}/recordings",
+        headers=HEADERS,
+        json=record_payload,
+    )
+    assert record_resp.status_code == 200
+    recording_info = record_resp.json()["info"]
+    rec_id = recording_info["id"]
+    assert isinstance(recording_info.get("url"), str) and recording_info.get(
+        "url",
+    ).startswith("http")
+
+    # Verify recording is listed
+    list_resp = await client.get(
+        f"/v0/assistant/{agent_id}/recordings",
+        headers=HEADERS,
+    )
+    assert list_resp.status_code == 200
+    recordings = list_resp.json()["info"]
+    assert isinstance(recordings, list) and len(recordings) == 1
+    listed = recordings[0]
+    assert listed["id"] == rec_id
+
+    # Delete the recording
+    delete_resp = await client.delete(
+        f"/v0/assistant/{agent_id}/recordings/{rec_id}",
+        headers=HEADERS,
+    )
+    assert delete_resp.status_code == 200
+
+    # Confirm removal
+    list_after_del = await client.get(
+        f"/v0/assistant/{agent_id}/recordings",
+        headers=HEADERS,
+    )
+    assert list_after_del.status_code == 200
+    assert list_after_del.json()["info"] == []
