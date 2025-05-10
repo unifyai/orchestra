@@ -1,7 +1,10 @@
 import copy
+import functools
 import json
+import os
 import random
 import re
+from typing import Optional
 
 from openai import OpenAI
 from sqlalchemy import (
@@ -26,11 +29,12 @@ from sqlalchemy import (
     select,
 )
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import aliased
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.dao.log_dao import LogDAO
-from orchestra.db.models.orchestra_models import DerivedLog, Log
+from orchestra.db.models.orchestra_models import DerivedLog, Embedding, Log
 
 __all__ = [
     "unify_inferred_types",
@@ -43,6 +47,10 @@ __all__ = [
     "_flatten_target",
     "_extract_placeholders",
     "_substitute_placeholders",
+    "_maybe_vector_column",
+    "_ensure_vectors_exist",
+    "_get_embedding",
+    "DEFAULT_EMBEDDING_MODEL",
 ]
 # Initialize OpenAI client if API key is available
 try:
@@ -818,3 +826,78 @@ def _build_subquery_for_base_call(
         .subquery(f"base_call_{key_expr.name}_{random.randint(0, 1000000)}")
     )
     return filtered_subquery
+
+
+def _ensure_vectors_exist(
+    session: Session,
+    id_to_text: dict[int, str],
+    model: Optional[str],
+    dimensions: Optional[int],
+    key: str,
+) -> None:
+    """
+    For each log_event_id/text pair, ensure a Embedding row with
+    (ref_id=log_event_id,key=key,model=model or default,vector=embedding) exists.
+    Bulk-insert any missing rows.
+
+    Args:
+        session: SQLAlchemy session
+        id_to_text: Dictionary mapping log_event_id to text string
+        model: Embedding model to use (defaults to DEFAULT_EMBEDDING_MODEL if None)
+        dimensions: Optional number of dimensions for the embedding
+        key: The key identifier for these embeddings
+    """
+    # If no texts to process, return immediately
+    if not id_to_text:
+        return
+
+    # Normalize model name
+    model_name = model or DEFAULT_EMBEDDING_MODEL
+
+    # Query existing vectors by ref_id
+    existing_refs = (
+        session.execute(
+            select(Embedding.ref_id).where(
+                and_(
+                    Embedding.key == key,
+                    Embedding.model == model_name,
+                    Embedding.ref_id.in_(list(id_to_text.keys())),
+                ),
+            ),
+        )
+        .scalars()
+        .all()
+    )
+
+    # Convert to set for faster lookups
+    existing_set = set(existing_refs)
+
+    # Build list of Embedding objects to insert
+    to_insert = []
+    for log_event_id, text in id_to_text.items():
+        if log_event_id not in existing_set:
+            try:
+                # Generate embedding
+                embedding = _get_embedding(text, model_name, dimensions)
+
+                # Create new Embedding object
+                embeddings = Embedding(
+                    ref_id=log_event_id,
+                    key=key,
+                    model=model_name,
+                    vector=embedding,
+                )
+
+                to_insert.append(embeddings)
+            except ValueError as e:
+                # Log the error but continue with other texts
+                raise e
+
+    # Bulk insert new vectors if any
+    if to_insert:
+        try:
+            session.bulk_save_objects(to_insert)
+            session.commit()
+        except IntegrityError:
+            # Handle race condition where vectors were inserted by another process
+            session.rollback()
