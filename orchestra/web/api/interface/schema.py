@@ -35,6 +35,8 @@ class BaseTileSchema(BaseSchema):
     filters: Optional[str] = None
     common_filter: Optional[str] = None
     metric: Optional[str] = None
+    column_context: Optional[str] = None
+    grouping: Optional[str] = None
 
 
 class TableTileSchema(BaseModel):
