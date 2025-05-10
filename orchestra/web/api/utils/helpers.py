@@ -6,6 +6,7 @@ from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
 
 import litellm
+import numpy as np
 import stripe
 from anthropic import Anthropic
 from openai import OpenAI
@@ -188,6 +189,8 @@ class CustomEncoder(json.JSONEncoder):
     def default(self, obj):
         if isinstance(obj, Decimal):
             return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
         elif isinstance(obj, time):
             return obj.strftime("%H:%M:%S.%f")
         elif isinstance(obj, date):

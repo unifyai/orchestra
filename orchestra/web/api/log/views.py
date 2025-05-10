@@ -8,6 +8,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
+import numpy as np
 from fastapi import (
     APIRouter,
     Body,
@@ -34,6 +35,7 @@ from orchestra.db.models.orchestra_models import (
     ActiveDerivedLog,
     Context,
     DerivedLog,
+    Embedding,
     Log,
     LogEvent,
     LogEventContext,
@@ -55,6 +57,7 @@ from orchestra.web.api.utils.helpers import CustomEncoder
 from orchestra.web.api.utils.http_responses import not_found
 
 from .python2SQL import (
+    DEFAULT_EMBEDDING_MODEL,
     _compute_expression,
     _extract_placeholders,
     _substitute_placeholders,
@@ -635,6 +638,15 @@ def create_from_logs(
 
                 # Create a derived entry for each log ID involved in this computation
                 for log_event_id in involved_log_ids:
+                    if isinstance(value, np.ndarray):
+                        # add the embedding to the vector index table
+                        embeddings = Embedding(
+                            ref_id=log_event_id,
+                            key=body.key,
+                            model=DEFAULT_EMBEDDING_MODEL,
+                            vector=value,
+                        )
+                        session.add(embeddings)
                     val = json.loads(json.dumps(value, cls=CustomEncoder))
                     non_null_val = val if val is not None else non_null_value
                     inferred_type = LogDAO.infer_type("", non_null_val)
