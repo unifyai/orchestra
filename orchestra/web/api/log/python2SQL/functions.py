@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 
 from fastapi import HTTPException
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     TIMESTAMP,
     BindParameter,
@@ -31,6 +32,9 @@ from orchestra.db.models.orchestra_models import Log
 from .core import build_sql_query
 from .helpers import (
     _build_subquery_for_base_call,
+    _build_subquery_for_identifier,
+    _ensure_vectors_exist,
+    _get_embedding,
     _get_parent_idx,
     _select_value,
     cast_expr,
@@ -128,7 +132,7 @@ def _handle_functions(
     """
     Handles function-based operations ('len', 'str', 'type', 'round', 'round_timestamp',
     'exists', 'version', 'isNone', 'time', 'date', 'now', 'mean', 'sum', 'var', 'std',
-    'min', 'max', 'median', 'mode') in the filter dictionary.
+    'min', 'max', 'median', 'mode', 'embed') in the filter dictionary.
 
     Args:
         filter_dict (dict): The filter dictionary containing the function and its arguments.
@@ -140,7 +144,7 @@ def _handle_functions(
     """
     operand = filter_dict.get("operand")
     no_arg_functions = ["now"]
-    two_arg_functions = ["BASE", "round", "round_timestamp"]
+    two_arg_functions = ["BASE", "round", "round_timestamp", "embed"]
 
     if operand in no_arg_functions:
         rhs_expr = None
@@ -687,6 +691,124 @@ def _handle_functions(
                 .subquery()
             )
         return now_subq
+    elif operand == "embed":
+        # embed(text, model?, dimensions?) - Converts text to a vector embedding
+        if len(rhs_expr) < 1 or len(rhs_expr) > 3:
+            raise ValueError(
+                "embed() requires 1-3 arguments: (text, [model], [dimensions])",
+            )
+
+        text_expr = rhs_expr[0]
+        model_expr = rhs_expr[1] if len(rhs_expr) >= 2 else None
+        dim_expr = rhs_expr[2] if len(rhs_expr) == 3 else None
+
+        # Process model parameter if provided
+        model = None
+        if model_expr is not None:
+            if isinstance(model_expr, BindParameter):
+                model = model_expr.value
+                if not isinstance(model, str):
+                    raise ValueError(
+                        f"embed() model must be a string, got {type(model).__name__}",
+                    )
+            else:
+                raise ValueError("embed() requires a literal string as the model name")
+
+        # Process dimensions parameter if provided
+        dimensions = None
+        if dim_expr is not None:
+            if isinstance(dim_expr, BindParameter):
+                dimensions = dim_expr.value
+                if not isinstance(dimensions, int):
+                    raise ValueError(
+                        f"embed() dimensions must be an integer, got {type(dimensions).__name__}",
+                    )
+            else:
+                raise ValueError(
+                    "embed() requires a literal integer as the dimensions parameter",
+                )
+
+        # Handle text values (both column references and literals)
+        if not isinstance(text_expr, BindParameter):
+            # Get the key or identifier from the text expression
+            key = None
+            first_arg = filter_dict["rhs"][0]
+
+            if first_arg.get("type") == "identifier":
+                key = first_arg["value"]
+            elif (
+                first_arg.get("operand") == "BASE"
+                and len(first_arg.get("rhs", [])) >= 2
+                and first_arg["rhs"][1].get("type") == "identifier"
+            ):
+                key = first_arg["rhs"][1]["value"]
+            else:
+                raise ValueError("embed(): could not resolve key from first argument")
+
+            # Ensure vectors exist for this key with the specified model
+            # Fetch all text values for this key to create embeddings
+            texts_q = select(Log.log_event_id, Log.value).where(Log.key == key)
+            if isinstance(log_event_ids, list):
+                texts_q = texts_q.where(Log.log_event_id.in_(log_event_ids))
+
+            rows = session.execute(texts_q)
+            id_to_text = {
+                row.log_event_id: row.value
+                for row in rows
+                if isinstance(row.value, str)
+            }
+
+            if id_to_text:
+                _ensure_vectors_exist(
+                    session=session,
+                    id_to_text=id_to_text,
+                    model=model,
+                    dimensions=dimensions,
+                    key=key,
+                )
+
+            # Retrieve the vector column for the given key
+            vector_subq = _build_subquery_for_identifier(
+                key,
+                log_event_alias,
+                log_event_ids,
+            )
+
+            # Create a proper subquery with vector type
+            select_cols = [vector_subq.c.log_event_id.label("log_event_id")]
+
+            # Include composite indices if they exist
+            if hasattr(vector_subq.c, "__comp_idx__"):
+                select_cols.append(vector_subq.c.__comp_idx__.label("__comp_idx__"))
+            if hasattr(vector_subq.c, "__parent_idx__"):
+                select_cols.append(vector_subq.c.__parent_idx__.label("__parent_idx__"))
+
+            # Add the vector value and type columns
+            val_col, _ = _select_value(vector_subq, session)
+            select_cols.extend(
+                [
+                    val_col.label("value"),
+                    literal("vector").label("inferred_type"),
+                ],
+            )
+
+            return select(*select_cols).select_from(vector_subq).subquery()
+        else:
+            # Handle literal text values (direct API call)
+            text = text_expr.value
+            if not isinstance(text, str):
+                raise ValueError(
+                    f"embed() requires a string, got {type(text).__name__}",
+                )
+
+            # Get the embedding vector
+            embedding = _get_embedding(text, model, dimensions)
+
+            # Create a vector literal using pgvector
+            vector_expr = literal(embedding, type_=Vector(len(embedding)))
+
+            return vector_expr
+
     elif operand in ["mean", "sum", "var", "std", "min", "max", "median", "mode"]:
         from ..utils.metric_utils import AggregationMetric, _get_reduction_expr
 
