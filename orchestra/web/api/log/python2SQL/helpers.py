@@ -179,6 +179,7 @@ def _select_value(subq, session, is_collection=False):
             "timedelta": subq.c.timedelta_value,
             "list": subq.c.jsonb_value,
             "dict": subq.c.jsonb_value,
+            "vector": subq.c.vector_value,
             "NoneType": subq.c.int_value,
             "image": subq.c.str_value,
         }
@@ -216,6 +217,10 @@ def unify_inferred_types(t1: str, t2: str) -> str:
         return t2
     if t2 is None:
         return t1
+
+    # Always prioritize vector type if either operand is a vector
+    if t1 == "vector" or t2 == "vector":
+        return "vector"
 
     # Find each type's position in the precedence list
     try:
@@ -260,6 +265,8 @@ def cast_expr(expr, from_type: str, to_type: str):
         return cast(func.replace(cast(expr, Text), '"', ""), Date)
     elif final_type == "timedelta":
         return cast(func.replace(cast(expr, Text), '"', ""), Interval)
+    elif final_type == "vector":
+        return expr
     else:
         # If neither side is recognized or is "NoneType", just return expr uncasted
         return expr
