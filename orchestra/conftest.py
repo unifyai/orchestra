@@ -50,6 +50,8 @@ def _engine(worker_id) -> Generator[Engine, None, None]:
     if worker_id:
         url = url.replace("orchestra_test", f"orchestra_test_{worker_id}")
     engine = create_engine(url, isolation_level="AUTOCOMMIT")
+    with engine.connect() as conn:
+        conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     meta.create_all(engine)
     with engine.begin() as conn:
         user_id = str(os.getenv("AUTH_ACCOUNT_USER_ID"))
