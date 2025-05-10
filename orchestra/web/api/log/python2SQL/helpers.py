@@ -309,6 +309,7 @@ def _build_subquery_for_identifier(
             select(
                 log_event_alias.id.label("log_event_id"),
                 literal(None).label("jsonb_value"),
+                literal(None).label("vector_value"),
                 literal(None).label("timestamp_value"),
                 literal(None).label("time_value"),
                 literal(None).label("date_value"),
@@ -330,6 +331,7 @@ def _build_subquery_for_identifier(
             select(
                 log_event_alias.id.label("log_event_id"),
                 literal(None).label("jsonb_value"),
+                literal(None).label("vector_value"),
                 case(
                     (True, cast(getattr(log_event_alias, key), TIMESTAMP)),
                     else_=None,
@@ -472,7 +474,9 @@ def _build_subquery_for_identifier(
     )
     # Combine base and derived logs with union
     combined_subq = base_subq.union_all(derived_subq).subquery(name=alias)
-    return combined_subq
+
+    # Wrap the combined subquery with vector column support
+    return _maybe_vector_column(combined_subq, key, session)
 
 
 def _join_subqueries(lhs_subq, rhs_subq, expr, inferred_type, session=None):
@@ -678,6 +682,71 @@ def _replace_identifier(ast_node, original, replacement):
         return new_node
     # For literals or other types, return as is
     return ast_node
+
+
+def _maybe_vector_column(expr, key, session, model: str | None = None):
+    """
+    Outer-joins the given expression with embeddings table to include vector data.
+
+    Args:
+        expr: The subquery expression to join with embeddings
+        key: The key to match in embeddings
+        session: SQLAlchemy session
+        model: Optional model name to filter vectors by specific embedding model
+
+    Returns:
+        A new subquery that includes vector data if available
+    """
+    # Build the join condition
+    join_condition = and_(
+        Embedding.ref_id == expr.c.log_event_id,
+        Embedding.key == literal(key),
+    )
+
+    # Add model filter if provided
+    if model is not None:
+        join_condition = and_(join_condition, Embedding.model == literal(model))
+
+    # Create a subquery that joins with embeddings
+    vector_subq = (
+        select(
+            expr.c.log_event_id.label("log_event_id"),
+            case(
+                (Embedding.vector != None, Embedding.vector),
+                else_=None,
+            ).label("vector_value"),
+            expr.c.jsonb_value.label("jsonb_value"),
+            expr.c.timestamp_value.label("timestamp_value"),
+            expr.c.time_value.label("time_value"),
+            expr.c.date_value.label("date_value"),
+            expr.c.timedelta_value.label("timedelta_value"),
+            expr.c.str_value.label("str_value"),
+            expr.c.int_value.label("int_value"),
+            expr.c.float_value.label("float_value"),
+            expr.c.bool_value.label("bool_value"),
+            # Use 'vector' as inferred_type if vector exists, otherwise use original type
+            case(
+                (Embedding.vector != None, literal("vector")),
+                else_=expr.c.inferred_type,
+            ).label("inferred_type"),
+        )
+        .select_from(expr)
+        .outerjoin(
+            Embedding,
+            join_condition,
+        )
+    )
+
+    # Add any additional columns that might be present in the original expression
+    if hasattr(expr.c, "__comp_idx__"):
+        vector_subq = vector_subq.add_columns(expr.c.__comp_idx__.label("__comp_idx__"))
+
+    if hasattr(expr.c, "__parent_idx__"):
+        vector_subq = vector_subq.add_columns(
+            expr.c.__parent_idx__.label("__parent_idx__"),
+        )
+
+    return vector_subq.subquery(name=f"{expr.name}_with_vector")
 
 
 def _build_subquery_for_base_call(
