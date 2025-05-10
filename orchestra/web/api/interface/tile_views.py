@@ -6,6 +6,7 @@ from orchestra.db.dao.interface_dao import InterfaceDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.tab_dao import TabDAO
 from orchestra.db.dao.tile_dao import TileDAO
+from orchestra.db.models.orchestra_models import Tab, Tile
 from orchestra.web.api.interface.schema import (
     CreateTileRequest,
     EditorTileSchema,
@@ -19,7 +20,7 @@ from orchestra.web.api.interface.schema import (
 router = APIRouter(prefix="/tile", tags=["tile"])
 
 
-def _create_tile_response(tile) -> TileSchema:
+def _create_tile_response(tile: Tile) -> TileSchema:
     """Helper function to convert a tile entity to a TileSchema with specialized tile data."""
 
     # Create specialized tile data schemas if they exist
@@ -121,7 +122,7 @@ def _get_tile(
     tab_dao: TabDAO,
     tile_dao: TileDAO,
     for_update: bool = False,
-) -> Tuple[object, object]:
+) -> Tuple[Tile, Tab]:
     """Helper function to retrieve a tile by ID or by tab_id and name."""
     tile = None
     tab = None
