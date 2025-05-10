@@ -1087,3 +1087,62 @@ async def test_create_static_entries_with_flag(client: AsyncClient):
 
         # The value should NOT be in derived_entries
         assert key not in log["derived_entries"]
+
+
+@pytest.mark.anyio
+async def test_derived_embedding_and_filtering(client: AsyncClient):
+    """
+    Create an 'embedding' derived column once, then reuse it from filters.
+    """
+    project = "derived_embed_demo"
+    await _create_project(client, project)
+
+    # 1) Create base logs with 'cat','dog','chair' descriptions
+    descriptions = ["a cute little cat", "a friendly dog", "a wooden chair"]
+    log_ids = []
+    for desc in descriptions:
+        response = await _create_log(client, project, entries={"desc": desc})
+        assert response.status_code == 200
+        log_ids.append(response.json()["log_event_ids"][0])
+
+    # 2) Add derived column: key="desc_vec", equation="embed(desc)"
+    key = "desc_vec"
+    equation = "embed({log:desc})"
+    referenced_logs = {"log": log_ids}
+
+    response = await _create_derived_entry(
+        client,
+        project,
+        key,
+        equation,
+        referenced_logs,
+    )
+    assert response.status_code == 200, response.text
+
+    # 3) Filter logs by similarity to 'cute little cat'
+    filter_expr = "cosine(desc_vec, embed('cute little cat')) < 0.2"
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project,
+            "filter_expr": filter_expr,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # 4) Assert the first result is 'cat' and 'chair' is not returned
+    logs = response.json()["logs"]
+    assert len(logs) > 0, "Expected at least one log to match the filter"
+
+    # First result should be the cat description (highest similarity)
+    assert "cat" in logs[0]["entries"]["desc"]
+
+    # Chair should not be in the results (similarity too low)
+    chair_found = False
+    for log in logs:
+        if "chair" in log["entries"]["desc"]:
+            chair_found = True
+            break
+
+    assert not chair_found, "Chair should not be returned due to low similarity"
