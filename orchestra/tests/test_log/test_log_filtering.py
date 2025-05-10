@@ -2510,3 +2510,101 @@ async def test_filters_on_nones(
     )
     assert response.status_code == 200
     assert len(response.json()["logs"]) == 0
+
+
+@pytest.mark.anyio
+async def test_embed_column_function(client: AsyncClient):
+    """
+    Test the embed() and similarity functions.
+    """
+    project_name = "test_embed_column_function"
+    await _create_project(client, project_name)
+
+    # Create logs with text content that will be embedded
+    log_data = [
+        {
+            "text_content": "apple fruit is delicious and nutritious",
+            "name": "apple_doc",
+        },
+        {"text_content": "banana is a yellow tropical fruit", "name": "banana_doc"},
+        {
+            "text_content": "orange juice is refreshing and healthy",
+            "name": "orange_doc",
+        },
+    ]
+
+    # Create the text logs
+    log_ids = []
+    for data in log_data:
+        response = await _create_log(
+            client,
+            project_name,
+            entries=data,
+            params={},
+        )
+        assert response.status_code == 200
+        log_ids.append(response.json()["log_event_ids"][0])
+
+    # Test 1: L2 distance between embedded column and literal embedding
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "l2(embed(text_content), embed('apple')) < 1.1",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    # Should find at least one match
+    assert len(data["logs"]) > 0
+    # First result should be the apple document (closest by L2)
+    assert "apple" in data["logs"][0]["entries"]["text_content"]
+
+    # Test 2: Cosine similarity between embedded columns
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "cosine(embed(text_content), embed('fruit')) > 0.5",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    # Should find all documents (all contain "fruit")
+    assert len(data["logs"]) == 3
+
+    # Test 3: Inner product between embedded column and literal embedding
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "ip(embed(text_content), embed('orange juice')) < 0.",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    # Should find at least one match
+    assert len(data["logs"]) > 0
+    # First result should be the orange document (highest inner product)
+    assert "orange" in data["logs"][0]["entries"]["text_content"]
+
+    # Test 4: L1 distance between embedded columns
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "l1(embed(text_content), embed('banana')) > 10",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    # Should find at least one match
+    assert len(data["logs"]) > 0
