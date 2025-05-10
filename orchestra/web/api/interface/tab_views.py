@@ -6,6 +6,7 @@ from orchestra.db.dao.interface_dao import InterfaceDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.tab_dao import TabDAO
 from orchestra.db.dao.tile_dao import TileDAO
+from orchestra.db.models.orchestra_models import Interface, Tab, Tile
 from orchestra.web.api.interface.schema import (
     CreateTabRequest,
     TabSchema,
@@ -15,7 +16,7 @@ from orchestra.web.api.interface.schema import (
 router = APIRouter(prefix="/tab", tags=["tab"])
 
 
-def _create_tab_response(tab, tiles=None) -> TabSchema:
+def _create_tab_response(tab: Tab, tiles: Optional[List[Tile]] = None) -> TabSchema:
     """Helper function to convert a tab entity to a TabSchema with optional tiles."""
 
     tile_list = []
@@ -51,7 +52,7 @@ def _get_tab(
     interface_dao: InterfaceDAO,
     tab_dao: TabDAO,
     for_update: bool = False,
-) -> Tuple[object, object]:
+) -> Tuple[Tab, Interface]:
     """Helper function to retrieve a tab by ID or by interface_id and name."""
     tab = None
     interface = None
@@ -165,6 +166,7 @@ def create_tab(
     tab_dao: TabDAO = Depends(),
     interface_dao: InterfaceDAO = Depends(),
     project_dao: ProjectDAO = Depends(),
+    tile_dao: TileDAO = Depends(),
 ):
     """Create a new tab."""
     # Get the interface, first by ID if provided in the request
@@ -226,7 +228,10 @@ def create_tab(
         is_checkpoint=checkpoint,
     )
 
-    return _create_tab_response(tab)
+    # Get all tiles for this tab
+    tiles = tile_dao.list_tiles_by_tab(tab_id=tab.id, is_checkpoint=tab.is_checkpoint)
+
+    return _create_tab_response(tab, tiles)
 
 
 @router.get(

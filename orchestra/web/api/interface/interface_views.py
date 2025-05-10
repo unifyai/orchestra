@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from orchestra.db.dao.interface_dao import InterfaceDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.tab_dao import TabDAO
+from orchestra.db.models.orchestra_models import Interface, Project, Tab
 from orchestra.web.api.interface.schema import (
     CreateInterfaceRequest,
     InterfaceSchema,
@@ -14,7 +15,10 @@ from orchestra.web.api.interface.schema import (
 router = APIRouter(prefix="/interfaces", tags=["interfaces"])
 
 
-def _create_interface_response(interface, tabs=None) -> InterfaceSchema:
+def _create_interface_response(
+    interface: Interface,
+    tabs: Optional[List[Tab]] = None,
+) -> InterfaceSchema:
     """Helper function to convert an interface entity to an InterfaceSchema with optional tabs."""
 
     tab_list = []
@@ -48,7 +52,7 @@ def _get_interface(
     project_dao: ProjectDAO,
     interface_dao: InterfaceDAO,
     for_update: bool = False,
-) -> Tuple[object, object]:
+) -> Tuple[Interface, Project]:
     """Helper function to retrieve an interface by ID or by project and name.
 
     Args:
@@ -178,6 +182,7 @@ def create_interface(
     ),
     project_dao: ProjectDAO = Depends(),
     interface_dao: InterfaceDAO = Depends(),
+    tab_dao: TabDAO = Depends(),
 ):
     """Create a new interface in a project."""
     # Verify project exists and user has access
@@ -212,7 +217,13 @@ def create_interface(
         is_checkpoint=checkpoint,
     )
 
-    return _create_interface_response(interface)
+    # Get tabs for this interface
+    tabs = tab_dao.list_tabs(
+        interface_id=str(interface.id),
+        is_checkpoint=interface.is_checkpoint,
+    )
+
+    return _create_interface_response(interface, tabs)
 
 
 @router.get(
