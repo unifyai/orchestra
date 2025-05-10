@@ -3,6 +3,7 @@ import json
 import random
 import re
 
+from openai import OpenAI
 from sqlalchemy import (
     TIMESTAMP,
     BindParameter,
@@ -43,6 +44,58 @@ __all__ = [
     "_extract_placeholders",
     "_substitute_placeholders",
 ]
+# Initialize OpenAI client if API key is available
+try:
+    OPENAI_API_KEY = os.getenv("ORCHESTRA_OPENAI_API_KEY")
+    _client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+except Exception as e:
+    raise ValueError(f"Failed to initialize OpenAI client: {str(e)}")
+
+DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
+MAX_EMBEDDING_DIMS = 1536
+
+
+@functools.lru_cache(maxsize=4096)
+def _get_embedding(
+    text: str,
+    model: str | None = None,
+    dimensions: int | None = None,
+) -> list[float]:
+    """
+    Get embedding vector for a text string using OpenAI's API.
+
+    Args:
+        text (str): The text to embed
+        model (str, optional): The embedding model to use. Defaults to text-embedding-3-large.
+        dimensions (int, optional): The number of dimensions for the embedding vector.
+
+    Returns:
+        list: A list of floats representing the embedding vector
+
+    Raises:
+        ValueError: If OpenAI API key is not set (except in test environment) or API call fails
+    """
+    if not OPENAI_API_KEY:
+        raise ValueError(
+            "OPENAI_API_KEY environment variable must be set to use embed()",
+        )
+
+    model = model or DEFAULT_EMBEDDING_MODEL
+
+    try:
+        kwargs = {"model": model, "input": [text]}
+        if dimensions is not None:
+            kwargs["dimensions"] = dimensions
+
+        resp = _client.embeddings.create(**kwargs)
+        embedding = resp.data[0].embedding
+        if len(embedding) > MAX_EMBEDDING_DIMS:
+            raise ValueError(
+                f"Embedding dimension {len(embedding)} exceeds {MAX_EMBEDDING_DIMS}",
+            )
+        return embedding
+    except Exception as e:
+        raise ValueError(f"Failed to get embedding: {str(e)}")
 
 
 def _extract_placeholders(equation: str) -> list:
