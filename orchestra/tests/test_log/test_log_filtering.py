@@ -132,6 +132,48 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
                 "rhs": 20,
             },
         ),
+        # Vector similarity operators
+        (
+            "l2(embedding, embed('query')) < 0.5",
+            {
+                "lhs": {
+                    "lhs": {"type": "identifier", "value": "embedding"},
+                    "operand": "l2",
+                    "rhs": {
+                        "operand": "embed",
+                        "rhs": ["query"],
+                    },
+                },
+                "operand": "<",
+                "rhs": 0.5,
+            },
+        ),
+        (
+            "cosine(vec1, vec2) > 0.3",
+            {
+                "lhs": {
+                    "lhs": {"type": "identifier", "value": "vec1"},
+                    "operand": "cosine",
+                    "rhs": {"type": "identifier", "value": "vec2"},
+                },
+                "operand": ">",
+                "rhs": 0.3,
+            },
+        ),
+        (
+            "embed('text', 'model-name')",
+            {
+                "operand": "embed",
+                "rhs": ["text", "model-name"],
+            },
+        ),
+        (
+            "embed(content_field)",
+            {
+                "operand": "embed",
+                "rhs": [{"type": "identifier", "value": "content_field"}],
+            },
+        ),
         # Parenthesized arithmetic + comparison
         (
             "(a + b) > 10",
