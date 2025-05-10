@@ -107,7 +107,7 @@ env = [
     "ORCHESTRA_DB_BASE=orchestra_test",
     "ORCHESTRA_SENTRY_DSN=",
 ]
-#addopts = "--cov --cov-report=lcov:lcov.info --cov-report=term"
+addopts = "--cov --cov-report=lcov:lcov.info --cov-report=term"
 markers = [
     "manual: marks tests as manual",
 ]
