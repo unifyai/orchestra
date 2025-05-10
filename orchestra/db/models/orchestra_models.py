@@ -1,6 +1,7 @@
 import uuid
 
 import sqlalchemy as sa
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     TIMESTAMP,
     Boolean,
@@ -1291,3 +1292,47 @@ class CallRecording(Base):
     url = Column(String, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
     assistant = relationship("Assistant", back_populates="recordings")
+
+
+class Embedding(Base):
+    """Model class for the embedding table that stores embeddings."""
+
+    __tablename__ = "embedding"
+
+    id = Column(Integer, primary_key=True)
+    ref_id = Column(Integer, ForeignKey("log_event.id"), nullable=False)
+    model = Column(String, nullable=False)
+    key = Column(String, nullable=False)
+    vector = Column(Vector(1536), nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("ref_id", "model", "key", name="uq_embedding"),
+        Index(
+            "idx_embedding_ref",
+            "ref_id",
+            "model",
+            "key",
+        ),
+        Index(
+            "embedding_hnsw_cosine_idx",
+            "vector",
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_ops={"vector": "vector_cosine_ops"},
+        ),
+        Index(
+            "embedding_hnsw_l2_idx",
+            "vector",
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_ops={"vector": "vector_l2_ops"},
+        ),
+        Index(
+            "embedding_hnsw_ip_idx",
+            "vector",
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_ops={"vector": "vector_ip_ops"},
+        ),
+    )
