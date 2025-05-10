@@ -42,6 +42,12 @@ __all__ = [
     "_handle_membership_operator",
     "_handle_index_operator",
     "_handle_slice_operator",
+    "_handle_l2",
+    "_handle_cosine",
+    "_handle_ip",
+    "_handle_l1",
+    "_handle_hamming",
+    "_handle_jaccard",
 ]
 
 # Helper function for logical operators (and, or, not)
@@ -968,3 +974,416 @@ def _handle_slice_operator(
             raise ValueError(
                 "SLICE operator expects LHS to be a subquery (string or list) or a Python string/list literal.",
             )
+
+
+def _handle_l2(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+):
+    """
+    Handles L2 distance operator between two vector operands: v1 <-> v2.
+    """
+    lhs = build_sql_query(
+        filter_dict.get("lhs"),
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+    )
+    rhs = build_sql_query(
+        filter_dict.get("rhs"),
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+    )
+
+    lhs_is_sub = isinstance(lhs, Subquery)
+    rhs_is_sub = isinstance(rhs, Subquery)
+
+    # Both sides subqueries
+    if lhs_is_sub and rhs_is_sub:
+        lval, _ = _select_value(lhs, session)
+        rval, _ = _select_value(rhs, session)
+        expr = lval.op("<->")(rval).cast(Float)
+        return _join_subqueries(lhs, rhs, expr, "float", session=session)
+
+    # Only LHS is subquery
+    if lhs_is_sub:
+        lval, _ = _select_value(lhs, session)
+        rval, _ = _select_value(rhs, session)
+        expr = lval.op("<->")(rval).cast(Float)
+        select_cols = [lhs.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in lhs.c.keys():
+            select_cols.append(lhs.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in lhs.c.keys():
+            select_cols.append(lhs.c.__parent_idx__.label("__parent_idx__"))
+        select_cols.extend(
+            [expr.label("value"), literal("float").label("inferred_type")],
+        )
+        return select(*select_cols).select_from(lhs).subquery()
+
+    # Only RHS is subquery
+    if rhs_is_sub:
+        rval, _ = _select_value(rhs, session)
+        lval, _ = _select_value(lhs, session)
+        expr = lval.op("<->")(rval).cast(Float)
+        select_cols = [rhs.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in rhs.c.keys():
+            select_cols.append(rhs.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in rhs.c.keys():
+            select_cols.append(rhs.c.__parent_idx__.label("__parent_idx__"))
+        select_cols.extend(
+            [expr.label("value"), literal("float").label("inferred_type")],
+        )
+        return select(*select_cols).select_from(rhs).subquery()
+
+    # Neither side subquery
+    return lhs.op("<->")(rhs).cast(Float)
+
+
+def _handle_cosine(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+):
+    """
+    Handles cosine similarity operator between two vector operands: v1 <=> v2.
+    """
+    lhs = build_sql_query(
+        filter_dict.get("lhs"),
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+    )
+    rhs = build_sql_query(
+        filter_dict.get("rhs"),
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+    )
+
+    lhs_is_sub = isinstance(lhs, Subquery)
+    rhs_is_sub = isinstance(rhs, Subquery)
+
+    if lhs_is_sub and rhs_is_sub:
+        lval, _ = _select_value(lhs, session)
+        rval, _ = _select_value(rhs, session)
+        dist = lval.op("<=>")(rval).cast(Float)
+        return _join_subqueries(lhs, rhs, dist, "float", session=session)
+
+    if lhs_is_sub:
+        lval, _ = _select_value(lhs, session)
+        rval, _ = _select_value(rhs, session)
+        dist = lval.op("<=>")(rval).cast(Float)
+        select_cols = [lhs.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in lhs.c.keys():
+            select_cols.append(lhs.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in lhs.c.keys():
+            select_cols.append(lhs.c.__parent_idx__.label("__parent_idx__"))
+        select_cols.extend(
+            [dist.label("value"), literal("float").label("inferred_type")],
+        )
+        return select(*select_cols).select_from(lhs).subquery()
+
+    if rhs_is_sub:
+        rval, _ = _select_value(rhs, session)
+        lval, _ = _select_value(lhs, session)
+        dist = lval.op("<=>")(rval).cast(Float)
+        select_cols = [rhs.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in rhs.c.keys():
+            select_cols.append(rhs.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in rhs.c.keys():
+            select_cols.append(rhs.c.__parent_idx__.label("__parent_idx__"))
+        select_cols.extend(
+            [dist.label("value"), literal("float").label("inferred_type")],
+        )
+        return select(*select_cols).select_from(rhs).subquery()
+
+    dist = lhs.op("<=>")(rhs).cast(Float)
+    return dist
+
+
+def _handle_ip(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+):
+    """
+    Handles inner product operator between two vector operands: v1 <#> v2.
+    """
+    lhs = build_sql_query(
+        filter_dict.get("lhs"),
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+    )
+    rhs = build_sql_query(
+        filter_dict.get("rhs"),
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+    )
+
+    lhs_is_sub = isinstance(lhs, Subquery)
+    rhs_is_sub = isinstance(rhs, Subquery)
+
+    if lhs_is_sub and rhs_is_sub:
+        lval, lval_type = _select_value(lhs, session)
+        rval, rval_type = _select_value(rhs, session)
+        expr = lval.op("<#>")(rval).cast(Float)
+        return _join_subqueries(lhs, rhs, expr, "float", session=session)
+
+    if lhs_is_sub:
+        lval, lval_type = _select_value(lhs, session)
+        rval, rval_type = _select_value(rhs, session)
+        expr = lval.op("<#>")(rval).cast(Float)
+        select_cols = [lhs.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in lhs.c.keys():
+            select_cols.append(lhs.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in lhs.c.keys():
+            select_cols.append(lhs.c.__parent_idx__.label("__parent_idx__"))
+        select_cols.extend(
+            [expr.label("value"), literal("float").label("inferred_type")],
+        )
+        return select(*select_cols).select_from(lhs).subquery()
+
+    if rhs_is_sub:
+        rval, rval_type = _select_value(rhs, session)
+        lval, lval_type = _select_value(lhs, session)
+        expr = lval.op("<#>")(rval).cast(Float)
+        select_cols = [rhs.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in rhs.c.keys():
+            select_cols.append(rhs.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in rhs.c.keys():
+            select_cols.append(rhs.c.__parent_idx__.label("__parent_idx__"))
+        select_cols.extend(
+            [expr.label("value"), literal("float").label("inferred_type")],
+        )
+        return select(*select_cols).select_from(rhs).subquery()
+
+    return lhs.op("<#>")(rhs).cast(Float)
+
+
+def _handle_l1(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+):
+    """
+    Handles L1 distance operator between two vector operands: v1 <+> v2.
+    """
+    lhs = build_sql_query(
+        filter_dict.get("lhs"),
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+    )
+    rhs = build_sql_query(
+        filter_dict.get("rhs"),
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+    )
+
+    lhs_is_sub = isinstance(lhs, Subquery)
+    rhs_is_sub = isinstance(rhs, Subquery)
+
+    if lhs_is_sub and rhs_is_sub:
+        lval, lval_type = _select_value(lhs, session)
+        rval, rval_type = _select_value(rhs, session)
+        expr = lval.op("<+>")(rval).cast(Float)
+        return _join_subqueries(lhs, rhs, expr, "float", session=session)
+
+    if lhs_is_sub:
+        lval, lval_type = _select_value(lhs, session)
+        rval, rval_type = _select_value(rhs, session)
+        expr = lval.op("<+>")(rval).cast(Float)
+        select_cols = [lhs.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in lhs.c.keys():
+            select_cols.append(lhs.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in lhs.c.keys():
+            select_cols.append(lhs.c.__parent_idx__.label("__parent_idx__"))
+        select_cols.extend(
+            [expr.label("value"), literal("float").label("inferred_type")],
+        )
+        return select(*select_cols).select_from(lhs).subquery()
+
+    if rhs_is_sub:
+        rval, rval_type = _select_value(rhs, session)
+        lval, lval_type = _select_value(lhs, session)
+        expr = lval.op("<+>")(rval).cast(Float)
+        select_cols = [rhs.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in rhs.c.keys():
+            select_cols.append(rhs.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in rhs.c.keys():
+            select_cols.append(rhs.c.__parent_idx__.label("__parent_idx__"))
+        select_cols.extend(
+            [expr.label("value"), literal("float").label("inferred_type")],
+        )
+        return select(*select_cols).select_from(rhs).subquery()
+
+    return lhs.op("<+>")(rhs).cast(Float)
+
+
+def _handle_hamming(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+):
+    """
+    Handles Hamming distance operator between two vector operands: v1 <~> v2.
+    """
+    lhs = build_sql_query(
+        filter_dict.get("lhs"),
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+    )
+    rhs = build_sql_query(
+        filter_dict.get("rhs"),
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+    )
+
+    lhs_is_sub = isinstance(lhs, Subquery)
+    rhs_is_sub = isinstance(rhs, Subquery)
+
+    if lhs_is_sub and rhs_is_sub:
+        lval, lval_type = _select_value(lhs, session)
+        rval, rval_type = _select_value(rhs, session)
+        expr = lval.op("<~>")(rval).cast(Float)
+        return _join_subqueries(lhs, rhs, expr, "float", session=session)
+
+    if lhs_is_sub:
+        lval, lval_type = _select_value(lhs, session)
+        rval, rval_type = _select_value(rhs, session)
+        expr = lval.op("<~>")(rval).cast(Float)
+        select_cols = [lhs.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in lhs.c.keys():
+            select_cols.append(lhs.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in lhs.c.keys():
+            select_cols.append(lhs.c.__parent_idx__.label("__parent_idx__"))
+        select_cols.extend(
+            [expr.label("value"), literal("float").label("inferred_type")],
+        )
+        return select(*select_cols).select_from(lhs).subquery()
+
+    if rhs_is_sub:
+        rval, rval_type = _select_value(rhs, session)
+        lval, lval_type = _select_value(lhs, session)
+        expr = lval.op("<~>")(rval).cast(Float)
+        select_cols = [rhs.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in rhs.c.keys():
+            select_cols.append(rhs.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in rhs.c.keys():
+            select_cols.append(rhs.c.__parent_idx__.label("__parent_idx__"))
+        select_cols.extend(
+            [expr.label("value"), literal("float").label("inferred_type")],
+        )
+        return select(*select_cols).select_from(rhs).subquery()
+
+    return lhs.op("<~>")(rhs).cast(Float)
+
+
+def _handle_jaccard(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+):
+    """
+    Handles Jaccard distance operator between two vector operands: v1 <%> v2.
+    """
+    lhs = build_sql_query(
+        filter_dict.get("lhs"),
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+    )
+    rhs = build_sql_query(
+        filter_dict.get("rhs"),
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+    )
+
+    lhs_is_sub = isinstance(lhs, Subquery)
+    rhs_is_sub = isinstance(rhs, Subquery)
+
+    if lhs_is_sub and rhs_is_sub:
+        lval, lval_type = _select_value(lhs, session)
+        rval, rval_type = _select_value(rhs, session)
+        expr = lval.op("<%>")(rval).cast(Float)
+        return _join_subqueries(lhs, rhs, expr, "float", session=session)
+
+    if lhs_is_sub:
+        lval, lval_type = _select_value(lhs, session)
+        rval, rval_type = _select_value(rhs, session)
+        expr = lval.op("<%>")(rval).cast(Float)
+        select_cols = [lhs.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in lhs.c.keys():
+            select_cols.append(lhs.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in lhs.c.keys():
+            select_cols.append(lhs.c.__parent_idx__.label("__parent_idx__"))
+        select_cols.extend(
+            [expr.label("value"), literal("float").label("inferred_type")],
+        )
+        return select(*select_cols).select_from(lhs).subquery()
+
+    if rhs_is_sub:
+        rval, rval_type = _select_value(rhs, session)
+        lval, lval_type = _select_value(lhs, session)
+        expr = lval.op("<%>")(rval).cast(Float)
+        select_cols = [rhs.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in rhs.c.keys():
+            select_cols.append(rhs.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in rhs.c.keys():
+            select_cols.append(rhs.c.__parent_idx__.label("__parent_idx__"))
+        select_cols.extend(
+            [expr.label("value"), literal("float").label("inferred_type")],
+        )
+        return select(*select_cols).select_from(rhs).subquery()
+
+    return lhs.op("<%>")(rhs).cast(Float)
