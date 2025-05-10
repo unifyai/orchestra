@@ -64,7 +64,13 @@ def build_sql_query(
     from .operators import (
         _handle_arithmetic_operator,
         _handle_comparison_operator,
+        _handle_cosine,
+        _handle_hamming,
         _handle_index_operator,
+        _handle_ip,
+        _handle_jaccard,
+        _handle_l1,
+        _handle_l2,
         _handle_logical_operator,
         _handle_membership_operator,
         _handle_slice_operator,
@@ -183,6 +189,7 @@ def build_sql_query(
         "max",
         "median",
         "mode",
+        "embed",
     ):
         return _handle_functions(
             filter_dict,
@@ -248,6 +255,60 @@ def build_sql_query(
         )
     elif operand == "zip":
         return _handle_zip(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope=local_scope,
+        )
+    elif operand == "l2":
+        return _handle_l2(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope=local_scope,
+        )
+    elif operand == "cosine":
+        return _handle_cosine(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope=local_scope,
+        )
+    elif operand == "ip":
+        return _handle_ip(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope=local_scope,
+        )
+    elif operand == "l1":
+        return _handle_l1(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope=local_scope,
+        )
+    elif operand == "hamming":
+        return _handle_hamming(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope=local_scope,
+        )
+    elif operand == "jaccard":
+        return _handle_jaccard(
             filter_dict,
             log_event_alias,
             session,
