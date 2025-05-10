@@ -10,6 +10,8 @@ from orchestra.db.dao.log_dao import (
     normalize_timestamp,
 )
 
+SIMILARITY_FUNCS = {"l2", "cosine", "ip", "l1", "hamming", "jaccard"}
+
 __all__ = ["str_filter_exp_to_dict", "str_filter_exp_to_dict_using_ast"]
 
 
@@ -578,6 +580,12 @@ def _transform_ast(node: ast.AST) -> dict:
             else ast.unparse(node.func).strip()
         )
 
+        # Special-case vector similarity functions
+        if func_name in SIMILARITY_FUNCS and len(node.args) == 2:
+            lhs = _transform_ast(node.args[0])
+            rhs = _transform_ast(node.args[1])
+            return {"lhs": lhs, "operand": func_name, "rhs": rhs}
+
         # Handle special functions
         if func_name in (
             "len",
@@ -611,6 +619,12 @@ def _transform_ast(node: ast.AST) -> dict:
                     "operand": func_name,
                     "rhs": [_transform_ast(arg) for arg in node.args],
                 }
+        # Handle embed function
+        elif func_name == "embed":
+            return {
+                "operand": "embed",
+                "rhs": [_transform_ast(arg) for arg in node.args],
+            }
         # Handle BASE function
         elif func_name == "BASE":
             # BASE takes exactly 2 arguments: event_ids and key
