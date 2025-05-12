@@ -1,9 +1,8 @@
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from orchestra.db.dao.interface_dao import InterfaceDAO
-from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.tab_dao import TabDAO
 from orchestra.db.dao.tile_dao import TileDAO
 from orchestra.db.models.orchestra_models import Tab, Tile
@@ -89,12 +88,13 @@ def _create_tile_response(tile: Tile) -> TileSchema:
         name=tile.name,
         type=tile.type,
         position=position,
-        min_width=tile.min_width,
-        min_height=tile.min_height,
+        minW=tile.minW,
+        minH=tile.minH,
         visible=tile.visible,
         locked=tile.locked,
         moved=tile.moved,
         static=tile.static,
+        color=tile.color,
         context=tile.context,
         table=tile.table,
         auto_update=tile.auto_update,
@@ -193,12 +193,13 @@ def _get_tile(
                         "name": "Data Table",
                         "type": "Table",
                         "position": {"x": 0, "y": 0, "width": 6, "height": 4},
-                        "min_width": 2,
-                        "min_height": 2,
+                        "minW": 2,
+                        "minH": 2,
                         "visible": True,
                         "locked": False,
                         "moved": False,
                         "static": False,
+                        "color": None,
                         "context": None,
                         "table": "main_data",
                         "auto_update": True,
@@ -254,14 +255,11 @@ def _get_tile(
     },
 )
 def create_tile(
-    request_fastapi: Request,
     request: CreateTileRequest,
     checkpoint: bool = Query(
         False,
         description="Whether to create a checkpoint tile (manual save)",
     ),
-    project_dao: ProjectDAO = Depends(),
-    interface_dao: InterfaceDAO = Depends(),
     tab_dao: TabDAO = Depends(),
     tile_dao: TileDAO = Depends(),
 ):
@@ -270,44 +268,6 @@ def create_tile(
     tab = None
     if hasattr(request, "tab_id") and request.tab_id:
         tab = tab_dao.get(request.tab_id)
-    # Or by project_id + interface_name + tab_name if provided
-    elif (
-        hasattr(request, "project_id")
-        and request.project_id
-        and hasattr(request, "interface_name")
-        and request.interface_name
-        and hasattr(request, "tab_name")
-        and request.tab_name
-    ):
-        # First get the project
-        project = project_dao.get_by_user_and_name(
-            user_id=request_fastapi.state.user_id,
-            name=request.project_id,
-        )
-        if not project:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Project {request.project_id} not found or you don't have access.",
-            )
-
-        # Then get the interface
-        interface = interface_dao.get_by_project_and_name(
-            project_id=project.id,
-            name=request.interface_name,
-            is_checkpoint=checkpoint,
-        )
-        if not interface:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Interface {request.interface_name} not found in project {request.project_id}.",
-            )
-
-        # Then get the tab
-        tab = tab_dao.get_by_interface_and_name(
-            interface_id=interface.id,
-            name=request.tab_name,
-            is_checkpoint=checkpoint,
-        )
 
     if not tab:
         raise HTTPException(
@@ -326,15 +286,19 @@ def create_tile(
 
         # Create the tile
         tile = tile_dao.create_tile(
+            tile_id=request.tile_id
+            if hasattr(request, "tile_id") and request.tile_id
+            else None,
             tab_id=tab.id,
             name=request.name,
             type=request.type,
-            min_width=request.min_width,
-            min_height=request.min_height,
+            minW=request.minW,
+            minH=request.minH,
             visible=request.visible,
             locked=request.locked,
             moved=request.moved,
             static=request.static,
+            color=request.color,
             context=request.context,
             table=request.table,
             auto_update=request.auto_update,
@@ -348,41 +312,25 @@ def create_tile(
             **position_data,
         )
 
-        print(tile.__dict__)
-
         # Handle specialized tile data based on type
         if request.type == "Table" and request.table_tile:
             tile_dao.create_table_tile(
                 tab_id=tab.id,
                 name=request.name,
                 tile_id=tile.id,
-                table_type=request.table_tile.table_type
-                if hasattr(request.table_tile, "table_type")
-                else None,
-                page_number=request.table_tile.page_number
-                if hasattr(request.table_tile, "page_number")
-                else None,
-                column_order=request.table_tile.column_order
-                if hasattr(request.table_tile, "column_order")
-                else None,
-                hidden_columns=request.table_tile.hidden_columns
-                if hasattr(request.table_tile, "hidden_columns")
-                else None,
-                sorting=request.table_tile.sorting
-                if hasattr(request.table_tile, "sorting")
-                else None,
-                group_sorting=request.table_tile.group_sorting
-                if hasattr(request.table_tile, "group_sorting")
-                else None,
-                columns_pin_left=request.table_tile.columns_pin_left
-                if hasattr(request.table_tile, "columns_pin_left")
-                else None,
-                columns_pin_right=request.table_tile.columns_pin_right
-                if hasattr(request.table_tile, "columns_pin_right")
-                else None,
-                selected=request.table_tile.selected
-                if hasattr(request.table_tile, "selected")
-                else None,
+                table_type=getattr(request.table_tile, "table_type", None),
+                page_number=getattr(request.table_tile, "page_number", None),
+                column_order=getattr(request.table_tile, "column_order", None),
+                hidden_columns=getattr(request.table_tile, "hidden_columns", None),
+                sorting=getattr(request.table_tile, "sorting", None),
+                group_sorting=getattr(request.table_tile, "group_sorting", None),
+                columns_pin_left=getattr(request.table_tile, "columns_pin_left", None),
+                columns_pin_right=getattr(
+                    request.table_tile,
+                    "columns_pin_right",
+                    None,
+                ),
+                selected=getattr(request.table_tile, "selected", None),
                 is_checkpoint=checkpoint,
                 **position_data,
             )
@@ -391,36 +339,20 @@ def create_tile(
                 tab_id=tab.id,
                 name=request.name,
                 tile_id=tile.id,
-                plot_type=request.plot_tile.plot_type
-                if hasattr(request.plot_tile, "plot_type")
-                else None,
-                plot_scale_x=request.plot_tile.plot_scale_x
-                if hasattr(request.plot_tile, "plot_scale_x")
-                else None,
-                plot_scale_y=request.plot_tile.plot_scale_y
-                if hasattr(request.plot_tile, "plot_scale_y")
-                else None,
-                plot_aggregate=request.plot_tile.plot_aggregate
-                if hasattr(request.plot_tile, "plot_aggregate")
-                else None,
-                x_axis=request.plot_tile.x_axis
-                if hasattr(request.plot_tile, "x_axis")
-                else None,
-                y_axis=request.plot_tile.y_axis
-                if hasattr(request.plot_tile, "y_axis")
-                else None,
-                plot_group_by=request.plot_tile.plot_group_by
-                if hasattr(request.plot_tile, "plot_group_by")
-                else None,
-                plot_group_by_colors=request.plot_tile.plot_group_by_colors
-                if hasattr(request.plot_tile, "plot_group_by_colors")
-                else None,
-                bin_count=request.plot_tile.bin_count
-                if hasattr(request.plot_tile, "bin_count")
-                else None,
-                regression_line=request.plot_tile.regression_line
-                if hasattr(request.plot_tile, "regression_line")
-                else None,
+                plot_type=getattr(request.plot_tile, "plot_type", None),
+                plot_scale_x=getattr(request.plot_tile, "plot_scale_x", None),
+                plot_scale_y=getattr(request.plot_tile, "plot_scale_y", None),
+                plot_aggregate=getattr(request.plot_tile, "plot_aggregate", None),
+                x_axis=getattr(request.plot_tile, "x_axis", None),
+                y_axis=getattr(request.plot_tile, "y_axis", None),
+                plot_group_by=getattr(request.plot_tile, "plot_group_by", None),
+                plot_group_by_colors=getattr(
+                    request.plot_tile,
+                    "plot_group_by_colors",
+                    None,
+                ),
+                bin_count=getattr(request.plot_tile, "bin_count", None),
+                regression_line=getattr(request.plot_tile, "regression_line", None),
                 is_checkpoint=checkpoint,
                 **position_data,
             )
@@ -429,9 +361,7 @@ def create_tile(
                 tab_id=tab.id,
                 name=request.name,
                 tile_id=tile.id,
-                base_index=request.view_tile.base_index
-                if hasattr(request.view_tile, "base_index")
-                else None,
+                base_index=getattr(request.view_tile, "base_index", None),
                 is_checkpoint=checkpoint,
                 **position_data,
             )
@@ -440,15 +370,9 @@ def create_tile(
                 tab_id=tab.id,
                 name=request.name,
                 tile_id=tile.id,
-                content=request.editor_tile.content
-                if hasattr(request.editor_tile, "content")
-                else "",
-                file_path=request.editor_tile.file_path
-                if hasattr(request.editor_tile, "file_path")
-                else None,
-                file_type=request.editor_tile.file_type
-                if hasattr(request.editor_tile, "file_type")
-                else None,
+                content=getattr(request.editor_tile, "content", None),
+                file_path=getattr(request.editor_tile, "file_path", None),
+                file_type=getattr(request.editor_tile, "file_type", None),
                 is_checkpoint=checkpoint,
                 **position_data,
             )
@@ -481,12 +405,13 @@ def create_tile(
                         "name": "Data Table",
                         "type": "Table",
                         "position": {"x": 0, "y": 0, "width": 6, "height": 4},
-                        "min_width": 2,
-                        "min_height": 2,
+                        "minW": 2,
+                        "minH": 2,
                         "visible": True,
                         "locked": False,
                         "moved": False,
                         "static": False,
+                        "color": None,
                         "context": None,
                         "table": "main_data",
                         "auto_update": True,
@@ -579,12 +504,13 @@ def get_tile(
                             "name": "Data Table",
                             "type": "Table",
                             "position": {"x": 0, "y": 0, "width": 6, "height": 4},
-                            "min_width": 2,
-                            "min_height": 2,
+                            "minW": 2,
+                            "minH": 2,
                             "visible": True,
                             "locked": False,
                             "moved": False,
                             "static": False,
+                            "color": None,
                             "context": None,
                             "table": "main_data",
                             "auto_update": True,
@@ -620,12 +546,13 @@ def get_tile(
                             "name": "Chart",
                             "type": "Plot",
                             "position": {"x": 6, "y": 0, "width": 6, "height": 4},
-                            "min_width": 2,
-                            "min_height": 2,
+                            "minW": 2,
+                            "minH": 2,
                             "visible": True,
                             "locked": False,
                             "moved": False,
                             "static": False,
+                            "color": None,
                             "context": None,
                             "table": "main_data",
                             "auto_update": True,
@@ -715,12 +642,13 @@ def list_tiles(
                         "name": "Updated Data Table",
                         "type": "Table",
                         "position": {"x": 1, "y": 1, "width": 8, "height": 5},
-                        "min_width": 2,
-                        "min_height": 2,
+                        "minW": 2,
+                        "minH": 2,
                         "visible": True,
                         "locked": False,
                         "moved": True,
                         "static": False,
+                        "color": None,
                         "context": None,
                         "table": "main_data",
                         "auto_update": True,
@@ -830,12 +758,13 @@ def update_tile(
                         "name": "Data Table",
                         "type": "Table",
                         "position": {"x": 0, "y": 0, "width": 6, "height": 4},
-                        "min_width": 2,
-                        "min_height": 2,
+                        "minW": 2,
+                        "minH": 2,
                         "visible": True,
                         "locked": False,
                         "moved": False,
                         "static": False,
+                        "color": None,
                         "context": None,
                         "table": "main_data",
                         "auto_update": True,
@@ -984,12 +913,13 @@ def create_tile_checkpoint(
                         "name": "Data Table",
                         "type": "Table",
                         "position": {"x": 0, "y": 0, "width": 6, "height": 4},
-                        "min_width": 2,
-                        "min_height": 2,
+                        "minW": 2,
+                        "minH": 2,
                         "visible": True,
                         "locked": False,
                         "moved": False,
                         "static": False,
+                        "color": None,
                         "context": None,
                         "table": "main_data",
                         "auto_update": True,
@@ -1167,12 +1097,13 @@ def delete_tile(
                         "name": "Data Table",
                         "type": "Table",
                         "position": {"x": 2, "y": 2, "width": 6, "height": 4},
-                        "min_width": 2,
-                        "min_height": 2,
+                        "minW": 2,
+                        "minH": 2,
                         "visible": True,
                         "locked": False,
                         "moved": True,
                         "static": False,
+                        "color": None,
                         "context": None,
                         "table": "main_data",
                         "auto_update": True,
@@ -1289,12 +1220,13 @@ def patch_tile(
                         "name": "Data Table",
                         "type": "Table",
                         "position": {"x": 0, "y": 0, "width": 6, "height": 4},
-                        "min_width": 2,
-                        "min_height": 2,
+                        "minW": 2,
+                        "minH": 2,
                         "visible": True,
                         "locked": False,
                         "moved": False,
                         "static": False,
+                        "color": None,
                         "context": None,
                         "table": "main_data",
                         "auto_update": True,

@@ -1097,21 +1097,22 @@ class Tile(Base):
         index=True,
     )
     name = Column(String(), nullable=False)
-    type = Column(String(), nullable=False)  # "Table", "Plot", "View", "Editor"
+    type = Column(String(), nullable=True)  # "Table", "Plot", "View", "Editor"
 
     # Position properties
     x_position = Column(Float, nullable=False)
     y_position = Column(Float, nullable=False)
     width = Column(Float, nullable=False)
     height = Column(Float, nullable=False)
-    min_width = Column(Float, nullable=True)
-    min_height = Column(Float, nullable=True)
+    minW = Column(Float, nullable=True)
+    minH = Column(Float, nullable=True)
 
     # Common properties
     visible = Column(Boolean(), nullable=False, server_default="t")
     locked = Column(Boolean(), nullable=False, server_default="f")
     moved = Column(Boolean(), nullable=False, server_default="f")
     static = Column(Boolean(), nullable=False, server_default="f")
+    color = Column(String(), nullable=True)
 
     # Common data properties
     context = Column(String(), nullable=True)
