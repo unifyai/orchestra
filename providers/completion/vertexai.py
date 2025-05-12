@@ -220,4 +220,10 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 0.15, "completion": 0.15},
     },
+    "mistral-small": {
+        "endpoint": "vertex_ai/mistral-small-2503",
+        "region": "europe-west4",
+        "context_window": 128000,
+        "cost": {"prompt": 0.1, "completion": 0.3},
+    },
 }
