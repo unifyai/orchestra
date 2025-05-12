@@ -2137,8 +2137,8 @@ def get_logs(
     ),
     sorting: Optional[str] = Query(
         None,
-        description="Dict with fields as keys and either 'ascending' or 'descending' as values. The first entry in the dict is the last field to be sorted by, which takes ultimate precedent, with other keys only remaining in order when the first key values are equal.",
-        example={"score": "ascending", "timestamp": "descending"},
+        description='JSON-encoded dict mapping either static column names (e.g. `timestamp`) or full Python2SQL expressions (e.g. `cosine(embed(\'search text\'), embedding_vector)`) to sort directions (`"ascending"` or `"descending"`). The first key is the primary sort field; subsequent keys break ties.',
+        example={"timestamp": "descending", "round(score, 2)": "ascending"},
     ),
     group_sorting: Optional[str] = Query(
         None,
@@ -2232,6 +2232,10 @@ def get_logs(
       3. **Return IDs only mode**:
          - If return_ids_only is True, returns only the log event ids.
          - If return_versions is also True, returns a list of objects with both id and version information.
+
+      4. **Dynamic expression sorting**:
+         - In addition to static field-based sorting, you can use dynamic expressions for sorting.
+         - The same grammar supported for `filter_expr` applies to sorting expressions.
 
     The response always includes:
       - `params`: The parameter versions used across the logs.

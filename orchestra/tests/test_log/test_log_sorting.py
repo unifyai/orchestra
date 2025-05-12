@@ -329,3 +329,26 @@ async def test_get_logs_w_date_sorting(client: AsyncClient):
         "_/safe": False,
         "_/timestamp": dates[-7],
     }
+
+
+@pytest.mark.anyio
+async def test_get_logs_w_dynamic_expression_sorting(client: AsyncClient):
+    project_name = "expr-project"
+    await _create_project(client, project_name)
+    await _create_several_logs(client, project_name)
+
+    expr = "round(_/temperature, 1)"
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"sorting": json.dumps({expr: "ascending"})},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+    temps = [
+        log["entries"]["_/temperature"]
+        for log in logs
+        if "_/temperature" in log["entries"]
+    ]
+    # temperature values should be sorted in ascending order
+    assert temps == [-210.0, 0.0, 100.0, 6000.0]
