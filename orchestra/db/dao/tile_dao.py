@@ -28,14 +28,16 @@ class TileDAO:
         name: str,
         x_position: float = 0,
         y_position: float = 0,
-        width: float = 400,
-        height: float = 400,
-        min_width: Optional[float] = None,
-        min_height: Optional[float] = None,
-        visible: bool = True,
-        locked: bool = False,
-        moved: bool = False,
-        static: bool = False,
+        width: float = 4,
+        height: float = 4,
+        tile_id: Optional[str] = None,
+        minW: Optional[float] = None,
+        minH: Optional[float] = None,
+        visible: Optional[bool] = True,
+        locked: Optional[bool] = False,
+        moved: Optional[bool] = False,
+        static: Optional[bool] = False,
+        color: Optional[str] = None,
         context: Optional[str] = None,
         table: Optional[str] = None,
         auto_update: Optional[str] = None,
@@ -59,12 +61,13 @@ class TileDAO:
             y_position: The y position of the tile
             width: The width of the tile
             height: The height of the tile
-            min_width: The minimum width of the tile
-            min_height: The minimum height of the tile
+            minW: The minimum width of the tile
+            minH: The minimum height of the tile
             visible: Whether the tile is visible
             locked: Whether the tile is locked
             moved: Whether the tile has been moved
             static: Whether the tile is static
+            color: The color of the tile
             context: Optional context data for the tile
             table: Optional table data for the tile
             auto_update: Optional auto-update setting
@@ -94,7 +97,10 @@ class TileDAO:
         if existing:
             raise ValueError(f"Tile with name {name} already exists in tab {tab_id}")
 
+        print(f"Creating tile {name} with color {color} in tab {tab_id}")
+
         tile = Tile(
+            id=tile_id,
             tab_id=tab_id,
             type=type,
             name=name,
@@ -102,12 +108,13 @@ class TileDAO:
             y_position=y_position,
             width=width,
             height=height,
-            min_width=min_width,
-            min_height=min_height,
+            minW=minW,
+            minH=minH,
             visible=visible,
             locked=locked,
             moved=moved,
             static=static,
+            color=color,
             context=context,
             table=table,
             auto_update=auto_update,
@@ -231,12 +238,13 @@ class TileDAO:
         width: Optional[float] = None,
         height: Optional[float] = None,
         position: Optional[dict] = None,
-        min_width: Optional[float] = None,
-        min_height: Optional[float] = None,
+        minW: Optional[float] = None,
+        minH: Optional[float] = None,
         visible: Optional[bool] = None,
         locked: Optional[bool] = None,
         moved: Optional[bool] = None,
         static: Optional[bool] = None,
+        color: Optional[str] = None,
         context: Optional[str] = None,
         table: Optional[str] = None,
         auto_update: Optional[str] = None,
@@ -260,12 +268,13 @@ class TileDAO:
             width: New width
             height: New height
             position: New position as a dict with x, y, width, height
-            min_width: New minimum width
-            min_height: New minimum height
+            minW: New minimum width
+            minH: New minimum height
             visible: New visibility setting
             locked: New locked setting
             moved: New moved setting
             static: New static setting
+            color: New color
             context: New context data
             table: New table data
             auto_update: New auto_update setting
@@ -320,10 +329,10 @@ class TileDAO:
         # Only update name if we identified by ID
         if name is not None and id is not None:
             tile.name = name
-        if min_width is not None:
-            tile.min_width = min_width
-        if min_height is not None:
-            tile.min_height = min_height
+        if minW is not None:
+            tile.minW = minW
+        if minH is not None:
+            tile.minH = minH
         if visible is not None:
             tile.visible = visible
         if locked is not None:
@@ -332,6 +341,8 @@ class TileDAO:
             tile.moved = moved
         if static is not None:
             tile.static = static
+        if color is not None:
+            tile.color = color
         if context is not None:
             tile.context = context
         if table is not None:
@@ -406,14 +417,15 @@ class TileDAO:
         tile_id: Optional[str] = None,
         x_position: float = 0,
         y_position: float = 0,
-        width: float = 600,
-        height: float = 400,
-        min_width: Optional[float] = None,
-        min_height: Optional[float] = None,
+        width: float = 4,
+        height: float = 4,
+        minW: Optional[float] = None,
+        minH: Optional[float] = None,
         visible: bool = True,
         locked: bool = False,
         moved: bool = False,
         static: bool = False,
+        color: Optional[str] = None,
         context: Optional[str] = None,
         table: Optional[str] = None,
         auto_update: Optional[str] = None,
@@ -445,12 +457,13 @@ class TileDAO:
                 y_position=y_position,
                 width=width,
                 height=height,
-                min_width=min_width,
-                min_height=min_height,
+                minW=minW,
+                minH=minH,
                 visible=visible,
                 locked=locked,
                 moved=moved,
                 static=static,
+                color=color,
                 context=context,
                 table=table,
                 auto_update=auto_update,
@@ -593,12 +606,13 @@ class TileDAO:
         y_position: float = 0,
         width: float = 600,
         height: float = 400,
-        min_width: Optional[float] = None,
-        min_height: Optional[float] = None,
+        minW: Optional[float] = None,
+        minH: Optional[float] = None,
         visible: bool = True,
         locked: bool = False,
         moved: bool = False,
         static: bool = False,
+        color: Optional[str] = None,
         context: Optional[str] = None,
         table: Optional[str] = None,
         auto_update: Optional[str] = None,
@@ -631,12 +645,13 @@ class TileDAO:
                 y_position=y_position,
                 width=width,
                 height=height,
-                min_width=min_width,
-                min_height=min_height,
+                minW=minW,
+                minH=minH,
                 visible=visible,
                 locked=locked,
                 moved=moved,
                 static=static,
+                color=color,
                 context=context,
                 table=table,
                 auto_update=auto_update,
@@ -693,26 +708,6 @@ class TileDAO:
         tab_id: Optional[str] = None,
         name: Optional[str] = None,
         is_checkpoint: Optional[bool] = False,
-        position: Optional[dict] = None,
-        x_position: Optional[float] = None,
-        y_position: Optional[float] = None,
-        width: Optional[float] = None,
-        height: Optional[float] = None,
-        min_width: Optional[float] = None,
-        min_height: Optional[float] = None,
-        visible: Optional[bool] = None,
-        locked: Optional[bool] = None,
-        moved: Optional[bool] = None,
-        static: Optional[bool] = None,
-        context: Optional[str] = None,
-        table: Optional[str] = None,
-        auto_update: Optional[str] = None,
-        freeze: Optional[str] = None,
-        filters: Optional[str] = None,
-        common_filter: Optional[str] = None,
-        metric: Optional[str] = None,
-        column_context: Optional[str] = None,
-        grouping: Optional[str] = None,
         plot_type: Optional[str] = None,
         plot_scale_x: Optional[str] = None,
         plot_scale_y: Optional[str] = None,
@@ -740,59 +735,6 @@ class TileDAO:
         if plot_tile is None:
             return None
 
-        # Process position data
-        position_fields = {}
-        if position:
-            position_fields = self._position_from_dict(position)
-        else:
-            # Handle individual position fields
-            if x_position is not None:
-                position_fields["x_position"] = x_position
-            if y_position is not None:
-                position_fields["y_position"] = y_position
-            if width is not None:
-                position_fields["width"] = width
-            if height is not None:
-                position_fields["height"] = height
-
-        # Apply position fields
-        for field, value in position_fields.items():
-            setattr(plot_tile, field, value)
-
-        # Update the base tile fields
-        if name is not None and id is not None:  # Only update name if identifying by ID
-            plot_tile.name = name
-        if min_width is not None:
-            plot_tile.min_width = min_width
-        if min_height is not None:
-            plot_tile.min_height = min_height
-        if visible is not None:
-            plot_tile.visible = visible
-        if locked is not None:
-            plot_tile.locked = locked
-        if moved is not None:
-            plot_tile.moved = moved
-        if static is not None:
-            plot_tile.static = static
-        if context is not None:
-            plot_tile.context = context
-        if table is not None:
-            plot_tile.table = table
-        if auto_update is not None:
-            plot_tile.auto_update = auto_update
-        if freeze is not None:
-            plot_tile.freeze = freeze
-        if filters is not None:
-            plot_tile.filters = filters
-        if common_filter is not None:
-            plot_tile.common_filter = common_filter
-        if metric is not None:
-            plot_tile.metric = metric
-        if column_context is not None:
-            plot_tile.column_context = column_context
-        if grouping is not None:
-            plot_tile.grouping = grouping
-
         # Update specialized fields
         if plot_type is not None:
             plot_tile.plot_type = plot_type
@@ -815,12 +757,6 @@ class TileDAO:
         if regression_line is not None:
             plot_tile.regression_line = regression_line
 
-        if is_checkpoint is not None and (id is not None or not is_checkpoint):
-            # Only update is_checkpoint if:
-            # 1. We're identifying by ID, or
-            # 2. We're identifying by name and we're setting is_checkpoint to False
-            plot_tile.is_checkpoint = is_checkpoint
-
         self.session.commit()
         return plot_tile
 
@@ -833,12 +769,13 @@ class TileDAO:
         y_position: float = 0,
         width: float = 600,
         height: float = 400,
-        min_width: Optional[float] = None,
-        min_height: Optional[float] = None,
+        minW: Optional[float] = None,
+        minH: Optional[float] = None,
         visible: bool = True,
         locked: bool = False,
         moved: bool = False,
         static: bool = False,
+        color: Optional[str] = None,
         context: Optional[str] = None,
         table: Optional[str] = None,
         auto_update: Optional[str] = None,
@@ -864,12 +801,13 @@ class TileDAO:
                 y_position=y_position,
                 width=width,
                 height=height,
-                min_width=min_width,
-                min_height=min_height,
+                minW=minW,
+                minH=minH,
                 visible=visible,
                 locked=locked,
                 moved=moved,
                 static=static,
+                color=color,
                 context=context,
                 table=table,
                 auto_update=auto_update,
@@ -919,26 +857,6 @@ class TileDAO:
         tab_id: Optional[str] = None,
         name: Optional[str] = None,
         is_checkpoint: Optional[bool] = False,
-        position: Optional[dict] = None,
-        x_position: Optional[float] = None,
-        y_position: Optional[float] = None,
-        width: Optional[float] = None,
-        height: Optional[float] = None,
-        min_width: Optional[float] = None,
-        min_height: Optional[float] = None,
-        visible: Optional[bool] = None,
-        locked: Optional[bool] = None,
-        moved: Optional[bool] = None,
-        static: Optional[bool] = None,
-        context: Optional[str] = None,
-        table: Optional[str] = None,
-        auto_update: Optional[str] = None,
-        freeze: Optional[str] = None,
-        filters: Optional[str] = None,
-        common_filter: Optional[str] = None,
-        metric: Optional[str] = None,
-        column_context: Optional[str] = None,
-        grouping: Optional[str] = None,
         content: Optional[str] = None,
         file_path: Optional[str] = None,
         file_type: Optional[str] = None,
@@ -959,59 +877,6 @@ class TileDAO:
         if editor_tile is None:
             return None
 
-        # Process position data
-        position_fields = {}
-        if position:
-            position_fields = self._position_from_dict(position)
-        else:
-            # Handle individual position fields
-            if x_position is not None:
-                position_fields["x_position"] = x_position
-            if y_position is not None:
-                position_fields["y_position"] = y_position
-            if width is not None:
-                position_fields["width"] = width
-            if height is not None:
-                position_fields["height"] = height
-
-        # Apply position fields
-        for field, value in position_fields.items():
-            setattr(editor_tile, field, value)
-
-        # Update the base tile fields
-        if name is not None and id is not None:  # Only update name if identifying by ID
-            editor_tile.name = name
-        if min_width is not None:
-            editor_tile.min_width = min_width
-        if min_height is not None:
-            editor_tile.min_height = min_height
-        if visible is not None:
-            editor_tile.visible = visible
-        if locked is not None:
-            editor_tile.locked = locked
-        if moved is not None:
-            editor_tile.moved = moved
-        if static is not None:
-            editor_tile.static = static
-        if context is not None:
-            editor_tile.context = context
-        if table is not None:
-            editor_tile.table = table
-        if auto_update is not None:
-            editor_tile.auto_update = auto_update
-        if freeze is not None:
-            editor_tile.freeze = freeze
-        if filters is not None:
-            editor_tile.filters = filters
-        if common_filter is not None:
-            editor_tile.common_filter = common_filter
-        if metric is not None:
-            editor_tile.metric = metric
-        if column_context is not None:
-            editor_tile.column_context = column_context
-        if grouping is not None:
-            editor_tile.grouping = grouping
-
         # Update specialized fields
         if content is not None:
             editor_tile.content = content
@@ -1019,12 +884,6 @@ class TileDAO:
             editor_tile.file_path = file_path
         if file_type is not None:
             editor_tile.file_type = file_type
-
-        if is_checkpoint is not None and (id is not None or not is_checkpoint):
-            # Only update is_checkpoint if:
-            # 1. We're identifying by ID, or
-            # 2. We're identifying by name and we're setting is_checkpoint to False
-            editor_tile.is_checkpoint = is_checkpoint
 
         self.session.commit()
         return editor_tile
@@ -1038,12 +897,13 @@ class TileDAO:
         y_position: float = 0,
         width: float = 600,
         height: float = 400,
-        min_width: Optional[float] = None,
-        min_height: Optional[float] = None,
+        minW: Optional[float] = None,
+        minH: Optional[float] = None,
         visible: bool = True,
         locked: bool = False,
         moved: bool = False,
         static: bool = False,
+        color: Optional[str] = None,
         context: Optional[str] = None,
         table: Optional[str] = None,
         auto_update: Optional[str] = None,
@@ -1067,12 +927,13 @@ class TileDAO:
                 y_position=y_position,
                 width=width,
                 height=height,
-                min_width=min_width,
-                min_height=min_height,
+                minW=minW,
+                minH=minH,
                 visible=visible,
                 locked=locked,
                 moved=moved,
                 static=static,
+                color=color,
                 context=context,
                 table=table,
                 auto_update=auto_update,
@@ -1195,17 +1056,7 @@ class TileDAO:
             if table_tile:
                 for field, value in table_tile_data.items():
                     if hasattr(table_tile, field):
-                        if field in (
-                            "table_type",
-                            "page_number",
-                            "column_order",
-                            "hidden_columns",
-                            "sorting",
-                            "group_sorting",
-                            "columns_pin_left",
-                            "columns_pin_right",
-                            "selected",
-                        ) and isinstance(value, (list, dict)):
+                        if isinstance(value, (tuple, list, dict)):
                             setattr(table_tile, field, json.dumps(value))
                         else:
                             setattr(table_tile, field, value)
@@ -1217,7 +1068,7 @@ class TileDAO:
             if plot_tile:
                 for field, value in plot_tile_data.items():
                     if hasattr(plot_tile, field):
-                        if field == "plot_data" and not isinstance(value, str):
+                        if isinstance(value, (tuple, list, dict)):
                             setattr(plot_tile, field, json.dumps(value))
                         else:
                             setattr(plot_tile, field, value)
@@ -1229,7 +1080,7 @@ class TileDAO:
             if view_tile:
                 for field, value in view_tile_data.items():
                     if hasattr(view_tile, field):
-                        if field == "view_data" and not isinstance(value, str):
+                        if isinstance(value, (tuple, list, dict)):
                             setattr(view_tile, field, json.dumps(value))
                         else:
                             setattr(view_tile, field, value)
@@ -1241,7 +1092,10 @@ class TileDAO:
             if editor_tile:
                 for field, value in editor_tile_data.items():
                     if hasattr(editor_tile, field):
-                        setattr(editor_tile, field, value)
+                        if isinstance(value, (tuple, list, dict)):
+                            setattr(editor_tile, field, json.dumps(value))
+                        else:
+                            setattr(editor_tile, field, value)
 
         # Handle position updates specially
         if "position" in update_data:
@@ -1253,12 +1107,13 @@ class TileDAO:
         # Update the base tile fields - translate certain fields if needed
         allowed_fields = [
             "name",
-            "min_width",
-            "min_height",
+            "minW",
+            "minH",
             "visible",
             "locked",
             "moved",
             "static",
+            "color",
             "context",
             "table",
             "auto_update",
@@ -1270,8 +1125,8 @@ class TileDAO:
             "grouping",
         ]
 
-        for field in allowed_fields:
-            if field in update_data:
+        for field in update_data:
+            if field in allowed_fields and hasattr(tile, field):
                 setattr(tile, field, update_data[field])
 
         self.session.commit()
@@ -1330,52 +1185,7 @@ class TileDAO:
             for field, value in specialized_data.items():
                 if hasattr(specialized_tile, field):
                     # JSON serialize if needed for complex types
-                    if (
-                        tile_type == "Table"
-                        and field
-                        in (
-                            "table_type",
-                            "page_number",
-                            "column_order",
-                            "hidden_columns",
-                            "sorting",
-                            "group_sorting",
-                            "columns_pin_left",
-                            "columns_pin_right",
-                            "selected",
-                        )
-                        and isinstance(value, (list, dict))
-                    ):
-                        setattr(specialized_tile, field, json.dumps(value))
-                    elif (
-                        tile_type == "Plot"
-                        and field
-                        in (
-                            "plot_type",
-                            "plot_scale_x",
-                            "plot_scale_y",
-                            "plot_aggregate",
-                            "x_axis",
-                            "y_axis",
-                            "plot_group_by",
-                            "plot_group_by_colors",
-                            "bin_count",
-                            "regression_line",
-                        )
-                        and isinstance(value, (list, dict))
-                    ):
-                        setattr(specialized_tile, field, json.dumps(value))
-                    elif (
-                        tile_type == "View"
-                        and field == "base_index"
-                        and isinstance(value, (list, dict))
-                    ):
-                        setattr(specialized_tile, field, json.dumps(value))
-                    elif (
-                        tile_type == "Editor"
-                        and field in ("file_path", "file_type")
-                        and isinstance(value, (list, dict))
-                    ):
+                    if isinstance(value, (tuple, list, dict)):
                         setattr(specialized_tile, field, json.dumps(value))
                     else:
                         setattr(specialized_tile, field, value)
@@ -1485,6 +1295,7 @@ class TileDAO:
                 locked=source_tile.locked,
                 moved=source_tile.moved,
                 static=source_tile.static,
+                color=source_tile.color,
                 context=source_tile.context,
                 table=source_tile.table,
                 auto_update=source_tile.auto_update,
@@ -1492,8 +1303,8 @@ class TileDAO:
                 filters=source_tile.filters,
                 common_filter=source_tile.common_filter,
                 metric=source_tile.metric,
-                min_width=source_tile.min_width,
-                min_height=source_tile.min_height,
+                minW=source_tile.minW,
+                minH=source_tile.minH,
                 column_context=source_tile.column_context,
                 grouping=source_tile.grouping,
                 is_checkpoint=True,
@@ -1519,6 +1330,7 @@ class TileDAO:
                 locked=source_tile.locked,
                 moved=source_tile.moved,
                 static=source_tile.static,
+                color=source_tile.color,
                 context=source_tile.context,
                 table=source_tile.table,
                 auto_update=source_tile.auto_update,
@@ -1526,8 +1338,8 @@ class TileDAO:
                 filters=source_tile.filters,
                 common_filter=source_tile.common_filter,
                 metric=source_tile.metric,
-                min_width=source_tile.min_width,
-                min_height=source_tile.min_height,
+                minW=source_tile.minW,
+                minH=source_tile.minH,
                 column_context=source_tile.column_context,
                 grouping=source_tile.grouping,
                 is_checkpoint=True,
@@ -1855,12 +1667,13 @@ class TileDAO:
                                 "y_position": tile.y_position,
                                 "width": tile.width,
                                 "height": tile.height,
-                                "min_width": tile.min_width,
-                                "min_height": tile.min_height,
+                                "minW": tile.minW,
+                                "minH": tile.minH,
                                 "visible": tile.visible,
                                 "locked": tile.locked,
                                 "moved": tile.moved,
                                 "static": tile.static,
+                                "color": tile.color,
                                 "context": tile.context,
                                 "table": tile.table,
                                 "auto_update": tile.auto_update,
@@ -1888,12 +1701,13 @@ class TileDAO:
                             y_position=source_tile.y_position,
                             width=source_tile.width,
                             height=source_tile.height,
-                            min_width=source_tile.min_width,
-                            min_height=source_tile.min_height,
+                            minW=source_tile.minW,
+                            minH=source_tile.minH,
                             visible=source_tile.visible,
                             locked=source_tile.locked,
                             moved=source_tile.moved,
                             static=source_tile.static,
+                            color=source_tile.color,
                             context=source_tile.context,
                             table=source_tile.table,
                             auto_update=source_tile.auto_update,

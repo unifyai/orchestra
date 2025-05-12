@@ -62,19 +62,26 @@ async def _create_test_tab(
     name=TEST_TAB,
     active=True,
     order=0,
+    tab_id=None,
 ):
     """Create a test tab"""
+    payload = {
+        "interface_id": interface_id,
+        "name": name,
+        "active": active,
+        "order": order,
+        "visible": True,
+        "color": "#00FF00",
+    }
+
+    # Add the tab_id if provided
+    if tab_id:
+        payload["tab_id"] = tab_id
+
     response = await client.post(
         "/v0/tab/",
         headers=HEADERS,
-        json={
-            "interface_id": interface_id,
-            "name": name,
-            "active": active,
-            "order": order,
-            "visible": True,
-            "color": "#00FF00",
-        },
+        json=payload,
     )
     return response
 
@@ -788,3 +795,34 @@ async def test_create_tab_checkpoint_with_renamed_tiles(client: AsyncClient):
     checkpoint_data = second_checkpoint.json()
     assert len(checkpoint_data["tiles"]) == 1
     assert checkpoint_data["tiles"][0]["name"] == "new-name"
+
+
+@pytest.mark.anyio
+async def test_create_tab_with_specified_id(client: AsyncClient):
+    """Test creating a tab with a user-specified ID"""
+    # Create an interface
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    # Generate a UUID to use for the tab
+    specified_id = str(uuid.uuid4())
+
+    # Create a tab with the specified ID
+    response = await _create_test_tab(
+        client,
+        interface_id,
+        name="predetermined-id-tab",
+        tab_id=specified_id,
+    )
+    assert response.status_code == 201
+
+    data = response.json()
+    assert data["id"] == specified_id
+    assert data["name"] == "predetermined-id-tab"
+    assert data["interface_id"] == interface_id
+
+    # Verify we can retrieve the tab by its ID
+    get_response = await _get_tab(client, tab_id=specified_id)
+    assert get_response.status_code == 200
+    get_data = get_response.json()
+    assert get_data["id"] == specified_id

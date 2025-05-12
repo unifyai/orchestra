@@ -22,12 +22,13 @@ class BaseTileSchema(BaseSchema):
     name: str
     position: TilePosition
     type: Optional[str] = None
-    min_width: Optional[float] = Field(None)
-    min_height: Optional[float] = Field(None)
+    minW: Optional[float] = Field(None)
+    minH: Optional[float] = Field(None)
     visible: bool = True
     locked: bool = False
     moved: bool = False
     static: bool = False
+    color: Optional[str] = None
     context: Optional[str] = None
     table: Optional[str] = None
     auto_update: Optional[str] = None
@@ -115,16 +116,18 @@ class InterfaceSchema(BaseSchema):
 
 # Request/response schemas
 class CreateTileRequest(BaseModel):
+    tile_id: Optional[str] = None
     tab_id: str
     name: str
     position: TilePosition
-    type: str
-    min_width: Optional[float] = None
-    min_height: Optional[float] = None
-    visible: bool = True
-    locked: bool = False
-    moved: bool = False
-    static: bool = False
+    type: Optional[str] = None
+    minW: Optional[float] = None
+    minH: Optional[float] = None
+    visible: Optional[bool] = True
+    locked: Optional[bool] = False
+    moved: Optional[bool] = False
+    static: Optional[bool] = False
+    color: Optional[str] = None
     context: Optional[str] = None
     table: Optional[str] = None
     auto_update: Optional[str] = None
@@ -147,10 +150,13 @@ class CreateTileRequest(BaseModel):
 class UpdateTileRequest(BaseModel):
     name: Optional[str] = None
     position: Optional[TilePosition] = None
-    min_width: Optional[float] = None
-    min_height: Optional[float] = None
+    minW: Optional[float] = None
+    minH: Optional[float] = None
     visible: Optional[bool] = None
     locked: Optional[bool] = None
+    moved: Optional[bool] = None
+    static: Optional[bool] = None
+    color: Optional[str] = None
     context: Optional[str] = None
     table: Optional[str] = None
     auto_update: Optional[str] = None
@@ -171,6 +177,7 @@ class UpdateTileRequest(BaseModel):
 
 
 class CreateTabRequest(BaseModel):
+    tab_id: Optional[str] = None
     interface_id: str
     name: str
     visible: bool = True
@@ -196,6 +203,7 @@ class UpdateTabRequest(BaseModel):
 
 
 class CreateInterfaceRequest(BaseModel):
+    interface_id: Optional[str] = None
     project: str
     name: str
     color: Optional[str] = None
