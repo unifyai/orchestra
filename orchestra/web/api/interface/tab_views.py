@@ -218,6 +218,9 @@ def create_tab(
 
     # Create the tab
     tab = tab_dao.create_tab(
+        tab_id=request.tab_id
+        if hasattr(request, "tab_id") and request.tab_id
+        else None,
         interface_id=interface.id,
         name=request.name,
         visible=request.visible,
