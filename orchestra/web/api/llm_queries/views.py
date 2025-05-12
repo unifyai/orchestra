@@ -455,7 +455,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                 **db_operations_kwargs,
             )
 
-        return StreamingResponse(stream_and_update_db())
+        return StreamingResponse(stream_and_update_db(), media_type="text/event-stream")
     else:
         processing_time = (time.time() - t0) * 1000
         background_tasks.add_task(

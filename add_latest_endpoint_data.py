@@ -11,6 +11,7 @@ from orchestra.db.models.orchestra_models import (
     Endpoint,
     Modality,
     Model,
+    Organization,
     Provider,
     Task,
     Users,
@@ -27,6 +28,7 @@ user_tables = [
     ("auth_user", AuthUser),
     ("api_key", ApiKey),
     ("users", Users),
+    ("organization", Organization),
 ]
 
 
@@ -75,6 +77,14 @@ def write_data_to_db(data, engine, user_id, email_id, api_key):
             "autorecharge_threshold": -1,
             "autorecharge_qty": 0,
             "store_prompts": True,
+        },
+    ]
+    data["organization"] = [
+        {
+            "id": 1,
+            "owner_id": user_id,
+            "name": "Orchestra Admin Organization",
+            "created_at": datetime.now(),
         },
     ]
     tables = data_tables + user_tables
