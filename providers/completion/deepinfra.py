@@ -66,7 +66,7 @@ supported_models = {
     "llama-3.2-3b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.2-3B-Instruct",
         "context_window": 128000,
-        "cost": {"prompt": 0.015, "completion": 0.025},
+        "cost": {"prompt": 0.01, "completion": 0.02},
     },
     "llama-3.2-11b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.2-11B-Vision-Instruct",
@@ -146,7 +146,7 @@ supported_models = {
     "qwen-3-235b-a22b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen3-235B-A22B",
         "context_window": 40000,
-        "cost": {"prompt": 0.1, "completion": 0.1},
+        "cost": {"prompt": 0.15, "completion": 0.6},
     },
     "qwen-3-30b-a3b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen3-30B-A3B",
@@ -156,7 +156,7 @@ supported_models = {
     "qwen-2.5-coder-32b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen2.5-Coder-32B-Instruct",
         "context_window": 32768,
-        "cost": {"prompt": 0.07, "completion": 0.15},
+        "cost": {"prompt": 0.06, "completion": 0.15},
     },
     "qwen-2.5-7b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen2.5-7B-Instruct",
