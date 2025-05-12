@@ -85,16 +85,17 @@ async def _create_test_tile(
     tab_id,
     name=TEST_TILE,
     tile_type="Table",
-    width=1,
-    height=1,
+    width=4,
+    height=4,
     x=0,
     y=0,
-    min_width=None,
-    min_height=None,
+    minW=None,
+    minH=None,
     visible=True,
     locked=False,
     moved=False,
     static=False,
+    color=None,
     context=None,
     table=None,
     auto_update=None,
@@ -108,6 +109,7 @@ async def _create_test_tile(
     plot_tile_data=None,
     view_tile_data=None,
     editor_tile_data=None,
+    tile_id=None,
 ):
     """Create a test tile
 
@@ -120,12 +122,13 @@ async def _create_test_tile(
         height: Height of the tile
         x: X position of the tile
         y: Y position of the tile
-        min_width: Minimum width of the tile
-        min_height: Minimum height of the tile
+        minW: Minimum width of the tile
+        minH: Minimum height of the tile
         visible: Whether the tile is visible
         locked: Whether the tile is locked
         moved: Whether the tile has been moved
         static: Whether the tile is static
+        color: Color of the tile
         context: Context data for the tile
         table: Table data for the tile
         auto_update: Auto-update setting
@@ -139,6 +142,7 @@ async def _create_test_tile(
         plot_tile_data: Specialized data for plot tiles
         view_tile_data: Specialized data for view tiles
         editor_tile_data: Specialized data for editor tiles
+        tile_id: Optional pre-specified ID for the tile
     """
 
     # Create position object matching the schema
@@ -154,8 +158,9 @@ async def _create_test_tile(
         "locked": locked,
         "moved": moved,
         "static": static,
-        "min_width": min_width,
-        "min_height": min_height,
+        "color": color,
+        "minW": minW,
+        "minH": minH,
         "context": context,
         "table": table,
         "auto_update": auto_update,
@@ -166,6 +171,10 @@ async def _create_test_tile(
         "column_context": column_context,
         "grouping": grouping,
     }
+
+    # Add the tile_id if provided
+    if tile_id:
+        payload["tile_id"] = tile_id
 
     # Remove None values to avoid sending empty fields
     payload = {k: v for k, v in payload.items() if v is not None}
@@ -669,13 +678,39 @@ async def test_create_tile(client: AsyncClient):
     assert "position" in data
     assert data["position"]["x"] == 0
     assert data["position"]["y"] == 0
-    assert data["position"]["width"] == 1
-    assert data["position"]["height"] == 1
+    assert data["position"]["width"] == 4
+    assert data["position"]["height"] == 4
 
     assert data["visible"] is True
     assert data["is_checkpoint"] is False
     assert "id" in data
     assert "created_at" in data
+
+
+@pytest.mark.anyio
+async def test_create_tile_with_color(client: AsyncClient):
+    """Test creating a tile with color"""
+    # Create an interface and tab
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+
+    # Create a tile
+    response = await _create_test_tile(
+        client,
+        tab_id,
+        name="color-tile",
+        color="#FF0000",
+    )
+    assert response.status_code == 201
+
+    data = response.json()
+    assert data["name"] == "color-tile"
+    assert data["tab_id"] == tab_id
+
+    # Check color field
+    assert data["color"] == "#FF0000"
 
 
 @pytest.mark.anyio
@@ -1119,8 +1154,8 @@ async def test_update_tile_with_position(client: AsyncClient):
     update_data = {
         "name": "updated-position-test",
         "position": {"x": 2, "y": 3, "width": 4, "height": 5},
-        "min_width": 2,
-        "min_height": 2,
+        "minW": 2,
+        "minH": 2,
         "locked": True,
     }
 
@@ -1134,8 +1169,8 @@ async def test_update_tile_with_position(client: AsyncClient):
     assert data["position"]["y"] == 3
     assert data["position"]["width"] == 4
     assert data["position"]["height"] == 5
-    assert data["min_width"] == 2
-    assert data["min_height"] == 2
+    assert data["minW"] == 2
+    assert data["minH"] == 2
     assert data["locked"] is True
 
 
@@ -1326,3 +1361,36 @@ async def test_patch_specialized_tile_endpoint(client: AsyncClient):
     assert editor_data["editor_tile"]["file_path"] == "updated.js"
     assert editor_data["editor_tile"]["file_type"] == "javascript"
     assert editor_data["editor_tile"]["content"] == "console.log('Updated');"
+
+
+@pytest.mark.anyio
+async def test_create_tile_with_specified_id(client: AsyncClient):
+    """Test creating a tile with a user-specified ID"""
+    # Create an interface and tab
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+
+    # Generate a UUID to use for the tile
+    specified_id = str(uuid.uuid4())
+
+    # Create a tile with the specified ID
+    response = await _create_test_tile(
+        client,
+        tab_id,
+        name="predetermined-id-tile",
+        tile_id=specified_id,
+    )
+    assert response.status_code == 201
+
+    data = response.json()
+    assert data["id"] == specified_id
+    assert data["name"] == "predetermined-id-tile"
+    assert data["tab_id"] == tab_id
+
+    # Verify we can retrieve the tile by its ID
+    get_response = await _get_tile(client, tile_id=specified_id)
+    assert get_response.status_code == 200
+    get_data = get_response.json()
+    assert get_data["id"] == specified_id

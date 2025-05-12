@@ -21,6 +21,7 @@ class TabDAO:
         visible: bool = True,
         active: bool = False,
         order: int = 0,
+        tab_id: Optional[str] = None,
         global_context: Optional[str] = None,
         color: Optional[str] = None,
         is_checkpoint: bool = False,
@@ -28,6 +29,7 @@ class TabDAO:
     ) -> Tab:
         """Create a new tab in an interface."""
         tab = Tab(
+            id=tab_id,
             interface_id=interface_id,
             name=name,
             visible=visible,
