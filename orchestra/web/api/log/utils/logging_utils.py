@@ -1,4 +1,5 @@
 import json
+import random
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -45,7 +46,9 @@ from orchestra.settings import settings
 from orchestra.web.api.log.schema import CreateLogConfig
 from orchestra.web.api.utils.http_responses import not_found
 
-from ..python2SQL import STR_TO_SQL_TYPES, build_sql_query, str_filter_exp_to_dict
+from ..python2SQL import STR_TO_SQL_TYPES
+from ..python2SQL.core import build_sql_query
+from ..python2SQL.parsers import str_filter_exp_to_dict
 
 __all__ = [
     "_get_logs_query",
@@ -467,32 +470,69 @@ def _get_logs_query(
                     status_code=400,
                     detail=f"Sort mode must be 'ascending' or 'descending', got {mode}.",
                 )
-
-            cast_expr = _build_sort_criteria(
-                unified_logs_for_sort.c.value,
-                sort_key,
-                field_types,
-            )
-
-            sort_val_sq = (
-                select(
-                    unified_logs_for_sort.c.log_event_id.label("log_event_id"),
-                    cast_expr.label("val"),
+            try:
+                expr_dict = str_filter_exp_to_dict(
+                    sort_key,
+                    field_names=list(field_types.keys()),
                 )
-                .where(unified_logs_for_sort.c.key == sort_key)
-                .order_by(
-                    unified_logs_for_sort.c.log_event_id,
-                    unified_logs_for_sort.c.updated_at.desc(),
+            except Exception:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid sort expression '{sort_key}'",
                 )
-                .distinct(unified_logs_for_sort.c.log_event_id)
-                .subquery(f"sort_{sort_key}_sq")
-            )
 
-            sort_val_sqs.append(sort_val_sq)
+            if expr_dict.get("type", None) == "identifier":
+                # static field sorting
+                cast_expr = _build_sort_criteria(
+                    unified_logs_for_sort.c.value,
+                    sort_key,
+                    field_types,
+                )
 
-            # --- 2. remember ORDER‑BY expression
-            direction = asc if mode == "ascending" else desc
-            sort_criteria.append(direction(sort_val_sq.c.val).nulls_last())
+                sort_val_sq = (
+                    select(
+                        unified_logs_for_sort.c.log_event_id.label("log_event_id"),
+                        cast_expr.label("val"),
+                    )
+                    .where(unified_logs_for_sort.c.key == sort_key)
+                    .order_by(
+                        unified_logs_for_sort.c.log_event_id,
+                        unified_logs_for_sort.c.updated_at.desc(),
+                    )
+                    .distinct(unified_logs_for_sort.c.log_event_id)
+                    .subquery(f"sort_{sort_key}_sq")
+                )
+
+                sort_val_sqs.append(sort_val_sq)
+
+                # --- 2. remember ORDER‑BY expression
+                direction = asc if mode == "ascending" else desc
+                sort_criteria.append(direction(sort_val_sq.c.val).nulls_last())
+            else:
+                # dynamic expression sorting
+                event_ids_subq = log_event_query.subquery(name="event_ids_subq")
+                sort_expr = build_sql_query(
+                    expr_dict,
+                    LogEvent,
+                    session,
+                    log_event_ids=event_ids_subq,
+                )
+                rand = random.randint(1, 1000000)
+                base_sq = sort_expr.alias(f"sort_base_{rand}")
+                sort_val_sq = (
+                    select(
+                        base_sq.c.log_event_id.label("log_event_id"),
+                        base_sq.c.value.label("val"),
+                    )
+                    .where(base_sq.c.log_event_id.in_(select(event_ids_subq.c.id)))
+                    .subquery(f"sort_expr_{rand}")
+                )
+
+                sort_val_sqs.append(sort_val_sq)
+
+                # Add to ORDER BY clauses
+                direction = asc if mode == "ascending" else desc
+                sort_criteria.append(direction(sort_val_sq.c.val).nulls_last())
 
     # Always add deterministic tie‑breaker
     sort_criteria.append(desc(relevant_log_events.c.id))
