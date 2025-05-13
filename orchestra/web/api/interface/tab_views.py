@@ -1,9 +1,8 @@
 from typing import List, Optional, Tuple
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from orchestra.db.dao.interface_dao import InterfaceDAO
-from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.tab_dao import TabDAO
 from orchestra.db.dao.tile_dao import TileDAO
 from orchestra.db.models.orchestra_models import Interface, Tab, Tile
@@ -157,7 +156,6 @@ def _get_tab(
     },
 )
 def create_tab(
-    request_fastapi: Request,
     request: CreateTabRequest,
     checkpoint: bool = Query(
         False,
@@ -165,43 +163,17 @@ def create_tab(
     ),
     tab_dao: TabDAO = Depends(),
     interface_dao: InterfaceDAO = Depends(),
-    project_dao: ProjectDAO = Depends(),
     tile_dao: TileDAO = Depends(),
 ):
     """Create a new tab."""
     # Get the interface, first by ID if provided in the request
-    interface = None
-    if hasattr(request, "interface_id") and request.interface_id:
-        interface = interface_dao.get(request.interface_id)
-    # Also support interface_name + project_id
-    elif (
-        hasattr(request, "project_id")
-        and request.project_id
-        and hasattr(request, "interface_name")
-        and request.interface_name
-    ):
-        # First verify project exists
-        project = project_dao.get_by_user_and_name(
-            user_id=request_fastapi.state.user_id,
-            name=request.project_id,
-        )
-        if not project:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Project {request.project_id} not found or you don't have access.",
-            )
-        # Then get interface
-        interface = interface_dao.get_by_project_and_name(
-            project_id=project.id,
-            name=request.interface_name,
-            is_checkpoint=checkpoint,
+    if not getattr(request, "interface_id", None):
+        raise HTTPException(
+            status_code=400,
+            detail="Interface ID is required.",
         )
 
-    if not interface:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Interface not found. Please provide valid interface_id or project_id+interface_name.",
-        )
+    interface = interface_dao.get(getattr(request, "interface_id"))
 
     # Check if tab already exists with the same name in this interface
     existing = tab_dao.get_by_interface_and_name(
@@ -218,9 +190,7 @@ def create_tab(
 
     # Create the tab
     tab = tab_dao.create_tab(
-        tab_id=request.tab_id
-        if hasattr(request, "tab_id") and request.tab_id
-        else None,
+        tab_id=getattr(request, "tab_id", None),
         interface_id=interface.id,
         name=request.name,
         visible=request.visible,

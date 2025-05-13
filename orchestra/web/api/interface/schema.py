@@ -19,6 +19,7 @@ class TilePosition(BaseModel):
 
 
 class BaseTileSchema(BaseSchema):
+    id: Optional[str] = None
     name: str
     position: TilePosition
     type: Optional[str] = None
@@ -150,6 +151,7 @@ class CreateTileRequest(BaseModel):
 class UpdateTileRequest(BaseModel):
     name: Optional[str] = None
     position: Optional[TilePosition] = None
+    type: Optional[str] = None
     minW: Optional[float] = None
     minH: Optional[float] = None
     visible: Optional[bool] = None

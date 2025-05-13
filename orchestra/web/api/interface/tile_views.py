@@ -22,6 +22,9 @@ router = APIRouter(prefix="/tile", tags=["tile"])
 def _create_tile_response(tile: Tile) -> TileSchema:
     """Helper function to convert a tile entity to a TileSchema with specialized tile data."""
 
+    if tile is None:
+        return
+
     # Create specialized tile data schemas if they exist
     table_tile_data = None
     plot_tile_data = None
@@ -272,7 +275,7 @@ def create_tile(
     if not tab:
         raise HTTPException(
             status_code=404,
-            detail=f"Tab not found. Please provide valid tab_id or project_id+interface_name+tab_name.",
+            detail=f"Tab not found. Please provide valid tab_id.",
         )
 
     try:
@@ -284,11 +287,28 @@ def create_tile(
             "height": request.position.height,
         }
 
-        # Create the tile
+        # Extract specialized tile data if available
+        specialized_data = {}
+        if request.type == "Table" and request.table_tile:
+            specialized_data["table_tile"] = request.table_tile.model_dump(
+                exclude_unset=True,
+            )
+        elif request.type == "Plot" and request.plot_tile:
+            specialized_data["plot_tile"] = request.plot_tile.model_dump(
+                exclude_unset=True,
+            )
+        elif request.type == "View" and request.view_tile:
+            specialized_data["view_tile"] = request.view_tile.model_dump(
+                exclude_unset=True,
+            )
+        elif request.type == "Editor" and request.editor_tile:
+            specialized_data["editor_tile"] = request.editor_tile.model_dump(
+                exclude_unset=True,
+            )
+
+        # Create the tile with all data including specialized tile data
         tile = tile_dao.create_tile(
-            tile_id=request.tile_id
-            if hasattr(request, "tile_id") and request.tile_id
-            else None,
+            tile_id=getattr(request, "tile_id", None),
             tab_id=tab.id,
             name=request.name,
             type=request.type,
@@ -310,72 +330,8 @@ def create_tile(
             grouping=request.grouping,
             is_checkpoint=checkpoint,
             **position_data,
+            **specialized_data,
         )
-
-        # Handle specialized tile data based on type
-        if request.type == "Table" and request.table_tile:
-            tile_dao.create_table_tile(
-                tab_id=tab.id,
-                name=request.name,
-                tile_id=tile.id,
-                table_type=getattr(request.table_tile, "table_type", None),
-                page_number=getattr(request.table_tile, "page_number", None),
-                column_order=getattr(request.table_tile, "column_order", None),
-                hidden_columns=getattr(request.table_tile, "hidden_columns", None),
-                sorting=getattr(request.table_tile, "sorting", None),
-                group_sorting=getattr(request.table_tile, "group_sorting", None),
-                columns_pin_left=getattr(request.table_tile, "columns_pin_left", None),
-                columns_pin_right=getattr(
-                    request.table_tile,
-                    "columns_pin_right",
-                    None,
-                ),
-                selected=getattr(request.table_tile, "selected", None),
-                is_checkpoint=checkpoint,
-                **position_data,
-            )
-        elif request.type == "Plot" and request.plot_tile:
-            tile_dao.create_plot_tile(
-                tab_id=tab.id,
-                name=request.name,
-                tile_id=tile.id,
-                plot_type=getattr(request.plot_tile, "plot_type", None),
-                plot_scale_x=getattr(request.plot_tile, "plot_scale_x", None),
-                plot_scale_y=getattr(request.plot_tile, "plot_scale_y", None),
-                plot_aggregate=getattr(request.plot_tile, "plot_aggregate", None),
-                x_axis=getattr(request.plot_tile, "x_axis", None),
-                y_axis=getattr(request.plot_tile, "y_axis", None),
-                plot_group_by=getattr(request.plot_tile, "plot_group_by", None),
-                plot_group_by_colors=getattr(
-                    request.plot_tile,
-                    "plot_group_by_colors",
-                    None,
-                ),
-                bin_count=getattr(request.plot_tile, "bin_count", None),
-                regression_line=getattr(request.plot_tile, "regression_line", None),
-                is_checkpoint=checkpoint,
-                **position_data,
-            )
-        elif request.type == "View" and request.view_tile:
-            tile_dao.create_view_tile(
-                tab_id=tab.id,
-                name=request.name,
-                tile_id=tile.id,
-                base_index=getattr(request.view_tile, "base_index", None),
-                is_checkpoint=checkpoint,
-                **position_data,
-            )
-        elif request.type == "Editor" and request.editor_tile:
-            tile_dao.create_editor_tile(
-                tab_id=tab.id,
-                name=request.name,
-                tile_id=tile.id,
-                content=getattr(request.editor_tile, "content", None),
-                file_path=getattr(request.editor_tile, "file_path", None),
-                file_type=getattr(request.editor_tile, "file_type", None),
-                is_checkpoint=checkpoint,
-                **position_data,
-            )
 
         # Get the full tile with all associated data
         created_tile = tile_dao.get_by_tab_and_name(

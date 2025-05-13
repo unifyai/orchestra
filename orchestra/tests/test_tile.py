@@ -84,7 +84,7 @@ async def _create_test_tile(
     client: AsyncClient,
     tab_id,
     name=TEST_TILE,
-    tile_type="Table",
+    tile_type=None,
     width=4,
     height=4,
     x=0,
@@ -180,13 +180,13 @@ async def _create_test_tile(
     payload = {k: v for k, v in payload.items() if v is not None}
 
     # Add specialized tile data based on type
-    if tile_type.lower() == "table" and table_tile_data:
+    if tile_type and tile_type.lower() == "table" and table_tile_data:
         payload["table_tile"] = table_tile_data
-    elif tile_type.lower() == "plot" and plot_tile_data:
+    elif tile_type and tile_type.lower() == "plot" and plot_tile_data:
         payload["plot_tile"] = plot_tile_data
-    elif tile_type.lower() == "view" and view_tile_data:
+    elif tile_type and tile_type.lower() == "view" and view_tile_data:
         payload["view_tile"] = view_tile_data
-    elif tile_type.lower() == "editor" and editor_tile_data:
+    elif tile_type and tile_type.lower() == "editor" and editor_tile_data:
         payload["editor_tile"] = editor_tile_data
 
     response = await client.post(
@@ -1394,3 +1394,274 @@ async def test_create_tile_with_specified_id(client: AsyncClient):
     assert get_response.status_code == 200
     get_data = get_response.json()
     assert get_data["id"] == specified_id
+
+
+@pytest.mark.anyio
+async def test_create_tile_with_no_type(client: AsyncClient):
+    """Test creating a tile with no type"""
+    # Create an interface and tab
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+
+    # Generate a UUID to use for the tile
+    specified_id = str(uuid.uuid4())
+
+    # Create a tile with the specified ID
+    response = await _create_test_tile(
+        client,
+        tab_id,
+        name="no-type-tile",
+        tile_id=specified_id,
+    )
+    assert response.status_code == 201
+
+    data = response.json()
+    assert data["id"] == specified_id
+    assert data["name"] == "no-type-tile"
+    assert data["tab_id"] == tab_id
+
+    # Verify we can retrieve the tile by its ID
+    get_response = await _get_tile(client, tile_id=specified_id)
+    assert get_response.status_code == 200
+    get_data = get_response.json()
+    assert get_data["id"] == specified_id
+
+
+@pytest.mark.anyio
+async def test_patch_tile_set_type_and_specialized_data(client: AsyncClient):
+    """Create tile with no type then patch to Table with specialized data."""
+    # Create interface and tab
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+
+    # Create tile without specifying type
+    create_response = await _create_test_tile(
+        client,
+        tab_id,
+        name="set-type-table-tile",
+    )
+    assert create_response.status_code == 201
+    tile_id = create_response.json()["id"]
+
+    # Patch to set type Table with specialized payload
+    table_payload = {
+        "type": "Table",
+        "table_tile": {
+            "table_type": "basic",
+            "page_number": "1",
+        },
+    }
+    patch_response = await _patch_tile(
+        client,
+        tile_id=tile_id,
+        patch_data=table_payload,
+    )
+    assert patch_response.status_code == 200
+
+    data = patch_response.json()
+    assert data["type"] == "Table"
+    assert data["table_tile"] is not None
+    assert data["table_tile"]["table_type"] == "basic"
+    # Other specialized tiles should be None
+    assert data["plot_tile"] is None
+    assert data["view_tile"] is None
+    assert data["editor_tile"] is None
+
+    # Retrieve and double-check
+    get_resp = await _get_tile(client, tile_id=tile_id)
+    assert get_resp.status_code == 200
+    get_data = get_resp.json()
+    assert get_data["type"] == "Table"
+    assert get_data["table_tile"]["table_type"] == "basic"
+
+
+@pytest.mark.anyio
+async def test_patch_tile_change_type_with_new_specialized_data(client: AsyncClient):
+    """Change tile type from Table to Plot and verify specialized objects shift."""
+    # Interface and tab
+    interface_resp = await _create_test_interface(client)
+    tab_resp = await _create_test_tab(client, interface_resp.json()["id"])
+    tab_id = tab_resp.json()["id"]
+
+    # Create initial Table tile
+    create_resp = await _create_test_table_tile(
+        client,
+        tab_id,
+        name="change-to-plot-tile",
+        table_type="initial",
+    )
+    assert create_resp.status_code == 201
+    tile_id = create_resp.json()["id"]
+
+    # Patch to switch to Plot with payload
+    plot_payload = {
+        "type": "Plot",
+        "plot_tile": {
+            "plot_type": "scatter",
+            "x_axis": "x_data",
+            "y_axis": "y_data",
+        },
+    }
+    patch_resp = await _patch_tile(client, tile_id=tile_id, patch_data=plot_payload)
+    assert patch_resp.status_code == 200
+    data = patch_resp.json()
+    assert data["type"] == "Plot"
+    assert data["plot_tile"] is not None
+    assert data["plot_tile"]["plot_type"] == "scatter"
+    # Table specialized should now be None
+    assert data["table_tile"] is None
+    assert data["view_tile"] is None
+    assert data["editor_tile"] is None
+
+    # Retrieve again
+    get_r = await _get_tile(client, tile_id=tile_id)
+    assert get_r.status_code == 200
+    get_d = get_r.json()
+    assert get_d["type"] == "Plot"
+    assert get_d["plot_tile"]["x_axis"] == "x_data"
+    assert get_d["table_tile"] is None
+
+
+@pytest.mark.anyio
+async def test_patch_tile_change_type_without_specialized_data(client: AsyncClient):
+    """Change type without supplying specialized payload to ensure defaults created."""
+    interface_resp = await _create_test_interface(client)
+    tab_resp = await _create_test_tab(client, interface_resp.json()["id"])
+    tab_id = tab_resp.json()["id"]
+
+    # Create Editor tile first
+    editor_resp = await _create_test_editor_tile(
+        client,
+        tab_id,
+        name="to-view-default",
+    )
+    assert editor_resp.status_code == 201
+    tile_id = editor_resp.json()["id"]
+
+    # Change type to View without view_tile data
+    patch_payload = {"type": "View"}
+    patch_resp = await _patch_tile(client, tile_id=tile_id, patch_data=patch_payload)
+    assert patch_resp.status_code == 200
+    data = patch_resp.json()
+    assert data["type"] == "View"
+    # View tile should exist even though payload not provided (default)
+    assert data["view_tile"] is not None
+    # Other specialized tiles None
+    assert data["table_tile"] is None
+    assert data["plot_tile"] is None
+    assert data["editor_tile"] is None
+
+
+@pytest.mark.anyio
+async def test_create_tile_with_specialized_data_in_one_step(client: AsyncClient):
+    """Test creating a tile with specialized data in a single DAO call."""
+    # Create an interface and tab
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+
+    # Create tiles of each type with specialized data in one step
+
+    # Table tile
+    table_response = await _create_test_tile(
+        client,
+        tab_id,
+        name="one-step-table-tile",
+        tile_type="Table",
+        table_tile_data={
+            "table_type": "unified",
+            "page_number": "1",
+            "column_order": "id,name,value",
+        },
+    )
+    assert table_response.status_code == 201
+    table_data = table_response.json()
+    assert table_data["type"] == "Table"
+    assert table_data["table_tile"] is not None
+    assert table_data["table_tile"]["table_type"] == "unified"
+    assert table_data["table_tile"]["page_number"] == "1"
+    assert table_data["table_tile"]["column_order"] == "id,name,value"
+
+    # Plot tile
+    plot_response = await _create_test_tile(
+        client,
+        tab_id,
+        name="one-step-plot-tile",
+        tile_type="Plot",
+        plot_tile_data={
+            "plot_type": "scatter",
+            "x_axis": "time",
+            "y_axis": "value",
+            "plot_scale_x": "linear",
+            "plot_scale_y": "log",
+        },
+    )
+    assert plot_response.status_code == 201
+    plot_data = plot_response.json()
+    assert plot_data["type"] == "Plot"
+    assert plot_data["plot_tile"] is not None
+    assert plot_data["plot_tile"]["plot_type"] == "scatter"
+    assert plot_data["plot_tile"]["x_axis"] == "time"
+    assert plot_data["plot_tile"]["plot_scale_y"] == "log"
+
+    # View tile
+    view_response = await _create_test_tile(
+        client,
+        tab_id,
+        name="one-step-view-tile",
+        tile_type="View",
+        view_tile_data={
+            "base_index": "custom-index",
+        },
+    )
+    assert view_response.status_code == 201
+    view_data = view_response.json()
+    assert view_data["type"] == "View"
+    assert view_data["view_tile"] is not None
+    assert view_data["view_tile"]["base_index"] == "custom-index"
+
+    # Editor tile
+    editor_response = await _create_test_tile(
+        client,
+        tab_id,
+        name="one-step-editor-tile",
+        tile_type="Editor",
+        editor_tile_data={
+            "file_type": "markdown",
+            "file_path": "notes.md",
+            "content": "# Test Notes\nThis is a test document.",
+        },
+    )
+    assert editor_response.status_code == 201
+    editor_data = editor_response.json()
+    assert editor_data["type"] == "Editor"
+    assert editor_data["editor_tile"] is not None
+    assert editor_data["editor_tile"]["file_type"] == "markdown"
+    assert (
+        editor_data["editor_tile"]["content"]
+        == "# Test Notes\nThis is a test document."
+    )
+
+    # Test with pre-specified ID
+    custom_id = str(uuid.uuid4())
+    custom_id_response = await _create_test_tile(
+        client,
+        tab_id,
+        name="custom-id-table-tile",
+        tile_type="Table",
+        table_tile_data={
+            "table_type": "custom-id-table",
+        },
+        tile_id=custom_id,
+    )
+    assert custom_id_response.status_code == 201
+    custom_id_data = custom_id_response.json()
+    assert custom_id_data["id"] == custom_id
+    assert custom_id_data["table_tile"] is not None
+    assert custom_id_data["table_tile"]["id"] == custom_id
+    assert custom_id_data["table_tile"]["tile_id"] == custom_id
