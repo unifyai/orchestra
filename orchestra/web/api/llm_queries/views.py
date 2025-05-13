@@ -81,63 +81,12 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     :raises HTTPException: when user has insufficient credits.
     """
-    # TODO: This is a hacky fix to block malicious users.
-    # Configuration for malicious pattern detection
-    MIN_PATTERNS_REQUIRED = (
-        3  # Minimum number of patterns that must match to block request
-    )
-    malicious_patterns = [
-        # Core identity patterns
-        "Oracle Planner",
-        "Oracle system",
-        "master strategist",
-        "specialized AI component",
-        # Task-related patterns
-        "task decomposition",
-        "workflow design",
-        "workflow_list",
-        "multi-step tasks",
-        "sequentially invoking",
-        # System-related patterns
-        "Oracle execution engine",
-        "system's memory component",
-        "powerful tools",
-        "sophisticated mechanisms",
-        "context and memory",
-        # Role-specific patterns
-        "DO NOT execute",
-        "create the blueprint",
-        "logically sequenced",
-        "step-by-step workflows",
-        "analyze user goals",
-    ]
 
     if isinstance(request, list):
         request_priority_list = request
     else:
         request_priority_list = [request]
 
-    # Check for malicious patterns in any request
-    try:
-        for req in request_priority_list:
-            for message in req.messages:
-                if message.get("content"):
-                    content = message["content"].lower()
-                    # Count how many patterns match
-                    pattern_matches = sum(
-                        1
-                        for pattern in malicious_patterns
-                        if pattern.lower() in content
-                    )
-
-                    # Only block if we exceed the minimum threshold
-                    if pattern_matches >= MIN_PATTERNS_REQUIRED:
-                        raise HTTPException(
-                            status_code=403,
-                            detail="This request has been blocked due to policy violations.",
-                        )
-    except Exception as e:
-        pass
     try_request = 0
     num_tries = min(5, len(request_priority_list))
     region = None
