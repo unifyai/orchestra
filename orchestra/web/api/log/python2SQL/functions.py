@@ -747,7 +747,12 @@ def _handle_functions(
 
             # Ensure vectors exist for this key with the specified model
             # Fetch all text values for this key to create embeddings
-            texts_q = _build_subquery_for_identifier(key, log_event_alias, log_event_ids, session=session)
+            texts_q = _build_subquery_for_identifier(
+                key,
+                log_event_alias,
+                log_event_ids,
+                session=session,
+            )
             rows = session.execute(select(texts_q))
             id_to_text = {
                 row.log_event_id: row.str_value

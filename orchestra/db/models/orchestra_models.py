@@ -1301,7 +1301,11 @@ class Embedding(Base):
     __tablename__ = "embedding"
 
     id = Column(Integer, primary_key=True)
-    ref_id = Column(Integer, ForeignKey("log_event.id"), nullable=False)
+    ref_id = Column(
+        Integer,
+        ForeignKey("log_event.id", ondelete="CASCADE"),
+        nullable=False,
+    )
     model = Column(String, nullable=False)
     key = Column(String, nullable=False)
     vector = Column(Vector(1536), nullable=False)
