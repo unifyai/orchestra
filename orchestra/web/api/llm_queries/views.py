@@ -8,17 +8,14 @@ from fastapi.param_functions import Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from providers.completion import PROVIDER_CLASSES
 
-from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.custom_router_dao import CustomRouterDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
-from orchestra.db.dao.model_dao import ModelDAO
-from orchestra.db.dao.provider_dao import ProviderDAO
-from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.db.dao.router_dao import RouterDAO
 from orchestra.db.dao.users_dao import UsersDAO
+from orchestra.web.api.dependencies import _ro_session
 from orchestra.web.api.llm_queries.schema import (
     ChatCompletionRequest,
     ChatCompletionResponse,
@@ -48,17 +45,12 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
     request: Union[ChatCompletionRequest, List[ChatCompletionRequest]],
     response_fastapi: Response,
-    users_dao: UsersDAO = Depends(),
-    model_dao: ModelDAO = Depends(),
-    provider_dao: ProviderDAO = Depends(),
     endpoint_dao: EndpointDAO = Depends(),
-    query_dao: QueryDAO = Depends(),
     benchmark_run_dao: BenchmarkRunDAO = Depends(),
     custom_endpoint_dao: CustomEndpointDAO = Depends(),
     custom_api_key_dao: CustomApiKeyDAO = Depends(),
     custom_router_dao: CustomRouterDAO = Depends(),
     router_dao: RouterDAO = Depends(),
-    auth_user_dao: AuthUserDAO = Depends(),
 ) -> Union[ChatCompletionResponse, StreamingResponse]:
     """
     OpenAI compatible `/chat/completions` endpoint for LLM inference.
@@ -71,11 +63,12 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     :param background_tasks: FastAPI background tasks.
     :param request_fastapi: FastAPI request object.
     :param request: ChatCompletionRequest object.
-    :param users_dao: DAO for users models.
-    :param model_dao: DAO for model models.
-    :param provider_dao: DAO for provider models.
     :param endpoint_dao: DAO for endpoint models.
-    :param query_dao: DAO for query models.
+    :param benchmark_run_dao: DAO for benchmark run models.
+    :param custom_endpoint_dao: DAO for custom endpoint models.
+    :param custom_api_key_dao: DAO for custom api key models.
+    :param custom_router_dao: DAO for custom router models.
+    :param router_dao: DAO for router models.
 
     :return: ChatCompletionResponse object.
 
@@ -160,7 +153,8 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         on_prem = os.environ.get("ON_PREM")
         user_id = request_fastapi.state.user_id
         use_custom_keys = request.use_custom_keys
-        user = users_dao.get_user_with_id(user_id)
+        with _ro_session() as ro_sess:
+            user = UsersDAO(ro_sess).get_user_with_id(user_id)
         store_prompt = user.store_prompts if user else True
         store_prompt = True if store_prompt is None else store_prompt
         store_query_body, store_response_body = False, False
