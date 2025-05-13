@@ -175,6 +175,12 @@ def create_tab(
 
     interface = interface_dao.get(getattr(request, "interface_id"))
 
+    if not interface:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Interface with ID {getattr(request, 'interface_id')} not found.",
+        )
+
     # Check if tab already exists with the same name in this interface
     existing = tab_dao.get_by_interface_and_name(
         interface_id=interface.id,
