@@ -2208,6 +2208,14 @@ def get_logs(
         False,
         description="If True, return only log IDs instead of full entries.",
     ),
+    randomize: bool = Query(
+        False,
+        description="If true, return logs in a deterministic random order (fixed seed) instead of newest-first.",
+    ),
+    seed: Optional[str] = Query(
+        "42",
+        description="If provided, use this seed for deterministic random ordering instead of the default.",
+    ),
     project_dao: ProjectDAO = Depends(),
     field_type_dao: FieldTypeDAO = Depends(),
     context_dao: ContextDAO = Depends(),
@@ -2292,6 +2300,8 @@ def get_logs(
             context_dao=context_dao,
             session=session,
             return_versions=return_versions,
+            randomize=randomize,
+            seed=seed,
         )
         if return_ids_only:
             if return_versions:
@@ -2620,6 +2630,10 @@ def get_logs_latest_timestamp(
     field_type_dao: FieldTypeDAO = Depends(),
     context_dao: ContextDAO = Depends(),
     session=Depends(get_db_session),
+    randomize: bool = Query(
+        False,
+        description="If true, return logs in a deterministic random order (fixed seed) instead of newest-first.",
+    ),
 ):
     """
     Returns the update timestamp of the most recently updated log within the specified
@@ -2643,6 +2657,7 @@ def get_logs_latest_timestamp(
         context_dao=context_dao,
         session=session,
         latest_timestamp=True,
+        randomize=randomize,
     )
 
 
