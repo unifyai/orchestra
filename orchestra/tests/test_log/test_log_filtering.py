@@ -19,6 +19,30 @@ from . import (
     "expression, values",
     [
         (
+            "d.get('x') is None",
+            {"d": {}},
+        ),
+        (
+            "d.get('y', 5) == 5",
+            {"d": {}},
+        ),
+        (
+            "d.get('num') > 3",
+            {"d": {"num": 4}},
+        ),
+        (
+            "d.get('arr')[1] == 4",
+            {"d": {"arr": [3, 4, 5]}},
+        ),
+        (
+            "d.get('missing', [1,2])[0] == 1",
+            {"d": {}},
+        ),
+        (
+            "d.get('nullkey') is None",
+            {"d": {"nullkey": None}},
+        ),
+        (
             "((a == 5) and (b > 7)) or (len(c) < 10 and 'earth' not in d)",
             {"a": 5, "b": 8, "c": "abcdef", "d": "hello world"},
         ),
@@ -354,6 +378,28 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
                 "operand": "dict_method",
                 "method": "items",
                 "rhs": {"type": "identifier", "value": "my_dict"},
+            },
+        ),
+        (
+            "my_dict.get('a')",
+            {
+                "operand": "dict_method",
+                "method": "get",
+                "rhs": {"type": "identifier", "value": "my_dict"},
+                "key": "a",
+                "default": None,
+                "default_supplied": False,
+            },
+        ),
+        (
+            "my_dict.get('b', 10)",
+            {
+                "operand": "dict_method",
+                "method": "get",
+                "rhs": {"type": "identifier", "value": "my_dict"},
+                "key": "b",
+                "default": 10,
+                "default_supplied": True,
             },
         ),
         # if‑expr
