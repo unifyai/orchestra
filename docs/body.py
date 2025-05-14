@@ -68,7 +68,11 @@ def get_param_fields(properties, required_props, chat_completions=False):
         description = property.get("description", "")
         default = property.get("default")
         if default is not None:
-            default = "{" + default + "}"
+            # If the default already begins with '{', it is already a valid JSX
+            # expression (produced by get_param_details). Otherwise, wrap it so
+            # that it parses correctly in MDX.
+            if not default.startswith("{"):
+                default = "{" + default + "}"
             default_str = f" default={default}"
         else:
             default_str = ""
@@ -180,7 +184,22 @@ def get_body(path, route, schemas, route_config, curl_example, python_example):
                 description,
                 example,
             ) = get_param_details(parameter)
-            default = None if not default else default
+
+            # Clean up the default string returned from `get_param_details` so that
+            # it is just the literal value (e.g. "300", "false", "\"foo\"")
+            if default:
+                default_str = default.strip()
+                # remove the leading 'default=' if present
+                if default_str.startswith("default="):
+                    default_str = default_str[len("default=") :]
+                # remove surrounding braces {..} because `get_param_fields` will
+                # add them if needed
+                if default_str.startswith("{") and default_str.endswith("}"):
+                    default_str = default_str[1:-1]
+                default = default_str
+            else:
+                default = None
+
             properties.append(
                 {
                     "title": name,
