@@ -770,7 +770,7 @@ def get_interface_checkpoint(
 
     # Find the latest checkpoint
     if interface_id:
-        checkpoint = interface_dao.get_latest_checkpoint(id=interface_id)
+        checkpoint = interface_dao.get_checkpoint(id=interface_id)
     else:
         _, project_obj = _get_interface(
             request_fastapi=request_fastapi,
@@ -782,7 +782,7 @@ def get_interface_checkpoint(
             interface_dao=interface_dao,
             for_update=True,
         )
-        checkpoint = interface_dao.get_latest_checkpoint(
+        checkpoint = interface_dao.get_checkpoint(
             project_id=project_obj.id,
             name=name,
         )
