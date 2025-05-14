@@ -1810,3 +1810,63 @@ async def test_create_tile_with_specialized_data_in_one_step(client: AsyncClient
     assert custom_id_data["table_tile"]["id"] is not None
     assert custom_id_data["table_tile"]["id"] != custom_id
     assert custom_id_data["table_tile"]["tile_id"] == custom_id
+
+
+@pytest.mark.anyio
+async def test_restore_tile_checkpoint(client: AsyncClient):
+    """Ensure a tile checkpoint keeps its original state even after the active tile and its specialized data are updated."""
+    # Create interface and tab
+    interface_resp = await _create_test_interface(client)
+    interface_id = interface_resp.json()["id"]
+    tab_resp = await _create_test_tab(client, interface_id)
+    tab_id = tab_resp.json()["id"]
+
+    # Create a Table tile with initial properties
+    original_color = "#123456"
+    table_resp = await _create_test_table_tile(
+        client,
+        tab_id,
+        name="checkpoint-table-tile",
+        table_type="basic",
+        color=original_color,
+    )
+    assert table_resp.status_code == 201
+    tile_id = table_resp.json()["id"]
+
+    print(table_resp.json())
+
+    # Create checkpoint
+    cp_resp = await _create_tile_checkpoint(client, tile_id=tile_id)
+    assert cp_resp.status_code == 200
+    cp_id = cp_resp.json()["id"]  # may be needed for debugging
+    assert cp_resp.json()["is_checkpoint"] is True
+    assert cp_resp.json()["color"] == original_color
+    assert cp_resp.json()["table_tile"]["table_type"] == "basic"
+
+    # Update active tile (both base and specialized)
+    patch_payload = {
+        "color": "#654321",
+        "table_tile": {
+            "table_type": "advanced",
+        },
+    }
+    upd_resp = await _patch_tile(client, tile_id=tile_id, patch_data=patch_payload)
+    assert upd_resp.status_code == 200
+    assert upd_resp.json()["color"] == "#654321"
+    assert upd_resp.json()["table_tile"]["table_type"] == "advanced"
+
+    # Fetch checkpoint again and assert immutability
+    cp_fetch = await _get_tile_checkpoint(client, tile_id=tile_id)
+    assert cp_fetch.status_code == 200
+    cp_data = cp_fetch.json()
+
+    assert cp_data["color"] == original_color  # original color retained
+    assert cp_data["table_tile"]["table_type"] == "basic"  # original specialized data
+    assert cp_data["is_checkpoint"] is True
+
+    # Active tile should reflect updated values
+    active_get = await _get_tile(client, tile_id=tile_id)
+    assert active_get.status_code == 200
+    active_data = active_get.json()
+    assert active_data["color"] == "#654321"
+    assert active_data["table_tile"]["table_type"] == "advanced"
