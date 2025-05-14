@@ -502,7 +502,7 @@ async def test_get_interface_checkpoint(client: AsyncClient):
     checkpoint_id = checkpoint_response.json()["id"]
 
     # Get the checkpoint
-    response = await _get_interface_checkpoint(client, interface_id=checkpoint_id)
+    response = await _get_interface_checkpoint(client, interface_id=interface_id)
     assert response.status_code == 200
 
     data = response.json()
@@ -964,3 +964,52 @@ async def test_create_interface_checkpoint_with_renamed_tabs(client: AsyncClient
     checkpoint_data = second_checkpoint.json()
     assert len(checkpoint_data["tabs"]) == 1
     assert checkpoint_data["tabs"][0]["name"] == "new-name"
+
+
+@pytest.mark.anyio
+async def test_restore_interface_checkpoint(client: AsyncClient):
+    """Ensure that an interface checkpoint remains unchanged after updates to the active interface."""
+    # 1. Create an interface with a known color
+    create_resp = await _create_test_interface(client, color="#FF0000")
+    assert create_resp.status_code == 201
+    interface_id = create_resp.json()["id"]
+
+    # 2. Create a checkpoint for this interface
+    checkpoint_resp = await _create_interface_checkpoint(
+        client,
+        interface_id=interface_id,
+    )
+    assert checkpoint_resp.status_code == 200
+    checkpoint_id = checkpoint_resp.json()["id"]
+
+    # Sanity check that checkpoint captured the original color
+    assert checkpoint_resp.json()["color"] == "#FF0000"
+    assert checkpoint_resp.json()["is_checkpoint"] is True
+
+    # 3. Update the active interface (change color and name)
+    update_payload = {"color": "#00FF00", "name": "updated-interface-name"}
+    update_resp = await _update_interface(
+        client,
+        interface_id=interface_id,
+        update_data=update_payload,
+    )
+    assert update_resp.status_code == 200
+    assert update_resp.json()["color"] == "#00FF00"
+    assert update_resp.json()["name"] == "updated-interface-name"
+
+    # 4. Fetch the checkpoint again and verify it is unchanged
+    checkpoint_get = await _get_interface_checkpoint(client, interface_id=interface_id)
+    assert checkpoint_get.status_code == 200
+    checkpoint_data = checkpoint_get.json()
+
+    # The checkpoint should still reflect the original values
+    assert checkpoint_data["color"] == "#FF0000"
+    assert checkpoint_data["name"] == TEST_INTERFACE  # original name
+    assert checkpoint_data["is_checkpoint"] is True
+
+    # Active interface should reflect updated values
+    active_get = await _get_interface(client, interface_id=interface_id)
+    assert active_get.status_code == 200
+    active_data = active_get.json()
+    assert active_data["color"] == "#00FF00"
+    assert active_data["name"] == "updated-interface-name"
