@@ -392,7 +392,7 @@ async def test_default_unity_resources_on_user_creation(client: AsyncClient):
             for tile in tiles
             if tile["type"] == "Table"
             and tile["context"] == "Tasks"
-            and tile["table"] == "Tasks"
+            and tile["name"] == "Tasks"
         ),
         None,
     )
