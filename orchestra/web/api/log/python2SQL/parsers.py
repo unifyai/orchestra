@@ -637,17 +637,49 @@ def _transform_ast(node: ast.AST) -> dict:
         # Handle zip function
         elif func_name == "zip":
             return {"operand": "zip", "rhs": [_transform_ast(arg) for arg in node.args]}
-        # Handle dict methods (keys, values, items)
+        # Handle dict methods (keys, values, items, get)
         elif isinstance(node.func, ast.Attribute) and node.func.attr in (
             "keys",
             "values",
             "items",
+            "get",
         ):
-            return {
-                "operand": "dict_method",
-                "method": node.func.attr,
-                "rhs": _transform_ast(node.func.value),
-            }
+            if node.func.attr == "get":
+                # Handle dict.get(key, default) method
+                if len(node.args) == 0:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="dict.get() requires at least one argument",
+                    )
+                if len(node.args) > 2:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="dict.get() accepts at most two arguments",
+                    )
+
+                container = _transform_ast(node.func.value)
+                key_expr = _transform_ast(node.args[0])
+                default_expr = None
+                if len(node.args) > 1:
+                    default_expr = _transform_ast(node.args[1])
+
+                filter_dict = {
+                    "operand": "dict_method",
+                    "method": "get",
+                    "rhs": container,
+                    "key": key_expr,
+                    "default": default_expr,
+                    "default_supplied": len(node.args) > 1,
+                }
+
+                return filter_dict
+            else:
+                # Handle other dict methods (keys, values, items)
+                return {
+                    "operand": "dict_method",
+                    "method": node.func.attr,
+                    "rhs": _transform_ast(node.func.value),
+                }
 
         # Handle other function calls
         else:

@@ -48,6 +48,7 @@ __all__ = [
     "_handle_list_comp",
     "_handle_dict_comp",
     "_handle_zip",
+    "_handle_dict_get",
 ]
 
 # Helper function for functions (len, str, type, round, round_timestamp, exists, version, isNone)
@@ -892,7 +893,17 @@ def _handle_dict_method(
     is_derived,
     local_scope=None,
 ):
-    method = filter_dict["method"]  # e.g., "keys", "values", "items"
+    method = filter_dict["method"]  # e.g., "keys", "values", "items", "get"
+    if method == "get":
+        return _handle_dict_get(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope,
+            default_supplied=filter_dict.get("default_supplied", False),
+        )
     src = build_sql_query(
         filter_dict["rhs"],
         log_event_alias,
@@ -1865,6 +1876,236 @@ def _handle_dict_comp(
             .subquery(name="final")
         )
     return final
+
+
+def ensure_jsonb(expr):
+    """
+    Ensures an expression is cast to JSONB type.
+
+    Args:
+        expr: SQLAlchemy expression or literal value
+
+    Returns:
+        SQLAlchemy expression of JSONB type
+    """
+    if isinstance(expr, BindParameter):
+        # For literal values, use to_jsonb for proper conversion
+        return func.to_jsonb(literal(expr.value))
+    else:
+        # For SQL expressions, cast to JSONB
+        return cast(expr, JSONB)
+
+
+def _handle_dict_get(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived,
+    local_scope=None,
+    default_supplied=False,
+):
+    """
+    Handle dictionary get() method in filter queries.
+
+    This function processes expressions like my_dict.get('key', default_value)
+    by extracting the value for the given key from a JSONB object and providing
+    a default value if the key doesn't exist or the value is null.
+    """
+    # Check for zero arguments
+    if "key" not in filter_dict:
+        raise ValueError("dict.get() requires at least one argument (key)")
+
+    # Check for too many arguments
+    if len([k for k in filter_dict.keys() if k in ("key", "default")]) > 2:
+        raise ValueError("dict.get() accepts at most 2 arguments (key, default)")
+
+    # Build SQL for the dictionary container
+    container_sql = build_sql_query(
+        filter_dict["rhs"],
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+    )
+
+    # Build SQL for the key
+    key_sql = build_sql_query(
+        filter_dict["key"],
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+    )
+
+    # Build SQL for the default value if provided
+    default_sql = None
+    if "default" in filter_dict and filter_dict["default"] is not None:
+        default_sql = build_sql_query(
+            filter_dict["default"],
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+        )
+
+    def process_get(container_val, key_val, default_val=None):
+        """
+        Process dictionary get operation with proper type handling.
+
+        Args:
+            container_val: JSONB container expression
+            key_val: Key expression
+            default_val: Optional default value expression
+
+        Returns:
+            tuple: (value_expr, result_type)
+        """
+        # Ensure container is JSONB
+        container_jsonb = ensure_jsonb(container_val)
+
+        # Ensure we're working with a JSON object, not an array or scalar
+        is_object = func.jsonb_typeof(container_jsonb) == "object"
+
+        # Use a CASE expression to handle non-object values safely
+        safe_val = case((is_object, container_jsonb), else_=literal("{}", type_=JSONB))
+
+        # Extract the raw JSONB value using -> operator (not ->> which returns text)
+        key_text = cast(key_val, Text)
+        extracted_jsonb = safe_val.op("->")(key_text)
+
+        # Determine the type of the extracted value
+        json_type = func.jsonb_typeof(extracted_jsonb)
+
+        # Map JSON types to our type system with more granular handling
+        result_type = case(
+            (
+                json_type == "number",
+                # Check if it's an integer (no decimal part)
+                case(
+                    (
+                        func.abs(cast(extracted_jsonb, Numeric) % 1) < 0.000001,
+                        literal("int"),
+                    ),
+                    else_=literal("float"),
+                ),
+            ),
+            (json_type == "boolean", literal("bool")),
+            (json_type == "string", literal("str")),
+            (json_type == "array", literal("list")),
+            (json_type == "object", literal("dict")),
+            (json_type == "null", literal("NoneType")),
+            else_=literal("str"),
+        )
+
+        if default_val is not None:
+            # Convert default to JSONB for proper coalescing
+            default_jsonb = ensure_jsonb(default_val)
+
+            # Get default type
+            if isinstance(default_val, BindParameter):
+                default_type = LogDAO.infer_type("", default_val.value)
+            elif isinstance(default_val, Subquery):
+                _, default_type = _select_value(default_val, session)
+            else:
+                default_type = "str"
+
+            # Coalesce at the JSONB level
+            coalesced_jsonb = func.coalesce(extracted_jsonb, default_jsonb)
+
+            # Cast the result to the default's type
+            value_expr = cast_expr(
+                coalesced_jsonb,
+                session.execute(select(result_type)).scalar_one(),
+                default_type,
+            )
+            return value_expr, default_type
+        else:
+            # No default - use the inferred type directly
+            inferred_type = session.execute(select(result_type)).scalar_one()
+
+            # For scalar types, we need to extract the value with ->>
+            if inferred_type in ("str", "int", "float", "bool"):
+                # For scalar types, we need to extract as text then cast
+                extracted_text = safe_val.op("->>")(key_text)
+                value_expr = cast_expr(extracted_text, "str", inferred_type)
+            else:
+                # For complex types (list, dict), keep as JSONB
+                value_expr = extracted_jsonb
+
+            return value_expr, inferred_type
+
+    # Handle subquery containers
+    if isinstance(container_sql, Subquery):
+        container_val, _ = _select_value(container_sql, session, is_collection=True)
+
+        # Process key value
+        if isinstance(key_sql, Subquery):
+            key_val, _ = _select_value(key_sql, session)
+        else:
+            key_val = key_sql
+
+        # Process default value if provided
+        if default_sql is not None:
+            if isinstance(default_sql, Subquery):
+                default_val, _ = _select_value(default_sql, session)
+            else:
+                default_val = default_sql
+
+            value_expr, result_type = process_get(container_val, key_val, default_val)
+        else:
+            value_expr, result_type = process_get(container_val, key_val)
+
+        # Create the final subquery
+        select_cols = [container_sql.c.log_event_id.label("log_event_id")]
+
+        # Include composite indices if they exist
+        if "__comp_idx__" in container_sql.c.keys():
+            select_cols.append(container_sql.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in container_sql.c.keys():
+            select_cols.append(container_sql.c.__parent_idx__.label("__parent_idx__"))
+
+        # Add the value and type columns
+        select_cols.extend(
+            [value_expr.label("value"), literal(result_type).label("inferred_type")],
+        )
+
+        return (
+            select(*select_cols)
+            .select_from(container_sql)
+            .subquery("dict_get_subquery")
+        )
+    else:
+        # For non-subquery containers (literals or direct SQL expressions)
+        if default_sql is not None:
+            value_expr, result_type = process_get(container_sql, key_sql, default_sql)
+        else:
+            value_expr, result_type = process_get(container_sql, key_sql)
+
+        # For direct expressions, we need to wrap in a subquery if we have log_event_ids
+        if log_event_ids:
+            if isinstance(log_event_ids, list):
+                ids_subq = select(
+                    literal(id_).label("log_event_id") for id_ in log_event_ids
+                ).subquery()
+            else:
+                ids_subq = select(log_event_ids.c.id.label("log_event_id")).subquery()
+
+            return (
+                select(
+                    ids_subq.c.log_event_id,
+                    value_expr.label("value"),
+                    literal(result_type).label("inferred_type"),
+                )
+                .select_from(ids_subq)
+                .subquery("dict_get_subquery")
+            )
+        else:
+            # If no log_event_ids, just return the expression
+            return value_expr
 
 
 def _handle_zip(
