@@ -737,6 +737,11 @@ async def test_create_different_tile_types(client: AsyncClient):
     assert table_data["table_tile"]["table_type"] == "basic"
     assert table_data["table_tile"]["selected"] == "123,456"
     assert table_data["table_tile"]["page_number"] == "1"
+    # Verify specialized tile ID relationship
+    assert "id" in table_data["table_tile"]
+    assert table_data["table_tile"]["id"] is not None
+    assert table_data["table_tile"]["id"] != table_data["id"]
+    assert table_data["table_tile"]["tile_id"] == table_data["id"]
 
     # Create a plot tile
     plot_response = await _create_test_plot_tile(
@@ -753,6 +758,11 @@ async def test_create_different_tile_types(client: AsyncClient):
     assert plot_data["plot_tile"]["plot_type"] == "scatter"
     assert plot_data["plot_tile"]["x_axis"] == "x_data"
     assert plot_data["plot_tile"]["y_axis"] == "y_data"
+    # Verify specialized tile ID relationship
+    assert "id" in plot_data["plot_tile"]
+    assert plot_data["plot_tile"]["id"] is not None
+    assert plot_data["plot_tile"]["id"] != plot_data["id"]
+    assert plot_data["plot_tile"]["tile_id"] == plot_data["id"]
 
     # Create a view tile
     view_response = await _create_test_view_tile(client, tab_id, base_index="index1")
@@ -761,6 +771,11 @@ async def test_create_different_tile_types(client: AsyncClient):
     assert view_data["type"] == "View"
     assert "view_tile" in view_data
     assert view_data["view_tile"]["base_index"] == "index1"
+    # Verify specialized tile ID relationship
+    assert "id" in view_data["view_tile"]
+    assert view_data["view_tile"]["id"] is not None
+    assert view_data["view_tile"]["id"] != view_data["id"]
+    assert view_data["view_tile"]["tile_id"] == view_data["id"]
 
     # Create an editor tile
     editor_response = await _create_test_editor_tile(
@@ -777,6 +792,11 @@ async def test_create_different_tile_types(client: AsyncClient):
     assert editor_data["editor_tile"]["file_type"] == "python"
     assert editor_data["editor_tile"]["content"] == "print('Test')"
     assert editor_data["editor_tile"]["file_path"] == "test.py"
+    # Verify specialized tile ID relationship
+    assert "id" in editor_data["editor_tile"]
+    assert editor_data["editor_tile"]["id"] is not None
+    assert editor_data["editor_tile"]["id"] != editor_data["id"]
+    assert editor_data["editor_tile"]["tile_id"] == editor_data["id"]
 
 
 @pytest.mark.anyio
@@ -1192,6 +1212,11 @@ async def test_update_specialized_tile_data(client: AsyncClient):
         selected="Entries/id_123456,Entries/id_123457",
     )
     table_tile_id = table_tile_response.json()["id"]
+    # Verify specialized tile ID relationship
+    assert "id" in table_tile_response.json()["table_tile"]
+    assert table_tile_response.json()["table_tile"]["id"] is not None
+    assert table_tile_response.json()["table_tile"]["id"] != table_tile_id
+    assert table_tile_response.json()["table_tile"]["tile_id"] == table_tile_id
 
     # Update the specialized table data
     update_data = {
@@ -1211,6 +1236,11 @@ async def test_update_specialized_tile_data(client: AsyncClient):
         updated_data["table_tile"]["selected"] == "Entries/id_123458,Entries/id_123459"
     )
     assert updated_data["table_tile"]["sorting"] == "column1:asc"
+    # Verify specialized tile ID relationship after update
+    assert "id" in updated_data["table_tile"]
+    assert updated_data["table_tile"]["id"] is not None
+    assert updated_data["table_tile"]["id"] != updated_data["id"]
+    assert updated_data["table_tile"]["tile_id"] == updated_data["id"]
 
     # Create a plot tile
     plot_tile_response = await _create_test_plot_tile(
@@ -1220,6 +1250,11 @@ async def test_update_specialized_tile_data(client: AsyncClient):
         plot_type="scatter",
     )
     plot_tile_id = plot_tile_response.json()["id"]
+    # Verify specialized tile ID relationship
+    assert "id" in plot_tile_response.json()["plot_tile"]
+    assert plot_tile_response.json()["plot_tile"]["id"] is not None
+    assert plot_tile_response.json()["plot_tile"]["id"] != plot_tile_id
+    assert plot_tile_response.json()["plot_tile"]["tile_id"] == plot_tile_id
 
     # Update the specialized plot data
     update_data = {
@@ -1241,6 +1276,11 @@ async def test_update_specialized_tile_data(client: AsyncClient):
     assert updated_data["plot_tile"]["plot_scale_y"] == "log"
     assert updated_data["plot_tile"]["x_axis"] == "category"
     assert updated_data["plot_tile"]["y_axis"] == "value"
+    # Verify specialized tile ID relationship after update
+    assert "id" in updated_data["plot_tile"]
+    assert updated_data["plot_tile"]["id"] is not None
+    assert updated_data["plot_tile"]["id"] != updated_data["id"]
+    assert updated_data["plot_tile"]["tile_id"] == updated_data["id"]
 
     # Create an editor tile
     editor_tile_response = await _create_test_editor_tile(
@@ -1250,6 +1290,11 @@ async def test_update_specialized_tile_data(client: AsyncClient):
         file_type="python",
     )
     editor_tile_id = editor_tile_response.json()["id"]
+    # Verify specialized tile ID relationship
+    assert "id" in editor_tile_response.json()["editor_tile"]
+    assert editor_tile_response.json()["editor_tile"]["id"] is not None
+    assert editor_tile_response.json()["editor_tile"]["id"] != editor_tile_id
+    assert editor_tile_response.json()["editor_tile"]["tile_id"] == editor_tile_id
 
     # Update the specialized editor data
     update_data = {
@@ -1267,6 +1312,11 @@ async def test_update_specialized_tile_data(client: AsyncClient):
     assert updated_data["editor_tile"]["file_type"] == "javascript"
     assert updated_data["editor_tile"]["file_path"] == "script.js"
     assert updated_data["editor_tile"]["content"] == "console.log('Hello');"
+    # Verify specialized tile ID relationship after update
+    assert "id" in updated_data["editor_tile"]
+    assert updated_data["editor_tile"]["id"] is not None
+    assert updated_data["editor_tile"]["id"] != updated_data["id"]
+    assert updated_data["editor_tile"]["tile_id"] == updated_data["id"]
 
 
 @pytest.mark.anyio
@@ -1282,12 +1332,27 @@ async def test_patch_specialized_tile_endpoint(client: AsyncClient):
     table_tile = await _create_test_table_tile(client, tab_id, name="spec-table-tile")
     print(table_tile.json())
     table_id = table_tile.json()["id"]
+    # Verify specialized tile ID relationship
+    assert "id" in table_tile.json()["table_tile"]
+    assert table_tile.json()["table_tile"]["id"] is not None
+    assert table_tile.json()["table_tile"]["id"] != table_id
+    assert table_tile.json()["table_tile"]["tile_id"] == table_id
 
     plot_tile = await _create_test_plot_tile(client, tab_id, name="spec-plot-tile")
     plot_id = plot_tile.json()["id"]
+    # Verify specialized tile ID relationship
+    assert "id" in plot_tile.json()["plot_tile"]
+    assert plot_tile.json()["plot_tile"]["id"] is not None
+    assert plot_tile.json()["plot_tile"]["id"] != plot_id
+    assert plot_tile.json()["plot_tile"]["tile_id"] == plot_id
 
     view_tile = await _create_test_view_tile(client, tab_id, name="spec-view-tile")
     view_id = view_tile.json()["id"]
+    # Verify specialized tile ID relationship
+    assert "id" in view_tile.json()["view_tile"]
+    assert view_tile.json()["view_tile"]["id"] is not None
+    assert view_tile.json()["view_tile"]["id"] != view_id
+    assert view_tile.json()["view_tile"]["tile_id"] == view_id
 
     editor_tile = await _create_test_editor_tile(
         client,
@@ -1295,6 +1360,11 @@ async def test_patch_specialized_tile_endpoint(client: AsyncClient):
         name="spec-editor-tile",
     )
     editor_id = editor_tile.json()["id"]
+    # Verify specialized tile ID relationship
+    assert "id" in editor_tile.json()["editor_tile"]
+    assert editor_tile.json()["editor_tile"]["id"] is not None
+    assert editor_tile.json()["editor_tile"]["id"] != editor_id
+    assert editor_tile.json()["editor_tile"]["tile_id"] == editor_id
 
     # Test patch for table tile
     table_patch = {
@@ -1313,6 +1383,11 @@ async def test_patch_specialized_tile_endpoint(client: AsyncClient):
     assert table_data["table_tile"]["table_type"] == "specialized-type"
     assert table_data["table_tile"]["selected"] == "Entries/id_123460,Entries/id_123461"
     assert table_data["table_tile"]["sorting"] == "field:desc"
+    # Verify specialized tile ID relationship after patch
+    assert "id" in table_data["table_tile"]
+    assert table_data["table_tile"]["id"] is not None
+    assert table_data["table_tile"]["id"] != table_data["id"]
+    assert table_data["table_tile"]["tile_id"] == table_data["id"]
 
     # Test patch for plot tile
     plot_patch = {
@@ -1331,6 +1406,11 @@ async def test_patch_specialized_tile_endpoint(client: AsyncClient):
     assert plot_data["plot_tile"]["plot_type"] == "bar"
     assert plot_data["plot_tile"]["plot_scale_x"] == "continuous"
     assert plot_data["plot_tile"]["plot_aggregate"] == "sum"
+    # Verify specialized tile ID relationship after patch
+    assert "id" in plot_data["plot_tile"]
+    assert plot_data["plot_tile"]["id"] is not None
+    assert plot_data["plot_tile"]["id"] != plot_data["id"]
+    assert plot_data["plot_tile"]["tile_id"] == plot_data["id"]
 
     # Test patch for view tile
     view_patch = {"base_index": "updated-index"}
@@ -1343,6 +1423,11 @@ async def test_patch_specialized_tile_endpoint(client: AsyncClient):
     assert view_response.status_code == 200
     view_data = view_response.json()
     assert view_data["view_tile"]["base_index"] == "updated-index"
+    # Verify specialized tile ID relationship after patch
+    assert "id" in view_data["view_tile"]
+    assert view_data["view_tile"]["id"] is not None
+    assert view_data["view_tile"]["id"] != view_data["id"]
+    assert view_data["view_tile"]["tile_id"] == view_data["id"]
 
     # Test patch for editor tile
     editor_patch = {
@@ -1361,6 +1446,11 @@ async def test_patch_specialized_tile_endpoint(client: AsyncClient):
     assert editor_data["editor_tile"]["file_path"] == "updated.js"
     assert editor_data["editor_tile"]["file_type"] == "javascript"
     assert editor_data["editor_tile"]["content"] == "console.log('Updated');"
+    # Verify specialized tile ID relationship after patch
+    assert "id" in editor_data["editor_tile"]
+    assert editor_data["editor_tile"]["id"] is not None
+    assert editor_data["editor_tile"]["id"] != editor_data["id"]
+    assert editor_data["editor_tile"]["tile_id"] == editor_data["id"]
 
 
 @pytest.mark.anyio
@@ -1470,6 +1560,11 @@ async def test_patch_tile_set_type_and_specialized_data(client: AsyncClient):
     assert data["plot_tile"] is None
     assert data["view_tile"] is None
     assert data["editor_tile"] is None
+    # Verify specialized tile ID relationship
+    assert "id" in data["table_tile"]
+    assert data["table_tile"]["id"] is not None
+    assert data["table_tile"]["id"] != data["id"]
+    assert data["table_tile"]["tile_id"] == data["id"]
 
     # Retrieve and double-check
     get_resp = await _get_tile(client, tile_id=tile_id)
@@ -1477,6 +1572,9 @@ async def test_patch_tile_set_type_and_specialized_data(client: AsyncClient):
     get_data = get_resp.json()
     assert get_data["type"] == "Table"
     assert get_data["table_tile"]["table_type"] == "basic"
+    # Verify specialized tile ID relationship again
+    assert get_data["table_tile"]["id"] != get_data["id"]
+    assert get_data["table_tile"]["tile_id"] == get_data["id"]
 
 
 @pytest.mark.anyio
@@ -1496,6 +1594,11 @@ async def test_patch_tile_change_type_with_new_specialized_data(client: AsyncCli
     )
     assert create_resp.status_code == 201
     tile_id = create_resp.json()["id"]
+    # Verify initial specialized tile ID relationship
+    assert "id" in create_resp.json()["table_tile"]
+    assert create_resp.json()["table_tile"]["id"] is not None
+    assert create_resp.json()["table_tile"]["id"] != tile_id
+    assert create_resp.json()["table_tile"]["tile_id"] == tile_id
 
     # Patch to switch to Plot with payload
     plot_payload = {
@@ -1516,6 +1619,11 @@ async def test_patch_tile_change_type_with_new_specialized_data(client: AsyncCli
     assert data["table_tile"] is None
     assert data["view_tile"] is None
     assert data["editor_tile"] is None
+    # Verify specialized tile ID relationship
+    assert "id" in data["plot_tile"]
+    assert data["plot_tile"]["id"] is not None
+    assert data["plot_tile"]["id"] != data["id"]
+    assert data["plot_tile"]["tile_id"] == data["id"]
 
     # Retrieve again
     get_r = await _get_tile(client, tile_id=tile_id)
@@ -1524,6 +1632,9 @@ async def test_patch_tile_change_type_with_new_specialized_data(client: AsyncCli
     assert get_d["type"] == "Plot"
     assert get_d["plot_tile"]["x_axis"] == "x_data"
     assert get_d["table_tile"] is None
+    # Verify specialized tile ID relationship again
+    assert get_d["plot_tile"]["id"] != get_d["id"]
+    assert get_d["plot_tile"]["tile_id"] == get_d["id"]
 
 
 @pytest.mark.anyio
@@ -1541,6 +1652,11 @@ async def test_patch_tile_change_type_without_specialized_data(client: AsyncClie
     )
     assert editor_resp.status_code == 201
     tile_id = editor_resp.json()["id"]
+    # Verify initial specialized tile ID relationship
+    assert "id" in editor_resp.json()["editor_tile"]
+    assert editor_resp.json()["editor_tile"]["id"] is not None
+    assert editor_resp.json()["editor_tile"]["id"] != tile_id
+    assert editor_resp.json()["editor_tile"]["tile_id"] == tile_id
 
     # Change type to View without view_tile data
     patch_payload = {"type": "View"}
@@ -1554,6 +1670,11 @@ async def test_patch_tile_change_type_without_specialized_data(client: AsyncClie
     assert data["table_tile"] is None
     assert data["plot_tile"] is None
     assert data["editor_tile"] is None
+    # Verify specialized tile ID relationship
+    assert "id" in data["view_tile"]
+    assert data["view_tile"]["id"] is not None
+    assert data["view_tile"]["id"] != data["id"]
+    assert data["view_tile"]["tile_id"] == data["id"]
 
 
 @pytest.mark.anyio
@@ -1586,6 +1707,11 @@ async def test_create_tile_with_specialized_data_in_one_step(client: AsyncClient
     assert table_data["table_tile"]["table_type"] == "unified"
     assert table_data["table_tile"]["page_number"] == "1"
     assert table_data["table_tile"]["column_order"] == "id,name,value"
+    # Verify specialized tile ID relationship
+    assert "id" in table_data["table_tile"]
+    assert table_data["table_tile"]["id"] is not None
+    assert table_data["table_tile"]["id"] != table_data["id"]
+    assert table_data["table_tile"]["tile_id"] == table_data["id"]
 
     # Plot tile
     plot_response = await _create_test_tile(
@@ -1608,6 +1734,11 @@ async def test_create_tile_with_specialized_data_in_one_step(client: AsyncClient
     assert plot_data["plot_tile"]["plot_type"] == "scatter"
     assert plot_data["plot_tile"]["x_axis"] == "time"
     assert plot_data["plot_tile"]["plot_scale_y"] == "log"
+    # Verify specialized tile ID relationship
+    assert "id" in plot_data["plot_tile"]
+    assert plot_data["plot_tile"]["id"] is not None
+    assert plot_data["plot_tile"]["id"] != plot_data["id"]
+    assert plot_data["plot_tile"]["tile_id"] == plot_data["id"]
 
     # View tile
     view_response = await _create_test_tile(
@@ -1624,6 +1755,11 @@ async def test_create_tile_with_specialized_data_in_one_step(client: AsyncClient
     assert view_data["type"] == "View"
     assert view_data["view_tile"] is not None
     assert view_data["view_tile"]["base_index"] == "custom-index"
+    # Verify specialized tile ID relationship
+    assert "id" in view_data["view_tile"]
+    assert view_data["view_tile"]["id"] is not None
+    assert view_data["view_tile"]["id"] != view_data["id"]
+    assert view_data["view_tile"]["tile_id"] == view_data["id"]
 
     # Editor tile
     editor_response = await _create_test_tile(
@@ -1646,6 +1782,11 @@ async def test_create_tile_with_specialized_data_in_one_step(client: AsyncClient
         editor_data["editor_tile"]["content"]
         == "# Test Notes\nThis is a test document."
     )
+    # Verify specialized tile ID relationship
+    assert "id" in editor_data["editor_tile"]
+    assert editor_data["editor_tile"]["id"] is not None
+    assert editor_data["editor_tile"]["id"] != editor_data["id"]
+    assert editor_data["editor_tile"]["tile_id"] == editor_data["id"]
 
     # Test with pre-specified ID
     custom_id = str(uuid.uuid4())
@@ -1663,5 +1804,9 @@ async def test_create_tile_with_specialized_data_in_one_step(client: AsyncClient
     custom_id_data = custom_id_response.json()
     assert custom_id_data["id"] == custom_id
     assert custom_id_data["table_tile"] is not None
-    assert custom_id_data["table_tile"]["id"] == custom_id
+    assert custom_id_data["table_tile"]["tile_id"] == custom_id
+    # Verify specialized tile ID relationship for pre-specified ID
+    assert "id" in custom_id_data["table_tile"]
+    assert custom_id_data["table_tile"]["id"] is not None
+    assert custom_id_data["table_tile"]["id"] != custom_id
     assert custom_id_data["table_tile"]["tile_id"] == custom_id

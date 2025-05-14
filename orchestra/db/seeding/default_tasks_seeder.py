@@ -154,11 +154,11 @@ class DefaultTasksSeeder:
 
         # If tile doesn't exist, create it
         if not tile:
-            tile = tile_dao.create_table_tile(
+            tile = tile_dao.create_tile(
                 tab_id=tab_id,
                 name="Tasks",
                 context="Tasks",
-                table="Tasks",
+                type="Table",
             )
 
         return tile
