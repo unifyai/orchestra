@@ -335,6 +335,8 @@ def _get_logs_query(
     session=Depends(get_db_session),
     latest_timestamp=False,
     return_versions: bool = False,
+    randomize: bool = False,
+    seed: Optional[str] = "42",
 ):
     """
     Returns a combined list of base logs (Log) and derived logs (DerivedLog)
@@ -456,107 +458,131 @@ def _get_logs_query(
         return_versions=return_versions,
     )
 
-    sort_val_sqs: List[Subquery] = []
-    sort_criteria: List[Any] = []
+    if not randomize:
+        # Standard sorting logic
+        sort_val_sqs: List[Subquery] = []
+        sort_criteria: List[Any] = []
 
-    if sorting:
-        sort_dict = json.loads(sorting)
+        if sorting:
+            sort_dict = json.loads(sorting)
 
-        for sort_key, mode in sort_dict.items():
-            if is_image_field(sort_key, field_types):
-                continue
-            if mode not in ("ascending", "descending"):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Sort mode must be 'ascending' or 'descending', got {mode}.",
-                )
-            try:
-                expr_dict = str_filter_exp_to_dict(
-                    sort_key,
-                    field_names=list(field_types.keys()),
-                )
-            except Exception:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid sort expression '{sort_key}'",
-                )
-
-            if expr_dict.get("type", None) == "identifier":
-                # static field sorting
-                cast_expr = _build_sort_criteria(
-                    unified_logs_for_sort.c.value,
-                    sort_key,
-                    field_types,
-                )
-
-                sort_val_sq = (
-                    select(
-                        unified_logs_for_sort.c.log_event_id.label("log_event_id"),
-                        cast_expr.label("val"),
+            for sort_key, mode in sort_dict.items():
+                if is_image_field(sort_key, field_types):
+                    continue
+                if mode not in ("ascending", "descending"):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Sort mode must be 'ascending' or 'descending', got {mode}.",
                     )
-                    .where(unified_logs_for_sort.c.key == sort_key)
-                    .order_by(
-                        unified_logs_for_sort.c.log_event_id,
-                        unified_logs_for_sort.c.updated_at.desc(),
+                try:
+                    expr_dict = str_filter_exp_to_dict(
+                        sort_key,
+                        field_names=list(field_types.keys()),
                     )
-                    .distinct(unified_logs_for_sort.c.log_event_id)
-                    .subquery(f"sort_{sort_key}_sq")
-                )
-
-                sort_val_sqs.append(sort_val_sq)
-
-                # --- 2. remember ORDER‑BY expression
-                direction = asc if mode == "ascending" else desc
-                sort_criteria.append(direction(sort_val_sq.c.val).nulls_last())
-            else:
-                # dynamic expression sorting
-                event_ids_subq = log_event_query.subquery(name="event_ids_subq")
-                sort_expr = build_sql_query(
-                    expr_dict,
-                    LogEvent,
-                    session,
-                    log_event_ids=event_ids_subq,
-                )
-                rand = random.randint(1, 1000000)
-                base_sq = sort_expr.alias(f"sort_base_{rand}")
-                sort_val_sq = (
-                    select(
-                        base_sq.c.log_event_id.label("log_event_id"),
-                        base_sq.c.value.label("val"),
+                except Exception:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid sort expression '{sort_key}'",
                     )
-                    .where(base_sq.c.log_event_id.in_(select(event_ids_subq.c.id)))
-                    .subquery(f"sort_expr_{rand}")
-                )
 
-                sort_val_sqs.append(sort_val_sq)
+                if expr_dict.get("type", None) == "identifier":
+                    # static field sorting
+                    cast_expr = _build_sort_criteria(
+                        unified_logs_for_sort.c.value,
+                        sort_key,
+                        field_types,
+                    )
 
-                # Add to ORDER BY clauses
-                direction = asc if mode == "ascending" else desc
-                sort_criteria.append(direction(sort_val_sq.c.val).nulls_last())
+                    sort_val_sq = (
+                        select(
+                            unified_logs_for_sort.c.log_event_id.label("log_event_id"),
+                            cast_expr.label("val"),
+                        )
+                        .where(unified_logs_for_sort.c.key == sort_key)
+                        .order_by(
+                            unified_logs_for_sort.c.log_event_id,
+                            unified_logs_for_sort.c.updated_at.desc(),
+                        )
+                        .distinct(unified_logs_for_sort.c.log_event_id)
+                        .subquery(f"sort_{sort_key}_sq")
+                    )
 
-    # Always add deterministic tie‑breaker
-    sort_criteria.append(desc(relevant_log_events.c.id))
+                    sort_val_sqs.append(sort_val_sq)
 
-    # Bring the sort sub‑queries into the FROM‑clause
-    joined_events = relevant_log_events
-    for sq in sort_val_sqs:
-        joined_events = joined_events.outerjoin(
-            sq,
-            sq.c.log_event_id == relevant_log_events.c.id,
+                    # --- 2. remember ORDER‑BY expression
+                    direction = asc if mode == "ascending" else desc
+                    sort_criteria.append(direction(sort_val_sq.c.val).nulls_last())
+                else:
+                    # dynamic expression sorting
+                    event_ids_subq = log_event_query.subquery(name="event_ids_subq")
+                    sort_expr = build_sql_query(
+                        expr_dict,
+                        LogEvent,
+                        session,
+                        log_event_ids=event_ids_subq,
+                    )
+                    rand = random.randint(1, 1000000)
+                    base_sq = sort_expr.alias(f"sort_base_{rand}")
+                    sort_val_sq = (
+                        select(
+                            base_sq.c.log_event_id.label("log_event_id"),
+                            base_sq.c.value.label("val"),
+                        )
+                        .where(base_sq.c.log_event_id.in_(select(event_ids_subq.c.id)))
+                        .subquery(f"sort_expr_{rand}")
+                    )
+
+                    sort_val_sqs.append(sort_val_sq)
+
+                    # Add to ORDER BY clauses
+                    direction = asc if mode == "ascending" else desc
+                    sort_criteria.append(direction(sort_val_sq.c.val).nulls_last())
+
+        # Always add deterministic tie‑breaker
+        sort_criteria.append(desc(relevant_log_events.c.id))
+
+        # Bring the sort sub‑queries into the FROM‑clause
+        joined_events = relevant_log_events
+        for sq in sort_val_sqs:
+            joined_events = joined_events.outerjoin(
+                sq,
+                sq.c.log_event_id == relevant_log_events.c.id,
+            )
+        pag_query = (
+            session.query(
+                relevant_log_events.c.id.label("id"),
+                func.row_number().over(order_by=sort_criteria).label("row_num"),
+            )
+            .select_from(joined_events)
+            .order_by(*sort_criteria)
         )
-    pag_query = (
-        session.query(
-            relevant_log_events.c.id.label("id"),
-            func.row_number().over(order_by=sort_criteria).label("row_num"),
-        )
-        .select_from(joined_events)
-        .order_by(*sort_criteria)
-    )
 
-    if limit:
-        pag_query = pag_query.limit(limit)
-    if offset:
-        pag_query = pag_query.offset(offset)
+        if limit:
+            pag_query = pag_query.limit(limit)
+        if offset:
+            pag_query = pag_query.offset(offset)
+
+    else:
+        # Deterministic random ordering using fixed seed
+        # Create a deterministic random key by hashing the ID with a fixed seed
+        random_key = func.md5(
+            cast(relevant_log_events.c.id, String) + literal(seed),
+        )
+
+        # Use the random key for both the window function and ORDER BY
+        pag_query = (
+            session.query(
+                relevant_log_events.c.id.label("id"),
+                func.row_number().over(order_by=[random_key]).label("row_num"),
+            )
+            .select_from(relevant_log_events)
+            .order_by(random_key)
+        )
+
+        if limit:
+            pag_query = pag_query.limit(limit)
+        if offset:
+            pag_query = pag_query.offset(offset)
 
     paginated_ids_subq = pag_query.subquery(name="paginated_ids_subq")
 
