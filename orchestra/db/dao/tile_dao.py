@@ -105,7 +105,6 @@ class TileDAO:
         )
         if existing:
             raise ValueError(f"Tile with name {name} already exists in tab {tab_id}")
-
         # Validate tile type if provided
         valid_types = ["Table", "Plot", "View", "Editor"]
         if type and type not in valid_types:
@@ -113,6 +112,7 @@ class TileDAO:
                 f"Invalid tile type '{type}'. Must be one of {', '.join(valid_types)}",
             )
 
+        # Create base tile
         tile = Tile(
             id=tile_id,
             tab_id=tab_id,
@@ -142,51 +142,170 @@ class TileDAO:
             checkpoint_or_active_id=checkpoint_or_active_id,
         )
         self.session.add(tile)
+        # Commit to get the tile ID
         self.session.commit()
 
         # Create specialized tile based on type if needed
         if type and type in valid_types:
+            # First, check if a specialized tile already exists with this tile_id
+            # and delete it to avoid constraint violations
+            self._ensure_no_specialized_tile_exists(tile.id, type)
+
             # Extract the specialized data dict based on the type
             specialized_data = None
             if type == "Table" and table_tile:
-                specialized_data = table_tile
-            elif type == "Plot" and plot_tile:
-                specialized_data = plot_tile
-            elif type == "View" and view_tile:
-                specialized_data = view_tile
-            elif type == "Editor" and editor_tile:
-                specialized_data = editor_tile
+                specialized_data = table_tile.copy()
+                # Remove id if it exists in specialized data
+                specialized_data.pop("id", None)
 
-            # Create the specialized tile with the appropriate data
-            if type == "Table":
-                table_obj = TableTile(
-                    id=tile.id, tile_id=tile.id, **(specialized_data or {})
-                )
+                table_obj = TableTile(tile_id=tile.id, **(specialized_data or {}))
                 self.session.add(table_obj)
                 tile.table_tile = table_obj
-                print(f"Created table tile {table_obj.id} for tile {tile.id}")
-            elif type == "Plot":
-                plot_obj = PlotTile(
-                    id=tile.id, tile_id=tile.id, **(specialized_data or {})
-                )
+
+            elif type == "Plot" and plot_tile:
+                specialized_data = plot_tile.copy()
+                # Remove id if it exists in specialized data
+                specialized_data.pop("id", None)
+
+                plot_obj = PlotTile(tile_id=tile.id, **(specialized_data or {}))
                 self.session.add(plot_obj)
                 tile.plot_tile = plot_obj
-            elif type == "View":
-                view_obj = ViewTile(
-                    id=tile.id, tile_id=tile.id, **(specialized_data or {})
-                )
+
+            elif type == "View" and view_tile:
+                specialized_data = view_tile.copy()
+                # Remove id if it exists in specialized data
+                specialized_data.pop("id", None)
+
+                view_obj = ViewTile(tile_id=tile.id, **(specialized_data or {}))
                 self.session.add(view_obj)
                 tile.view_tile = view_obj
-            elif type == "Editor":
-                editor_obj = EditorTile(
-                    id=tile.id, tile_id=tile.id, **(specialized_data or {})
-                )
+
+            elif type == "Editor" and editor_tile:
+                specialized_data = editor_tile.copy()
+                # Remove id if it exists in specialized data
+                specialized_data.pop("id", None)
+
+                editor_obj = EditorTile(tile_id=tile.id, **(specialized_data or {}))
                 self.session.add(editor_obj)
                 tile.editor_tile = editor_obj
 
+            # If no specialized data was provided but a type was, create a default specialized tile
+            elif type == "Table":
+                print(f"Creating table tile")
+                table_obj = TableTile(tile_id=tile.id)
+                self.session.add(table_obj)
+                tile.table_tile = table_obj
+            elif type == "Plot":
+                print(f"Creating plot tile")
+                plot_obj = PlotTile(tile_id=tile.id)
+                self.session.add(plot_obj)
+                tile.plot_tile = plot_obj
+            elif type == "View":
+                print(f"Creating view tile")
+                view_obj = ViewTile(tile_id=tile.id)
+                self.session.add(view_obj)
+                tile.view_tile = view_obj
+            elif type == "Editor":
+                print(f"Creating editor tile")
+                editor_obj = EditorTile(tile_id=tile.id, content="")
+                self.session.add(editor_obj)
+                tile.editor_tile = editor_obj
+
+            # Commit the specialized tile
             self.session.commit()
 
         return tile
+
+    def _ensure_no_specialized_tile_exists(self, tile_id: str, tile_type: str) -> None:
+        """
+        Ensure no specialized tile exists for the given tile_id and type.
+        This helps prevent unique constraint violations.
+
+        Args:
+            tile_id: The ID of the parent tile
+            tile_type: The type of specialized tile to check for
+        """
+        if tile_type == "Table":
+            existing = (
+                self.session.query(TableTile)
+                .filter(TableTile.tile_id == tile_id)
+                .first()
+            )
+            if existing:
+                print(f"Existing table tile: {existing}")
+                self.session.delete(existing)
+        elif tile_type == "Plot":
+            existing = (
+                self.session.query(PlotTile).filter(PlotTile.tile_id == tile_id).first()
+            )
+            if existing:
+                print(f"Existing plot tile: {existing}")
+                self.session.delete(existing)
+        elif tile_type == "View":
+            existing = (
+                self.session.query(ViewTile).filter(ViewTile.tile_id == tile_id).first()
+            )
+            if existing:
+                print(f"Existing view tile: {existing}")
+                self.session.delete(existing)
+        elif tile_type == "Editor":
+            existing = (
+                self.session.query(EditorTile)
+                .filter(EditorTile.tile_id == tile_id)
+                .first()
+            )
+            if existing:
+                print(f"Existing editor tile: {existing}")
+                self.session.delete(existing)
+
+    def _handle_type_change(self, tile: Tile, new_type: str) -> None:
+        """Handle logic when a tile's type is updated.
+
+        This helper validates the new type, ensures the corresponding
+        specialized tile relationship exists (creating a default one if
+        necessary) and removes any previously attached specialized tile
+        objects that no longer match the new type.
+        """
+        valid_types = ["Table", "Plot", "View", "Editor"]
+        if new_type not in valid_types:
+            raise ValueError(
+                f"Invalid tile type '{new_type}'. Must be one of {', '.join(valid_types)}",
+            )
+
+        # Mapping of type -> attribute name and model class
+        specialized_map = {
+            "Table": ("table_tile", TableTile),
+            "Plot": ("plot_tile", PlotTile),
+            "View": ("view_tile", ViewTile),
+            "Editor": ("editor_tile", EditorTile),
+        }
+
+        # Remove specialized tiles that do not match the new type
+        for t, (attr, model_cls) in specialized_map.items():
+            if t != new_type:
+                existing_spec = getattr(tile, attr)
+                if existing_spec is not None:
+                    # Delete the orphaned specialized tile
+                    self.session.delete(existing_spec)
+                    setattr(tile, attr, None)
+
+        # Now handle the specialized object for the new type
+        attr, model_cls = specialized_map[new_type]
+
+        # Always delete any existing specialized tile of the new type to avoid conflicts
+        # This allows us to completely replace a specialized tile when needed
+        self._ensure_no_specialized_tile_exists(tile.id, new_type)
+
+        # Now create a new specialized tile
+        spec_obj = model_cls(tile_id=tile.id)
+        self.session.add(spec_obj)
+        setattr(tile, attr, spec_obj)
+
+        # Finally, set the tile's type
+        tile.type = new_type
+
+        # Flush changes to make them visible in the current session
+        self.session.flush()
 
     def _get_tile(
         self,
@@ -283,48 +402,6 @@ class TileDAO:
             query = query.where(Tile.is_checkpoint == is_checkpoint)
 
         return self.session.execute(query).scalars().all()
-
-    def _handle_type_change(self, tile: Tile, new_type: str) -> None:
-        """Handle logic when a tile's type is updated.
-
-        This helper validates the new type, ensures the corresponding
-        specialized tile relationship exists (creating a default one if
-        necessary) and removes any previously attached specialized tile
-        objects that no longer match the new type.
-        """
-        valid_types = ["Table", "Plot", "View", "Editor"]
-        if new_type not in valid_types:
-            raise ValueError(
-                f"Invalid tile type '{new_type}'. Must be one of {', '.join(valid_types)}",
-            )
-
-        # Mapping of type -> attribute name and model class
-        specialized_map = {
-            "Table": ("table_tile", TableTile),
-            "Plot": ("plot_tile", PlotTile),
-            "View": ("view_tile", ViewTile),
-            "Editor": ("editor_tile", EditorTile),
-        }
-
-        # Remove specialized tiles that do not match the new type
-        for t, (attr, model_cls) in specialized_map.items():
-            if t != new_type:
-                existing_spec = getattr(tile, attr)
-                if existing_spec is not None:
-                    # Delete the orphaned specialized tile
-                    self.session.delete(existing_spec)
-                    setattr(tile, attr, None)
-
-        # Ensure the specialized object for new_type exists
-        attr, model_cls = specialized_map[new_type]
-        if getattr(tile, attr) is None:
-            # Create with default values (only id/tile_id)
-            spec_obj = model_cls(id=tile.id, tile_id=tile.id)
-            self.session.add(spec_obj)
-            setattr(tile, attr, spec_obj)
-
-        # Finally, set the tile's type
-        tile.type = new_type
 
     def update_tile(
         self,
@@ -482,13 +559,41 @@ class TileDAO:
 
         # If specialized payloads passed, update them accordingly
         if tile.type == "Table" and table_tile is not None:
-            self.update_table_tile(id=tile.id, **table_tile)
+            if tile.table_tile is not None:
+                self.update_table_tile(id=tile.table_tile.id, **table_tile)
+            else:
+                # If no specialized tile exists, create one first
+                self._handle_type_change(tile, "Table")
+                # After _handle_type_change, the table_tile should exist
+                if tile.table_tile is not None:
+                    self.update_table_tile(id=tile.table_tile.id, **table_tile)
         elif tile.type == "Plot" and plot_tile is not None:
-            self.update_plot_tile(id=tile.id, **plot_tile)
+            if tile.plot_tile is not None:
+                self.update_plot_tile(id=tile.plot_tile.id, **plot_tile)
+            else:
+                # If no specialized tile exists, create one first
+                self._handle_type_change(tile, "Plot")
+                # After _handle_type_change, the plot_tile should exist
+                if tile.plot_tile is not None:
+                    self.update_plot_tile(id=tile.plot_tile.id, **plot_tile)
         elif tile.type == "View" and view_tile is not None:
-            self.update_view_tile(id=tile.id, **view_tile)
+            if tile.view_tile is not None:
+                self.update_view_tile(id=tile.view_tile.id, **view_tile)
+            else:
+                # If no specialized tile exists, create one first
+                self._handle_type_change(tile, "View")
+                # After _handle_type_change, the view_tile should exist
+                if tile.view_tile is not None:
+                    self.update_view_tile(id=tile.view_tile.id, **view_tile)
         elif tile.type == "Editor" and editor_tile is not None:
-            self.update_editor_tile(id=tile.id, **editor_tile)
+            if tile.editor_tile is not None:
+                self.update_editor_tile(id=tile.editor_tile.id, **editor_tile)
+            else:
+                # If no specialized tile exists, create one first
+                self._handle_type_change(tile, "Editor")
+                # After _handle_type_change, the editor_tile should exist
+                if tile.editor_tile is not None:
+                    self.update_editor_tile(id=tile.editor_tile.id, **editor_tile)
 
         self.session.commit()
         return tile
@@ -601,7 +706,6 @@ class TileDAO:
             tile_id = base_tile.id
 
         table_tile = TableTile(
-            id=tile_id,
             tile_id=tile_id,
             table_type=table_type,
             page_number=page_number,
@@ -789,7 +893,6 @@ class TileDAO:
             tile_id = base_tile.id
 
         plot_tile = PlotTile(
-            id=tile_id,
             tile_id=tile_id,
             plot_type=plot_type,
             plot_scale_x=plot_scale_x,
@@ -945,7 +1048,6 @@ class TileDAO:
             tile_id = base_tile.id
 
         editor_tile = EditorTile(
-            id=tile_id,
             tile_id=tile_id,
             content=content,
             file_path=file_path,
@@ -1071,7 +1173,6 @@ class TileDAO:
             tile_id = base_tile.id
 
         view_tile = ViewTile(
-            id=tile_id,
             tile_id=tile_id,
             base_index=base_index,
         )
@@ -1176,6 +1277,8 @@ class TileDAO:
             "editor_tile": update_data.pop("editor_tile", None),
         }
 
+        print(f"Specialized payloads: {specialized_payloads}")
+
         # Handle position updates specially
         if "position" in update_data:
             position = update_data.pop("position")
@@ -1218,23 +1321,26 @@ class TileDAO:
         # Finally process specialized tile data (after type / general updates)
         # ------------------------------------------------------------------
         effective_type = tile.type  # type after any change above
+        print(f"Effective type: {effective_type}")
         if effective_type is not None:
-            payload = specialized_payloads.get(
-                {
-                    "Table": "table_tile",
-                    "Plot": "plot_tile",
-                    "View": "view_tile",
-                    "Editor": "editor_tile",
-                }[effective_type],
-            )
+            payload_key = {
+                "Table": "table_tile",
+                "Plot": "plot_tile",
+                "View": "view_tile",
+                "Editor": "editor_tile",
+            }.get(effective_type)
+
+            payload = specialized_payloads.get(payload_key)
+
+            print(f"Payload: {payload}")
 
             if payload:
-                # Map type to updater method
+                # Map type to updater method and corresponding specialized tile attribute
                 updater_map = {
-                    "Table": self.update_table_tile,
-                    "Plot": self.update_plot_tile,
-                    "View": self.update_view_tile,
-                    "Editor": self.update_editor_tile,
+                    "Table": (self.update_table_tile, "table_tile"),
+                    "Plot": (self.update_plot_tile, "plot_tile"),
+                    "View": (self.update_view_tile, "view_tile"),
+                    "Editor": (self.update_editor_tile, "editor_tile"),
                 }
 
                 # Convert complex structures to json strings where necessary
@@ -1243,7 +1349,20 @@ class TileDAO:
                     for k, v in payload.items()
                 }
 
-                updater_map[effective_type](id=tile.id, **cleaned_payload)
+                print(f"Cleaned payload: {cleaned_payload}")
+
+                updater_method, attr_name = updater_map[effective_type]
+                specialized_tile = getattr(tile, attr_name)
+
+                if specialized_tile is not None:
+                    # If specialized tile exists, update it using its ID
+                    updater_method(id=specialized_tile.id, **cleaned_payload)
+                else:
+                    # If no specialized tile exists, create one first
+                    self._handle_type_change(tile, effective_type)
+                    specialized_tile = getattr(tile, attr_name)
+                    if specialized_tile is not None:
+                        updater_method(id=specialized_tile.id, **cleaned_payload)
 
         self.session.commit()
         return tile
@@ -1273,16 +1392,12 @@ class TileDAO:
         # Get the specialized tile based on type
         specialized_tile = None
         if tile_type == "Table":
-            specialized_key = "table_tile"
             specialized_tile = self.get_table_tile(id=id)
         elif tile_type == "Plot":
-            specialized_key = "plot_tile"
             specialized_tile = self.get_plot_tile(id=id)
         elif tile_type == "View":
-            specialized_key = "view_tile"
             specialized_tile = self.get_view_tile(id=id)
         elif tile_type == "Editor":
-            specialized_key = "editor_tile"
             specialized_tile = self.get_editor_tile(id=id)
         else:
             # Invalid tile type
@@ -1293,8 +1408,8 @@ class TileDAO:
 
         # Extract the specialized data
         specialized_data = None
-        if specialized_key in update_data:
-            specialized_data = update_data[specialized_key]
+        if tile_type in update_data:
+            specialized_data = update_data[tile_type]
 
         # Update the specialized tile
         if specialized_data:
@@ -1609,7 +1724,7 @@ class TileDAO:
                 self.update_editor_tile(
                     id=str(existing_specialized.id),
                     content=source_tile.editor_tile.content,
-                    file_name=source_tile.editor_tile.file_name,
+                    file_path=source_tile.editor_tile.file_path,
                     file_type=source_tile.editor_tile.file_type,
                 )
             else:
@@ -1619,7 +1734,7 @@ class TileDAO:
                     name=source_tile.name,
                     tile_id=updated.id,
                     content=source_tile.editor_tile.content,
-                    file_name=source_tile.editor_tile.file_name,
+                    file_path=source_tile.editor_tile.file_path,
                     file_type=source_tile.editor_tile.file_type,
                     is_checkpoint=True,
                 )
@@ -1894,7 +2009,6 @@ class TileDAO:
                         # Create new TableTile
                         table_tile_values.append(
                             {
-                                "id": new_tile_id,  # Same ID as the base tile
                                 "tile_id": new_tile_id,
                                 "table_type": tt.table_type,
                                 "page_number": tt.page_number,
@@ -1964,7 +2078,6 @@ class TileDAO:
                         # Create new PlotTile
                         plot_tile_values.append(
                             {
-                                "id": new_tile_id,  # Same ID as the base tile
                                 "tile_id": new_tile_id,
                                 "plot_type": pt.plot_type,
                                 "plot_scale_x": pt.plot_scale_x,
@@ -2026,7 +2139,6 @@ class TileDAO:
                         # Create new ViewTile
                         view_tile_values.append(
                             {
-                                "id": new_tile_id,  # Same ID as the base tile
                                 "tile_id": new_tile_id,
                                 "base_index": vt.base_index,
                             },
@@ -2081,7 +2193,6 @@ class TileDAO:
                         # Create new EditorTile
                         editor_tile_values.append(
                             {
-                                "id": new_tile_id,  # Same ID as the base tile
                                 "tile_id": new_tile_id,
                                 "file_path": et.file_path,
                                 "file_type": et.file_type,
