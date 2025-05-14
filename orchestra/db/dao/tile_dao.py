@@ -705,20 +705,21 @@ class TileDAO:
             )
             tile_id = base_tile.id
 
-        table_tile = TableTile(
-            tile_id=tile_id,
-            table_type=table_type,
-            page_number=page_number,
-            column_order=column_order,
-            hidden_columns=hidden_columns,
-            sorting=sorting,
-            group_sorting=group_sorting,
-            columns_pin_left=columns_pin_left,
-            columns_pin_right=columns_pin_right,
-            selected=selected,
-        )
-
-        self.session.add(table_tile)
+        # Create a new table tile if it doesn't exist
+        if getattr(base_tile, "table_tile", None) is None:
+            table_tile = TableTile(
+                tile_id=tile_id,
+                table_type=table_type,
+                page_number=page_number,
+                column_order=column_order,
+                hidden_columns=hidden_columns,
+                sorting=sorting,
+                group_sorting=group_sorting,
+                columns_pin_left=columns_pin_left,
+                columns_pin_right=columns_pin_right,
+                selected=selected,
+            )
+            self.session.add(table_tile)
 
         # Now update the base tile
         base_tile = self._get_tile(id=tile_id, is_checkpoint=is_checkpoint)
@@ -740,6 +741,7 @@ class TileDAO:
     ) -> Optional[Union[TableTile, PlotTile, ViewTile, EditorTile]]:
         """Helper method to get a specialized tile by ID or by tab_id and name."""
         if id is not None:
+            # Direct lookup by specialized tile primary key
             query = select(model_class).where(model_class.id == id)
             return self.session.execute(query).scalars().first()
 
@@ -753,8 +755,8 @@ class TileDAO:
             if base_tile is None:
                 return None
 
-            # Then get the specialized tile using the base tile's ID
-            query = select(model_class).where(model_class.id == base_tile.id)
+            # Then get the specialized tile using the base tile's tile_id reference
+            query = select(model_class).where(model_class.tile_id == base_tile.id)
             return self.session.execute(query).scalars().first()
 
         return None
@@ -892,19 +894,22 @@ class TileDAO:
             )
             tile_id = base_tile.id
 
-        plot_tile = PlotTile(
-            tile_id=tile_id,
-            plot_type=plot_type,
-            plot_scale_x=plot_scale_x,
-            plot_scale_y=plot_scale_y,
-            plot_aggregate=plot_aggregate,
-            x_axis=x_axis,
-            y_axis=y_axis,
-            plot_group_by=plot_group_by,
-            plot_group_by_colors=plot_group_by_colors,
-            bin_count=bin_count,
-            regression_line=regression_line,
-        )
+        # Create a new table tile if it doesn't exist
+        if getattr(base_tile, "plot_tile", None) is None:
+            plot_tile = PlotTile(
+                tile_id=tile_id,
+                plot_type=plot_type,
+                plot_scale_x=plot_scale_x,
+                plot_scale_y=plot_scale_y,
+                plot_aggregate=plot_aggregate,
+                x_axis=x_axis,
+                y_axis=y_axis,
+                plot_group_by=plot_group_by,
+                plot_group_by_colors=plot_group_by_colors,
+                bin_count=bin_count,
+                regression_line=regression_line,
+            )
+            self.session.add(plot_tile)
 
         # Now update the base tile
         base_tile = self._get_tile(id=tile_id, is_checkpoint=is_checkpoint)
@@ -913,7 +918,6 @@ class TileDAO:
         else:
             print(f"Base tile not found for {tile_id}")
 
-        self.session.add(plot_tile)
         self.session.commit()
 
         return plot_tile
@@ -1047,12 +1051,15 @@ class TileDAO:
             )
             tile_id = base_tile.id
 
-        editor_tile = EditorTile(
-            tile_id=tile_id,
-            content=content,
-            file_path=file_path,
-            file_type=file_type,
-        )
+        # Create a new table tile if it doesn't exist
+        if getattr(base_tile, "editor_tile", None) is None:
+            editor_tile = EditorTile(
+                tile_id=tile_id,
+                content=content,
+                file_path=file_path,
+                file_type=file_type,
+            )
+            self.session.add(editor_tile)
 
         # Now update the base tile
         base_tile = self._get_tile(id=tile_id, is_checkpoint=is_checkpoint)
@@ -1061,7 +1068,6 @@ class TileDAO:
         else:
             print(f"Base tile not found for {tile_id}")
 
-        self.session.add(editor_tile)
         self.session.commit()
 
         return editor_tile
@@ -1172,10 +1178,13 @@ class TileDAO:
             )
             tile_id = base_tile.id
 
-        view_tile = ViewTile(
-            tile_id=tile_id,
-            base_index=base_index,
-        )
+        # Create a new table tile if it doesn't exist
+        if getattr(base_tile, "view_tile", None) is None:
+            view_tile = ViewTile(
+                tile_id=tile_id,
+                base_index=base_index,
+            )
+            self.session.add(view_tile)
 
         # Now update the base tile
         base_tile = self._get_tile(id=tile_id, is_checkpoint=is_checkpoint)
@@ -1184,7 +1193,6 @@ class TileDAO:
         else:
             print(f"Base tile not found for {tile_id}")
 
-        self.session.add(view_tile)
         self.session.commit()
 
         return view_tile
@@ -1602,12 +1610,10 @@ class TileDAO:
                 self.update_table_tile(
                     id=str(existing_specialized.id),
                     table_type=source_tile.table_tile.table_type,
-                    column_context=source_tile.table_tile.column_context,
                     page_number=source_tile.table_tile.page_number,
                     column_order=source_tile.table_tile.column_order,
                     hidden_columns=source_tile.table_tile.hidden_columns,
                     sorting=source_tile.table_tile.sorting,
-                    grouping=source_tile.table_tile.grouping,
                     group_sorting=source_tile.table_tile.group_sorting,
                     columns_pin_left=source_tile.table_tile.columns_pin_left,
                     columns_pin_right=source_tile.table_tile.columns_pin_right,
@@ -1620,12 +1626,10 @@ class TileDAO:
                     name=source_tile.name,
                     tile_id=updated.id,
                     table_type=source_tile.table_tile.table_type,
-                    column_context=source_tile.table_tile.column_context,
                     page_number=source_tile.table_tile.page_number,
                     column_order=source_tile.table_tile.column_order,
                     hidden_columns=source_tile.table_tile.hidden_columns,
                     sorting=source_tile.table_tile.sorting,
-                    grouping=source_tile.table_tile.grouping,
                     group_sorting=source_tile.table_tile.group_sorting,
                     columns_pin_left=source_tile.table_tile.columns_pin_left,
                     columns_pin_right=source_tile.table_tile.columns_pin_right,

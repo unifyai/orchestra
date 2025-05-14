@@ -62,6 +62,7 @@ async def _create_test_tab(
     name=TEST_TAB,
     active=True,
     order=0,
+    color="#00FF00",
     tab_id=None,
 ):
     """Create a test tab"""
@@ -71,7 +72,7 @@ async def _create_test_tab(
         "active": active,
         "order": order,
         "visible": True,
-        "color": "#00FF00",
+        "color": color,
     }
 
     # Add the tab_id if provided
@@ -826,3 +827,58 @@ async def test_create_tab_with_specified_id(client: AsyncClient):
     assert get_response.status_code == 200
     get_data = get_response.json()
     assert get_data["id"] == specified_id
+
+
+@pytest.mark.anyio
+async def test_restore_tab_checkpoint(client: AsyncClient):
+    """Ensure tab checkpoint snapshot is not affected by later updates to the active tab."""
+    # 1. Create interface and original tab
+    interface_resp = await _create_test_interface(client)
+    interface_id = interface_resp.json()["id"]
+
+    create_tab_resp = await _create_test_tab(
+        client,
+        interface_id,
+        name="checkpoint-tab",
+        color="#00FF00",
+        active=True,
+        order=1,
+    )
+    assert create_tab_resp.status_code == 201
+    tab_id = create_tab_resp.json()["id"]
+
+    # 2. Create a checkpoint for this tab
+    checkpoint_resp = await _create_tab_checkpoint(client, tab_id=tab_id)
+    assert checkpoint_resp.status_code == 200
+    checkpoint_id = checkpoint_resp.json()["id"]
+
+    # Verify initial properties in checkpoint
+    assert checkpoint_resp.json()["color"] == "#00FF00"
+    assert checkpoint_resp.json()["visible"] is True
+    assert checkpoint_resp.json()["is_checkpoint"] is True
+
+    # 3. Update the active tab's properties
+    update_payload = {"color": "#FF00FF", "visible": False, "order": 5}
+    upd_resp = await _update_tab(client, tab_id=tab_id, update_data=update_payload)
+    assert upd_resp.status_code == 200
+    assert upd_resp.json()["color"] == "#FF00FF"
+    assert upd_resp.json()["visible"] is False
+    assert upd_resp.json()["order"] == 5
+
+    # 4. Fetch checkpoint again and verify values unchanged
+    cp_get = await _get_tab_checkpoint(client, tab_id=tab_id)
+    assert cp_get.status_code == 200
+    cp_data = cp_get.json()
+
+    assert cp_data["color"] == "#00FF00"  # original color
+    assert cp_data["visible"] is True  # original visibility
+    assert cp_data["order"] == 1  # original order
+    assert cp_data["is_checkpoint"] is True
+
+    # Active tab should reflect new values
+    active_get = await _get_tab(client, tab_id=tab_id)
+    assert active_get.status_code == 200
+    active_data = active_get.json()
+    assert active_data["color"] == "#FF00FF"
+    assert active_data["visible"] is False
+    assert active_data["order"] == 5
