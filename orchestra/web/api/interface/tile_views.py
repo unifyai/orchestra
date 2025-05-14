@@ -307,7 +307,7 @@ def create_tile(
             )
 
         # Create the tile with all data including specialized tile data
-        tile = tile_dao.create_tile(
+        tile_dao.create_tile(
             tile_id=getattr(request, "tile_id", None),
             tab_id=tab.id,
             name=request.name,
