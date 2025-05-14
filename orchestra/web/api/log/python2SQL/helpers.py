@@ -168,10 +168,10 @@ def _select_value(subq, session, is_collection=False):
                 first_elem = session.execute(select(subq).limit(1)).first()[0]
                 dt = LogDAO.infer_type("", first_elem)
             else:
-                dt = session.execute(select(subq.c.inferred_type)).first()[0]
+                dt = session.execute(select(subq.c.inferred_type).limit(1)).first()[0]
             return subq.c.value, dt
 
-        dt = session.execute(select(subq)).first()[
+        dt = session.execute(select(subq).limit(1)).first()[
             -1
         ]  # execute the subquery to determine the type.
         if not isinstance(subq, Subquery):
