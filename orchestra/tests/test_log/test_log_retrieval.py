@@ -976,3 +976,36 @@ async def test_get_logs_nested_dict_ordering(client: AsyncClient):
         "nested_empty",
     ]
     assert mixed_types["nested_empty"] == {"empty": {}}
+
+
+@pytest.mark.anyio
+async def test_get_logs_randomized_pagination_and_reproducibility(client: AsyncClient):
+    project = "randomize-test"
+    await _create_project(client, project)
+    await _create_several_logs(client, project)
+
+    # Page 1 with randomize
+    resp1 = await client.get(
+        "/v0/logs",
+        params={"project": project, "randomize": True, "limit": 3},
+        headers=HEADERS,
+    )
+    assert resp1.status_code == 200
+    ids_page1 = [log["id"] for log in resp1.json()["logs"]]
+
+    # Repeated call returns same IDs
+    resp2 = await client.get(
+        "/v0/logs",
+        params={"project": project, "randomize": True, "limit": 3},
+        headers=HEADERS,
+    )
+    assert [log["id"] for log in resp2.json()["logs"]] == ids_page1
+
+    # Page 2 has no overlap
+    resp3 = await client.get(
+        "/v0/logs",
+        params={"project": project, "randomize": True, "limit": 3, "offset": 3},
+        headers=HEADERS,
+    )
+    ids_page2 = [log["id"] for log in resp3.json()["logs"]]
+    assert set(ids_page1).isdisjoint(ids_page2)
