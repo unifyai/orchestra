@@ -1,3 +1,5 @@
+from docs.utils import format_default
+
 args_to_skip = {
     "/v0/promo": {"post": ["user"]},
     "/v0/endpoints": {"get": ["model"]},
@@ -17,10 +19,8 @@ def get_param_details(parameter):
 
     # getting the string to be passed to the param field for default
     default_value = schema.get("default", None)
-    if default_value:
-        if param_type == "string":
-            default_value = f'"{default_value}"'
-        default = " default={" + str(default_value) + "}"
+    if default_value is not None:
+        default = f" default={format_default(default_value)}"
     else:
         default = ""
 

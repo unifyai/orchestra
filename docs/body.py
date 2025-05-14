@@ -1,6 +1,7 @@
 import json
 
 from docs.query import get_param_details
+from docs.utils import format_default
 
 chat_completions_groups = {
     "model": {
@@ -40,7 +41,9 @@ def get_property_details(schema_properties, files=[]):
 
         example = prop.get("example")  # example
         description = prop.get("description")  # description
-        default = json.dumps(prop["default"]) if "default" in prop else None
+        default = (
+            format_default(prop["default"]) if prop.get("default") is not None else None
+        )
         properties.append(
             {
                 "title": property_name,
