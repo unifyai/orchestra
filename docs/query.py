@@ -18,15 +18,9 @@ def get_param_details(parameter):
         param_type = " | ".join([sch.get("type", "any") for sch in schema["anyOf"]])
 
     # getting the string to be passed to the param field for default
-    # In MDX/JSX, attribute values must be valid JSX expressions or quoted strings.
-    # We wrap the JSON-serialized default in curly braces so that numbers/booleans
-    # (e.g. 300, false) are parsed correctly while strings are still represented
-    # as string literals (e.g. {"Iowa"}).
     default_value = schema.get("default", None)
     if default_value is not None:
-        # json.dumps gives us a JS-compatible literal (e.g. 300, false, "Iowa")
-        default_literal = format_default(default_value)
-        default = " default={" + default_literal + "}"
+        default = f" default={format_default(default_value)}"
     else:
         default = ""
 
