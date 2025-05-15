@@ -111,3 +111,11 @@ class AssistantDAO:
             assistant.email = email
         self.session.add(assistant)
         return assistant
+
+    def list_all_assistant_emails(self) -> List[str]:
+        """
+        List all non-null email addresses from all Assistants.
+        """
+        stmt = select(Assistant.email).where(Assistant.email.is_not(None))
+        result = self.session.execute(stmt).scalars().all()
+        return result
