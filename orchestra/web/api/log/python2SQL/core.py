@@ -316,6 +316,17 @@ def build_sql_query(
             is_derived,
             local_scope=local_scope,
         )
+    elif operand == "str_method":
+        from .functions import _handle_str_method
+
+        return _handle_str_method(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope=local_scope,
+        )
     else:
         if operand is not None:
             raise ValueError(f"Unknown operand or structure: {filter_dict}")
