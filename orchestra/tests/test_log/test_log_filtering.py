@@ -485,6 +485,106 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
                 ],
             },
         ),
+        # String methods
+        (
+            "x.strip()",
+            {
+                "operand": "str_method",
+                "method": "strip",
+                "rhs": {"type": "identifier", "value": "x"},
+                "args": [],
+            },
+        ),
+        (
+            "x.strip('-')",
+            {
+                "operand": "str_method",
+                "method": "strip",
+                "rhs": {"type": "identifier", "value": "x"},
+                "args": ["-"],
+            },
+        ),
+        (
+            "x.lstrip()",
+            {
+                "operand": "str_method",
+                "method": "lstrip",
+                "rhs": {"type": "identifier", "value": "x"},
+                "args": [],
+            },
+        ),
+        (
+            "x.rstrip()",
+            {
+                "operand": "str_method",
+                "method": "rstrip",
+                "rhs": {"type": "identifier", "value": "x"},
+                "args": [],
+            },
+        ),
+        (
+            "x.startswith('a')",
+            {
+                "operand": "str_method",
+                "method": "startswith",
+                "rhs": {"type": "identifier", "value": "x"},
+                "args": ["a"],
+            },
+        ),
+        (
+            "x.endswith('z')",
+            {
+                "operand": "str_method",
+                "method": "endswith",
+                "rhs": {"type": "identifier", "value": "x"},
+                "args": ["z"],
+            },
+        ),
+        (
+            "x.contains('substring')",
+            {
+                "operand": "str_method",
+                "method": "contains",
+                "rhs": {"type": "identifier", "value": "x"},
+                "args": ["substring"],
+            },
+        ),
+        (
+            "x.match('pattern')",
+            {
+                "operand": "str_method",
+                "method": "match",
+                "rhs": {"type": "identifier", "value": "x"},
+                "args": ["pattern"],
+            },
+        ),
+        (
+            "x.replace('old', 'new')",
+            {
+                "operand": "str_method",
+                "method": "replace",
+                "rhs": {"type": "identifier", "value": "x"},
+                "args": ["old", "new"],
+            },
+        ),
+        (
+            "x.substring(1)",
+            {
+                "operand": "str_method",
+                "method": "substring",
+                "rhs": {"type": "identifier", "value": "x"},
+                "args": [1],
+            },
+        ),
+        (
+            "x.substring(1, 3)",
+            {
+                "operand": "str_method",
+                "method": "substring",
+                "rhs": {"type": "identifier", "value": "x"},
+                "args": [1, 3],
+            },
+        ),
     ],
 )
 def test_ast_parser(expression, expected_dict):
