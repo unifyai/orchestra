@@ -25,6 +25,7 @@ from orchestra.web.api import (  # noqa: WPS235
     supported_endpoints,
     users,
 )
+from orchestra.web.api.assistant import admin_router as assistant_admin_router
 from orchestra.web.api.assistant import router as assistant_router
 from orchestra.web.api.dependencies import (
     auth_admin_key,
@@ -88,7 +89,13 @@ api_router.include_router(
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
 )
-
+api_router.include_router(
+    assistant_admin_router,
+    prefix="/admin",
+    tags=["Assistants"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
 # API_KEY_AUTH endpoints
 
 groupings = {
