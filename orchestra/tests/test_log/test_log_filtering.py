@@ -812,6 +812,19 @@ def test_ast_parser(expression, expected_dict):
             {"d": {"a": [1, 2], "b": []}},
             True,
         ),
+        # String methods
+        ("s.strip() == 'foo'", {"s": " foo "}, True),
+        ("s.lstrip() == 'foo '", {"s": " foo "}, True),
+        ("s.rstrip() == ' foo'", {"s": " foo "}, True),
+        ("s.strip('-') == 'foo'", {"s": "-foo-"}, True),
+        ("s.startswith('foo')", {"s": "foobar"}, True),
+        ("s.endswith('bar')", {"s": "foobar"}, True),
+        ("not s.startswith('bar')", {"s": "foobar"}, True),
+        ("not s.endswith('foo')", {"s": "foobar"}, True),
+        ("'lo' in s.strip()", {"s": "  hello  "}, True),
+        ("s.upper() == 'HELLO'", {"s": "hello"}, True),
+        ("s.lower() == 'hello'", {"s": "HELLO"}, True),
+        ("s.capitalize() == 'Hello'", {"s": "hello"}, True),
         # dict comprehensions
         (
             "{k:v for k,v in d.items() if v>1} == {'b':2,'c':3}",
