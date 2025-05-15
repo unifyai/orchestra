@@ -2755,6 +2755,98 @@ async def test_string_pattern_binding(
         assert len(logs) == 0, f"Expected no match for {filter_expr}"
 
 
+@pytest.mark.parametrize(
+    "input_string, start, stop, expected_result",
+    [
+        # Basic slicing
+        ("hello", 0, 2, "he"),
+        ("hello", 1, 4, "ell"),
+        ("hello", 0, 5, "hello"),
+        ("hello", 0, None, "hello"),  # No end index
+        ("hello", 2, None, "llo"),  # Start only
+        # Edge cases
+        ("hello", 0, 0, ""),  # Empty slice
+        ("hello", 5, None, ""),  # Start at end
+        ("hello", 0, 10, "hello"),  # End beyond string length
+        # Negative indices
+        ("hello", -3, None, "llo"),  # Negative start
+        ("hello", 0, -1, "hell"),  # Negative end
+        ("hello", -3, -1, "ll"),  # Both negative
+    ],
+)
+@pytest.mark.anyio
+async def test_string_slicing(
+    client: AsyncClient,
+    input_string,
+    start,
+    stop,
+    expected_result,
+):
+    """
+    Test that string slicing correctly handles various slice indices,
+    including negative indices and None values.
+    """
+    project_name = "test_string_slice"
+    await _create_project(client, project_name)
+
+    # Create a log with the test string
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"test_string": input_string},
+    )
+    assert response.status_code == 200
+    log_id = response.json()["log_event_ids"][0]
+
+    # Build the slice expression
+    if stop is None:
+        slice_expr = f"test_string[{start}:]"
+    else:
+        slice_expr = f"test_string[{start}:{stop}]"
+
+    # Test filtering with the slice
+    filter_expr = f"{slice_expr} == '{expected_result}'"
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": filter_expr,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+
+    assert len(logs) == 1, f"Expected match for {filter_expr}"
+    assert logs[0]["id"] == log_id
+
+    # Create a derived entry with the slice
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key="derived_slice",
+        equation=f"{{s:test_string}}[{start}:{stop if stop is not None else ''}]",
+        referenced_logs={"s": [log_id]},
+        user=1,
+    )
+    assert response.status_code == 200
+
+    # Fetch the log with the derived entry
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "from_ids": str(log_id)},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    # Check the derived entry has the correct sliced value
+    assert len(data["logs"]) == 1
+    log = data["logs"][0]
+    assert "derived_slice" in log["derived_entries"]
+    assert log["derived_entries"]["derived_slice"] == expected_result
+
+
 async def test_complex_string_filter_expressions(client: AsyncClient):
     """
     Test that filter expressions correctly match complex strings with special characters,
