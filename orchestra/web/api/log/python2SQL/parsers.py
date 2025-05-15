@@ -637,6 +637,65 @@ def _transform_ast(node: ast.AST) -> dict:
         # Handle zip function
         elif func_name == "zip":
             return {"operand": "zip", "rhs": [_transform_ast(arg) for arg in node.args]}
+        # Handle string methods (lower, upper, capitalize, strip, etc.)
+        elif isinstance(node.func, ast.Attribute) and node.func.attr in (
+            "lower",
+            "upper",
+            "capitalize",
+            "strip",
+            "lstrip",
+            "rstrip",
+            "startswith",
+            "endswith",
+            "contains",
+            "match",
+            "replace",
+            "substring",
+        ):
+            attr = node.func.attr
+            # Validate argument counts per method
+            if attr in ("lower", "upper", "capitalize") and len(node.args) > 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"str.{attr}() invalid args: expected 0, got {len(node.args)}",
+                )
+            elif attr in ("strip", "lstrip", "rstrip") and len(node.args) > 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"str.{attr}() invalid args: expected 0 or 1, got {len(node.args)}",
+                )
+            elif attr in ("startswith", "endswith") and len(node.args) != 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"str.{attr}() invalid args: expected 1, got {len(node.args)}",
+                )
+            elif attr == "contains" and len(node.args) != 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"str.contains() invalid args: expected 1, got {len(node.args)}",
+                )
+            elif attr == "match" and len(node.args) != 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"str.match() invalid args: expected 1, got {len(node.args)}",
+                )
+            elif attr == "replace" and len(node.args) != 2:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"str.replace() invalid args: expected 2, got {len(node.args)}",
+                )
+            elif attr == "substring" and not (1 <= len(node.args) <= 2):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"str.substring() invalid args: expected 1-2, got {len(node.args)}",
+                )
+
+            return {
+                "operand": "str_method",
+                "method": attr,
+                "rhs": _transform_ast(node.func.value),
+                "args": [_transform_ast(a) for a in node.args],
+            }
         # Handle dict methods (keys, values, items, get)
         elif isinstance(node.func, ast.Attribute) and node.func.attr in (
             "keys",
