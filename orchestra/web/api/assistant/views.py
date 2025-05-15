@@ -16,6 +16,7 @@ from orchestra.web.api.assistant.schema import (
 )
 
 router = APIRouter()
+admin_router = APIRouter()
 
 
 @router.post(
@@ -584,3 +585,21 @@ def delete_recording(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Error deleting recording: {str(e)}",
         )
+
+
+##################
+# Admin endpoints #
+##################
+
+
+@admin_router.get(
+    "/assistant/emails",
+    response_model=InfoResponse[List[str]],
+    summary="Admin: list all assistant email addresses",
+)
+async def admin_list_assistant_emails(
+    dao: AssistantDAO = Depends(),
+) -> InfoResponse[List[str]]:
+    """Return every non-null email address that has been set on an Assistant."""
+    emails = dao.list_all_assistant_emails()
+    return InfoResponse(info=emails)
