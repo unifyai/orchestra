@@ -921,16 +921,32 @@ def _handle_slice_operator(
             select_cols.append(lhs_expr.c.__parent_idx__.label("__parent_idx__"))
 
         if lhs_type == "str":
-            # PostgreSQL is 1-indexed, so we need to adjust the lower bound
-            start = lower + 1
-            length = upper - lower
+            # Text value without the JSON quotes Postgres adds
+            str_txt = func.replace(cast(lhs_valcol, String), '"', "")
+            str_len = func.char_length(str_txt)
+            if lower is None:
+                start_expr = literal(1)
+                lower_index_expr = literal(0)  # 0-based mirror
+            elif isinstance(lower, int) and lower >= 0:
+                start_expr = literal(lower + 1)  # 1-based
+                lower_index_expr = literal(lower)
+            elif isinstance(lower, int):  # negative
+                start_expr = str_len + literal(lower) + literal(1)
+                lower_index_expr = str_len + literal(lower)  # 0-based
+            else:
+                raise ValueError("Slice start must be int or None")
 
-            # Use PostgreSQL's substring function to extract the slice
-            extracted = func.substring(
-                func.replace(cast(lhs_valcol, String), '"', ""),
-                literal(start),
-                literal(length),
-            )
+            if upper is None:
+                extracted = func.substring(str_txt, start_expr)
+            elif isinstance(upper, int) and upper >= 0:
+                slice_len = max(upper - (lower or 0), 0)
+                extracted = func.substring(str_txt, start_expr, literal(slice_len))
+            elif isinstance(upper, int):  # negative stop
+                end_index_expr = str_len + literal(upper)
+                slice_len_expr = end_index_expr - lower_index_expr
+                extracted = func.substring(str_txt, start_expr, slice_len_expr)
+            else:
+                raise ValueError("Slice stop must be int or None")
 
             select_cols.extend(
                 [
