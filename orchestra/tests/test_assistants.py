@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from httpx import AsyncClient
 
-from orchestra.tests.utils import HEADERS
+from orchestra.tests.utils import ADMIN_HEADERS, HEADERS
 
 
 def _get_sample_wav_bytes() -> bytes:
@@ -409,3 +409,61 @@ async def test_assistant_recordings_audio_lifecycle(client: AsyncClient):
     )
     assert list_after_del.status_code == 200
     assert list_after_del.json()["info"] == []
+
+
+@pytest.mark.anyio
+async def test_admin_list_assistant_emails(client: AsyncClient):
+    # Create two assistants
+    payload1 = {
+        "first_name": "Laura",
+        "surname": "Wilson",
+        "age": 33,
+        "weekly_limit": 25.0,
+        "max_parallel": 3,
+        "region": "Europe",
+        "profile_photo": "https://example.com/photos/laura.jpg",
+        "about": "AI ethics researcher with focus on fairness in algorithms",
+    }
+    payload2 = {
+        "first_name": "Michael",
+        "surname": "Taylor",
+        "age": 41,
+        "weekly_limit": 30.0,
+        "max_parallel": 4,
+        "region": "North America",
+        "profile_photo": "https://example.com/photos/michael.jpg",
+        "about": "Cloud architecture specialist with expertise in distributed systems",
+    }
+
+    # Create the assistants
+    resp1 = await client.post("/v0/assistant", json=payload1, headers=HEADERS)
+    resp2 = await client.post("/v0/assistant", json=payload2, headers=HEADERS)
+    assert resp1.status_code == 200 and resp2.status_code == 200
+
+    # Get the assistant IDs
+    aid1 = resp1.json()["info"]["agent_id"]
+    aid2 = resp2.json()["info"]["agent_id"]
+
+    # Set unique emails for each assistant
+    email1 = "laura.wilson@example.com"
+    email2 = "michael.taylor@example.com"
+
+    # Update the assistants with emails
+    update1 = await client.patch(
+        f"/v0/assistant/{aid1}/config",
+        json={"email": email1},
+        headers=HEADERS,
+    )
+    update2 = await client.patch(
+        f"/v0/assistant/{aid2}/config",
+        json={"email": email2},
+        headers=HEADERS,
+    )
+    assert update1.status_code == 200 and update2.status_code == 200
+
+    # Test the admin endpoint for listing all assistant emails
+    resp = await client.get("/v0/admin/assistant/emails", headers=ADMIN_HEADERS)
+    assert resp.status_code == 200
+    data = resp.json().get("info")
+    assert isinstance(data, list)
+    assert set(data) == {email1, email2}
