@@ -9,6 +9,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     Float,
+    Integer,
     Numeric,
     String,
     Text,
@@ -49,6 +50,7 @@ __all__ = [
     "_handle_dict_comp",
     "_handle_zip",
     "_handle_dict_get",
+    "_handle_str_method",
 ]
 
 # Helper function for functions (len, str, type, round, round_timestamp, exists, version, isNone)
@@ -1508,6 +1510,363 @@ def _handle_list_comp(
         .subquery(name="final")
     )
     return final
+
+
+def _handle_str_method(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived,
+    local_scope=None,
+):
+    """
+    Handle string method calls in filter queries.
+
+    This function processes expressions like 'my_string.lower()' or 'my_string.startswith("prefix")'
+    by mapping Python string methods to their PostgreSQL equivalents.
+    """
+    method = filter_dict[
+        "method"
+    ]  # e.g., "lower", "upper", "capitalize", "strip", etc.
+    bool_methods = {"startswith", "endswith", "contains", "match"}
+    inferred = "bool" if method in bool_methods else "str"
+
+    src = build_sql_query(
+        filter_dict["rhs"],
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+    )
+
+    # Get arguments if any
+    args = []
+    if "args" in filter_dict and filter_dict["args"]:
+        args = [
+            build_sql_query(
+                arg,
+                log_event_alias,
+                session,
+                log_event_ids,
+                is_derived=is_derived,
+                local_scope=local_scope,
+            )
+            for arg in filter_dict["args"]
+        ]
+
+    # Map Python string methods to PostgreSQL functions
+    if isinstance(src, (Subquery, ColumnClause)):
+        val, val_type = _select_value(src, session)
+
+        if val_type != "str":
+            raise HTTPException(
+                status_code=400,
+                detail=f"{method}() requires string input, got {val_type}",
+            )
+
+        # Ensure we're working with a string
+        str_val = cast(val, String)
+
+        # Apply the appropriate string operation
+        if method == "lower":
+            expr = func.lower(str_val)
+        elif method == "upper":
+            expr = func.upper(str_val)
+        elif method == "capitalize":
+            # First char uppercase, rest lowercase:
+            expr = func.concat(
+                func.upper(func.substr(str_val, 1, 1)),
+                func.lower(func.substr(str_val, 2)),
+            )
+        elif method == "strip":
+            if args:
+                chars = cast(args[0], String)
+                expr = func.btrim(str_val, chars)
+            else:
+                expr = func.regexp_replace(str_val, "^\\s+|\\s+$", "", "g")
+        elif method == "lstrip":
+            if args:
+                chars = cast(args[0], String)
+                expr = func.ltrim(str_val, chars)
+            else:
+                expr = func.regexp_replace(str_val, "^\\s+", "", "g")
+        elif method == "rstrip":
+            if args:
+                chars = cast(args[0], String)
+                expr = func.rtrim(str_val, chars)
+            else:
+                expr = func.regexp_replace(str_val, "\\s+$", "", "g")
+        elif method == "startswith":
+            if not args:
+                raise ValueError("startswith() requires a prefix argument")
+
+            prefix = cast(args[0], String)
+            # substr(str_val, 1, length(prefix)) = prefix
+            expr = func.substr(str_val, 1, func.length(prefix)) == prefix
+
+        elif method == "endswith":
+            if not args:
+                raise ValueError("endswith() requires a suffix argument")
+
+            suffix = cast(args[0], String)
+            expr = func.right(str_val, func.length(suffix)) == suffix
+        elif method == "contains":
+            if not args:
+                raise ValueError("contains() requires a substring argument")
+            substring = args[0]
+            if isinstance(substring, BindParameter):
+                substring_val = substring.value
+                expr = func.position(substring_val, str_val) > 0
+            else:
+                expr = func.position(substring, str_val) > 0
+        elif method == "match":
+            if not args:
+                raise ValueError("match() requires a pattern argument")
+            pattern = args[0]
+            expr = str_val.op("~")(pattern)
+        elif method == "replace":
+            if len(args) < 2:
+                raise ValueError("replace() requires old and new substring arguments")
+            old = args[0]
+            new = args[1]
+            expr = func.replace(str_val, old, new)
+        elif method == "substring" or method == "__getitem__":
+            # Handle both substring() and slice notation
+            if method == "substring":
+                if not args:
+                    raise ValueError("substring() requires at least a start argument")
+                start = args[0]
+                length = args[1] if len(args) > 1 else None
+
+                # PostgreSQL substring is 1-indexed
+                if isinstance(start, BindParameter) and isinstance(start.value, int):
+                    # Add 1 to convert from 0-indexed Python to 1-indexed PostgreSQL
+                    start_val = start.value + 1 if start.value >= 0 else start.value
+                    start = literal(start_val)
+                else:
+                    # For dynamic values, add 1 in the SQL
+                    start = cast(start, Integer) + 1
+
+                if length is not None:
+                    length = cast(length, Integer)
+                    expr = func.substring(str_val, start, length)
+                else:
+                    expr = func.substring(str_val, start)
+            else:  # __getitem__ (slice notation)
+                # Handle slice objects
+                slice_obj = filter_dict.get("slice", {})
+                start = slice_obj.get("start")
+                stop = slice_obj.get("stop")
+
+                if start is not None:
+                    start = build_sql_query(
+                        start,
+                        log_event_alias,
+                        session,
+                        log_event_ids,
+                        is_derived=is_derived,
+                        local_scope=local_scope,
+                    )
+                    # Convert to 1-indexed
+                    if isinstance(start, BindParameter) and isinstance(
+                        start.value,
+                        int,
+                    ):
+                        start_val = start.value + 1 if start.value >= 0 else start.value
+                        start = literal(start_val)
+                    else:
+                        start = cast(start, Integer) + 1
+                else:
+                    start = literal(1)  # Default to beginning of string
+
+                if stop is not None:
+                    stop = build_sql_query(
+                        stop,
+                        log_event_alias,
+                        session,
+                        log_event_ids,
+                        is_derived=is_derived,
+                        local_scope=local_scope,
+                    )
+                    stop = cast(stop, Integer)
+                    # Calculate length (stop - start)
+                    if (
+                        isinstance(stop, BindParameter)
+                        and isinstance(stop.value, int)
+                        and isinstance(start, BindParameter)
+                        and isinstance(start.value, int)
+                    ):
+                        length = stop.value - start.value
+                        expr = func.substring(str_val, start, literal(length))
+                    else:
+                        length_sql = stop - start + 1
+                        expr = func.substring(str_val, start, length_sql)
+                else:
+                    # No stop means go to the end
+                    expr = func.substring(str_val, start)
+        else:
+            raise ValueError(f"Unsupported string method: {method}")
+
+        # Return as a subquery if the source was a subquery
+        if isinstance(src, ColumnClause):
+            return expr
+
+        select_cols = [src.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in src.c.keys():
+            select_cols.append(src.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in src.c.keys():
+            select_cols.append(src.c.__parent_idx__.label("__parent_idx__"))
+        select_cols.extend(
+            [expr.label("value"), literal(inferred).label("inferred_type")],
+        )
+        return select(*select_cols).select_from(src).subquery()
+    else:
+        # For literal values or direct SQL expressions
+        if isinstance(src, BindParameter):
+            if not isinstance(src.value, str):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{method}() requires string input, got {type(src.value).__name__}",
+                )
+
+        str_val = cast(src, String)
+
+        if method == "lower":
+            return func.lower(str_val)
+        elif method == "upper":
+            return func.upper(str_val)
+        elif method == "capitalize":
+            # First char uppercase, rest lowercase:
+            return func.concat(
+                func.upper(func.substr(str_val, 1, 1)),
+                func.lower(func.substr(str_val, 2)),
+            )
+        elif method == "strip":
+            if args:
+                chars = cast(args[0], String)
+                return func.btrim(str_val, chars)
+            else:
+                return func.regexp_replace(str_val, "^\\s+|\\s+$", "", "g")
+        elif method == "lstrip":
+            if args:
+                chars = cast(args[0], String)
+                return func.ltrim(str_val, chars)
+            else:
+                return func.regexp_replace(str_val, "^\\s+", "", "g")
+        elif method == "rstrip":
+            if args:
+                chars = cast(args[0], String)
+                return func.rtrim(str_val, chars)
+            else:
+                return func.regexp_replace(str_val, "\\s+$", "", "g")
+        elif method == "startswith":
+            if not args:
+                raise ValueError("startswith() requires a prefix argument")
+            prefix = cast(args[0], String)
+            return func.substr(str_val, 1, func.length(prefix)) == prefix
+        elif method == "endswith":
+            if not args:
+                raise ValueError("endswith() requires a suffix argument")
+            suffix = cast(args[0], String)
+            return func.right(str_val, func.length(suffix)) == suffix
+        elif method == "contains":
+            if not args:
+                raise ValueError("contains() requires a substring argument")
+            substring = args[0]
+            if isinstance(substring, BindParameter):
+                substring_val = substring.value
+                return func.position(substring_val, str_val) > 0
+            else:
+                return func.position(substring, str_val) > 0
+        elif method == "match":
+            if not args:
+                raise ValueError("match() requires a pattern argument")
+            pattern = args[0]
+            return str_val.op("~")(pattern)
+        elif method == "replace":
+            if len(args) < 2:
+                raise ValueError("replace() requires old and new substring arguments")
+            old = args[0]
+            new = args[1]
+            return func.replace(str_val, old, new)
+        elif method == "substring" or method == "__getitem__":
+            # Handle both substring() and slice notation
+            if method == "substring":
+                if not args:
+                    raise ValueError("substring() requires at least a start argument")
+                start = args[0]
+                length = args[1] if len(args) > 1 else None
+
+                # PostgreSQL substring is 1-indexed
+                if isinstance(start, BindParameter) and isinstance(start.value, int):
+                    # Add 1 to convert from 0-indexed Python to 1-indexed PostgreSQL
+                    start_val = start.value + 1 if start.value >= 0 else start.value
+                    start = literal(start_val)
+                else:
+                    # For dynamic values, add 1 in the SQL
+                    start = cast(start, Integer) + 1
+
+                if length is not None:
+                    length = cast(length, Integer)
+                    return func.substring(str_val, start, length)
+                else:
+                    return func.substring(str_val, start)
+            else:  # __getitem__ (slice notation)
+                # Handle slice objects
+                slice_obj = filter_dict.get("slice", {})
+                start = slice_obj.get("start")
+                stop = slice_obj.get("stop")
+
+                if start is not None:
+                    start = build_sql_query(
+                        start,
+                        log_event_alias,
+                        session,
+                        log_event_ids,
+                        is_derived=is_derived,
+                        local_scope=local_scope,
+                    )
+                    # Convert to 1-indexed
+                    if isinstance(start, BindParameter) and isinstance(
+                        start.value,
+                        int,
+                    ):
+                        start_val = start.value + 1 if start.value >= 0 else start.value
+                        start = literal(start_val)
+                    else:
+                        start = cast(start, Integer) + 1
+                else:
+                    start = literal(1)  # Default to beginning of string
+
+                if stop is not None:
+                    stop = build_sql_query(
+                        stop,
+                        log_event_alias,
+                        session,
+                        log_event_ids,
+                        is_derived=is_derived,
+                        local_scope=local_scope,
+                    )
+                    stop = cast(stop, Integer)
+                    # Calculate length (stop - start)
+                    if (
+                        isinstance(stop, BindParameter)
+                        and isinstance(stop.value, int)
+                        and isinstance(start, BindParameter)
+                        and isinstance(start.value, int)
+                    ):
+                        length = stop.value - start.value
+                        return func.substring(str_val, start, literal(length))
+                    else:
+                        length_sql = stop - start + 1
+                        return func.substring(str_val, start, length_sql)
+                else:
+                    # No stop means go to the end
+                    return func.substring(str_val, start)
+        else:
+            raise ValueError(f"Unsupported string method: {method}")
 
 
 def _handle_dict_comp(
