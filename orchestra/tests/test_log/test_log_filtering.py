@@ -2546,6 +2546,215 @@ async def test_boolean_membership_operator_error(
         assert response.status_code != 200 or len(response.json()["logs"]) == 0
 
 
+@pytest.mark.parametrize(
+    "input_string, expected_result",
+    [
+        # Test capitalize only uppercases first character and lowercases the rest
+        ("hello", "Hello"),
+        ("HELLO", "Hello"),
+        ("hELLO", "Hello"),
+        ("Hello world", "Hello world"),
+        ("HELLO WORLD", "Hello world"),
+        ("123hello", "123hello"),  # Non-letter first character remains unchanged
+        ("", ""),  # Empty string edge case
+        (" hello", " hello"),  # Leading space
+    ],
+)
+@pytest.mark.anyio
+async def test_capitalize_behavior(client: AsyncClient, input_string, expected_result):
+    """
+    Test that the capitalize() method correctly uppercases only the first character
+    and lowercases the rest, rather than using PostgreSQL's initcap() function.
+    """
+    project_name = "test_capitalize"
+    await _create_project(client, project_name)
+
+    # Create a log with the test string
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"test_string": input_string},
+    )
+    assert response.status_code == 200
+    log_id = response.json()["log_event_ids"][0]
+
+    # Create a derived entry that uses capitalize()
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key="derived_capitalize",
+        equation="{s:test_string}.capitalize()",
+        referenced_logs={"s": [log_id]},
+        user=1,
+    )
+    assert response.status_code == 200
+
+    # Fetch the log with the derived entry
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "from_ids": str(log_id)},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    # Check the derived entry has the correct capitalized value
+    assert len(data["logs"]) == 1
+    log = data["logs"][0]
+    assert "derived_capitalize" in log["derived_entries"]
+    assert log["derived_entries"]["derived_capitalize"] == expected_result
+
+    # Test filtering with the capitalized value
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": f"derived_capitalize == '{expected_result}'",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert len(response.json()["logs"]) == 1
+
+
+@pytest.mark.parametrize(
+    "input_string, expected_stripped",
+    [
+        # Test standard ASCII whitespace
+        ("  hello  ", "hello"),
+        ("\t\nhello\r\n", "hello"),
+        # Test Unicode whitespace characters
+        ("\u2000hello\u2001", "hello"),  # En quad and em quad spaces
+        ("\u200Ahello\u3000", "hello"),  # Hair space and ideographic space
+        ("\u2028hello\u2029", "hello"),  # Line and paragraph separators
+        # Test non-whitespace preservation
+        ("  hello world  ", "hello world"),
+        ("--hello--", "--hello--"),  # Dashes shouldn't be stripped
+        # Test with custom characters
+        ("-_-hello-_-", "-_-hello-_-"),  # These shouldn't be stripped by default
+    ],
+)
+@pytest.mark.anyio
+async def test_unicode_whitespace_stripping(
+    client: AsyncClient,
+    input_string,
+    expected_stripped,
+):
+    """
+    Test that strip(), lstrip(), and rstrip() methods correctly handle all Unicode
+    whitespace characters, not just ASCII whitespace.
+    """
+    project_name = "test_unicode_strip"
+    await _create_project(client, project_name)
+
+    # Create a log with the test string
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"test_string": input_string},
+    )
+    assert response.status_code == 200
+    log_id = response.json()["log_event_ids"][0]
+
+    # Create derived entries for strip, lstrip, rstrip
+    for method in ["strip", "lstrip", "rstrip"]:
+        response = await _create_derived_entry(
+            client,
+            project_name,
+            key=f"derived_{method}",
+            equation=f"{{s:test_string}}.{method}()",
+            referenced_logs={"s": [log_id]},
+            user=1,
+        )
+        assert response.status_code == 200
+
+    # Fetch the log with the derived entries
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "from_ids": str(log_id)},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+
+    # Check the strip() method handles all Unicode whitespace
+    assert len(data["logs"]) == 1
+    log = data["logs"][0]
+    assert "derived_strip" in log["derived_entries"]
+    assert log["derived_entries"]["derived_strip"] == expected_stripped
+
+    # Test filtering with the stripped value
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": f"derived_strip == '{expected_stripped}'",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert len(response.json()["logs"]) == 1
+
+
+@pytest.mark.parametrize(
+    "method, pattern, test_string, should_match",
+    [
+        # Test startswith with various patterns
+        ("startswith", "hello", "hello world", True),
+        ("startswith", "world", "hello world", False),
+        ("startswith", "h%", "hello world", False),  # % should be treated as literal
+        ("startswith", "h_", "hello world", False),  # _ should be treated as literal
+        # Test endswith with various patterns
+        ("endswith", "world", "hello world", True),
+        ("endswith", "hello", "hello world", False),
+        ("endswith", "%d", "hello world", False),  # % should be treated as literal
+        ("endswith", "_d", "hello world", False),  # _ should be treated as literal
+    ],
+)
+@pytest.mark.anyio
+async def test_string_pattern_binding(
+    client: AsyncClient,
+    method,
+    pattern,
+    test_string,
+    should_match,
+):
+    """
+    Test that startswith() and endswith() methods correctly handle pattern binding
+    and escape special characters in LIKE patterns.
+    """
+    project_name = "test_string_pattern"
+    await _create_project(client, project_name)
+
+    # Create a log with the test string
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"test_string": test_string},
+    )
+    assert response.status_code == 200
+    log_id = response.json()["log_event_ids"][0]
+
+    # Test filtering with the string method
+    filter_expr = f"test_string.{method}('{pattern}')"
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": filter_expr,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+
+    if should_match:
+        assert len(logs) == 1, f"Expected match for {filter_expr}"
+        assert logs[0]["id"] == log_id
+    else:
+        assert len(logs) == 0, f"Expected no match for {filter_expr}"
+
+
 async def test_complex_string_filter_expressions(client: AsyncClient):
     """
     Test that filter expressions correctly match complex strings with special characters,
