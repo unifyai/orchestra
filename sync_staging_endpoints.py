@@ -106,7 +106,6 @@ def main():
         conflict_cols = CONFLICT_TARGETS[table]
         inserted = upsert_table(engine, table, rows, conflict_cols)
         print(f"[INFO] Table '{table}': attempted={len(rows)}, inserted={inserted}")
-        exit()
 
 
 if __name__ == "__main__":
