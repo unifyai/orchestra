@@ -52,7 +52,7 @@ jobs:
         AUTH_ACCOUNT_USER_ID: ${{ secrets.AUTH_ACCOUNT_USER_ID }}
 
     - name: Upload performance metrics
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: perf_timings
         path: perf_timings.json
