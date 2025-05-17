@@ -110,6 +110,7 @@ env = [
 addopts = "--cov --cov-report=lcov:lcov.info --cov-report=term"
 markers = [
     "manual: marks tests as manual",
+    "performance: long-running performance tests"
 ]
 
 [fastapi-template.options]
