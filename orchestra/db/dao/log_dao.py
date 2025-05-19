@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import Depends
-from sqlalchemy import alias, cast, literal, select, text, update
+from sqlalchemy import alias, cast, func, literal, select, text, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
@@ -635,9 +635,6 @@ class LogDAO:
             return []
 
         # Start transaction
-        # created_ids = []
-        logs_to_create = []
-        json_logs_to_create = []
         history_entries = []
         json_history_entries = []
         contexts_to_update = set()
@@ -729,13 +726,28 @@ class LogDAO:
 
                 # Create JSON log for dict/list values
                 if isinstance(value, (dict, list)):
-                    json_logs_to_create.append(
-                        JSONLog(
-                            log_event_id=log_event_id,
-                            key=key,
-                            value=value,
-                        ),
+                    # Use upsert operation for JSON logs
+                    rowcount = self._upsert_json_log(
+                        log_event_id=log_event_id,
+                        key=key,
+                        value=value,
+                        overwrite=False,  # Always use overwrite=False for bulk_create
                     )
+
+                    # If no row was affected, check if there's a conflict
+                    if rowcount == 0:
+                        # Re-SELECT the row with FOR UPDATE to lock it
+                        existing_json_log = (
+                            self.session.query(JSONLog)
+                            .filter_by(log_event_id=log_event_id, key=key)
+                            .with_for_update()
+                            .first()
+                        )
+                        # If the existing value is different, raise OverwriteError
+                        if existing_json_log and existing_json_log.value != value:
+                            raise OverwriteError(
+                                f"Cannot overwrite existing JSON value for key '{key}'",
+                            )
 
                 # Create Log entry
                 if version is not None:
@@ -751,9 +763,7 @@ class LogDAO:
                             created_at=now,
                             updated_at=now,
                         )
-                        .on_conflict_do_nothing(
-                            index_elements=["log_event_id", "key", "version"],
-                        )
+                        .on_conflict_do_nothing()
                     )
                     result = self.session.execute(insert_stmt)
 
@@ -769,7 +779,6 @@ class LogDAO:
                             )
                             .one()
                         )
-                        # created_ids.append(new_log.id)
                     else:
                         # Check if existing row has the same value
                         existing_log = (
@@ -787,28 +796,34 @@ class LogDAO:
                                 f"key='{key}', version={version}) with a different value.\n"
                                 f"Existing: {existing_log.value}\nNew: {value}",
                             )
-                        # created_ids.append(existing_log.id)
                 else:
-                    # For non-versioned logs, add to bulk create list
-                    log = Log(
+                    # For non-versioned logs, use upsert operation
+                    rowcount = self._upsert_log(
                         log_event_id=log_event_id,
                         key=key,
                         value=value,
-                        version=None,
                         inferred_type=inferred_type,
-                        created_at=now,
-                        updated_at=now,
+                        version=None,
+                        overwrite=False,  # Always use overwrite=False for bulk_create
                     )
-                    logs_to_create.append(log)
 
-            # Bulk save non-versioned logs
-            if logs_to_create:
-                self.session.bulk_save_objects(logs_to_create)
-                self.session.flush()
+                    # If no row was affected, check if there's a conflict
+                    if rowcount == 0:
+                        # Re-SELECT the row with FOR UPDATE to lock it
+                        existing_log = (
+                            self.session.query(Log)
+                            .filter_by(log_event_id=log_event_id, key=key)
+                            .with_for_update()
+                            .first()
+                        )
+                        # If the existing value is different, raise OverwriteError
+                        if existing_log and existing_log.value != value:
+                            raise OverwriteError(
+                                f"Cannot overwrite existing value for key '{key}'",
+                            )
 
-            # Bulk save JSON logs
-            if json_logs_to_create:
-                self.session.bulk_save_objects(json_logs_to_create)
+            # No need to bulk save logs anymore as we're using upsert operations
+            self.session.flush()
 
             # Create history entries for versioned contexts
             for entry in history_entries:
@@ -826,7 +841,6 @@ class LogDAO:
                     context.updated_at = now
 
             self.session.commit()
-            # return created_ids
 
         except Exception as e:
             raise e
@@ -1055,10 +1069,9 @@ class LogDAO:
                 )
                 context_map = {context.id: context for context in contexts}
 
-            # Collect history entries to create and JSON logs to create/update
+            # Collect history entries to create and contexts to update
             history_entries = []
             json_history_entries = []
-            json_logs_to_create = []
             contexts_to_update = set()
             log_event_ids_to_update = set()
 
@@ -1153,17 +1166,30 @@ class LogDAO:
                         )
                         contexts_to_update.add(context_id)
                 else:
-                    # Entry doesn't exist, create new log
-                    new_log = Log(
+                    # Entry doesn't exist, use upsert operation
+                    rowcount = self._upsert_log(
                         log_event_id=log_event_id,
                         key=key,
                         value=json_value,
-                        version=version,
                         inferred_type=inferred_type,
-                        created_at=now,
-                        updated_at=now,
+                        version=version,
+                        overwrite=update.get("overwrite", overwrite),
                     )
-                    self.session.add(new_log)
+
+                    # If overwrite=False and no row was affected, check if there's a conflict
+                    if not update.get("overwrite", overwrite) and rowcount == 0:
+                        # Re-SELECT the row with FOR UPDATE to lock it
+                        existing_log = (
+                            self.session.query(Log)
+                            .filter_by(log_event_id=log_event_id, key=key)
+                            .with_for_update()
+                            .first()
+                        )
+                        # If the existing value is different, raise OverwriteError
+                        if existing_log and existing_log.value != json_value:
+                            raise OverwriteError(
+                                f"Cannot overwrite existing value for key '{key}'",
+                            )
 
                     # Handle versioned history for new logs
                     if is_versioned:
@@ -1182,43 +1208,40 @@ class LogDAO:
 
                 # Handle JSON logs for dict/list values
                 if isinstance(value, (dict, list)):
-                    existing_json_log = existing_json_log_map.get(group_key)
+                    # Use upsert operation for JSON logs
+                    rowcount = self._upsert_json_log(
+                        log_event_id,
+                        key,
+                        json_value,
+                        update.get("overwrite", overwrite),
+                    )
 
-                    if existing_json_log:
-                        # Update existing JSON log
-                        existing_json_log.value = value
-
-                        # Create JSON history if versioned
-                        if is_versioned:
-                            json_history_entries.append(
-                                {
-                                    "log_event_id": log_event_id,
-                                    "key": key,
-                                    "value": existing_json_log.value,
-                                    "version": context.version,
-                                    "description": f"Updated JSON entry with key {key}",
-                                    "archived_at": now,
-                                },
+                    # If overwrite=False and no row was affected, check if there's a conflict
+                    if not update.get("overwrite", overwrite) and rowcount == 0:
+                        # Re-SELECT the row with FOR UPDATE to lock it
+                        existing_json_log = (
+                            self.session.query(JSONLog)
+                            .filter_by(log_event_id=log_event_id, key=key)
+                            .with_for_update()
+                            .first()
+                        )
+                        # If the existing value is different, raise OverwriteError
+                        if existing_json_log and existing_json_log.value != json_value:
+                            raise OverwriteError(
+                                f"Cannot overwrite existing JSON value for key '{key}'",
                             )
 
-                    else:
-                        # Create new JSON log
-                        new_json_log = JSONLog(
-                            log_event_id=log_event_id,
-                            key=key,
-                            value=value,
-                        )
-                        json_logs_to_create.append(new_json_log)
-
-                        # Create JSON history if versioned
-                        if is_versioned:
+                    # Create JSON history if versioned and a change was made
+                    if is_versioned:
+                        if rowcount == 1:
+                            # New row was inserted or existing row was updated
                             json_history_entries.append(
                                 {
                                     "log_event_id": log_event_id,
                                     "key": key,
-                                    "value": value,
+                                    "value": json_value,
                                     "version": context.version,
-                                    "description": f"Created JSON entry with key {key}",
+                                    "description": f"{'Updated' if group_key in existing_json_log_map else 'Created'} JSON entry with key {key}",
                                     "archived_at": now,
                                 },
                             )
@@ -1234,10 +1257,6 @@ class LogDAO:
             for entry in json_history_entries:
                 json_log_history = JSONLogHistory(**entry)
                 self.session.add(json_log_history)
-
-            # Bulk save JSON logs
-            if json_logs_to_create:
-                self.session.bulk_save_objects(json_logs_to_create)
 
             # Update context timestamps
             for context_id in contexts_to_update:
