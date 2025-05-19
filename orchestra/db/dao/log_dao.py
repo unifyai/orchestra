@@ -1167,10 +1167,7 @@ class LogDAO:
             # Update log event timestamps
             for log_event_id in log_event_ids_to_update:
                 log_event = (
-                    self.session.query(LogEvent)
-                    .filter_by(id=log_event_id)
-                    .with_for_update()
-                    .first()
+                    self.session.query(LogEvent).filter_by(id=log_event_id).first()
                 )
                 if log_event:
                     log_event.updated_at = now
@@ -1374,7 +1371,6 @@ class LogDAO:
                 log_entry = (
                     self.session.query(Log)
                     .filter_by(log_event_id=le_id, key=base_key)
-                    .with_for_update()
                     .first()
                 )
                 if not log_entry:

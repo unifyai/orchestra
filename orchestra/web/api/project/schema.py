@@ -40,7 +40,7 @@ class ProjectConfig(BaseModel):
         json_schema_extra={
             "example": "eval-project",
             "pattern": "^[a-zA-Z0-9_\\-/]+$",
-            "pattern_description": "Only letters, numbers, underscores, and hyphens are allowed",
+            "pattern_description": "Only letters, numbers, underscores, slashes, and hyphens are allowed",
         },
     )
 
