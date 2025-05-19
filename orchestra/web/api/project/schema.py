@@ -34,7 +34,14 @@ class ProjectConfig(BaseModel):
     name: str = Field(
         description="A unique, user-defined name used when referencing  "
         "the project.",
-        json_schema_extra={"example": "eval-project"},
+        min_length=1,
+        max_length=255,
+        pattern=r"^[a-zA-Z0-9_\-/]+$",
+        json_schema_extra={
+            "example": "eval-project",
+            "pattern": "^[a-zA-Z0-9_\\-/]+$",
+            "pattern_description": "Only letters, numbers, underscores, and hyphens are allowed",
+        },
     )
 
 
