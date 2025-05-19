@@ -35,6 +35,7 @@ from orchestra.db.models.orchestra_models import (
     LogEvent,
     LogEventContext,
     Organization,
+    Project,
     TempInterface,
 )
 from orchestra.settings import settings
@@ -49,6 +50,27 @@ from orchestra.web.api.project.schema import (
 from orchestra.web.api.utils.http_responses import not_found
 
 router = APIRouter()
+
+
+def get_project_or_404(
+    request_fastapi: Request,
+    project_name: str = Path(
+        ...,
+        description="Project name, may contain slashes",
+        example="proj/a",
+    ),
+    project_dao: ProjectDAO = Depends(),
+) -> Project:
+    project = project_dao.get_by_user_and_name(
+        user_id=request_fastapi.state.user_id,
+        name=project_name,
+    )
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {project_name} not found.",
+        )
+    return project
 
 
 ###########################
@@ -465,180 +487,6 @@ def create_project(
 
 
 @router.delete(
-    "/project/{project_name:path}",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {"info": "Project deleted successfully!"},
-                },
-            },
-        },
-        404: {
-            "description": "Project Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Project <name> not found.",
-                    },
-                },
-            },
-        },
-    },
-)
-def delete_project(
-    request_fastapi: Request,
-    project_name: str = Path(
-        description="Name of the project to delete.",
-        example="eval-project",
-    ),
-    project_dao: ProjectDAO = Depends(),
-    session=Depends(get_db_session),
-):
-    """
-    Deletes a project from your account.
-    """
-    # Check if trying to delete the protected project (Unity)
-    if project_name == "Unity":
-        raise HTTPException(
-            status_code=403,
-            detail="The 'Unity' project cannot be deleted.",
-        )
-
-    # Check if trying to delete the protected project (Production Traffic)
-    ORGANIZATION_NAME = settings.orchestra_organization_name
-    OWNER_ID = settings.orchestra_owner_id
-    PROD_TRAFFIC_PROJECT_NAME = settings.orchestra_prod_traffic_name
-    CHAT_COMPLETIONS_PROJECT_NAME = settings.chat_completions_project_name
-    orchestra_org = (
-        session.query(Organization)
-        .filter(
-            Organization.name == ORGANIZATION_NAME,
-            Organization.owner_id == OWNER_ID,
-        )
-        .first()
-    )
-    try:
-        # Get the project using the new access-aware method
-        project = project_dao.get_by_user_and_name(
-            user_id=request_fastapi.state.user_id,
-            name=project_name,
-        )
-        project_id = project.id
-        if project_name == CHAT_COMPLETIONS_PROJECT_NAME:
-            raise HTTPException(
-                status_code=403,
-                detail=f"The '{CHAT_COMPLETIONS_PROJECT_NAME}' project cannot be deleted.",
-            )
-        if (
-            project_name == PROD_TRAFFIC_PROJECT_NAME
-            and project.organization_id == orchestra_org.id
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail=f"The '{PROD_TRAFFIC_PROJECT_NAME}' project cannot be deleted.",
-            )
-        project_dao.delete(id=project_id)
-
-    except:
-        raise not_found(f"Project {project_name}")
-
-    return {"info": "Project deleted successfully"}
-
-
-@router.patch(
-    "/project/{project_name:path}",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {"info": "Project renamed successfully!"},
-                },
-            },
-        },
-        404: {
-            "description": "Project Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Project <name> not found.",
-                    },
-                },
-            },
-        },
-    },
-)
-def rename_project(
-    request_fastapi: Request,
-    request: ProjectConfig,
-    project_name: str = Path(
-        description="Name of the project to rename.",
-        example="old-project-name",
-    ),
-    project_dao: ProjectDAO = Depends(),
-):
-    """
-    Renames a project from `name` to `new_name` in your account.
-    """
-    # Check if trying to rename the protected Unity project
-    if project_name == "Unity":
-        raise HTTPException(
-            status_code=403,
-            detail="The 'Unity' project cannot be renamed.",
-        )
-    try:
-        # First verify the project exists and user has access
-        try:
-            project = project_dao.get_by_user_and_name(
-                user_id=request_fastapi.state.user_id,
-                name=project_name,
-            ).id
-            # Now rename it
-            project_dao.rename(
-                user_id=request_fastapi.state.user_id,
-                name=project_name,
-                new_name=request.name,
-            )
-        except:
-            raise ValueError("Project not found")
-    except:
-        raise not_found(f"Project {project_name}")
-    return {"info": "Project renamed successfully!"}
-
-
-@router.get(
-    "/projects",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": [
-                        "project_a",
-                        "project_b",
-                        "project_c",
-                    ],
-                },
-            },
-        },
-    },
-)
-def list_projects(
-    request_fastapi: Request,
-    project_dao: ProjectDAO = Depends(),
-):
-    """
-    Returns the names of all projects stored in your account.
-    """
-    raw_projects = project_dao.filter_by_user_access(
-        user_id=request_fastapi.state.user_id,
-    )
-    return [p[0].name for p in raw_projects]
-
-
-@router.delete(
     "/project/{project_name:path}/logs",
     responses={
         200: {
@@ -663,28 +511,14 @@ def list_projects(
 )
 def delete_project_logs(
     request_fastapi: Request,
-    project_name: str,
-    project_dao: ProjectDAO = Depends(),
+    project: Project = Depends(get_project_or_404),
     log_event_dao: LogEventDAO = Depends(),
 ):
     """
     Deletes all logs in a project.
     """
-    # Verify project exists and user has access
-    try:
-        project = project_dao.get_by_user_and_name(
-            user_id=request_fastapi.state.user_id,
-            name=project_name,
-        )
-        project_id = project.id
-    except HTTPException:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project {project_name} not found.",
-        )
-
     # Get all log events for the project
-    log_events = log_event_dao.filter(project_id=project_id)
+    log_events = log_event_dao.filter(project_id=project.id)
 
     # Delete each log event (cascade delete will handle related logs)
     for event in log_events:
@@ -720,36 +554,173 @@ def delete_project_logs(
 )
 def delete_project_contexts(
     request_fastapi: Request,
-    project_name: str = Path(
-        description="Name of the project to delete contexts from.",
-        example="test-project",
-    ),
-    project_dao: ProjectDAO = Depends(),
+    project: Project = Depends(get_project_or_404),
     context_dao: ContextDAO = Depends(),
 ):
     """
     Deletes all contexts and their associated logs from a project.
     The project's interfaces remain untouched.
     """
-    # Verify project exists and user has access
-    try:
-        project = project_dao.get_by_user_and_name(
-            user_id=request_fastapi.state.user_id,
-            name=project_name,
-        )
-        project_id = project.id
-    except HTTPException:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project {project_name} not found.",
-        )
-
     # Get all contexts for the project
-    contexts = context_dao.filter(project_id=project_id)
+    contexts = context_dao.filter(project_id=project.id)
     for context in contexts:
         context_dao.delete(context[0].id)
 
     return {"info": "Project contexts and logs deleted successfully!"}
+
+
+@router.delete(
+    "/project/{project_name:path}",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Project deleted successfully!"},
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project <name> not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def delete_project(
+    request_fastapi: Request,
+    project: Project = Depends(get_project_or_404),
+    project_dao: ProjectDAO = Depends(),
+    session=Depends(get_db_session),
+):
+    """
+    Deletes a project from your account.
+    """
+    # Check if trying to delete the protected project (Unity)
+    if project.name == "Unity":
+        raise HTTPException(
+            status_code=403,
+            detail="The 'Unity' project cannot be deleted.",
+        )
+
+    # Check if trying to delete the protected project (Production Traffic)
+    ORGANIZATION_NAME = settings.orchestra_organization_name
+    OWNER_ID = settings.orchestra_owner_id
+    PROD_TRAFFIC_PROJECT_NAME = settings.orchestra_prod_traffic_name
+    CHAT_COMPLETIONS_PROJECT_NAME = settings.chat_completions_project_name
+    orchestra_org = (
+        session.query(Organization)
+        .filter(
+            Organization.name == ORGANIZATION_NAME,
+            Organization.owner_id == OWNER_ID,
+        )
+        .first()
+    )
+    try:
+        if project.name == CHAT_COMPLETIONS_PROJECT_NAME:
+            raise HTTPException(
+                status_code=403,
+                detail=f"The '{CHAT_COMPLETIONS_PROJECT_NAME}' project cannot be deleted.",
+            )
+        if (
+            project.name == PROD_TRAFFIC_PROJECT_NAME
+            and project.organization_id == orchestra_org.id
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail=f"The '{PROD_TRAFFIC_PROJECT_NAME}' project cannot be deleted.",
+            )
+        project_dao.delete(id=project.id)
+
+    except:
+        raise not_found(f"Project {project.name}")
+
+    return {"info": "Project deleted successfully"}
+
+
+@router.patch(
+    "/project/{project_name:path}",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Project renamed successfully!"},
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project <name> not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def rename_project(
+    request_fastapi: Request,
+    request: ProjectConfig,
+    project: Project = Depends(get_project_or_404),
+    project_dao: ProjectDAO = Depends(),
+):
+    """
+    Renames a project from `name` to `new_name` in your account.
+    """
+    # Check if trying to rename the protected Unity project
+    if project.name == "Unity":
+        raise HTTPException(
+            status_code=403,
+            detail="The 'Unity' project cannot be renamed.",
+        )
+    try:
+        # Now rename it
+        project_dao.rename(
+            user_id=request_fastapi.state.user_id,
+            name=project.name,
+            new_name=request.name,
+        )
+    except:
+        raise not_found(f"Project {project.name}")
+    return {"info": "Project renamed successfully!"}
+
+
+@router.get(
+    "/projects",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": [
+                        "project_a",
+                        "project_b",
+                        "project_c",
+                    ],
+                },
+            },
+        },
+    },
+)
+def list_projects(
+    request_fastapi: Request,
+    project_dao: ProjectDAO = Depends(),
+):
+    """
+    Returns the names of all projects stored in your account.
+    """
+    raw_projects = project_dao.filter_by_user_access(
+        user_id=request_fastapi.state.user_id,
+    )
+    return [p[0].name for p in raw_projects]
 
 
 ###########################
