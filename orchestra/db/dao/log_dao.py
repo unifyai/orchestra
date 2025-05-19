@@ -883,6 +883,87 @@ class LogDAO:
             raise ValueError(f"Failed to get next version for parameter {param_key}")
         return row[0]
 
+    def _upsert_json_log(
+        self,
+        log_event_id: int,
+        key: str,
+        value: Any,
+        overwrite: bool,
+    ) -> int:
+        """
+        Upsert a JSONLog entry using PostgreSQL's INSERT ... ON CONFLICT.
+
+        Args:
+            log_event_id: The log event ID
+            key: The key for the JSON log
+            value: The JSON value to store
+            overwrite: Whether to update existing entries (True) or do nothing (False)
+
+        Returns:
+            int: The number of rows affected (1 for insert/update, 0 for no change)
+        """
+        stmt = pg_insert(JSONLog).values(
+            log_event_id=log_event_id,
+            key=key,
+            value=value,
+        )
+        if overwrite:
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["log_event_id", "key"],
+                set_={"value": stmt.excluded.value},
+            )
+        else:
+            stmt = stmt.on_conflict_do_nothing()
+
+        result = self.session.execute(stmt)
+        return result.rowcount
+
+    def _upsert_log(
+        self,
+        log_event_id: int,
+        key: str,
+        value: Any,
+        inferred_type: str,
+        version: Optional[int] = None,
+        overwrite: bool = False,
+    ) -> int:
+        """
+        Upsert a Log entry using PostgreSQL's INSERT ... ON CONFLICT.
+
+        Args:
+            log_event_id: The log event ID
+            key: The key for the log
+            value: The value to store
+            inferred_type: The inferred type of the value
+            version: Optional version number
+            overwrite: Whether to update existing entries (True) or do nothing (False)
+
+        Returns:
+            int: The number of rows affected (1 for insert/update, 0 for no change)
+        """
+        stmt = pg_insert(Log).values(
+            log_event_id=log_event_id,
+            key=key,
+            value=value,
+            version=version,
+            inferred_type=inferred_type,
+            created_at=func.now(),
+            updated_at=func.now(),
+        )
+        if overwrite:
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["log_event_id", "key", "version"],
+                set_={
+                    "value": stmt.excluded.value,
+                    "updated_at": func.now(),
+                },
+            )
+        else:
+            stmt = stmt.on_conflict_do_nothing()
+
+        result = self.session.execute(stmt)
+        return result.rowcount
+
     def bulk_update(
         self,
         updates: List[Dict[str, Any]],
