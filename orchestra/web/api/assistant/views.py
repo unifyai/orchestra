@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.recording_dao import RecordingDAO
+from orchestra.db.dao.voice_dao import VoiceDAO
 from orchestra.services.call_recording_service import CallRecordingService
 from orchestra.web.api.assistant.schema import (
     AssistantCreate,
@@ -13,6 +14,8 @@ from orchestra.web.api.assistant.schema import (
     InfoResponse,
     RecordingCreate,
     RecordingInfo,
+    VoiceCreate,
+    VoiceRead
 )
 
 router = APIRouter()
@@ -43,6 +46,7 @@ admin_router = APIRouter()
                             "updated_at": "2025-04-25T12:00:00Z",
                             "phone": "+1-555-123-4567",
                             "email": "alice.smith@example.com",
+                            "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5"
                         },
                     },
                 },
@@ -91,6 +95,7 @@ def create_assistant(
             max_parallel=assistant_in.max_parallel,
             phone=assistant_in.phone,
             email=assistant_in.email,
+            voice_id=assistant_in.voice_id
         )
 
         return InfoResponse(
@@ -108,6 +113,7 @@ def create_assistant(
                 updated_at=assistant.updated_at,
                 phone=assistant.phone,
                 email=assistant.email,
+                voice_id=assistant.voice_id
             ),
         )
     except Exception as e:
@@ -143,6 +149,7 @@ def create_assistant(
                                 "region": "North America",
                                 "profile_photo": "https://example.com/photos/alice.jpg",
                                 "about": "Mathematician and writer known for work on Analytical Engine",
+                                "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                                 "created_at": "2025-04-25T12:00:00Z",
                                 "updated_at": "2025-04-25T12:00:00Z",
                             },
@@ -158,6 +165,7 @@ def create_assistant(
                                 "region": "South America",
                                 "profile_photo": "https://example.com/photos/bob.jpg",
                                 "about": "Machine learning expert with focus on computer vision",
+                                "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                                 "created_at": "2025-04-24T10:30:00Z",
                                 "updated_at": "2025-04-24T10:30:00Z",
                             },
@@ -196,6 +204,7 @@ def list_assistants(
                     updated_at=a.updated_at,
                     phone=a.phone,
                     email=a.email,
+                    voice_id=a.voice_id
                 )
                 for a in assistants
             ],
@@ -276,6 +285,7 @@ def delete_assistant(
                             "email": "alice.smith@example.com",
                             "region": "North America",
                             "profile_photo": "https://example.com/photos/alice.jpg",
+                            "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                             "created_at": "2025-04-25T12:00:00Z",
                             "updated_at": "2025-04-25T14:30:00Z",
                         },
@@ -332,6 +342,7 @@ def update_assistant_config(
             email=update.email,
             weekly_limit=weekly_limit,
             max_parallel=update.max_parallel,
+            voice_id=update.voice_id
         )
         if not updated:
             raise HTTPException(
@@ -353,6 +364,7 @@ def update_assistant_config(
                 updated_at=updated.updated_at,
                 phone=updated.phone,
                 email=updated.email,
+                voice_id=updated.voice_id
             ),
         )
     except Exception as e:
@@ -584,6 +596,192 @@ def delete_recording(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Error deleting recording: {str(e)}",
+        )
+
+@router.post(
+    "assistant/voice",
+    response_model=InfoResponse[VoiceRead],
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new voice record",
+    description="Create a voice that can be used my any assistant during TTS.",
+    responses={
+        200: {
+            "description": "Voice created successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": {
+                            "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
+                            "name": "English Woman Calm 1",
+                            "description": "Calm and relaxting voice of an english-speaking woman",
+                            "gender": "female",
+                            "language": "en",
+                        },
+                    },
+                },
+            },
+        },
+        422: {
+            "description": "Validation Error",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": [
+                            {
+                                "loc": ["body", "name"],
+                                "msg": "field required",
+                                "type": "value_error.missing",
+                            },
+                        ],
+                    },
+                },
+            },
+        },
+    },
+    tags=["Voices"],
+)
+async def create_voice(
+    voice_in: VoiceCreate,
+    request: Request,
+    dao: VoiceDAO = Depends(),
+) -> InfoResponse[VoiceRead]:
+    """
+    Create a new voice record in the database after it has been created/localized via Cartesia.
+    """
+    try:
+        voice = dao.create_voice(
+            user_id=request.state.user_id,
+            voice_id=voice_in.voice_id, # This is Cartesia's ID
+            name=voice_in.name,
+            description=voice_in.description,
+            gender=voice_in.gender,
+            language=voice_in.language,
+        )
+
+        return InfoResponse(
+            info=VoiceRead(
+                voice_id=voice.id,
+                name=voice.name,
+                description=voice.description,
+                gender=voice.gender,
+                language=voice.language
+            ),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Error creating voice: {str(e)}",
+        )
+
+@router.get(
+    "/assistant/voice",
+    response_model=InfoResponse[List[RecordingInfo]],
+    status_code=status.HTTP_200_OK,
+    summary="List all assistant voices for the user.",
+    description="Returns a list of all assistant voices created available for the user.",
+    responses={
+        200: {
+            "description": "List of voices retrieved successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": [
+                            {
+                                "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
+                                "name": "English Woman Calm 1",
+                                "description": "Calm and relaxting voice of an english-speaking woman",
+                                "gender": "female",
+                                "language": "en",
+                            },
+                            {
+                                "voice_id": "c99d36f3-5ffd-4253-803a-535c1bc9c306",
+                                "name": "English Male Deep 1",
+                                "description": "A deep, smoooth British man's voice perfect for narration.",
+                                "gender": "male",
+                                "language": "en"
+                            },
+                        ],
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Voice Not Found",
+            "content": {
+                "application/json": {"example": {"detail": "Voice not found."}},
+            },
+        },
+    },
+    tags=["Voices"],
+)
+def list_voices(
+    request: Request,
+    dao: VoiceDAO = Depends(),
+) -> InfoResponse[List[VoiceRead]]:
+    """
+    List all voices saved by the authenticated user.
+    """
+    try:
+        voices = dao.list_voices_for_user(
+            user_id=request.state.user_id,
+        )
+
+        return InfoResponse(
+            info=[
+                VoiceRead(
+                    voice_id=voice.id,
+                    name=voice.name,
+                    description=voice.description,
+                    language=voice.language,
+                    gender=voice.gender
+                )
+                for voice in voices
+            ],
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Error fetching user voices: {str(e)}",
+        )
+
+@router.delete(
+    "assistant/voice/{voice_id}",
+    status_code=status.HTTP_200_OK,
+    response_model=InfoResponse[str],
+    summary="Delete a user's voice record",
+    description="Deletes a specific voice record by its Cartesia ID for the authenticated user. This does NOT delete the voice from Cartesia itself, that should be a separate Cartesia API call if needed.",
+    responses={
+        200: {
+            "description": "Voice deleted successfully",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Voice deleted successfully"},
+                },
+            },
+        },
+        404: {
+            "description": "Voice not found",
+            "content": {
+                "application/json": {"example": {"detail": "Voice not found."}},
+            },
+        },
+    },
+    tags=["Voices"],
+)
+def delete_voice(
+    voice_id: str,
+    request: Request,
+    dao: VoiceDAO = Depends(),
+) -> InfoResponse[str]:
+    try:
+        dao.delete_voice(user_id=request.state.user_id, voice_id=voice_id)
+        return InfoResponse(info="Voice deleted successfully.")
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error deleting voice record: {str(e)}",
         )
 
 
