@@ -3046,7 +3046,7 @@ def get_log_groups(
     return {k: next(iter(v)) for k, v in groups.items()}
 
 
-@router.post(
+@router.patch(
     "/logs/rename_field",
     responses={
         200: {
