@@ -358,6 +358,9 @@ def _get_logs_query(
     context_obj = context_dao.filter(name=context_name, project_id=project_id)
     if context_obj:
         context_id = context_obj[0][0].id
+        log_event_query = log_event_query.join(LogEventContext).filter(
+            LogEventContext.context_id == context_id,
+        )
     else:
         context_id = None
     field_types = field_type_dao.get_field_types(project_id, context_id=context_id)
@@ -412,6 +415,7 @@ def _get_logs_query(
             else:
                 log_event_query = log_event_query.filter(condition)
 
+    # FIXME: potential duplicate logic
     if context:
         context_obj = context_dao.filter(name=context, project_id=project_id)
     else:
@@ -436,19 +440,6 @@ def _get_logs_query(
             status_code=400,
             detail="Cannot return versions for unversioned context",
         )
-
-    log_event_query = log_event_query.filter(
-        exists(
-            select(1)
-            .select_from(LogEventContext)
-            .where(
-                and_(
-                    LogEventContext.log_event_id == LogEvent.id,
-                    LogEventContext.context_id == ctx_id_val,
-                ),
-            ),
-        ),
-    )
 
     # Turn into a subquery => these are the log_event_ids we care about so far
     relevant_log_events = log_event_query.subquery(name="relevant_log_events")
