@@ -502,8 +502,12 @@ def large_log_dataset(_engine_session: Engine):
 
         # Create log events and entries for each context
         for i, context_id in enumerate(context_ids):
-            # Create log events per context (20,000 for ctx_big, 10,000 for others)
-            count = 20000 if i == 0 else 10000
+            # Create log events per context
+            count = (
+                os.getenv("ORCHESTRA_PERF_LOG_EVENTS_COUNT")
+                if i == 0
+                else os.getenv("ORCHESTRA_PERF_LOG_EVENTS_COUNT") // 2
+            )
             log_event_ids = log_event_dao.bulk_create(
                 project_id=project_id,
                 count=count,
