@@ -456,7 +456,7 @@ def large_log_dataset(_engine_session: Engine):
         project_dao.create(name=project_name, user_id=user_id)
         project_id = project_dao.filter(user_id=user_id, name=project_name)[0][0].id
         # Create contexts
-        context_names = ["ctx_big", "ctx_b", "ctx_c", "ctx_d", "ctx_e"]
+        context_names = ["ctx_big"]
         context_ids = []
 
         for ctx_name in context_names:
