@@ -610,7 +610,9 @@ def create_from_logs(
             # get the filtered log events
             log_event_ids_subq = (
                 session.query(LogEvent.id)
-                .filter(project_obj.id == LogEvent.project_id)
+                .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
+                .filter(LogEvent.project_id == project_obj.id)
+                .filter(LogEventContext.context_id == context_id)
                 .subquery(name="log_event_ids_subq")
             )
             computed_values = _compute_expression(
