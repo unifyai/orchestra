@@ -80,166 +80,6 @@ async def test_substring_match_performance(timed_client):
 @pytest.mark.anyio
 @pytest.mark.performance
 @pytest.mark.usefixtures("large_log_dataset")
-async def test_field_filtering_performance(timed_client):
-    """Test field filtering performance with large dataset."""
-    params = {
-        "project": PROJECT,
-        "context": "ctx_big",
-        "from_fields": "int_field&str_field",
-        "exclude_ids": "1&2&3",
-        "limit": 100,
-    }
-
-    response = await timed_client.get(
-        "/v0/logs",
-        params=params,
-        headers=HEADERS,
-    )
-
-    assert response.status_code == 200
-
-
-@pytest.mark.anyio
-@pytest.mark.performance
-@pytest.mark.usefixtures("large_log_dataset")
-async def test_distinct_grouping_performance(timed_client):
-    """Test distinct grouping performance with large dataset."""
-    params = {
-        "project": PROJECT,
-        "context": "ctx_big",
-        "key": "int_field",
-        "group_threshold": 10,
-        "limit": 100,
-    }
-
-    response = await timed_client.get(
-        "/v0/logs/groups",
-        params=params,
-        headers=HEADERS,
-    )
-
-    assert response.status_code == 200
-
-
-@pytest.mark.anyio
-@pytest.mark.performance
-@pytest.mark.usefixtures("large_log_dataset")
-async def test_group_by_sorting_performance(timed_client):
-    """Test group-by with sorting performance with large dataset."""
-    group_sorting = {"field": "entries/int_field", "order": "desc"}
-
-    params = {
-        "project": PROJECT,
-        "context": "ctx_big",
-        "group_by": ["entries/int_field"],
-        "group_sorting": json.dumps(group_sorting),
-        "limit": 100,
-    }
-
-    response = await timed_client.get(
-        "/v0/logs",
-        params=params,
-        headers=HEADERS,
-    )
-
-    assert response.status_code == 200
-
-
-@pytest.mark.anyio
-@pytest.mark.performance
-@pytest.mark.usefixtures("large_log_dataset")
-async def test_sorting_performance(timed_client):
-    params = {
-        "project": PROJECT,
-        "sorting": json.dumps({"entries/int_field": "desc"}),
-        "limit": 100,
-    }
-    response = await timed_client.get(
-        "/v0/logs",
-        params=params,
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
-
-
-@pytest.mark.anyio
-@pytest.mark.performance
-@pytest.mark.usefixtures("large_log_dataset")
-async def test_nested_grouping_performance(timed_client):
-    params = {
-        "project": PROJECT,
-        "context": "ctx_big",
-        "group_by": json.dumps(["entries/int_field", "entries/float_field"]),
-        "group_depth": 0,
-        "limit": 100,
-    }
-    response = await timed_client.get(
-        "/v0/logs",
-        params=params,
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
-
-
-@pytest.mark.anyio
-@pytest.mark.performance
-@pytest.mark.usefixtures("large_log_dataset")
-async def test_metrics_group_performance(timed_client):
-    params = {
-        "project": PROJECT,
-        "context": "ctx_big",
-        "key": json.dumps(["entries/int_field", "entries/float_field"]),
-    }
-    response = await timed_client.get(
-        "/v0/logs/metric/mean",
-        params=params,
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
-
-
-@pytest.mark.anyio
-@pytest.mark.performance
-@pytest.mark.usefixtures("large_log_dataset")
-async def test_multiple_metric_verbs(timed_client):
-    """Test multiple metric verbs (min, max, sum) performance."""
-    for verb in ("min", "max", "sum"):
-        params = {
-            "project": PROJECT,
-            "context": "ctx_big",
-            "key": json.dumps(["entries/int_field"]),
-        }
-        response = await timed_client.get(
-            f"/v0/logs/metric/{verb}",
-            params=params,
-            headers=HEADERS,
-        )
-        assert response.status_code == 200
-
-
-@pytest.mark.anyio
-@pytest.mark.performance
-@pytest.mark.usefixtures("large_log_dataset")
-async def test_multi_key_sorting_and_pagination(timed_client):
-    """Test compound sorting on two fields with pagination."""
-    sorting = {"int_field": "ascending", "float_field": "descending"}
-    params = {
-        "project": PROJECT,
-        "context": "ctx_big",
-        "sorting": json.dumps(sorting),
-        "limit": 100,
-    }
-    response = await timed_client.get(
-        "/v0/logs",
-        params=params,
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
-
-
-@pytest.mark.anyio
-@pytest.mark.performance
-@pytest.mark.usefixtures("large_log_dataset")
 async def test_boolean_filter_combo(timed_client):
     """Test boolean + categorical + numeric filter combination."""
     filter_expr = (
@@ -316,6 +156,190 @@ async def test_dict_subscript_filter_performance(timed_client):
 @pytest.mark.anyio
 @pytest.mark.performance
 @pytest.mark.usefixtures("large_log_dataset")
+async def test_complex_filter_performance(timed_client):
+    """Test complex filter performance with large dataset."""
+    filter_expr = (
+        "(int_field > 1000 and int_field < 5000) and "
+        "(str_field.startswith('ABC') or str_field.endswith('XYZ')) and "
+        "bool_field == True"
+    )
+    params = {
+        "project": PROJECT,
+        "context": "ctx_big",
+        "filter_expr": filter_expr,
+        "limit": 100,
+    }
+    response = await timed_client.get(
+        "/v0/logs",
+        params=params,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.anyio
+@pytest.mark.performance
+@pytest.mark.usefixtures("large_log_dataset")
+async def test_field_filtering_performance(timed_client):
+    """Test field filtering performance with large dataset."""
+    params = {
+        "project": PROJECT,
+        "context": "ctx_big",
+        "from_fields": "int_field&str_field",
+        "exclude_ids": "1&2&3",
+        "limit": 100,
+    }
+
+    response = await timed_client.get(
+        "/v0/logs",
+        params=params,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.anyio
+@pytest.mark.performance
+@pytest.mark.usefixtures("large_log_dataset")
+async def test_distinct_grouping_performance(timed_client):
+    """Test distinct grouping performance with large dataset."""
+    params = {
+        "project": PROJECT,
+        "context": "ctx_big",
+        "key": "int_field",
+        "group_threshold": 10,
+        "limit": 100,
+    }
+
+    response = await timed_client.get(
+        "/v0/logs/groups",
+        params=params,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.anyio
+@pytest.mark.performance
+@pytest.mark.usefixtures("large_log_dataset")
+async def test_group_by_sorting_performance(timed_client):
+    """Test group-by with sorting performance with large dataset."""
+    group_sorting = {"field": "entries/int_field", "order": "desc"}
+
+    params = {
+        "project": PROJECT,
+        "context": "ctx_big",
+        "group_by": ["entries/int_field"],
+        "group_sorting": json.dumps(group_sorting),
+        "limit": 100,
+    }
+
+    response = await timed_client.get(
+        "/v0/logs",
+        params=params,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.anyio
+@pytest.mark.performance
+@pytest.mark.usefixtures("large_log_dataset")
+async def test_sorting_performance(timed_client):
+    params = {
+        "project": PROJECT,
+        "context": "ctx_big",
+        "sorting": json.dumps({"int_field": "descending"}),
+        "limit": 100,
+    }
+    response = await timed_client.get(
+        "/v0/logs",
+        params=params,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.anyio
+@pytest.mark.performance
+@pytest.mark.usefixtures("large_log_dataset")
+async def test_nested_grouping_performance(timed_client):
+    params = {
+        "project": PROJECT,
+        "context": "ctx_big",
+        "group_by": ["entries/int_field", "entries/float_field"],
+        "group_depth": 0,
+    }
+    response = await timed_client.get(
+        "/v0/logs",
+        params=params,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.anyio
+@pytest.mark.performance
+@pytest.mark.usefixtures("large_log_dataset")
+async def test_metrics_group_performance(timed_client):
+    params = {
+        "project": PROJECT,
+        "context": "ctx_big",
+        "key": json.dumps(["int_field", "float_field"]),
+    }
+    response = await timed_client.get(
+        "/v0/logs/metric/mean",
+        params=params,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.anyio
+@pytest.mark.performance
+@pytest.mark.usefixtures("large_log_dataset")
+async def test_multiple_metric_verbs(timed_client):
+    """Test multiple metric verbs (min, max, sum) performance."""
+    for verb in ("min", "max", "sum"):
+        params = {
+            "project": PROJECT,
+            "context": "ctx_big",
+            "key": json.dumps(["int_field"]),
+        }
+        response = await timed_client.get(
+            f"/v0/logs/metric/{verb}",
+            params=params,
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+
+@pytest.mark.anyio
+@pytest.mark.performance
+@pytest.mark.usefixtures("large_log_dataset")
+async def test_multi_key_sorting_and_pagination(timed_client):
+    """Test compound sorting on two fields with pagination."""
+    sorting = {"int_field": "ascending", "float_field": "descending"}
+    params = {
+        "project": PROJECT,
+        "context": "ctx_big",
+        "sorting": json.dumps(sorting),
+        "limit": 100,
+    }
+    response = await timed_client.get(
+        "/v0/logs",
+        params=params,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.anyio
+@pytest.mark.performance
+@pytest.mark.usefixtures("large_log_dataset")
 async def test_get_fields_performance(timed_client):
     params = {"project": PROJECT, "context": "ctx_big"}
     response = await timed_client.get(
@@ -333,30 +357,6 @@ async def test_latest_timestamp_performance(timed_client):
     params = {"project": PROJECT, "context": "ctx_big"}
     response = await timed_client.get(
         "/v0/logs/latest_timestamp",
-        params=params,
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
-
-
-@pytest.mark.anyio
-@pytest.mark.performance
-@pytest.mark.usefixtures("large_log_dataset")
-async def test_complex_filter_performance(timed_client):
-    """Test complex filter performance with large dataset."""
-    filter_expr = (
-        "(int_field > 1000 and int_field < 5000) and "
-        "(str_field.startswith('ABC') or str_field.endswith('XYZ')) and "
-        "bool_field == True"
-    )
-    params = {
-        "project": PROJECT,
-        "context": "ctx_big",
-        "filter_expr": filter_expr,
-        "limit": 100,
-    }
-    response = await timed_client.get(
-        "/v0/logs",
         params=params,
         headers=HEADERS,
     )
@@ -385,25 +385,6 @@ async def test_metric_max_performance(timed_client):
     params = {"project": PROJECT, "context": "ctx_big", "key": "entries/float_field"}
     response = await timed_client.get(
         "/v0/logs/metric/max",
-        params=params,
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
-
-
-@pytest.mark.anyio
-@pytest.mark.performance
-@pytest.mark.usefixtures("large_log_dataset")
-async def test_edge_case_sorting_performance(timed_client):
-    """Test edge case sorting performance."""
-    params = {
-        "project": PROJECT,
-        "context": "ctx_big",
-        "sorting": json.dumps({"int_field": "descending"}),
-        # No limit specified - should return all logs
-    }
-    response = await timed_client.get(
-        "/v0/logs",
         params=params,
         headers=HEADERS,
     )
