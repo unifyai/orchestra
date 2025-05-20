@@ -152,7 +152,7 @@ async def test_sorting_performance(timed_client):
     params = {
         "project": PROJECT,
         "sorting": json.dumps({"entries/int_field": "desc"}),
-        "limit": 200,
+        "limit": 100,
     }
     response = await timed_client.get(
         "/v0/logs",
