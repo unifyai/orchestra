@@ -98,11 +98,6 @@ supported_models = {
         "context_window": 32768,
         "cost": {"prompt": 0.2, "completion": 0.2},
     },
-    "mixtral-8x7b-instruct-v0.1": {
-        "endpoint": "together_ai/mistralai/Mixtral-8x7B-Instruct-v0.1",
-        "context_window": 32768,
-        "cost": {"prompt": 0.6, "completion": 0.6},
-    },
     "qwen-3-235b-a22b-instruct": {
         "endpoint": "together_ai/Qwen/Qwen3-235B-A22B-fp8-tput",
         "context_window": 128000,

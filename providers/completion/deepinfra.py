@@ -46,7 +46,7 @@ supported_models = {
     "llama-4-maverick-instruct": {
         "endpoint": "deepinfra/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
         "context_window": 1024000,
-        "cost": {"prompt": 0.17, "completion": 0.6},
+        "cost": {"prompt": 0.16, "completion": 0.6},
     },
     "llama-4-scout-instruct": {
         "endpoint": "deepinfra/meta-llama/Llama-4-Scout-17B-16E-Instruct",
@@ -146,7 +146,7 @@ supported_models = {
     "qwen-3-235b-a22b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen3-235B-A22B",
         "context_window": 40000,
-        "cost": {"prompt": 0.15, "completion": 0.6},
+        "cost": {"prompt": 0.14, "completion": 0.6},
     },
     "qwen-3-30b-a3b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen3-30B-A3B",
