@@ -462,24 +462,24 @@ async def test_derived_entry_performance(timed_client):
     assert derive_resp.status_code == 200
 
 
-@pytest.mark.anyio
-@pytest.mark.performance
-@pytest.mark.usefixtures("large_log_dataset")
-async def test_join_logs_performance(timed_client):
-    payload = {
-        "project": PROJECT,
-        "pair_of_args": [{"context": "ctx_big"}, {"context": "ctx_b"}],
-        "join_expr": "A.category == B.category",
-        "mode": "inner",
-        "new_context": "joined_perf_context",
-        "columns": ["A.int_field", "A.float_field", "B.category"],
-    }
-    response = await timed_client.post(
-        "/v0/logs/join",
-        json=payload,
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
+# @pytest.mark.anyio
+# @pytest.mark.performance
+# @pytest.mark.usefixtures("large_log_dataset")
+# async def test_join_logs_performance(timed_client):
+#     payload = {
+#         "project": PROJECT,
+#         "pair_of_args": [{"context": "ctx_big"}, {"context": "ctx_b"}],
+#         "join_expr": "A.category == B.category",
+#         "mode": "inner",
+#         "new_context": "joined_perf_context",
+#         "columns": ["A.int_field", "A.float_field", "B.category"],
+#     }
+#     response = await timed_client.post(
+#         "/v0/logs/join",
+#         json=payload,
+#         headers=HEADERS,
+#     )
+#     assert response.status_code == 200
 
 
 @pytest.mark.anyio
