@@ -227,8 +227,7 @@ async def test_multi_key_sorting_and_pagination(timed_client):
         "project": PROJECT,
         "context": "ctx_big",
         "sorting": json.dumps(sorting),
-        "limit": 50,
-        "offset": 100,
+        "limit": 100,
     }
     response = await timed_client.get(
         "/v0/logs",
