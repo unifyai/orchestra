@@ -284,11 +284,17 @@ async def test_nested_grouping_performance(timed_client):
 @pytest.mark.anyio
 @pytest.mark.performance
 @pytest.mark.usefixtures("large_log_dataset")
-async def test_metrics_group_performance(timed_client):
+async def test_metrics_all_fields_performance(timed_client):
+    response = await timed_client.get(
+        f"v0/logs/fields?project={PROJECT}",
+        params={"context": "ctx_big"},
+        headers=HEADERS,
+    )
+    all_fields = list(response.json().keys())
     params = {
         "project": PROJECT,
         "context": "ctx_big",
-        "key": json.dumps(["int_field", "float_field"]),
+        "key": json.dumps(all_fields),
     }
     response = await timed_client.get(
         "/v0/logs/metric/mean",
@@ -301,20 +307,25 @@ async def test_metrics_group_performance(timed_client):
 @pytest.mark.anyio
 @pytest.mark.performance
 @pytest.mark.usefixtures("large_log_dataset")
-async def test_multiple_metric_verbs(timed_client):
-    """Test multiple metric verbs (min, max, sum) performance."""
-    for verb in ("min", "max", "sum"):
-        params = {
-            "project": PROJECT,
-            "context": "ctx_big",
-            "key": json.dumps(["int_field"]),
-        }
-        response = await timed_client.get(
-            f"/v0/logs/metric/{verb}",
-            params=params,
-            headers=HEADERS,
-        )
-        assert response.status_code == 200
+async def test_metrics_group_by_performance(timed_client):
+    response = await timed_client.get(
+        f"v0/logs/fields?project={PROJECT}",
+        params={"context": "ctx_big"},
+        headers=HEADERS,
+    )
+    all_fields = list(response.json().keys())
+    params = {
+        "project": PROJECT,
+        "context": "ctx_big",
+        "key": json.dumps(all_fields),
+        "group_by": json.dumps(["entries/int_field"]),
+    }
+    response = await timed_client.get(
+        "/v0/logs/metric/mean",
+        params=params,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
 
 
 @pytest.mark.anyio
@@ -357,34 +368,6 @@ async def test_latest_timestamp_performance(timed_client):
     params = {"project": PROJECT, "context": "ctx_big"}
     response = await timed_client.get(
         "/v0/logs/latest_timestamp",
-        params=params,
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
-
-
-@pytest.mark.anyio
-@pytest.mark.performance
-@pytest.mark.usefixtures("large_log_dataset")
-async def test_metric_sum_performance(timed_client):
-    """Test metric sum performance."""
-    params = {"project": PROJECT, "context": "ctx_big", "key": "entries/int_field"}
-    response = await timed_client.get(
-        "/v0/logs/metric/sum",
-        params=params,
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
-
-
-@pytest.mark.anyio
-@pytest.mark.performance
-@pytest.mark.usefixtures("large_log_dataset")
-async def test_metric_max_performance(timed_client):
-    """Test metric max performance."""
-    params = {"project": PROJECT, "context": "ctx_big", "key": "entries/float_field"}
-    response = await timed_client.get(
-        "/v0/logs/metric/max",
         params=params,
         headers=HEADERS,
     )
