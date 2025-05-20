@@ -226,7 +226,11 @@ async def test_distinct_grouping_performance(timed_client):
 @pytest.mark.usefixtures("large_log_dataset")
 async def test_group_by_sorting_performance(timed_client):
     """Test group-by with sorting performance with large dataset."""
-    group_sorting = {"field": "entries/int_field", "order": "desc"}
+    group_sorting = {
+        "field": "float_field",
+        "metric": "mean",
+        "direction": "descending",
+    }
 
     params = {
         "project": PROJECT,
@@ -242,24 +246,6 @@ async def test_group_by_sorting_performance(timed_client):
         headers=HEADERS,
     )
 
-    assert response.status_code == 200
-
-
-@pytest.mark.anyio
-@pytest.mark.performance
-@pytest.mark.usefixtures("large_log_dataset")
-async def test_sorting_performance(timed_client):
-    params = {
-        "project": PROJECT,
-        "context": "ctx_big",
-        "sorting": json.dumps({"int_field": "descending"}),
-        "limit": 100,
-    }
-    response = await timed_client.get(
-        "/v0/logs",
-        params=params,
-        headers=HEADERS,
-    )
     assert response.status_code == 200
 
 
@@ -322,6 +308,24 @@ async def test_metrics_group_by_performance(timed_client):
     }
     response = await timed_client.get(
         "/v0/logs/metric/mean",
+        params=params,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.anyio
+@pytest.mark.performance
+@pytest.mark.usefixtures("large_log_dataset")
+async def test_sorting_performance(timed_client):
+    params = {
+        "project": PROJECT,
+        "context": "ctx_big",
+        "sorting": json.dumps({"int_field": "descending"}),
+        "limit": 100,
+    }
+    response = await timed_client.get(
+        "/v0/logs",
         params=params,
         headers=HEADERS,
     )
