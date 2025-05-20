@@ -579,7 +579,6 @@ def create_from_logs(
             )
     else:
         # Original derived log creation logic
-        created_derived_ids = []
         try:
             # Check if this is a filter-based derived log
             is_filter_based = False
@@ -720,7 +719,7 @@ def create_from_logs(
                 detail=f"Failed to create derived logs with key='{body.key}'. Error: {e}",
             )
         return {
-            "info": f"Created {len(created_derived_ids)} derived logs with key='{body.key}'.",
+            "info": f"Created {len(computed_values)} derived logs with key='{body.key}'.",
         }
 
 
