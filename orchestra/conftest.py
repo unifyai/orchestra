@@ -504,9 +504,9 @@ def large_log_dataset(_engine_session: Engine):
         for i, context_id in enumerate(context_ids):
             # Create log events per context
             count = (
-                os.getenv("ORCHESTRA_PERF_LOG_EVENTS_COUNT")
+                int(os.getenv("ORCHESTRA_PERF_LOG_EVENTS_COUNT"))
                 if i == 0
-                else os.getenv("ORCHESTRA_PERF_LOG_EVENTS_COUNT") // 2
+                else int(os.getenv("ORCHESTRA_PERF_LOG_EVENTS_COUNT")) // 2
             )
             log_event_ids = log_event_dao.bulk_create(
                 project_id=project_id,
