@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Union
 
@@ -114,7 +115,8 @@ class ContextDAO:
 
         if entry is not None:
             if name is not None:
-                if not all(c.isalnum() or c == "/" for c in name):
+                # check if name is valid
+                if not re.match(r"^[a-zA-Z0-9_/]+$", name):
                     raise ValueError(
                         "Context name must contain only alphanumeric characters and '/'",
                     )
