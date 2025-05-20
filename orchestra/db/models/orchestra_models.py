@@ -1045,7 +1045,7 @@ class Voice(Base):
 
     __tablename__ = "voices"
 
-    voice_id = Column(String, primary_key=True) # This will store Cartesia's voice ID
+    voice_id = Column(String, primary_key=True)  # This will store Cartesia's voice ID
     user_id = Column(
         String,
         ForeignKey("auth_user.id", ondelete="CASCADE"),
@@ -1055,7 +1055,7 @@ class Voice(Base):
     name = Column(String, nullable=False)
     description = Column(String, nullable=False)
     gender = Column(String, nullable=False)
-    language = Column(String, nullable=False) # e.g., "en", "es"
+    language = Column(String, nullable=False)  # e.g., "en", "es"
 
 
 class Tab(Base):

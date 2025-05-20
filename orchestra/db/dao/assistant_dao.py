@@ -30,7 +30,7 @@ class AssistantDAO:
         max_parallel: int,
         phone: Optional[str] = None,
         email: Optional[str] = None,
-        voice_id: Optional[str] = None
+        voice_id: Optional[str] = None,
     ) -> Assistant:
         """
         Create a new Assistant for the given user.
@@ -47,7 +47,7 @@ class AssistantDAO:
             max_parallel=max_parallel,
             phone=phone,
             email=email,
-            voice_id=voice_id
+            voice_id=voice_id,
         )
         self.session.add(assistant)
         self.session.flush()
