@@ -450,7 +450,7 @@ async def test_derived_entry_performance(timed_client):
         "project": PROJECT,
         "context": "ctx_big",
         "key": "double_int_field",
-        "equation": "{x:entries/int_field} * 2",
+        "equation": "{x:int_field} * 2",
         "referenced_logs": {"x": {"filter_expr": "", "context": "ctx_big"}},
     }
     derive_resp = await timed_client.post(
@@ -459,6 +459,27 @@ async def test_derived_entry_performance(timed_client):
         headers=HEADERS,
     )
     assert derive_resp.status_code == 200
+
+
+@pytest.mark.anyio
+@pytest.mark.performance
+@pytest.mark.usefixtures("large_log_dataset")
+async def test_update_derived_performance(timed_client):
+    # Now update the derived entry
+    update_payload = {
+        "project": PROJECT,
+        "key": "double_int_field",
+        "equation": "{x:int_field} * 3",
+        "target_derived_logs": {
+            "x": {"from_fields": "double_int_field", "context": "ctx_big"},
+        },
+    }
+    update_response = await timed_client.put(
+        "/v0/logs/derived",
+        json=update_payload,
+        headers=HEADERS,
+    )
+    assert update_response.status_code == 200
 
 
 # @pytest.mark.anyio
@@ -497,40 +518,6 @@ async def test_rename_field_performance(timed_client):
         headers=HEADERS,
     )
     assert response.status_code == 200
-
-
-@pytest.mark.anyio
-@pytest.mark.performance
-@pytest.mark.usefixtures("large_log_dataset")
-async def test_update_derived_performance(timed_client):
-    # First create a derived entry
-    create_payload = {
-        "project": PROJECT,
-        "key": "double_int_field",
-        "equation": "{x:entries/int_field} * 2",
-        "referenced_logs": {"x": {"filter_expr": ""}},
-    }
-    create_response = await timed_client.post(
-        "/v0/logs/derived",
-        json=create_payload,
-        headers=HEADERS,
-    )
-    assert create_response.status_code == 200
-
-    # Now update the derived entry
-    update_payload = {
-        "project": PROJECT,
-        "target_derived_logs": {"from_fields": "double_int_field"},
-        "key": "double_int_field",
-        "equation": "{x:entries/int_field} * 3",
-        "referenced_logs": {"x": {"filter_expr": ""}},
-    }
-    update_response = await timed_client.put(
-        "/v0/logs/derived",
-        json=update_payload,
-        headers=HEADERS,
-    )
-    assert update_response.status_code == 200
 
 
 @pytest.mark.anyio
