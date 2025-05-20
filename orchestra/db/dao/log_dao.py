@@ -109,7 +109,7 @@ def _is_timedelta_string(value: str) -> bool:
             clean_value = value.strip("\"'")
 
             # Check ISO 8601 duration format
-            iso_duration_pattern = r"^P(?:\d+Y)?(?:\d+M)?(?:\d+D)?(?:T(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?)?$"
+            iso_duration_pattern = r"^P(?=\d|T\d)(?:\d+Y)?(?:\d+M)?(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?)?$"
             if re.match(iso_duration_pattern, clean_value):
                 return True
 
