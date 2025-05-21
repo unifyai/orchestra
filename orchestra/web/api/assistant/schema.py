@@ -277,14 +277,11 @@ class VoiceRead(VoiceCreate):
     Schema for reading voice data from the DB.
     """
 
-    user_id: str = Field(..., description="User ID owning this voice record")
-
     class Config:
         orm_mode = True
         schema_extra = {
             "example": {
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
-                "user_id": "hufefa453fajiaf",
                 "name": "English Woman Calm 1",
                 "description": "Calm and relaxting voice of an english-speaking woman",
                 "gender": "female",
