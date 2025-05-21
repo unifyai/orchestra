@@ -71,7 +71,7 @@ class AssistantCreate(BaseModel):
         description="Email address for the assistant",
         example="ada.lovelace@example.com",
     )
-    voice_id: Optional[str] = Field( # This is Cartesia's voice ID
+    voice_id: Optional[str] = Field(  # This is Cartesia's voice ID
         None,
         description="Id of the voice (Cartesia ID) to use for the assistant",
         example="bf0a246a-8642-498a-9950-80c35e9276b5",
@@ -170,7 +170,7 @@ class AssistantUpdate(BaseModel):
         description="Email address for the assistant",
         example="ada.lovelace@newdomain.com",
     )
-    voice_id: Optional[str] = Field( # This is Cartesia's voice ID
+    voice_id: Optional[str] = Field(  # This is Cartesia's voice ID
         None,
         description="Id of the voice (Cartesia ID) to use for the assistant",
         example="bf0a246a-8642-498a-9950-80c35e9276b5",
@@ -232,10 +232,11 @@ class VoiceCreate(BaseModel):
     Schema for creating a new assistant voice entry in our DB.
     The voice_id is provided by Cartesia after a successful clone/localize.
     """
+
     voice_id: str = Field(
         ...,
         description="Cartesia Voice ID",
-        example="bf0a246a-8642-498a-9950-80c35e9276b5"
+        example="bf0a246a-8642-498a-9950-80c35e9276b5",
     )
     name: str = Field(
         ...,
@@ -270,10 +271,12 @@ class VoiceCreate(BaseModel):
             },
         }
 
+
 class VoiceRead(VoiceCreate):
     """
     Schema for reading voice data from the DB.
     """
+
     user_id: str = Field(..., description="User ID owning this voice record")
 
     class Config:

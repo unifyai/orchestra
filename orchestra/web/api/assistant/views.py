@@ -15,7 +15,7 @@ from orchestra.web.api.assistant.schema import (
     RecordingCreate,
     RecordingInfo,
     VoiceCreate,
-    VoiceRead
+    VoiceRead,
 )
 
 router = APIRouter()
@@ -46,7 +46,7 @@ admin_router = APIRouter()
                             "updated_at": "2025-04-25T12:00:00Z",
                             "phone": "+1-555-123-4567",
                             "email": "alice.smith@example.com",
-                            "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5"
+                            "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                         },
                     },
                 },
@@ -95,7 +95,7 @@ def create_assistant(
             max_parallel=assistant_in.max_parallel,
             phone=assistant_in.phone,
             email=assistant_in.email,
-            voice_id=assistant_in.voice_id
+            voice_id=assistant_in.voice_id,
         )
 
         return InfoResponse(
@@ -113,7 +113,7 @@ def create_assistant(
                 updated_at=assistant.updated_at,
                 phone=assistant.phone,
                 email=assistant.email,
-                voice_id=assistant.voice_id
+                voice_id=assistant.voice_id,
             ),
         )
     except Exception as e:
@@ -204,7 +204,7 @@ def list_assistants(
                     updated_at=a.updated_at,
                     phone=a.phone,
                     email=a.email,
-                    voice_id=a.voice_id
+                    voice_id=a.voice_id,
                 )
                 for a in assistants
             ],
@@ -342,7 +342,7 @@ def update_assistant_config(
             email=update.email,
             weekly_limit=weekly_limit,
             max_parallel=update.max_parallel,
-            voice_id=update.voice_id
+            voice_id=update.voice_id,
         )
         if not updated:
             raise HTTPException(
@@ -364,7 +364,7 @@ def update_assistant_config(
                 updated_at=updated.updated_at,
                 phone=updated.phone,
                 email=updated.email,
-                voice_id=updated.voice_id
+                voice_id=updated.voice_id,
             ),
         )
     except Exception as e:
@@ -598,6 +598,7 @@ def delete_recording(
             detail=f"Error deleting recording: {str(e)}",
         )
 
+
 @router.post(
     "assistant/voice",
     response_model=InfoResponse[VoiceRead],
@@ -651,7 +652,7 @@ async def create_voice(
     try:
         voice = dao.create_voice(
             user_id=request.state.user_id,
-            voice_id=voice_in.voice_id, # This is Cartesia's ID
+            voice_id=voice_in.voice_id,  # This is Cartesia's ID
             name=voice_in.name,
             description=voice_in.description,
             gender=voice_in.gender,
@@ -664,7 +665,7 @@ async def create_voice(
                 name=voice.name,
                 description=voice.description,
                 gender=voice.gender,
-                language=voice.language
+                language=voice.language,
             ),
         )
     except Exception as e:
@@ -672,6 +673,7 @@ async def create_voice(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Error creating voice: {str(e)}",
         )
+
 
 @router.get(
     "/assistant/voice",
@@ -698,7 +700,7 @@ async def create_voice(
                                 "name": "English Male Deep 1",
                                 "description": "A deep, smoooth British man's voice perfect for narration.",
                                 "gender": "male",
-                                "language": "en"
+                                "language": "en",
                             },
                         ],
                     },
@@ -733,7 +735,7 @@ def list_voices(
                     name=voice.name,
                     description=voice.description,
                     language=voice.language,
-                    gender=voice.gender
+                    gender=voice.gender,
                 )
                 for voice in voices
             ],
@@ -743,6 +745,7 @@ def list_voices(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Error fetching user voices: {str(e)}",
         )
+
 
 @router.delete(
     "assistant/voice/{voice_id}",
