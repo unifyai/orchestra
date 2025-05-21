@@ -677,7 +677,7 @@ async def create_voice(
 
 @router.get(
     "/assistant/voice",
-    response_model=InfoResponse[List[RecordingInfo]],
+    response_model=InfoResponse[List[VoiceRead]],
     status_code=status.HTTP_200_OK,
     summary="List all assistant voices for the user.",
     description="Returns a list of all assistant voices created available for the user.",
