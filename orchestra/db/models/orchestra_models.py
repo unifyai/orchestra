@@ -1037,8 +1037,12 @@ class Assistant(Base):
         back_populates="assistant",
         cascade="all, delete-orphan",
     )
-    voice_id = Column(String, nullable=True)
-
+    voice_id = sa.Column(
+        sa.String,
+        sa.ForeignKey("voices.voice_id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
 
 class Voice(Base):
     """Model class for the assistants voices table."""
