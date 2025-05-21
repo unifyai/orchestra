@@ -113,7 +113,7 @@ async def test_rename_field_basic(client: AsyncClient):
     log_id = response.json()["log_event_ids"][0]
 
     # Rename the field
-    rename_response = await client.post(
+    rename_response = await client.patch(
         "/v0/logs/rename_field",
         json={
             "project": project_name,
@@ -173,7 +173,7 @@ async def test_rename_field_edge_cases(client: AsyncClient):
     assert response.status_code == 200
 
     # Test case 1: Attempt to rename non-existent field
-    response = await client.post(
+    response = await client.patch(
         "/v0/logs/rename_field",
         json={
             "project": project_name,
@@ -186,7 +186,7 @@ async def test_rename_field_edge_cases(client: AsyncClient):
     assert "Field not found" in response.json()["detail"]
 
     # Test case 2: Attempt to rename to an existing field name
-    response = await client.post(
+    response = await client.patch(
         "/v0/logs/rename_field",
         json={
             "project": project_name,
@@ -199,7 +199,7 @@ async def test_rename_field_edge_cases(client: AsyncClient):
     assert "already exists" in response.json()["detail"]
 
     # Test case 3: Attempt to rename with invalid new field name
-    response = await client.post(
+    response = await client.patch(
         "/v0/logs/rename_field",
         json={
             "project": project_name,
@@ -371,7 +371,7 @@ async def test_rename_field_preserves_order(client: AsyncClient):
     log_field_b_index = initial_log_order.index("field_b")
 
     # Rename field_b to field_b_renamed
-    rename_response = await client.post(
+    rename_response = await client.patch(
         "/v0/logs/rename_field",
         json={
             "project": project_name,
