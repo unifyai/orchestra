@@ -731,7 +731,7 @@ def list_voices(
         return InfoResponse(
             info=[
                 VoiceRead(
-                    voice_id=voice.id,
+                    voice_id=voice.voice_id,
                     name=voice.name,
                     description=voice.description,
                     language=voice.language,
