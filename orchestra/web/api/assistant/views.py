@@ -600,7 +600,7 @@ def delete_recording(
 
 
 @router.post(
-    "assistant/voice",
+    "/assistant/voice",
     response_model=InfoResponse[VoiceRead],
     status_code=status.HTTP_201_CREATED,
     summary="Create a new voice record",
@@ -748,7 +748,7 @@ def list_voices(
 
 
 @router.delete(
-    "assistant/voice/{voice_id}",
+    "/assistant/voice/{voice_id}",
     status_code=status.HTTP_200_OK,
     response_model=InfoResponse[str],
     summary="Delete a user's voice record",
