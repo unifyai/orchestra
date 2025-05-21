@@ -1039,7 +1039,7 @@ class Assistant(Base):
     )
     voice_id = sa.Column(
         sa.String,
-        sa.ForeignKey("voices.voice_id", ondelete="CASCADE"),
+        sa.ForeignKey("voices.voice_id", ondelete="SET NULL"),
         nullable=True,
         index=True,
     )
