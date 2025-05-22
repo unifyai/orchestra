@@ -633,7 +633,7 @@ def create_from_logs(
             }
             # Iterate over the computed values and resolved IDs
             non_null_value = None
-            for i, (_, value) in enumerate(computed_values):
+            for i, (le, value) in enumerate(computed_values):
                 # Get all log IDs involved in this specific computation
                 involved_log_ids = list(set(ids[i] for ids in resolved_ids.values()))
 
@@ -642,7 +642,7 @@ def create_from_logs(
                     if isinstance(value, np.ndarray):
                         # add the embedding to the vector index table
                         embeddings = Embedding(
-                            ref_id=log_event_id,
+                            ref_id=le,
                             key=body.key,
                             model=DEFAULT_EMBEDDING_MODEL,
                             vector=value,

@@ -761,7 +761,7 @@ def _maybe_vector_column(expr, key, session, model: str | None = None):
             expr.c.__parent_idx__.label("__parent_idx__"),
         )
 
-    return vector_subq.subquery(name=f"{expr.name}_with_vector")
+    return vector_subq.subquery()
 
 
 def _build_subquery_for_base_call(
