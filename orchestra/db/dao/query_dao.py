@@ -1,4 +1,5 @@
 import datetime
+from decimal import Decimal
 from typing import List, Optional
 
 from fastapi import Depends
@@ -8,6 +9,8 @@ from sqlalchemy.orm import Session, aliased
 
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Query, QueryTagAssociation, Tag
+from orchestra.db.models.orchestra_models import Users as User
+from orchestra.errors import OutOfCreditError
 
 
 class QueryDAO:
@@ -24,7 +27,7 @@ class QueryDAO:
         endpoint_id: Optional[int],
         custom_endpoint_id: Optional[int],
         local_endpoint_id: Optional[int],
-        credits: float,
+        credits: Decimal,
         query_body: str,
         response_body: str,
         status_code: int,
@@ -39,8 +42,30 @@ class QueryDAO:
         :param user_id: user_id of a query.
         :param at: at of a query.
         :param endpoint_id: endpoint_id of a query.
-        :param credits: credits of a query.
+        :param credits: credits of a query (whole-credit units, Decimal OK).
         """
+
+        # ------------------------------------------------------------------ #
+        # Guard – account suspended for non-payment                         #
+        # ------------------------------------------------------------------ #
+        user = (
+            self.session.query(User)
+            .filter_by(id=user_id)
+            .with_for_update()  # lock to avoid race on credit updates
+            .one()
+        )
+
+        if user.billing_state == "SUSPENDED":
+            raise OutOfCreditError(
+                "Account suspended due to unpaid invoice. "
+                "Please update your payment method to resume usage.",
+            )
+
+        # ------------------------------------------------------------------ #
+        # Debit the wallet ─ we store whole credits as integers              #
+        # ------------------------------------------------------------------ #
+        credits_int = int(credits)  # fail-safe against fractions
+        user.credit_balance -= credits_int
 
         new_query = Query(
             user_id=user_id,
@@ -49,7 +74,7 @@ class QueryDAO:
             endpoint_id=endpoint_id,
             custom_endpoint_id=custom_endpoint_id,
             local_endpoint_id=local_endpoint_id,
-            credits=credits,
+            credits=credits_int,
             query_body=query_body,
             response_body=response_body,
             signature=signature,
@@ -81,9 +106,13 @@ class QueryDAO:
 
                 try:
                     self.session.add(query_tag_association)
-                    self.session.commit()
                 except IntegrityError:
                     self.session.rollback()
+
+        # --------------------------------------------------------------- #
+        # All done – persist debit + query + tags in one atomic commit    #
+        # --------------------------------------------------------------- #
+        self.session.commit()
 
     def get_all_queries(self, limit: int, offset: int) -> List[Query]:
         """
@@ -112,7 +141,7 @@ class QueryDAO:
         endpoint_ids: Optional[list[int]] = None,
         custom_endpoint_ids: Optional[list[int]] = None,
         local_endpoint_ids: Optional[list[int]] = None,
-        credits: Optional[float] = None,
+        credits: Optional[Decimal] = None,
         signature: Optional[str] = None,
         used_router: Optional[str] = None,
         router: Optional[str] = None,

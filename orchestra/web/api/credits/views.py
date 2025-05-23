@@ -1,14 +1,18 @@
 import logging
-from datetime import datetime, timezone
+from datetime import date
+from decimal import Decimal
 from typing import Dict
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
+from sqlalchemy.orm import Session
 
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.db.models.orchestra_models import Users
-from orchestra.web.api.credits.schema import CreditsResponse
+from orchestra.db.dependencies import get_db_session
+from orchestra.db.models.orchestra_models import RechargeStatus, Users
+from orchestra.lib.time import month_end_utc
+from orchestra.web.api.credits.schema import CreditsResponse, RechargeCreateSchema
 from orchestra.web.api.utils.http_responses import not_found
 from orchestra.web.api.utils.on_prem import handle_on_prem
 
@@ -164,10 +168,49 @@ def promo_code(
         )
 
     recharge_dao.create_recharge(
-        at=datetime.now(timezone.utc),
         user_id=user_id,
         quantity=qty,
-        type=code,
+        amount_usd=Decimal("0.00"),
+        invoice_group=month_end_utc(date.today()),
+        type_=code,
     )
     users_dao.recharge_credit(user_id, qty)
     return {"info": f"Code {code} activated successfully!"}
+
+
+@router.post("/recharge")
+def create_recharge(
+    data: RechargeCreateSchema,
+    db: Session = Depends(get_db_session),
+    users_dao: UsersDAO = Depends(),
+    recharge_dao: RechargeDAO = Depends(),
+):
+    """Create a recharge - either prepaid or auto-recharge."""
+    user = users_dao.get_user(data.user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    # Determine status based on type
+    if data.type == "payment":
+        # Prepaid credit purchase - already paid via Stripe
+        status = RechargeStatus.PAID
+    else:
+        # Auto-recharge - bill later via monthly invoice
+        status = RechargeStatus.PENDING_INVOICE
+
+    # Create the recharge record
+    recharge = recharge_dao.create_recharge(
+        user_id=user.id,
+        quantity=data.quantity,
+        amount_usd=data.amount_usd,
+        invoice_group=month_end_utc(date.today()),
+        type_=data.type,
+        transaction_id=data.transaction_id,
+        status=status,
+    )
+
+    # Credit the user's balance immediately
+    user.credit_balance += data.quantity
+    db.commit()
+
+    return {"recharge_id": recharge.id, "new_balance": user.credit_balance}

@@ -1,4 +1,6 @@
 import datetime
+from datetime import date
+from decimal import Decimal
 from typing import List, Optional
 
 from fastapi import Depends
@@ -6,7 +8,7 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import Recharge
+from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
 
 
 class RechargeDAO:
@@ -17,29 +19,28 @@ class RechargeDAO:
 
     def create_recharge(
         self,
-        at: datetime.datetime,
+        *,
         user_id: str,
-        quantity: float,
-        type: str,  # noqa: WPS125
-        transaction_id: str = None,
-    ) -> None:
-        """
-        Add single recharge to session.
-
-        :param at: at of a recharge.
-        :param user_id: user_id of a recharge.
-        :param quantity: quantity of a recharge.
-        :param type: type of a recharge.
-        """
-        self.session.add(
-            Recharge(
-                at=at,
-                user_id=user_id,
-                quantity=quantity,
-                type=type,
-                transaction_id=transaction_id,
-            ),
+        quantity: int,
+        amount_usd: Decimal,
+        invoice_group: date,
+        type_: str,
+        transaction_id: str | None = None,
+        status: RechargeStatus = RechargeStatus.PENDING_INVOICE,
+    ) -> Recharge:
+        """Insert a recharge row and return it."""
+        recharge = Recharge(
+            user_id=user_id,
+            quantity=quantity,
+            amount_usd=amount_usd,
+            invoice_group=invoice_group,
+            type=type_,
+            transaction_id=transaction_id,
+            status=status,
         )
+        self.session.add(recharge)
+        self.session.flush()
+        return recharge
 
     def get_all_recharges(self, limit: int, offset: int) -> List[Recharge]:
         """
