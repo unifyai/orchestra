@@ -253,12 +253,12 @@ def setup_observability(app: FastAPI) -> None:  # pragma: no cover
     # if settings.grafana_url:
     #     logger.info(f"Grafana dashboard available at {settings.grafana_url}")
 
-    # # Setup OpenTelemetry for distributed tracing
-    # try:
-    #     setup_opentelemetry(app)
-    # except Exception as e:
-    #     logger.error(f"Failed to setup OpenTelemetry: {e}")
-    #     logger.info("Continuing without distributed tracing")
+    # Setup OpenTelemetry for distributed tracing
+    try:
+        setup_opentelemetry(app)
+    except Exception as e:
+        logger.error(f"Failed to setup OpenTelemetry: {e}")
+        logger.info("Continuing without distributed tracing")
 
     # Setup SQLAlchemy instrumentation for query tracking
     # Only register DB listeners if the engine is already initialized
