@@ -19,22 +19,22 @@ from orchestra.db.models.orchestra_models import (
 from orchestra.web.api.context.schema import ContextCreateRequest
 
 
-def delete_orphaned_log_events(session: Session) -> None:
-    # Using a Common Table Expression (CTE) for bulk deletion.
+def delete_orphaned_log_events(session: Session, project_id: int) -> None:
+    # Using a scoped delete for the specific project.
     # This statement deletes log events that have no association rows in log_event_context.
     session.execute(
         text(
             """
-        WITH orphaned AS (
-            SELECT le.id
-            FROM log_event le
-            LEFT JOIN log_event_context lec ON le.id = lec.log_event_id
-            WHERE lec.log_event_id IS NULL
-        )
-        DELETE FROM log_event
-        WHERE id IN (SELECT id FROM orphaned);
+        DELETE FROM log_event le
+        WHERE le.project_id = :project_id
+          AND NOT EXISTS (
+            SELECT 1
+            FROM log_event_context lec
+            WHERE lec.log_event_id = le.id
+          );
         """,
         ),
+        {"project_id": project_id},
     )
     session.commit()
 
@@ -145,7 +145,7 @@ class ContextDAO:
             self.session.delete(context)
             self.session.flush()  # Ensure the context deletion cascades.
             # then remove all orphaned log events
-            delete_orphaned_log_events(self.session)
+            delete_orphaned_log_events(self.session, context.project_id)
             self.session.commit()
         except Exception as e:
             print(e)
