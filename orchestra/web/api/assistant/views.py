@@ -2,10 +2,13 @@ from decimal import Decimal
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy.orm import Session
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.recording_dao import RecordingDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
+from orchestra.db.dependencies import get_db_session
+from orchestra.services.bucket_service import BucketService
 from orchestra.services.call_recording_service import CallRecordingService
 from orchestra.web.api.assistant.schema import (
     AssistantCreate,
@@ -73,7 +76,7 @@ admin_router = APIRouter()
 def create_assistant(
     assistant_in: AssistantCreate,
     request: Request,
-    dao: AssistantDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ) -> InfoResponse[AssistantRead]:
     """
     Create a new assistant for the authenticated user.
@@ -82,6 +85,7 @@ def create_assistant(
     attributes like name, age, and operational limits. Each assistant is tied
     to the authenticated user's account.
     """
+    dao = AssistantDAO(session)
     try:
         assistant = dao.create_assistant(
             user_id=request.state.user_id,
@@ -178,7 +182,7 @@ def create_assistant(
 )
 def list_assistants(
     request: Request,
-    dao: AssistantDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ) -> InfoResponse[List[AssistantRead]]:
     """
     List all assistants for the authenticated user.
@@ -186,6 +190,7 @@ def list_assistants(
     Retrieves all assistants created by the current user, including their
     configuration details and operational limits.
     """
+    dao = AssistantDAO(session)
     try:
         assistants = dao.list_assistants_for_user(request.state.user_id)
         return InfoResponse(
@@ -242,7 +247,7 @@ def list_assistants(
 def delete_assistant(
     assistant_id: int,
     request: Request,
-    dao: AssistantDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ) -> InfoResponse[str]:
     """
     Delete an assistant by ID for the authenticated user.
@@ -250,6 +255,7 @@ def delete_assistant(
     Permanently removes the specified assistant from the user's account.
     This action cannot be undone.
     """
+    dao = AssistantDAO(session)
     try:
         dao.delete_assistant(user_id=request.state.user_id, agent_id=assistant_id)
         return InfoResponse(info="Assistant deleted successfully")
@@ -321,7 +327,7 @@ def update_assistant_config(
     assistant_id: int,
     update: AssistantUpdate,
     request: Request,
-    dao: AssistantDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ) -> InfoResponse[AssistantRead]:
     """
     Update about, phone, email, weekly_limit, and/or max_parallel for an existing assistant.
@@ -329,6 +335,7 @@ def update_assistant_config(
     Allows partial updates to an assistant's configuration. Only the fields
     provided in the request will be updated, while others remain unchanged.
     """
+    dao = AssistantDAO(session)
     try:
         weekly_limit: Optional[Decimal] = None
         if update.weekly_limit is not None:
@@ -417,7 +424,7 @@ async def create_recording(
     assistant_id: int,
     recording: RecordingCreate,
     request: Request,
-    recording_service: CallRecordingService = Depends(),
+    session: Session = Depends(get_db_session),
 ) -> InfoResponse[RecordingInfo]:
     """
     Add a new call recording for the specified assistant.
@@ -425,6 +432,14 @@ async def create_recording(
     This endpoint allows uploading a call recording by providing base64-encoded audio data.
     The system will decode the audio, store it securely, and associate it with the assistant.
     """
+    assistant_dao = AssistantDAO(session)
+    recording_dao = RecordingDAO(session)
+    bucket_service = BucketService()
+    recording_service = CallRecordingService(
+        assistant_dao=assistant_dao,
+        recording_dao=recording_dao,
+        bucket_service=bucket_service,
+    )
     try:
         mime = recording.content_type or "application/octet-stream"
         recording_model = await recording_service.record_call_from_raw(
@@ -489,8 +504,7 @@ async def create_recording(
 def list_recordings(
     assistant_id: int,
     request: Request,
-    recording_dao: RecordingDAO = Depends(),
-    assistant_dao: AssistantDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ) -> InfoResponse[List[RecordingInfo]]:
     """
     List all call recordings for the specified assistant.
@@ -498,6 +512,8 @@ def list_recordings(
     Retrieves all call recordings associated with the assistant, including their
     URLs and creation timestamps.
     """
+    assistant_dao = AssistantDAO(session)
+    recording_dao = RecordingDAO(session)
     try:
         # Verify assistant exists and belongs to user
         assistant = assistant_dao.get_assistant_by_id(
@@ -557,8 +573,7 @@ def delete_recording(
     assistant_id: int,
     recording_id: int,
     request: Request,
-    recording_dao: RecordingDAO = Depends(),
-    assistant_dao: AssistantDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ) -> InfoResponse[str]:
     """
     Delete a call recording by ID for the specified assistant.
@@ -566,6 +581,8 @@ def delete_recording(
     Permanently removes the specified recording from the system.
     This action cannot be undone.
     """
+    assistant_dao = AssistantDAO(session)
+    recording_dao = RecordingDAO(session)
     try:
         # Verify assistant exists and belongs to user
         assistant = assistant_dao.get_assistant_by_id(
@@ -644,11 +661,12 @@ def delete_recording(
 async def create_voice(
     voice_in: VoiceCreate,
     request: Request,
-    dao: VoiceDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ) -> InfoResponse[VoiceRead]:
     """
     Create a new voice record in the database after it has been created/localized via Cartesia.
     """
+    dao = VoiceDAO(session)
     try:
         voice = dao.create_voice(
             user_id=request.state.user_id,
@@ -718,11 +736,12 @@ async def create_voice(
 )
 def list_voices(
     request: Request,
-    dao: VoiceDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ) -> InfoResponse[List[VoiceRead]]:
     """
     List all voices saved by the authenticated user.
     """
+    dao = VoiceDAO(session)
     try:
         voices = dao.list_voices_for_user(
             user_id=request.state.user_id,
@@ -774,8 +793,9 @@ def list_voices(
 def delete_voice(
     voice_id: str,
     request: Request,
-    dao: VoiceDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ) -> InfoResponse[str]:
+    dao = VoiceDAO(session)
     try:
         dao.delete_voice(user_id=request.state.user_id, voice_id=voice_id)
         return InfoResponse(info="Voice deleted successfully.")
@@ -799,8 +819,9 @@ def delete_voice(
     summary="Admin: list all assistant email addresses",
 )
 async def admin_list_assistant_emails(
-    dao: AssistantDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ) -> InfoResponse[List[str]]:
+    dao = AssistantDAO(session)
     """Return every non-null email address that has been set on an Assistant."""
     emails = dao.list_all_assistant_emails()
     return InfoResponse(info=emails)

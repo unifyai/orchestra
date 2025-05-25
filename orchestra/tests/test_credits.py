@@ -17,16 +17,16 @@ def test_positive_recharge(dbsession, worker_id) -> None:
     recharge_credits(worker_id)
     users_dao = UsersDAO(dbsession)
     # user1
-    simple = get_user("user1", users_dao)[0]
+    simple = get_user("user1", dbsession)[0]
     assert math.isclose(simple.credits, 3.5)
     # user2
-    recharge_limited = get_user("user2", users_dao)[0]
+    recharge_limited = get_user("user2", session=dbsession)[0]
     assert math.isclose(recharge_limited.credits, 12.49)
     # user3
-    recharge_not_needed_a = get_user("user3", users_dao)[0]
+    recharge_not_needed_a = get_user("user3", session=dbsession)[0]
     assert recharge_not_needed_a.credits == 12.5
     # user4
-    recharge_not_needed_b = get_user("user4", users_dao)[0]
+    recharge_not_needed_b = get_user("user4", session=dbsession)[0]
     assert recharge_not_needed_b.credits == 22.5
 
 
@@ -36,16 +36,16 @@ def test_negative_recharge(dbsession, worker_id) -> None:
     recharge_credits(worker_id, amount=-0.5)
     users_dao = UsersDAO(dbsession)
     # user1
-    simple = get_user("user1", users_dao)[0]
+    simple = get_user("user1", session=dbsession)[0]
     assert math.isclose(simple.credits, 0.5)
     # user2
-    recharge_limited = get_user("user2", users_dao)[0]
+    recharge_limited = get_user("user2", session=dbsession)[0]
     assert math.isclose(recharge_limited.credits, 9.49)
     # user3
-    recharge_not_needed_a = get_user("user3", users_dao)[0]
+    recharge_not_needed_a = get_user("user3", session=dbsession)[0]
     assert recharge_not_needed_a.credits == 9.5
     # user4
-    recharge_not_needed_b = get_user("user4", users_dao)[0]
+    recharge_not_needed_b = get_user("user4", session=dbsession)[0]
     assert recharge_not_needed_b.credits == 19.5
 
 

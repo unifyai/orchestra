@@ -1,17 +1,15 @@
 from typing import List, Tuple
 
-from fastapi import Depends
 from sqlalchemy import and_, delete, select
 from sqlalchemy.orm import Session
 
-from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import CustomApiKey, CustomEndpoint
 
 
 class CustomEndpointDAO:
     """Class for accessing custom endpoint table."""
 
-    def __init__(self, session: Session = Depends(get_db_session)):
+    def __init__(self, session: Session):
         self.session = session
 
     def create_custom_endpoint(

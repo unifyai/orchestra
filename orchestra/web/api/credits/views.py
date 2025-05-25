@@ -7,6 +7,7 @@ from fastapi.param_functions import Depends
 
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.users_dao import UsersDAO
+from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Users
 from orchestra.web.api.credits.schema import CreditsResponse
 from orchestra.web.api.utils.http_responses import not_found
@@ -37,7 +38,7 @@ logger.addHandler(handler)
 @handle_on_prem(endpoint="/credits", method="none")
 def get_credits(
     request_fastapi: Request,
-    users_dao: UsersDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> Users:
     """
     Returns the number of available credits.
@@ -46,6 +47,7 @@ def get_credits(
     :param users_dao: DAO for users models.
     :return: user instance with credits from database.
     """
+    users_dao = UsersDAO(session)
     user = users_dao.filter(id=request_fastapi.state.user_id)
     # TODO: Remove this after fixing the DB entries
     if len(user) == 0:
@@ -93,8 +95,7 @@ def promo_code(
         ),
         example="sample_user_id",
     ),
-    recharge_dao: RechargeDAO = Depends(),
-    users_dao: UsersDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> Dict[str, str]:
     """
     Activates a promotional code.
@@ -107,6 +108,8 @@ def promo_code(
     :param users_dao: DAO for users models.
     :return: user instance with credits from database.
     """
+    recharge_dao = RechargeDAO(session)
+    users_dao = UsersDAO(session)
 
     raise HTTPException(
         status_code=400,

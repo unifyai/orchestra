@@ -1,17 +1,15 @@
 from typing import Dict, List, Optional, Union
 
-from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.log_dao import LogDAO
-from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import FieldType
 
 
 class FieldTypeDAO:
-    def __init__(self, session: Session = Depends(get_db_session)):
+    def __init__(self, session: Session):
         self.session = session
 
     def create_field_type_if_absent(

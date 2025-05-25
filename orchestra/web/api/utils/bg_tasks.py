@@ -10,7 +10,6 @@ from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
-from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.web.api.log.utils.logging_utils import log_chat_completion_event
 from orchestra.web.api.query.schema import QueryModelRequest
@@ -88,7 +87,6 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
         endpoint_dao = EndpointDAO(session)
         auth_user_dao = AuthUserDAO(session)
         custom_endpoint_dao = CustomEndpointDAO(session)
-        query_dao = QueryDAO(session)
         users_dao = UsersDAO(session)
 
         if usage is None:
@@ -143,7 +141,7 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
 
         # Only create query model if queries_enabled is True
         if auth_user and auth_user.queries_enabled:
-            create_query_model(query_model_request, query_dao=query_dao)
+            create_query_model(query_model_request, session=session)
         # Log the chat completion event using the new unified logging system
         try:
             req = json.loads(query_body) if isinstance(query_body, str) else query_body

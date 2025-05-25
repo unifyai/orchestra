@@ -1,10 +1,13 @@
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy.orm import Session
 
 from orchestra.db.dao.legacy_interface_dao import LegacyInterfaceDAO
+from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.temp_interface_dao import TempInterfaceDAO
+from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.interface.schema import LegacyInterfaceConfig
 
 router = APIRouter()
@@ -56,10 +59,13 @@ router = APIRouter()
 def create_interface(
     request_fastapi: Request,
     request: LegacyInterfaceConfig,
-    project_dao: ProjectDAO = Depends(),
-    interface_dao: LegacyInterfaceDAO = Depends(),
-    temp_interface_dao: TempInterfaceDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    interface_dao = LegacyInterfaceDAO(session)
+    temp_interface_dao = TempInterfaceDAO(session)
+
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
         name=request.project,
@@ -132,10 +138,13 @@ def create_interface(
 def update_interface(
     request_fastapi: Request,
     request: LegacyInterfaceConfig,
-    project_dao: ProjectDAO = Depends(),
-    interface_dao: LegacyInterfaceDAO = Depends(),
-    temp_interface_dao: TempInterfaceDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    interface_dao = LegacyInterfaceDAO(session)
+    temp_interface_dao = TempInterfaceDAO(session)
+
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
         name=request.project,
@@ -227,10 +236,13 @@ def get_interfaces(
     name: str = Query(None),
     project: str = Query(...),
     temporary: bool = Query(False),
-    project_dao: ProjectDAO = Depends(),
-    interface_dao: LegacyInterfaceDAO = Depends(),
-    temp_interface_dao: TempInterfaceDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    interface_dao = LegacyInterfaceDAO(session)
+    temp_interface_dao = TempInterfaceDAO(session)
+
     project_obj = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
         name=project,
@@ -335,10 +347,13 @@ def delete_interface(
     name: str = Query(...),
     project: str = Query(...),
     temporary: bool = Query(False),
-    interface_dao: LegacyInterfaceDAO = Depends(),
-    temp_interface_dao: TempInterfaceDAO = Depends(),
-    project_dao: ProjectDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    interface_dao = LegacyInterfaceDAO(session)
+    temp_interface_dao = TempInterfaceDAO(session)
+
     project_obj = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
         name=project,

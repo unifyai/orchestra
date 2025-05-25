@@ -1,15 +1,13 @@
 from typing import List, Optional
 
-from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import AuthUser
 
 
 class AuthUserDAO:
-    def __init__(self, session: Session = Depends(get_db_session)):
+    def __init__(self, session: Session):
         self.session = session
 
     def create(  # noqa: WPS211

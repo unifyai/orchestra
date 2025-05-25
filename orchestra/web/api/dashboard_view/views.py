@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from starlette import status
 
 from orchestra.db.dao.dashboard_view_dao import DashboardViewDAO
+from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.dashboard_view.schema import (
     DashboardViewDelete,
     DashboardViewInfo,
@@ -35,11 +36,12 @@ router = APIRouter()
 )
 def list_dashboard_views(
     project_id: int = Path(),
-    dashboard_view_dao: DashboardViewDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Retrieve a list of all dashboard_views.
     """
+    dashboard_view_dao = DashboardViewDAO(session)
     dashboard_views = dashboard_view_dao.list_dashboard_views(project_id=project_id)
     return [[d.name, d.view] for d in dashboard_views]
 
@@ -65,11 +67,12 @@ def list_dashboard_views(
 )
 def create_dashboard_view(
     dashboard_view: DashboardViewInfo,
-    dashboard_view_dao: DashboardViewDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Create a new dashboard_view.
     """
+    dashboard_view_dao = DashboardViewDAO(session)
     existing_dashboard_view = dashboard_view_dao.filter(
         project_id=dashboard_view.project_id,
         name=dashboard_view.name,
@@ -104,11 +107,12 @@ def create_dashboard_view(
 )
 def rename_dashboard_view(
     new_name: DashboardViewNewName,
-    dashboard_view_dao: DashboardViewDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Rename an existing dashboard_view.
     """
+    dashboard_view_dao = DashboardViewDAO(session)
     dashboard_view = dashboard_view_dao.filter(
         project_id=new_name.project_id,
         name=new_name.name,
@@ -136,11 +140,12 @@ def rename_dashboard_view(
 )
 def delete_dashboard_view(
     view_to_delete: DashboardViewDelete,
-    dashboard_view_dao: DashboardViewDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Delete a dashboard_view and all its corresponding entries.
     """
+    dashboard_view_dao = DashboardViewDAO(session)
     dashboard_view = dashboard_view_dao.filter(
         project_id=view_to_delete.project_id,
         name=view_to_delete.name,

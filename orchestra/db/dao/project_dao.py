@@ -1,19 +1,17 @@
 from typing import List, Optional
 
-from fastapi import Depends
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
-from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Project
 
 
 class ProjectDAO:
     def __init__(
         self,
-        session: Session = Depends(get_db_session),
-        organization_member_dao: OrganizationMemberDAO = Depends(),
+        session: Session,
+        organization_member_dao: OrganizationMemberDAO,
     ):
         self.session = session
         self.organization_member_dao = organization_member_dao

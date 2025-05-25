@@ -1,10 +1,13 @@
 from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy.orm import Session
 
 from orchestra.db.dao.interface_dao import InterfaceDAO
+from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.tab_dao import TabDAO
+from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Interface, Project, Tab
 from orchestra.web.api.interface.schema import (
     CreateInterfaceRequest,
@@ -180,11 +183,14 @@ def create_interface(
         False,
         description="Whether to create a checkpoint interface (manual save)",
     ),
-    project_dao: ProjectDAO = Depends(),
-    interface_dao: InterfaceDAO = Depends(),
-    tab_dao: TabDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
     """Create a new interface in a project."""
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    interface_dao = InterfaceDAO(session)
+    tab_dao = TabDAO(session)
+
     # Verify project exists and user has access
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
@@ -286,11 +292,14 @@ def get_interface(
         False,
         description="Whether to get a checkpoint version (manually saved)",
     ),
-    project_dao: ProjectDAO = Depends(),
-    interface_dao: InterfaceDAO = Depends(),
-    tab_dao: TabDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
     """Get a specific interface by ID or by project ID and name."""
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    interface_dao = InterfaceDAO(session)
+    tab_dao = TabDAO(session)
+
     # Use helper function to get interface
     interface, _ = _get_interface(
         request_fastapi=request_fastapi,
@@ -354,11 +363,14 @@ def list_interfaces(
         False,
         description="Whether to list checkpoint versions (manually saved)",
     ),
-    project_dao: ProjectDAO = Depends(),
-    interface_dao: InterfaceDAO = Depends(),
-    tab_dao: TabDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
     """List all interfaces for a project."""
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    interface_dao = InterfaceDAO(session)
+    tab_dao = TabDAO(session)
+
     # Verify project exists and user has access
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
@@ -450,11 +462,14 @@ def update_interface(
         False,
         description="Whether this is a checkpoint update (manual save)",
     ),
-    project_dao: ProjectDAO = Depends(),
-    interface_dao: InterfaceDAO = Depends(),
-    tab_dao: TabDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
     """Update an interface by ID or by project ID and name."""
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    interface_dao = InterfaceDAO(session)
+    tab_dao = TabDAO(session)
+
     project_obj = None
     interface = None
 
@@ -629,11 +644,14 @@ def create_interface_checkpoint(
         None,
         description="The name of the interface to checkpoint",
     ),
-    project_dao: ProjectDAO = Depends(),
-    interface_dao: InterfaceDAO = Depends(),
-    tab_dao: TabDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
     """Create a manual checkpoint (save) of an interface by ID or by project ID and name."""
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    interface_dao = InterfaceDAO(session)
+    tab_dao = TabDAO(session)
+
     # Get the active interface first
     interface, project_obj = _get_interface(
         request_fastapi=request_fastapi,
@@ -761,11 +779,14 @@ def get_interface_checkpoint(
         None,
         description="The name of the interface to get checkpoint for",
     ),
-    project_dao: ProjectDAO = Depends(),
-    interface_dao: InterfaceDAO = Depends(),
-    tab_dao: TabDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
     """Get the latest checkpoint (manual save) for an interface by ID or by project ID and name."""
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    interface_dao = InterfaceDAO(session)
+    tab_dao = TabDAO(session)
+
     # Use helper function to get interface with for_update=True to ensure we're looking at the active interface
 
     # Find the latest checkpoint
@@ -853,11 +874,14 @@ def delete_interface(
         None,
         description="The name of the interface to delete",
     ),
-    project_dao: ProjectDAO = Depends(),
-    interface_dao: InterfaceDAO = Depends(),
-    tab_dao: TabDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
     """Delete an interface by ID or by project ID and name."""
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    interface_dao = InterfaceDAO(session)
+    tab_dao = TabDAO(session)
+
     # Use helper function to get interface with for_update=True to ensure we're deleting the active interface
     interface, project_obj = _get_interface(
         request_fastapi=request_fastapi,

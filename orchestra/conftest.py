@@ -424,6 +424,7 @@ def large_log_dataset(_engine_session: Engine):
     from orchestra.db.dao.field_type_dao import FieldTypeDAO
     from orchestra.db.dao.log_dao import LogDAO
     from orchestra.db.dao.log_event_dao import LogEventDAO
+    from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
     from orchestra.db.dao.project_dao import ProjectDAO
 
     # Create a local session
@@ -431,11 +432,15 @@ def large_log_dataset(_engine_session: Engine):
     session = SessionLocal()
 
     # Initialize DAOs
-    project_dao = ProjectDAO(session=session)
+    organization_member_dao = OrganizationMemberDAO(session=session)
+    project_dao = ProjectDAO(
+        session=session,
+        organization_member_dao=organization_member_dao,
+    )
     context_dao = ContextDAO(session=session)
     field_type_dao = FieldTypeDAO(session=session)
     log_event_dao = LogEventDAO(session=session)
-    log_dao = LogDAO(session=session)
+    log_dao = LogDAO(session=session, context_dao=context_dao)
 
     # Create deterministic random number generator
     rng = random.Random(1234)

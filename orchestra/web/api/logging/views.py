@@ -11,12 +11,14 @@ from typing import Any, Dict, List, Literal, Optional, Union
 import clickhouse_connect
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.param_functions import Depends
+from sqlalchemy.orm import Session
 
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.local_endpoint_dao import LocalEndpointDAO
 from orchestra.db.dao.query_dao import QueryDAO
 from orchestra.db.dao.tag_dao import TagDAO
+from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.utils.http_responses import not_found
 from orchestra.web.api.utils.on_prem import handle_on_prem
 
@@ -35,8 +37,9 @@ router = APIRouter()
 @router.get("/tags")
 def get_query_tags(
     request_fastapi: Request,
-    tag_dao: TagDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ) -> list[str]:
+    tag_dao = TagDAO(session)
     """Returns a list of the tags in your account"""
     return tag_dao.get_all_tags(request_fastapi.state.user_id)
 
@@ -76,11 +79,12 @@ def get_queries(
         description="indicates whether to includes failures in the return (when set as True ), or whether to return failures exlusively (when set as 'only').",
         example=False,
     ),
-    query_dao: QueryDAO = Depends(),
-    endpoint_dao: EndpointDAO = Depends(),
-    custom_endpoint_dao: CustomEndpointDAO = Depends(),
-    local_endpoint_dao: LocalEndpointDAO = Depends(),
+    session=Depends(get_db_session),
 ):
+    query_dao = QueryDAO(session)
+    endpoint_dao = EndpointDAO(session)
+    custom_endpoint_dao = CustomEndpointDAO(session)
+    local_endpoint_dao = LocalEndpointDAO(session)
     """
     Get the queries history, optionally for a given set of tags for a narrowed search.
     """
@@ -194,9 +198,10 @@ def log_query(
         description="A timestamp (if not set, will be the time of sending)",
         json_schema_extra={"example": "2024-07-12T04:20:32.808410"},
     ),
-    query_dao: QueryDAO = Depends(),
-    local_endpoint_dao: LocalEndpointDAO = Depends(),
+    session=Depends(get_db_session),
 ):
+    query_dao = QueryDAO(session)
+    local_endpoint_dao = LocalEndpointDAO(session)
     if not timestamp:
         timestamp = str(datetime.now(timezone.utc))
 

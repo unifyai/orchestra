@@ -4,14 +4,12 @@ import re
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
-from fastapi import Depends
 from sqlalchemy import alias, cast, func, literal, select, text, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     Context,
     FieldType,
@@ -194,8 +192,8 @@ def normalize_timestamp(ts_str: str) -> str:
 class LogDAO:
     def __init__(
         self,
-        session: Session = Depends(get_db_session),
-        context_dao: ContextDAO = Depends(ContextDAO),
+        session: Session,
+        context_dao: ContextDAO,
     ):
         self.session = session
         self.bucket_service = BucketService()

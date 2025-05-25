@@ -15,6 +15,7 @@ from orchestra.db.dao.custom_router_dao import CustomRouterDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.router_dao import RouterDAO
 from orchestra.db.dao.users_dao import UsersDAO
+from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.dependencies import _ro_session
 from orchestra.web.api.llm_queries.schema import (
     ChatCompletionRequest,
@@ -45,12 +46,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
     request: Union[ChatCompletionRequest, List[ChatCompletionRequest]],
     response_fastapi: Response,
-    endpoint_dao: EndpointDAO = Depends(),
-    benchmark_run_dao: BenchmarkRunDAO = Depends(),
-    custom_endpoint_dao: CustomEndpointDAO = Depends(),
-    custom_api_key_dao: CustomApiKeyDAO = Depends(),
-    custom_router_dao: CustomRouterDAO = Depends(),
-    router_dao: RouterDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> Union[ChatCompletionResponse, StreamingResponse]:
     """
     OpenAI compatible `/chat/completions` endpoint for LLM inference.
@@ -74,6 +70,12 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     :raises HTTPException: when user has insufficient credits.
     """
+    endpoint_dao = EndpointDAO(session)
+    benchmark_run_dao = BenchmarkRunDAO(session)
+    custom_endpoint_dao = CustomEndpointDAO(session)
+    custom_api_key_dao = CustomApiKeyDAO(session)
+    custom_router_dao = CustomRouterDAO(session)
+    router_dao = RouterDAO(session)
 
     if isinstance(request, list):
         request_priority_list = request
@@ -428,9 +430,10 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_fastapi: Request,
     request: ChatCompletionRequest,
-    endpoint_dao: EndpointDAO = Depends(),
-    benchmark_run_dao: BenchmarkRunDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> RouterScoresResponse:
+    endpoint_dao = EndpointDAO(session)
+    benchmark_run_dao = BenchmarkRunDAO(session)
     rc = NeuralRouter(request.model, endpoint_dao, benchmark_run_dao)
     scores = rc(request_fastapi, request.messages[-1]["content"], debug=True)
     return RouterScoresResponse(scores=scores)

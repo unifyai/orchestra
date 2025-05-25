@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_dao import LogDAO
+from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.context.schema import (
@@ -69,8 +70,7 @@ def create_context(
         description="Name of the project to create context in.",
         example="my_project",
     ),
-    project_dao: ProjectDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Creates a new context within a project. Contexts can be used to organize logs
@@ -82,6 +82,9 @@ def create_context(
     The context can be provided as a string (which will be used as the name with no description)
     or as an object with name and description fields.
     """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    context_dao = ContextDAO(session)
     try:
         project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
@@ -183,13 +186,16 @@ def get_contexts(
         description="Optional prefix to filter contexts by name",
         example="experiment1/",
     ),
-    project_dao: ProjectDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Get a list of contexts within a project.
     Returns information about each context including its versioning status and current version.
     """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    context_dao = ContextDAO(session)
+
     try:
         project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
@@ -261,12 +267,14 @@ def get_context(
         description="Name of the context to retrieve.",
         example="my_context",
     ),
-    project_dao: ProjectDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Get information about a specific context including its versioning status and current version.
     """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    context_dao = ContextDAO(session)
     try:
         project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
@@ -337,13 +345,15 @@ def delete_context(
         description="Name of the context to delete.",
         example="my_context",
     ),
-    project_dao: ProjectDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Deletes a context from a project. This will not delete the logs or artifacts
     within the context, but will remove their association with this context.
     """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    context_dao = ContextDAO(session)
     # Protect the built-in Tasks context in Unity project
     if project_name == "Unity" and context_name == "Tasks":
         raise HTTPException(
@@ -402,10 +412,6 @@ def add_logs_to_context(
         description="Name of the project to create context in.",
         example="my_project",
     ),
-    project_dao: ProjectDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
-    field_type_dao: FieldTypeDAO = Depends(),
-    log_dao: LogDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
@@ -419,6 +425,11 @@ def add_logs_to_context(
     If copy=True, new copies of the logs will be created and added to the context.
     If copy=False (default), the existing logs will be associated with the context.
     """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    context_dao = ContextDAO(session)
+    field_type_dao = FieldTypeDAO(session)
+    log_dao = LogDAO(session, context_dao)
     try:
         project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
@@ -604,10 +615,13 @@ async def rename_context(
     body: RenameContextRequest,
     project_name: str = Path(...),
     context_name: str = Path(...),
-    project_dao: ProjectDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """Rename an existing context within a project."""
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    context_dao = ContextDAO(session)
+
     # Protect the built-in Tasks context in Unity project
     if project_name == "Unity" and context_name == "Tasks":
         raise HTTPException(
