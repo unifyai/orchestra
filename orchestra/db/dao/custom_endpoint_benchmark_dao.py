@@ -1,18 +1,16 @@
 from datetime import datetime
 from typing import List, Optional, Union
 
-from fastapi import Depends
 from sqlalchemy import delete, or_, select
 from sqlalchemy.orm import Session
 
-from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import CustomEndpointBenchmark
 
 
 class CustomEndpointBenchmarkDAO:
     """Class for accessing custom endpoint benchmark table."""
 
-    def __init__(self, session: Session = Depends(get_db_session)):
+    def __init__(self, session: Session):
         self.session = session
 
     def upload_benchmark(

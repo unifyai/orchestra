@@ -1,11 +1,10 @@
 from decimal import Decimal
 from typing import List, Optional
 
-from fastapi import Depends, HTTPException, status
+from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Assistant
 
 
@@ -14,7 +13,7 @@ class AssistantDAO:
     Data access object for Assistant operations.
     """
 
-    def __init__(self, session: Session = Depends(get_db_session)):
+    def __init__(self, session: Session):
         self.session = session
 
     def create_assistant(

@@ -35,11 +35,12 @@ router = APIRouter()
 @admin_router.post("/auth-user")
 async def create_user(
     user: UserRequest,
-    auth_user_dao: AuthUserDAO = Depends(),
-    api_key_dao: ApiKeyDAO = Depends(),
-    user_dao: UsersDAO = Depends(),
     session: Session = Depends(get_db_session),
 ):
+    auth_user_dao = AuthUserDAO(session)
+    api_key_dao = ApiKeyDAO(session)
+    user_dao = UsersDAO(session)
+
     auth_user_dao.create(email=user.email)
     user = auth_user_dao.filter(email=user.email)
     new_api_key = generate_key()
@@ -62,11 +63,13 @@ async def create_user(
 @admin_router.get("/auth-user/by-user-id")
 async def get_user(
     user_id: str,
-    auth_user_dao: AuthUserDAO = Depends(),
-    api_key_dao: ApiKeyDAO = Depends(),
-    organization_member_dao: OrganizationMemberDAO = Depends(),
-    organization_dao: OrganizationDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+    auth_user_dao = AuthUserDAO(session)
+    api_key_dao = ApiKeyDAO(session)
+    organization_member_dao = OrganizationMemberDAO(session)
+    organization_dao = OrganizationDAO(session)
+
     user = auth_user_dao.filter(id=user_id)
     if not user:
         raise not_found("User ID")
@@ -93,11 +96,13 @@ async def get_user(
 @admin_router.get("/auth-user/by-email")
 async def get_user_by_email(
     email: str,
-    auth_user_dao: AuthUserDAO = Depends(),
-    api_key_dao: ApiKeyDAO = Depends(),
-    organization_member_dao: OrganizationMemberDAO = Depends(),
-    organization_dao: OrganizationDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+    auth_user_dao = AuthUserDAO(session)
+    api_key_dao = ApiKeyDAO(session)
+    organization_member_dao = OrganizationMemberDAO(session)
+    organization_dao = OrganizationDAO(session)
+
     user = auth_user_dao.filter(email=email)
     if not user:
         return None
@@ -125,12 +130,14 @@ async def get_user_by_email(
 async def get_user_by_account(
     provider_account_id: str,
     provider: str,
-    account_dao: AccountDAO = Depends(),
-    auth_user_dao: AuthUserDAO = Depends(),
-    api_key_dao: ApiKeyDAO = Depends(),
-    organization_member_dao: OrganizationMemberDAO = Depends(),
-    organization_dao: OrganizationDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+    account_dao = AccountDAO(session)
+    auth_user_dao = AuthUserDAO(session)
+    api_key_dao = ApiKeyDAO(session)
+    organization_member_dao = OrganizationMemberDAO(session)
+    organization_dao = OrganizationDAO(session)
+
     account = account_dao.filter(
         provider_account_id=provider_account_id,
         provider=provider,
@@ -163,8 +170,9 @@ async def get_user_by_account(
 @admin_router.put("/auth-user")
 async def update_user(
     updated_user: UserRequest,
-    auth_user_dao: AuthUserDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+    auth_user_dao = AuthUserDAO(session)
     user = auth_user_dao.filter(id=updated_user.user_id)
     if not user:
         raise not_found("User")
@@ -178,7 +186,8 @@ async def update_user(
 
 
 @admin_router.delete("/auth-user")
-async def delete_user(user_id: str, auth_user_dao: AuthUserDAO = Depends()):
+async def delete_user(user_id: str, session: Session = Depends(get_db_session)):
+    auth_user_dao = AuthUserDAO(session)
     user = auth_user_dao.filter(id=user_id)
     if not user:
         raise not_found("User")
@@ -187,7 +196,11 @@ async def delete_user(user_id: str, auth_user_dao: AuthUserDAO = Depends()):
 
 
 @admin_router.post("/account")
-async def link_account(account: AccountRequest, account_dao: AccountDAO = Depends()):
+async def link_account(
+    account: AccountRequest,
+    session: Session = Depends(get_db_session),
+):
+    account_dao = AccountDAO(session)
     account_dao.create(
         user_id=account.userId,
         provider=account.provider,
@@ -219,8 +232,9 @@ def generate_key(size=32):
 async def set_user_tier(
     user_id: str,
     tier: str,
-    auth_user_dao: AuthUserDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+    auth_user_dao = AuthUserDAO(session)
     user = auth_user_dao.filter(id=user_id)
     if not user:
         raise not_found("User ID")
@@ -236,8 +250,9 @@ async def set_user_tier(
 @admin_router.put("/auth-user/quotas/reset")
 async def reset_user_quotas(
     user_id: str,
-    auth_user_dao: AuthUserDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+    auth_user_dao = AuthUserDAO(session)
     user = auth_user_dao.filter(id=user_id)
     if not user:
         raise not_found("User ID")
@@ -247,8 +262,9 @@ async def reset_user_quotas(
 
 @admin_router.put("/auth-user/quotas/reset/all")
 async def reset_user_quotas(
-    auth_user_dao: AuthUserDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+    auth_user_dao = AuthUserDAO(session)
     users = auth_user_dao.filter()
     for user in users:
         auth_user_dao.update(
@@ -262,8 +278,9 @@ async def reset_user_quotas(
 @admin_router.post("/auth-user/freeze")
 async def freeze_account(
     request: FreezeAccountRequest,
-    users_dao: UsersDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+    users_dao = UsersDAO(session)
     users_dao.set_frozen_status(request.user_id, request.freeze)
     status_str = "frozen" if request.freeze else "unfrozen"
     return {"message": f"Account {status_str} successfully!"}
@@ -272,8 +289,9 @@ async def freeze_account(
 @admin_router.get("/api_key/list")
 async def list_user_api_keys(
     user_id: str,
-    api_key_dao: ApiKeyDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+    api_key_dao = ApiKeyDAO(session)
     keys = api_key_dao.filter(user_id=user_id)
     if not keys:
         raise not_found("API Keys")
@@ -285,8 +303,9 @@ async def create_api_key(
     name: str,
     user_id: Optional[str] = None,
     organization_id: Optional[int] = None,
-    api_key_dao: ApiKeyDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+    api_key_dao = ApiKeyDAO(session)
     # TODO: This only allows for one api key at the time
     existing_api_key = api_key_dao.filter(
         user_id=user_id,
@@ -311,11 +330,12 @@ async def create_api_key(
 async def reset_api_key(
     user_id: Optional[str] = None,
     organization_id: Optional[int] = None,
-    api_key_dao: ApiKeyDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
     # TODO: This deletes all previous key from a user/org and creates a new one,
     # this will need to be changed once multiple keys are enabled.
     # delete prev key
+    api_key_dao = ApiKeyDAO(session)
     old_api_key = api_key_dao.filter(user_id=user_id, organization_id=organization_id)
     api_key_dao.delete(id=old_api_key[0][0].id)
     new_api_key = generate_key()
@@ -331,9 +351,11 @@ async def reset_api_key(
 @admin_router.get("/organization/list")
 async def create_organization(
     name: str,
-    organization_dao: OrganizationDAO = Depends(),
-    organization_member_dao: OrganizationMemberDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+    organization_dao = OrganizationDAO(session)
+    organization_member_dao = OrganizationMemberDAO(session)
+
     org = organization_dao.filter(name=name)
     if not org:
         raise not_found("Organization")
@@ -345,9 +367,11 @@ async def create_organization(
 async def create_organization(
     name: str,
     owner_id: Optional[str] = None,
-    organization_dao: OrganizationDAO = Depends(),
-    organization_member_dao: OrganizationMemberDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+    organization_dao = OrganizationDAO(session)
+    organization_member_dao = OrganizationMemberDAO(session)
+
     existing_org = organization_dao.filter(owner_id=owner_id)
     if existing_org:
         raise HTTPException(
@@ -364,10 +388,12 @@ async def create_organization(
 async def add_organization_member(
     name: str,
     new_member_email: str,
-    auth_user_dao: AuthUserDAO = Depends(),
-    organization_dao: OrganizationDAO = Depends(),
-    organization_member_dao: OrganizationMemberDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+    auth_user_dao = AuthUserDAO(session)
+    organization_dao = OrganizationDAO(session)
+    organization_member_dao = OrganizationMemberDAO(session)
+
     new_user = auth_user_dao.filter(email=new_member_email)
     if not new_user:
         raise not_found("User")
@@ -387,10 +413,12 @@ async def update_organization_member_level(
     organization: str,
     member_email: str,
     new_level: str,
-    auth_user_dao: AuthUserDAO = Depends(),
-    organization_dao: OrganizationDAO = Depends(),
-    organization_member_dao: OrganizationMemberDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+    auth_user_dao = AuthUserDAO(session)
+    organization_dao = OrganizationDAO(session)
+    organization_member_dao = OrganizationMemberDAO(session)
+
     if new_level not in ["user", "admin", "owner"]:
         raise HTTPException(
             status_code=400,
@@ -415,9 +443,10 @@ async def update_organization_member_level(
 @router.get("/user/query-logging")
 async def get_query_logging_status(
     request: Request,
-    auth_user_dao: AuthUserDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
     """Get the current query logging status for the authenticated user."""
+    auth_user_dao = AuthUserDAO(session)
     user_id = request.state.user_id
     user = auth_user_dao.get_by_id(user_id)
     if not user:
@@ -430,9 +459,10 @@ async def get_query_logging_status(
 async def update_query_logging_status(
     request: Request,
     body: UpdateQueryLoggingRequest,
-    auth_user_dao: AuthUserDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
     """Update the query logging status for the authenticated user."""
+    auth_user_dao = AuthUserDAO(session)
     user_id = request.state.user_id
     user = auth_user_dao.get_by_id(user_id)
     if not user:

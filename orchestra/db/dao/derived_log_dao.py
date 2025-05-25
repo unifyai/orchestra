@@ -2,11 +2,9 @@ import json
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Union
 
-from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import DerivedLog, LogEvent
 from orchestra.web.api.log.python2SQL import (
     _compute_expression,
@@ -45,7 +43,7 @@ def _transform_referenced_logs(equation: str, referenced_logs: Dict) -> List[Dic
 
 # noinspection PyBroadException
 class DerivedLogDAO:
-    def __init__(self, session: Session = Depends(get_db_session)):
+    def __init__(self, session: Session):
         self.session = session
 
     def create(

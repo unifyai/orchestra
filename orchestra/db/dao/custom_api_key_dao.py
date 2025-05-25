@@ -1,18 +1,16 @@
 import copy
 from typing import List, Optional
 
-from fastapi import Depends
 from sqlalchemy import and_, delete, select
 from sqlalchemy.orm import Session
 
-from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import CustomApiKey
 
 
 class CustomApiKeyDAO:
     """Class for accessing custom api key table."""
 
-    def __init__(self, session: Session = Depends(get_db_session)):
+    def __init__(self, session: Session):
         self.session = session
 
     def create_custom_api_key(self, user_id: str, key: str, value: str) -> None:

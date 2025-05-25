@@ -2,12 +2,10 @@ import re
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Union
 
-from fastapi import Depends
 from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     Context,
     ContextHistory,
@@ -40,7 +38,7 @@ def delete_orphaned_log_events(session: Session, project_id: int) -> None:
 
 
 class ContextDAO:
-    def __init__(self, session: Session = Depends(get_db_session)):
+    def __init__(self, session: Session):
         self.session = session
 
     def create(

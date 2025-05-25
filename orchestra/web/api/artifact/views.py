@@ -5,9 +5,12 @@ Includes endpoints related to log artifacts.
 import json
 
 from fastapi import APIRouter, Depends, Path, Request
+from sqlalchemy.orm import Session
 
 from orchestra.db.dao.artifact_dao import ArtifactDAO
+from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.artifact.schema import ArtifactConfig
 from orchestra.web.api.utils.http_responses import not_found
 
@@ -49,14 +52,15 @@ def create_artifacts(
         description="Name of the project the artifacts belong to.",
         example="eval-project",
     ),
-    project_dao: ProjectDAO = Depends(),
-    artifact_dao: ArtifactDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
     """
     Creates one or more artifacts associated to a project. Artifacts are
     project-level metadata that don't depend on other variables.
     """
-
+    organization_dao = OrganizationDAO(session)
+    project_dao = ProjectDAO(session, organization_dao)
+    artifact_dao = ArtifactDAO(session)
     try:
         # TODO: Add organization id
         user_id = request_fastapi.state.user_id
@@ -112,12 +116,14 @@ def delete_artifact(
         description="Key of the artifact to delete.",
         example="project-description",
     ),
-    project_dao: ProjectDAO = Depends(),
-    artifact_dao: ArtifactDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
     """
     Deletes an artifact from a project.
     """
+    organization_dao = OrganizationDAO(session)
+    project_dao = ProjectDAO(session, organization_dao)
+    artifact_dao = ArtifactDAO(session)
     try:
         # TODO: Deal with org when appropriate
         user_id = request_fastapi.state.user_id
@@ -164,12 +170,15 @@ def list_artifacts(
         description="Name of the project to delete an artifact from.",
         example="eval-project",
     ),
-    project_dao: ProjectDAO = Depends(),
-    artifact_dao: ArtifactDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
     """
     Returns the key-value pairs of all artifacts in a project.
     """
+    organization_dao = OrganizationDAO(session)
+    project_dao = ProjectDAO(session, organization_dao)
+    artifact_dao = ArtifactDAO(session)
+
     try:
         # TODO: Deal with org when appropriate
         user_id = request_fastapi.state.user_id
