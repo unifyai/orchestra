@@ -570,6 +570,7 @@ class Context(Base):
         "LogEvent",
         secondary="log_event_context",
         back_populates="contexts",
+        passive_deletes=True,
     )
 
     __table_args__ = (
@@ -662,6 +663,7 @@ class LogEvent(Base):
         "Context",
         secondary="log_event_context",
         back_populates="log_events",
+        passive_deletes=True,
     )
     derived_logs = relationship(
         "DerivedLog",
