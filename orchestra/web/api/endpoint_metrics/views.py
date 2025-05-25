@@ -19,6 +19,7 @@ from orchestra.db.dao.custom_endpoint_benchmark_dao import CustomEndpointBenchma
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.latest_benchmark_dao import LatestBenchmarkDAO
+from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.utils.http_responses import model_not_found, not_found
 
 router = APIRouter()
@@ -38,8 +39,9 @@ ALLOWED_METRICS_STR = ALLOWED_METRICS_STR[:-2]
 def _get_endpoint_from_model_provider(
     model: str,
     provider: str,
-    endpoint_dao: EndpointDAO,
+    session=Depends(get_db_session),
 ):
+    endpoint_dao = EndpointDAO(session)
     try:
         endpoints = endpoint_dao.get_endpoints_of(
             models=(model,) if isinstance(model, str) else model,
@@ -63,9 +65,10 @@ def _get_custom_endpoint_benchmark(
     model: str,
     start_time: str = None,
     end_time: str = None,
-    custom_endpoint_dao: CustomEndpointDAO = None,
-    custom_endpoint_benchmark_dao: CustomEndpointBenchmarkDAO = None,
+    session=Depends(get_db_session),
 ):
+    custom_endpoint_dao = CustomEndpointDAO(session)
+    custom_endpoint_benchmark_dao = CustomEndpointBenchmarkDAO(session)
     start_time_provided = start_time is not None
     end_time_provided = end_time is not None
     try:
@@ -207,9 +210,10 @@ def log_endpoint_metric(
         "Defaults to current time if unspecified.",
         example="2024-08-12T04:20:32.808410",
     ),
-    custom_endpoint_dao: CustomEndpointDAO = Depends(),
-    custom_endpoint_benchmark_dao: CustomEndpointBenchmarkDAO = Depends(),
+    session=Depends(get_db_session),
 ):
+    custom_endpoint_dao = CustomEndpointDAO(session)
+    custom_endpoint_benchmark_dao = CustomEndpointBenchmarkDAO(session)
     """
     Append speed or cost data to the standardized time-series benchmarks for a custom
     endpoint (only custom endpoints are publishable by end users).
@@ -314,11 +318,7 @@ def get_endpoint_metrics(
         "Only the latest benchmark is returned if both are unspecified.",
         example="2024-08-12T04:20:32.808410",
     ),
-    endpoint_dao: EndpointDAO = Depends(),
-    latest_benchmark_dao: LatestBenchmarkDAO = Depends(),
-    benchmark_run_dao: BenchmarkRunDAO = Depends(),
-    custom_endpoint_dao: CustomEndpointDAO = Depends(),
-    custom_endpoint_benchmark_dao: CustomEndpointBenchmarkDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Extracts cost and speed data for the provided endpoint via our standardized
@@ -334,6 +334,12 @@ def get_endpoint_metrics(
     assumed to be the current time. An exception is raised if only `end_time` is
     provided.
     """
+    endpoint_dao = EndpointDAO(session)
+    latest_benchmark_dao = LatestBenchmarkDAO(session)
+    benchmark_run_dao = BenchmarkRunDAO(session)
+    custom_endpoint_dao = CustomEndpointDAO(session)
+    custom_endpoint_benchmark_dao = CustomEndpointBenchmarkDAO(session)
+
     start_time_provided = start_time is not None
     end_time_provided = end_time is not None
     latest_only = not start_time_provided and not end_time_provided
@@ -343,8 +349,7 @@ def get_endpoint_metrics(
             f"{model}@{provider}",
             start_time=start_time,
             end_time=end_time,
-            custom_endpoint_dao=custom_endpoint_dao,
-            custom_endpoint_benchmark_dao=custom_endpoint_benchmark_dao,
+            session=session,
         )
     elif os.environ.get("ON_PREM"):
         request_url = os.environ.get("PUBLIC_ORCHESTRA_URL", "") + "/benchmark"
@@ -459,8 +464,7 @@ def delete_endpoint_metrics(
         description="List of timestamps to delete the endpoint metrics for.",
         example="2024-08-17T19:19:37.289937",
     ),
-    custom_endpoint_dao: CustomEndpointDAO = Depends(),
-    custom_endpoint_benchmark_dao: CustomEndpointBenchmarkDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> Dict[str, str]:
     """
     Delete all benchmark time-series data for a given *custom* endpoint with the
@@ -468,6 +472,9 @@ def delete_endpoint_metrics(
     will be deleted for the specified custom endpoint.
     The time-series benchmark data for *public* endpoints are not deletable.
     """
+    custom_endpoint_dao = CustomEndpointDAO(session)
+    custom_endpoint_benchmark_dao = CustomEndpointBenchmarkDAO(session)
+
     user_id = request_fastapi.state.user_id
     available_endpoints = custom_endpoint_dao.filter(
         user_id=user_id,
@@ -518,7 +525,7 @@ def get_endpoint_details(
     """
     Extracts cost and context window data for the provided endpoint .
 
-    The `endpoint` is the endpoint name in the form \<model\>@\<provider\>.
+    The `endpoint` is the endpoint name in the form <model>@<provider>.
     """
     try:
         model, provider = endpoint.split("@")
