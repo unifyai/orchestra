@@ -205,6 +205,7 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
         app.url_path_for("swagger_ui_html"),
         app.url_path_for("swagger_ui_redirect"),
         app.url_path_for("redoc_html"),
+        app.url_path_for("metrics"),
     ]
 
     FastAPIInstrumentor().instrument_app(
@@ -367,7 +368,7 @@ def register_startup_event(
             location=settings.vertexai_location,
         )
         app.middleware_stack = app.build_middleware_stack()
-        ensure_production_traffic_project_exists(app)
+        # ensure_production_traffic_project_exists(app)
         pass  # noqa: WPS420
 
     return _startup
