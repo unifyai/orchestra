@@ -654,9 +654,10 @@ class LogDAO:
                     )
 
         # Start transaction
-        history_entries = []
-        json_history_entries = []
-        contexts_to_update = set()
+        history_entries: list[dict] = []
+        json_history_entries: list[dict] = []
+        contexts_to_update: set[int] = set()
+        pending_log_rows: list[dict] = []
 
         try:
             now = datetime.now(timezone.utc)
@@ -812,32 +813,23 @@ class LogDAO:
                                 f"Existing: {existing_log.value}\nNew: {value}",
                             )
                 else:
-                    # For non-versioned logs, use upsert operation
-                    rowcount = self._upsert_log(
-                        log_event_id=log_event_id,
-                        key=key,
-                        value=value,
-                        inferred_type=inferred_type,
-                        version=None,
-                        overwrite=False,  # Always use overwrite=False for bulk_create
+                    pending_log_rows.append(
+                        {
+                            "log_event_id": log_event_id,
+                            "key": key,
+                            "value": value,
+                            "version": None,
+                            "inferred_type": inferred_type,
+                            "created_at": now,
+                            "updated_at": now,
+                        },
                     )
 
-                    # If no row was affected, check if there's a conflict
-                    if rowcount == 0:
-                        # Re-SELECT the row with FOR UPDATE to lock it
-                        existing_log = (
-                            self.session.query(Log)
-                            .filter_by(log_event_id=log_event_id, key=key)
-                            .with_for_update()
-                            .first()
-                        )
-                        # If the existing value is different, raise OverwriteError
-                        if existing_log and existing_log.value != value:
-                            raise OverwriteError(
-                                f"Cannot overwrite existing value for key '{key}'",
-                            )
+            # Bulk-insert the accumulated rows in **one** statement
+            if pending_log_rows:
+                stmt = pg_insert(Log).values(pending_log_rows).on_conflict_do_nothing()
+                self.session.execute(stmt)
 
-            # No need to bulk save logs anymore as we're using upsert operations
             self.session.flush()
 
             # Create history entries for versioned contexts
