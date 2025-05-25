@@ -29,6 +29,7 @@ from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_dao import ImmutableFieldError, LogDAO, OverwriteError
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
+from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
@@ -123,11 +124,7 @@ admin_router = APIRouter()
 def create_logs(
     request_fastapi: Request,
     request: CreateLogConfig,
-    project_dao: ProjectDAO = Depends(),
-    field_type_dao: FieldTypeDAO = Depends(),
-    log_event_dao: LogEventDAO = Depends(),
-    log_dao: LogDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Creates one or more logs associated to a project. Logs are
@@ -161,6 +158,14 @@ def create_logs(
 
     This method returns the ids of the new stored logs.
     """
+    # Instantiate DAOs with shared session
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    field_type_dao = FieldTypeDAO(session)
+    log_event_dao = LogEventDAO(session)
+    context_dao = ContextDAO(session)
+    log_dao = LogDAO(session, context_dao)
+
     # check if the project exists
     try:
         user_id = request_fastapi.state.user_id
@@ -193,11 +198,15 @@ def create_logs(
         # get the default context
         context_id = context_dao.get_or_create(project_id, name="")
 
+    # Load the Context object once
+    context_obj = session.get(Context, context_id)
+
     # Call the internal implementation with validated project and context
     event_ids = create_logs_internal(
         request=request,
         project_id=project_id,
         context_id=context_id,
+        context_obj=context_obj,
         project_dao=project_dao,
         field_type_dao=field_type_dao,
         log_event_dao=log_event_dao,
