@@ -6,9 +6,8 @@ Create Date: 2025-05-21 13:05:02.353068
 
 """
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "72fbacb6b22e"
@@ -33,10 +32,18 @@ def upgrade() -> None:
     op.create_index(op.f("ix_voices_user_id"), "voices", ["user_id"], unique=False)
     op.add_column("assistants", sa.Column("voice_id", sa.String(), nullable=True))
     op.create_index(
-        op.f("ix_assistants_voice_id"), "assistants", ["voice_id"], unique=False
+        op.f("ix_assistants_voice_id"),
+        "assistants",
+        ["voice_id"],
+        unique=False,
     )
     op.create_foreign_key(
-        None, "assistants", "voices", ["voice_id"], ["voice_id"], ondelete="CASCADE"
+        None,
+        "assistants",
+        "voices",
+        ["voice_id"],
+        ["voice_id"],
+        ondelete="CASCADE",
     )
     # ### end Alembic commands ###
 
