@@ -7,15 +7,14 @@ from typing import List
 
 import sqlalchemy
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
+from sqlalchemy.orm import Session
 
 from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.derived_log_dao import DerivedLogDAO
 from orchestra.db.dao.favorite_project_dao import FavoriteProjectDAO
-from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.interface_dao import InterfaceDAO
 from orchestra.db.dao.legacy_interface_dao import LegacyInterfaceDAO
-from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
@@ -59,8 +58,11 @@ def get_project_or_404(
         description="Project name, may contain slashes",
         example="proj/a",
     ),
-    project_dao: ProjectDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ) -> Project:
+
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
         name=project_name,
@@ -107,12 +109,15 @@ def get_project_or_404(
 )
 def get_favorites(
     request_fastapi: Request,
-    favorite_project_dao: FavoriteProjectDAO = Depends(),
-    project_dao: ProjectDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Returns a list of the user's favorite projects, sorted by position.
     """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    favorite_project_dao = FavoriteProjectDAO(session)
+
     favorites = favorite_project_dao.filter_by_user(request_fastapi.state.user_id)
 
     # Sort by position
@@ -180,14 +185,17 @@ def get_favorites(
 def create_favorite(
     request_fastapi: Request,
     favorite: FavoriteProjectIn,
-    favorite_project_dao: FavoriteProjectDAO = Depends(),
-    project_dao: ProjectDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Creates a new favorite project for the user.
 
     Each favorite must include a project name, icon, and position.
     """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    favorite_project_dao = FavoriteProjectDAO(session)
+
     user_id = request_fastapi.state.user_id
 
     # Verify project exists and user has access
@@ -262,12 +270,15 @@ def create_favorite(
 def get_favorite(
     request_fastapi: Request,
     id: int = Path(..., description="The ID of the favorite to retrieve"),
-    favorite_project_dao: FavoriteProjectDAO = Depends(),
-    project_dao: ProjectDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Returns details of a specific favorite project.
     """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    favorite_project_dao = FavoriteProjectDAO(session)
+
     user_id = request_fastapi.state.user_id
     # Get the favorite
     try:
@@ -325,14 +336,17 @@ def update_favorite(
     request_fastapi: Request,
     update: FavoriteProjectUpdate,
     id: int = Path(..., description="The ID of the favorite to update"),
-    favorite_project_dao: FavoriteProjectDAO = Depends(),
-    project_dao: ProjectDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Updates a specific favorite project.
 
     Only the provided fields will be updated.
     """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    favorite_project_dao = FavoriteProjectDAO(session)
+
     # Get the favorite
     user_id = request_fastapi.state.user_id
     try:
@@ -405,11 +419,12 @@ def update_favorite(
 def delete_favorite(
     request_fastapi: Request,
     id: int = Path(..., description="The ID of the favorite to delete"),
-    favorite_project_dao: FavoriteProjectDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Deletes a specific favorite project.
     """
+    favorite_project_dao = FavoriteProjectDAO(session)
     # Get the favorite
     user_id = request_fastapi.state.user_id
     try:
@@ -458,12 +473,14 @@ def delete_favorite(
 def create_project(
     request_fastapi: Request,
     request: ProjectConfig,
-    project_dao: ProjectDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Creates a logging project and adds this to your account. This project will
     have a set of logs associated with it.
     """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
 
     try:
         existing_project = project_dao.get_by_user_and_name(
@@ -511,12 +528,13 @@ def create_project(
 )
 def delete_project_logs(
     request_fastapi: Request,
+    session: Session = Depends(get_db_session),
     project: Project = Depends(get_project_or_404),
-    log_event_dao: LogEventDAO = Depends(),
 ):
     """
     Deletes all logs in a project.
     """
+    log_event_dao = LogEventDAO(session)
     # Get all log events for the project
     log_events = log_event_dao.filter(project_id=project.id)
 
@@ -555,12 +573,14 @@ def delete_project_logs(
 def delete_project_contexts(
     request_fastapi: Request,
     project: Project = Depends(get_project_or_404),
-    context_dao: ContextDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Deletes all contexts and their associated logs from a project.
     The project's interfaces remain untouched.
     """
+
+    context_dao = ContextDAO(session)
     # Get all contexts for the project
     contexts = context_dao.filter(project_id=project.id)
     for context in contexts:
@@ -595,12 +615,14 @@ def delete_project_contexts(
 def delete_project(
     request_fastapi: Request,
     project: Project = Depends(get_project_or_404),
-    project_dao: ProjectDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
     Deletes a project from your account.
     """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+
     # Check if trying to delete the protected project (Unity)
     if project.name == "Unity":
         raise HTTPException(
@@ -670,11 +692,14 @@ def rename_project(
     request_fastapi: Request,
     request: ProjectConfig,
     project: Project = Depends(get_project_or_404),
-    project_dao: ProjectDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Renames a project from `name` to `new_name` in your account.
     """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+
     # Check if trying to rename the protected Unity project
     if project.name == "Unity":
         raise HTTPException(
@@ -712,11 +737,14 @@ def rename_project(
 )
 def list_projects(
     request_fastapi: Request,
-    project_dao: ProjectDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Returns the names of all projects stored in your account.
     """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+
     raw_projects = project_dao.filter_by_user_access(
         user_id=request_fastapi.state.user_id,
     )
@@ -755,15 +783,17 @@ admin_router = APIRouter()
 )
 def admin_share_project(
     request: ShareProjectRequest,
-    project_dao: ProjectDAO = Depends(),
-    auth_user_dao: AuthUserDAO = Depends(),
-    organization_dao: OrganizationDAO = Depends(),
-    organization_member_dao: OrganizationMemberDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Admin endpoint to share a project between users.
     This enables real-time collaboration between users.
     """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    auth_user_dao = AuthUserDAO(session)
+    organization_dao = OrganizationDAO(session)
+
     # Lookup the from_user and to_user
     from_user = auth_user_dao.get_by_id(request.from_user_id)
     to_user = auth_user_dao.get_by_id(request.to_user_id)
@@ -877,18 +907,6 @@ def admin_share_project(
 )
 def admin_duplicate_project(
     request: DuplicateProjectRequest,
-    project_dao: ProjectDAO = Depends(),
-    auth_user_dao: AuthUserDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
-    field_type_dao: FieldTypeDAO = Depends(),
-    log_event_dao: LogEventDAO = Depends(),
-    log_dao: LogDAO = Depends(),
-    derived_log_dao: DerivedLogDAO = Depends(),
-    legacy_interface_dao: LegacyInterfaceDAO = Depends(),
-    temp_interface_dao: TempInterfaceDAO = Depends(),
-    interface_dao: InterfaceDAO = Depends(),
-    tab_dao: TabDAO = Depends(),
-    tile_dao: TileDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
@@ -906,6 +924,18 @@ def admin_duplicate_project(
 
     The duplicate is a separate project where changes in one do not affect the other.
     """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    auth_user_dao = AuthUserDAO(session)
+    context_dao = ContextDAO(session)
+    log_event_dao = LogEventDAO(session)
+    derived_log_dao = DerivedLogDAO(session)
+    legacy_interface_dao = LegacyInterfaceDAO(session)
+    temp_interface_dao = TempInterfaceDAO(session)
+    interface_dao = InterfaceDAO(session)
+    tab_dao = TabDAO(session)
+    tile_dao = TileDAO(session)
+
     # 1. Validate users exist
     from_user = auth_user_dao.get_by_id(request.from_user_id)
     to_user = auth_user_dao.get_by_id(request.to_user_id)

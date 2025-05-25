@@ -5,6 +5,7 @@ from fastapi.param_functions import Depends
 
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
+from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.utils.http_responses import overspecified_model_provider
 from orchestra.web.api.utils.on_prem import handle_on_prem
 
@@ -33,13 +34,15 @@ def list_providers(
         description="Model to get available providers for.",
         example="llama-3.1-405b-chat",
     ),
-    endpoint_dao: EndpointDAO = Depends(),
-    custom_endpoint_dao: CustomEndpointDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Lists available providers. If `model` is specified,
     returns the providers that support that model.
     """
+    endpoint_dao = EndpointDAO(session)
+    custom_endpoint_dao = CustomEndpointDAO(session)
+
     user_id = request_fastapi.state.user_id
 
     res = endpoint_dao.get_endpoints_of((model,))
@@ -79,14 +82,16 @@ def list_models(
         description="Provider to get available models from.",
         example="openai",
     ),
-    endpoint_dao: EndpointDAO = Depends(),
-    custom_endpoint_dao: CustomEndpointDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Lists available models. If `provider` is specified,
     returns the models that the provider supports.
     You can also show all *custom* models by passing `custom` as the provider.
     """
+    endpoint_dao = EndpointDAO(session)
+    custom_endpoint_dao = CustomEndpointDAO(session)
+
     user_id = request_fastapi.state.user_id
 
     raw = endpoint_dao.get_endpoints_of((None,), (provider,))
@@ -133,14 +138,16 @@ def list_endpoints(
         description="Provider to get available endpoints for.",
         example="openai",
     ),
-    endpoint_dao: EndpointDAO = Depends(),
-    custom_endpoint_dao: CustomEndpointDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Lists available endpoints in `model@provider` format.
     If `model` or `provider` are specified, only the matching endpoints will be listed.
     You can also show all *custom* endpoints by passing `custom` as the provider.
     """
+    endpoint_dao = EndpointDAO(session)
+    custom_endpoint_dao = CustomEndpointDAO(session)
+
     user_id = request_fastapi.state.user_id
     if model and provider:
         raise overspecified_model_provider

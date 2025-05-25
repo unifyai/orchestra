@@ -392,7 +392,7 @@ async def test_rename_string_field_performance(timed_client):
         "old_field_name": "str_field",
         "new_field_name": "perf_str_field",
     }
-    response = await timed_client.post(
+    response = await timed_client.patch(
         "/v0/logs/rename_field",
         json=payload,
         headers=HEADERS,
@@ -480,7 +480,7 @@ async def test_rename_field_performance(timed_client):
         "old_field_name": "int_field",
         "new_field_name": "perf_int_field",
     }
-    response = await timed_client.post(
+    response = await timed_client.patch(
         "/v0/logs/rename_field",
         json=payload,
         headers=HEADERS,

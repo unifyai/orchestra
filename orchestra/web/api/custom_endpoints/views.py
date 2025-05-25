@@ -6,6 +6,7 @@ from starlette import status
 
 from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpoint, CustomEndpointDAO
+from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.custom_endpoints.schema import CustomEndpointModelResponse
 from orchestra.web.api.utils.http_responses import not_found
 
@@ -72,8 +73,7 @@ def create_custom_endpoint(
         ),
         example="llama-3.1-8b-finetuned",
     ),
-    custom_endpoint_dao: CustomEndpointDAO = Depends(),
-    custom_api_key_dao: CustomApiKeyDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> Dict[str, str]:
     """
     Creates a custom endpoint. This endpoint must either be a fine-tuned model from one
@@ -85,6 +85,8 @@ def create_custom_endpoint(
     the `provider` argument.
 
     """
+    custom_endpoint_dao = CustomEndpointDAO(session)
+    custom_api_key_dao = CustomApiKeyDAO(session)
     user_id = request_fastapi.state.user_id
     if "@" not in name:
         raise HTTPException(
@@ -141,14 +143,14 @@ def delete_custom_endpoint(
         description="Name of the custom endpoint to delete.",
         example="endpoint1",
     ),
-    custom_endpoint_dao: CustomEndpointDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> Dict[str, str]:
     """
     Deletes a custom endpoint from your account.
 
     """
     user_id = request_fastapi.state.user_id
-
+    custom_endpoint_dao = CustomEndpointDAO(session)
     existing_endpoint = custom_endpoint_dao.filter(user_id=user_id, name=name)
     if not existing_endpoint:
         raise not_found("Custom endpoint")
@@ -191,14 +193,14 @@ def rename_custom_endpoint(
         description="New name for the custom endpoint.",
         example="name2",
     ),
-    custom_endpoint_dao: CustomEndpointDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> Dict[str, str]:
     """
     Renames a custom endpoint in your account.
 
     """
     user_id = request_fastapi.state.user_id
-
+    custom_endpoint_dao = CustomEndpointDAO(session)
     existing_endpoint = custom_endpoint_dao.filter(user_id=user_id, name=name)
     if not existing_endpoint:
         raise not_found("Custom endpoint")
@@ -240,10 +242,11 @@ def rename_custom_endpoint(
 )
 def list_custom_endpoints(
     request_fastapi: Request,
-    custom_endpoint_dao: CustomEndpointDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> List[CustomEndpoint]:
     """
     Returns a list of the available custom endpoints.
     """
+    custom_endpoint_dao = CustomEndpointDAO(session)
     user_id = request_fastapi.state.user_id
     return custom_endpoint_dao.get_user_endpoints(user_id=user_id)

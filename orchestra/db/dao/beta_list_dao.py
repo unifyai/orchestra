@@ -1,14 +1,12 @@
-from fastapi import Depends
 from sqlalchemy.orm import Session
 
-from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import BetaList
 
 
 class BetaListDAO:
     """Class for accessing beta list table."""
 
-    def __init__(self, session: Session = Depends(get_db_session)):
+    def __init__(self, session: Session):
         self.session = session
 
     def create_beta_list(self, email: str, type: str) -> None:

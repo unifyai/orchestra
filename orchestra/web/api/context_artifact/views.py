@@ -9,7 +9,9 @@ from fastapi import APIRouter, Depends, Path, Request
 from orchestra.db.dao.artifact_dao import ArtifactDAO
 from orchestra.db.dao.context_artifact_dao import ContextArtifactDAO
 from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.context_artifact.schema import ContextArtifactCreateRequest
 from orchestra.web.api.utils.http_responses import not_found
 
@@ -55,13 +57,16 @@ def create_context_artifacts(
         description="Name of the context to create artifacts in.",
         example="experiment1/trial1",
     ),
-    project_dao: ProjectDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
-    context_artifact_dao: ContextArtifactDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Creates one or more artifacts associated to a context within a project.
     """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    context_dao = ContextDAO(session)
+    context_artifact_dao = ContextArtifactDAO(session)
+
     try:
         user_id = request_fastapi.state.user_id
         project_id = project_dao.filter(user_id=user_id, name=project)[0][0].id
@@ -114,13 +119,16 @@ def delete_context_artifact(
         description="Key of the artifact to delete.",
         example="context-description",
     ),
-    project_dao: ProjectDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
-    artifact_dao: ArtifactDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Deletes an artifact from a context within a project.
     """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    context_dao = ContextDAO(session)
+    artifact_dao = ArtifactDAO(session)
+
     try:
         user_id = request_fastapi.state.user_id
         project_id = project_dao.filter(user_id=user_id, name=project)[0][0].id
@@ -173,13 +181,16 @@ def list_context_artifacts(
         description="Name of the context to list artifacts from.",
         example="training",
     ),
-    project_dao: ProjectDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
-    context_artifact_dao: ContextArtifactDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Returns the key-value pairs of all artifacts in a context.
     """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    context_dao = ContextDAO(session)
+    context_artifact_dao = ContextArtifactDAO(session)
+
     try:
         user_id = request_fastapi.state.user_id
         project_id = project_dao.filter(user_id=user_id, name=project)[0][0].id
