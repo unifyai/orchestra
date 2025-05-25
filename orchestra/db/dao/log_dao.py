@@ -614,6 +614,7 @@ class LogDAO:
     def bulk_create(
         self,
         entries: List[Dict[str, Any]],
+        context_obj: Context | None = None,
     ) -> List[int]:
         """
         Create multiple Log entries in a single database transaction.
@@ -627,12 +628,30 @@ class LogDAO:
                 - version: int (optional)
                 - explicit_types: Dict (optional)
                 - context_id: int (optional)
+            context_obj: Optional Context object. When provided, enforces that all entries
+                belong to this single context (one-context-per-batch requirement).
 
         Returns:
             List of created log IDs
+
+        Note:
+            This method flushes then commits the transaction. When context_obj is provided,
+            only updates context_obj.updated_at (version bump happens elsewhere).
         """
         if not entries:
             return []
+
+        # Compute versioning status once using the passed context object
+        is_versioned = bool(context_obj and context_obj.is_versioned)
+
+        # Enforce one-context-per-batch requirement when context_obj is provided
+        if context_obj:
+            for entry in entries:
+                entry_context_id = entry.get("context_id")
+                if entry_context_id is not None and entry_context_id != context_obj.id:
+                    raise ValueError(
+                        f"Entry context_id {entry_context_id} does not match provided context_obj.id {context_obj.id}",
+                    )
 
         # Start transaction
         history_entries = []
@@ -690,39 +709,35 @@ class LogDAO:
                 if inferred_type == "timestamp" and isinstance(value, str):
                     value = normalize_timestamp(value)
                 # Handle versioned history
-                if context_id is not None:
-                    context = (
-                        self.session.query(Context).filter_by(id=context_id).first()
+                if is_versioned and context_obj is not None:
+                    # Create history entry
+                    history_entries.append(
+                        {
+                            "log_event_id": log_event_id,
+                            "key": key,
+                            "value": value,
+                            "version": context_obj.version,
+                            "inferred_type": inferred_type,
+                            "description": f"Created entry with key {key}",
+                            "archived_at": now,
+                        },
                     )
-                    if context and context.is_versioned:
-                        # Create history entry
-                        history_entries.append(
+
+                    # If JSON, also create JSON history
+                    if isinstance(value, (dict, list)):
+                        json_history_entries.append(
                             {
                                 "log_event_id": log_event_id,
                                 "key": key,
                                 "value": value,
-                                "version": context.version,
-                                "inferred_type": inferred_type,
+                                "version": context_obj.version,
                                 "description": f"Created entry with key {key}",
                                 "archived_at": now,
                             },
                         )
 
-                        # If JSON, also create JSON history
-                        if isinstance(value, (dict, list)):
-                            json_history_entries.append(
-                                {
-                                    "log_event_id": log_event_id,
-                                    "key": key,
-                                    "value": value,
-                                    "version": context.version,
-                                    "description": f"Created entry with key {key}",
-                                    "archived_at": now,
-                                },
-                            )
-
-                        # Mark context for update
-                        contexts_to_update.add(context.id)
+                    # Mark context for update
+                    contexts_to_update.add(context_obj.id)
 
                 # Create JSON log for dict/list values
                 if isinstance(value, (dict, list)):
@@ -835,10 +850,8 @@ class LogDAO:
                 self.session.add(json_log_history)
 
             # Update timestamps on contexts
-            for context_id in contexts_to_update:
-                context = self.session.query(Context).filter_by(id=context_id).first()
-                if context:
-                    context.updated_at = now
+            if context_obj and context_obj.id in contexts_to_update:
+                context_obj.updated_at = now
 
             self.session.commit()
 
