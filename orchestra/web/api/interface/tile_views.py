@@ -1,10 +1,12 @@
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
 
 from orchestra.db.dao.interface_dao import InterfaceDAO
 from orchestra.db.dao.tab_dao import TabDAO
 from orchestra.db.dao.tile_dao import TileDAO
+from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Tab, Tile
 from orchestra.web.api.interface.schema import (
     CreateTileRequest,
@@ -263,10 +265,12 @@ def create_tile(
         False,
         description="Whether to create a checkpoint tile (manual save)",
     ),
-    tab_dao: TabDAO = Depends(),
-    tile_dao: TileDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
     """Create a new tile in a tab."""
+    tab_dao = TabDAO(session)
+    tile_dao = TileDAO(session)
+
     # Get the tab, either directly by ID if provided in the request
     tab = None
     if hasattr(request, "tab_id") and request.tab_id:
@@ -428,9 +432,11 @@ def get_tile(
         False,
         description="Whether to get a checkpoint tile (manual save)",
     ),
-    tab_dao: TabDAO = Depends(),
-    tile_dao: TileDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+    tab_dao = TabDAO(session)
+    tile_dao = TileDAO(session)
+
     """Get a specific tile by ID or by tab_id and name."""
     # Use helper function to get tile
     tile, _ = _get_tile(
@@ -561,9 +567,11 @@ def list_tiles(
         False,
         description="Whether to list checkpoint tiles (manual save)",
     ),
-    tab_dao: TabDAO = Depends(),
-    tile_dao: TileDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+    tab_dao = TabDAO(session)
+    tile_dao = TileDAO(session)
+
     """List all tiles for a tab."""
     # Get tab
     tab = tab_dao.get(tab_id)
@@ -666,9 +674,11 @@ def update_tile(
         False,
         description="Whether this is a checkpoint update (manual save)",
     ),
-    tab_dao: TabDAO = Depends(),
-    tile_dao: TileDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+    tab_dao = TabDAO(session)
+    tile_dao = TileDAO(session)
+
     """Update a tile by ID or by tab_id and name."""
     # Use helper function to get tile
 
@@ -790,10 +800,12 @@ def create_tile_checkpoint(
     ),
     tab_id: Optional[str] = Query(None, description="The tab ID the tile belongs to"),
     name: Optional[str] = Query(None, description="The name of the tile to checkpoint"),
-    interface_dao: InterfaceDAO = Depends(),
-    tab_dao: TabDAO = Depends(),
-    tile_dao: TileDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+    interface_dao = InterfaceDAO(session)
+    tab_dao = TabDAO(session)
+    tile_dao = TileDAO(session)
+
     """Create a manual checkpoint (save) of a tile."""
     # Use helper function to get tile with for_update=True to ensure we're operating on the active tile
     tile, tab = _get_tile(
@@ -938,9 +950,10 @@ def get_tile_checkpoint(
         None,
         description="The name of the tile to get checkpoint for",
     ),
-    tab_dao: TabDAO = Depends(),
-    tile_dao: TileDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+
+    tile_dao = TileDAO(session)
     """Get the checkpoint (manual save) for a tile by ID or by tab_id and name."""
     # First get the active tile to use as a reference
     tile = None
@@ -1024,8 +1037,9 @@ def delete_tile(
     tile_id: Optional[str] = Query(None, description="The ID of the tile to delete"),
     tab_id: Optional[str] = Query(None, description="The tab ID the tile belongs to"),
     name: Optional[str] = Query(None, description="The name of the tile to delete"),
-    tile_dao: TileDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+    tile_dao = TileDAO(session)
     """Delete a tile by ID or by tab_id and name."""
     # Use helper function to get tile with for_update=True to ensure we're deleting the active tile
 
@@ -1129,9 +1143,11 @@ def patch_tile(
         False,
         description="Whether this is a checkpoint update (manual save)",
     ),
-    tab_dao: TabDAO = Depends(),
-    tile_dao: TileDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+    tab_dao = TabDAO(session)
+    tile_dao = TileDAO(session)
+
     """
     Partially update a tile by ID or by tab_id and name.
 
@@ -1244,8 +1260,9 @@ async def patch_specialized_tile(
     tab_id: Optional[str] = None,
     name: Optional[str] = None,
     update_data: Dict[str, Any] = Body(...),
-    tile_dao: TileDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
+    tile_dao = TileDAO(session)
     """
     Generic endpoint to patch any specialized tile type.
 

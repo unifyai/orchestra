@@ -2,7 +2,7 @@ import base64
 from typing import Optional
 
 import httpx
-from fastapi import Depends, HTTPException, status
+from fastapi import HTTPException, status
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.recording_dao import RecordingDAO
@@ -13,9 +13,9 @@ from orchestra.services.bucket_service import BucketService
 class CallRecordingService:
     def __init__(
         self,
-        assistant_dao: AssistantDAO = Depends(AssistantDAO),
-        recording_dao: RecordingDAO = Depends(RecordingDAO),
-        bucket_service: BucketService = Depends(BucketService),
+        assistant_dao: AssistantDAO,
+        recording_dao: RecordingDAO,
+        bucket_service: BucketService,
     ):
         self.assistant_dao = assistant_dao
         self.recording_dao = recording_dao

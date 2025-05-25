@@ -25,6 +25,7 @@ from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.recharge_type_dao import RechargeTypeDAO
 from orchestra.db.dao.task_dao import TaskDAO
 from orchestra.db.dao.users_dao import UsersDAO
+from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (  # noqa: WPS235
     BenchmarkRun,
     CreditCardFingerprint,
@@ -68,7 +69,7 @@ router = APIRouter()
 
 @router.get("/get_all_users", response_model=List[UsersModelResponse])
 def get_all_users_models(
-    users_dao: UsersDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> List[Users]:
     """
     Retrieve all users objects from the database.
@@ -76,13 +77,14 @@ def get_all_users_models(
     :param users_dao: DAO for users models.
     :return: list of users objects from database.
     """
+    users_dao = UsersDAO(session)
     return users_dao.get_all_users()
 
 
 @router.get("/get_user", response_model=List[UsersModelResponse])
 def get_user(
     id: str,  # noqa: WPS125
-    users_dao: UsersDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> List[Users]:
     """
     Retrieve specific users object from the database.
@@ -91,6 +93,7 @@ def get_user(
     :param users_dao: DAO for users models.
     :return: list of users objects from database.
     """
+    users_dao = UsersDAO(session)
     return users_dao.filter(id=id)
 
 
@@ -98,7 +101,7 @@ def get_user(
 def get_recharge_type_models(
     limit: int = 10,
     offset: int = 0,
-    recharge_type_dao: RechargeTypeDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> List[RechargeType]:
     """
     Retrieve all recharge_type objects from the database.
@@ -108,13 +111,14 @@ def get_recharge_type_models(
     :param recharge_type_dao: DAO for recharge_type models.
     :return: list of recharge_type objects from database.
     """
+    recharge_type_dao = RechargeTypeDAO(session)
     return recharge_type_dao.get_all_recharge_types(limit=limit, offset=offset)
 
 
 @router.get("/get_recharge_type", response_model=List[RechargeTypeModelResponse])
 def get_recharge_type(
     type: str,  # noqa: WPS125
-    recharge_type_dao: RechargeTypeDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> List[RechargeType]:
     """
     Retrieve specific recharge_type object from the database.
@@ -123,6 +127,7 @@ def get_recharge_type(
     :param recharge_type_dao: DAO for recharge_type models.
     :return: recharge_type object from database.
     """
+    recharge_type_dao = RechargeTypeDAO(session)
     return recharge_type_dao.filter(type=type)
 
 
@@ -130,7 +135,7 @@ def get_recharge_type(
 def get_recharge_models(
     limit: int = 10,
     offset: int = 0,
-    recharge_dao: RechargeDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> List[Recharge]:
     """
     Retrieve all recharge objects from the database.
@@ -140,6 +145,7 @@ def get_recharge_models(
     :param recharge_dao: DAO for recharge models.
     :return: list of recharge objects from database.
     """
+    recharge_dao = RechargeDAO(session)
     return recharge_dao.get_all_recharges(limit=limit, offset=offset)
 
 
@@ -150,7 +156,7 @@ def get_recharge(  # noqa: WPS211
     user_id: Optional[str] = None,
     quantity: Optional[int] = None,
     type: Optional[str] = None,  # noqa: WPS125
-    recharge_dao: RechargeDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> List[Recharge]:
     """
     Retrieve specific recharge object from the database.
@@ -163,6 +169,7 @@ def get_recharge(  # noqa: WPS211
     :param recharge_dao: DAO for recharge models.
     :return: list of recharge objects from database.
     """
+    recharge_dao = RechargeDAO(session)
     return recharge_dao.filter(
         id=id,
         at=at,
@@ -176,7 +183,7 @@ def get_recharge(  # noqa: WPS211
 def get_benchmark_run_models(
     limit: int = 10,
     offset: int = 0,
-    benchmark_run_dao: BenchmarkRunDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> List[BenchmarkRun]:
     """
     Retrieve all benchmark_run objects from the database.
@@ -186,6 +193,7 @@ def get_benchmark_run_models(
     :param benchmark_run_dao: DAO for benchmark_run models.
     :return: list of benchmark_run objects from database.
     """
+    benchmark_run_dao = BenchmarkRunDAO(session)
     return benchmark_run_dao.get_all_benchmark_runs(limit=limit, offset=offset)
 
 
@@ -197,7 +205,7 @@ def get_benchmark_run(  # noqa: WPS211
     region: Optional[str] = None,
     seq_len: Optional[str] = None,
     measured_at: Optional[datetime] = None,
-    benchmark_run_dao: BenchmarkRunDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> List[BenchmarkRun]:
     """
     Retrieve specific benchmark_run object from the database.
@@ -211,6 +219,7 @@ def get_benchmark_run(  # noqa: WPS211
     :param benchmark_run_dao: DAO for benchmark_run models.
     :return: benchmark_run object from database.
     """
+    benchmark_run_dao = BenchmarkRunDAO(session)
     return benchmark_run_dao.filter(
         id=id,
         endpoint_id=endpoint_id,
@@ -225,7 +234,7 @@ def get_benchmark_run(  # noqa: WPS211
 def get_datapoint_models(
     limit: int = 10,
     offset: int = 0,
-    datapoint_dao: DatapointDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> List[Datapoint]:
     """
     Retrieve all datapoint objects from the database.
@@ -235,6 +244,7 @@ def get_datapoint_models(
     :param datapoint_dao: DAO for datapoint models.
     :return: list of datapoint objects from database.
     """
+    datapoint_dao = DatapointDAO(session)
     return datapoint_dao.get_all_datapoints(limit=limit, offset=offset)
 
 
@@ -245,7 +255,7 @@ def get_datapoint(  # noqa: WPS211
     metric_name: Optional[str] = None,
     value: Optional[float] = None,
     measured_at: Optional[datetime] = None,
-    datapoint_dao: DatapointDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> List[Datapoint]:
     """
     Retrieve specific datapoint object from the database.
@@ -258,6 +268,7 @@ def get_datapoint(  # noqa: WPS211
     :param datapoint_dao: DAO for datapoint models.
     :return: datapoint object from database.
     """
+    datapoint_dao = DatapointDAO(session)
     return datapoint_dao.filter(
         id=id,
         benchmark_run_id=benchmark_run_id,
@@ -271,7 +282,7 @@ def get_datapoint(  # noqa: WPS211
 def get_endpoint_models(
     limit: int = 10,
     offset: int = 0,
-    endpoint_dao: EndpointDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> List[Endpoint]:
     """
     Retrieve all endpoint objects from the database.
@@ -281,6 +292,7 @@ def get_endpoint_models(
     :param endpoint_dao: DAO for endpoint models.
     :return: list of endpoint objects from database.
     """
+    endpoint_dao = EndpointDAO(session)
     return endpoint_dao.get_all_endpoints_raw(limit=limit, offset=offset)
 
 
@@ -290,7 +302,7 @@ def get_endpoint(
     mdl_id: Optional[int] = None,
     provider_id: Optional[int] = None,
     created_at: Optional[datetime] = None,
-    endpoint_dao: EndpointDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> List[Endpoint]:
     """
     Retrieve specific endpoint object from the database.
@@ -302,6 +314,7 @@ def get_endpoint(
     :param endpoint_dao: DAO for endpoint models.
     :return: endpoint object from database.
     """
+    endpoint_dao = EndpointDAO(session)
     return endpoint_dao.filter(
         id=id,
         mdl_id=mdl_id,
@@ -314,7 +327,7 @@ def get_endpoint(
 def get_metric_models(
     limit: int = 10,
     offset: int = 0,
-    metric_dao: MetricDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> List[Metric]:
     """
     Retrieve all metric objects from the database.
@@ -324,6 +337,7 @@ def get_metric_models(
     :param metric_dao: DAO for metric models.
     :return: list of metric objects from database.
     """
+    metric_dao = MetricDAO(session)
     return metric_dao.get_all_metrics(limit=limit, offset=offset)
 
 
@@ -335,7 +349,7 @@ def get_metric(  # noqa: WPS211
     tooltip: str,
     priority: int,
     plottable: bool,
-    metric_dao: MetricDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> List[Metric]:
     """
     Retrieve specific metric object from the database.
@@ -349,6 +363,7 @@ def get_metric(  # noqa: WPS211
     :param metric_dao: DAO for metric models.
     :return: list of metric objects from database.
     """
+    metric_dao = MetricDAO(session)
     return metric_dao.filter(
         name=name,
         units=units,
@@ -363,7 +378,7 @@ def get_metric(  # noqa: WPS211
 def get_modality_models(
     limit: int = 10,
     offset: int = 0,
-    modality_dao: ModalityDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> List[Modality]:
     """
     Retrieve all modality objects from the database.
@@ -373,13 +388,14 @@ def get_modality_models(
     :param modality_dao: DAO for modality models.
     :return: list of modality objects from database.
     """
+    modality_dao = ModalityDAO(session)
     return modality_dao.get_all_modalities(limit=limit, offset=offset)
 
 
 @router.get("/get_modality", response_model=List[ModalityModelResponse])
 def get_modality(
     name: str,
-    modality_dao: ModalityDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> List[Modality]:
     """
     Retrieve specific modality object from the database.
@@ -388,6 +404,7 @@ def get_modality(
     :param modality_dao: DAO for modality models.
     :return: modality object from database.
     """
+    modality_dao = ModalityDAO(session)
     return modality_dao.filter(name=name)
 
 
@@ -395,7 +412,7 @@ def get_modality(
 def get_task_models(
     limit: int = 10,
     offset: int = 0,
-    task_dao: TaskDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> List[Task]:
     """
     Retrieve all task objects from the database.
@@ -405,13 +422,14 @@ def get_task_models(
     :param task_dao: DAO for task models.
     :return: list of task objects from database.
     """
+    task_dao = TaskDAO(session)
     return task_dao.get_all_tasks(limit=limit, offset=offset)
 
 
 @router.get("/get_task", response_model=List[TaskModelResponse])
 def get_task(
     name: str,
-    task_dao: TaskDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> List[Task]:
     """
     Retrieve specific task object from the database.
@@ -420,13 +438,14 @@ def get_task(
     :param task_dao: DAO for task models.
     :return: task object from database.
     """
+    task_dao = TaskDAO(session)
     return task_dao.filter(name=name)
 
 
 @router.put("/create_datapoint")
 def create_datapoint_model(
     new_datapoint_object: DatapointModelRequest,
-    datapoint_dao: DatapointDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> None:
     """
     Creates datapoint model in the database.
@@ -434,6 +453,7 @@ def create_datapoint_model(
     :param new_datapoint_object: new datapoint model item.
     :param datapoint_dao: DAO for datapoint models.
     """
+    datapoint_dao = DatapointDAO(session)
     datapoint_dao.create_datapoint(
         benchmark_run_id=new_datapoint_object.benchmark_run_id,
         measured_at=new_datapoint_object.measured_at,
@@ -446,7 +466,7 @@ def create_datapoint_model(
 @router.put("/create_endpoint")
 def create_endpoint_model(
     new_endpoint_object: EndpointModelRequest,
-    endpoint_dao: EndpointDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> None:
     """
     Creates endpoint model in the database.
@@ -455,6 +475,7 @@ def create_endpoint_model(
     :param endpoint_dao: DAO for endpoint models.
     """
     created_at = datetime.now(timezone.utc)
+    endpoint_dao = EndpointDAO(session)
     endpoint_dao.create_endpoint(
         mdl_id=new_endpoint_object.mdl_id,
         provider_id=new_endpoint_object.provider_id,
@@ -465,7 +486,7 @@ def create_endpoint_model(
 @router.put("/create_metric")
 def create_metric_model(
     new_metric_object: MetricModelRequest,
-    metric_dao: MetricDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> None:
     """
     Creates metric model in the database.
@@ -473,6 +494,7 @@ def create_metric_model(
     :param new_metric_object: new metric model item.
     :param metric_dao: DAO for metric models.
     """
+    metric_dao = MetricDAO(session)
     metric_dao.create_metric(
         name=new_metric_object.name,
         units=new_metric_object.units,
@@ -486,7 +508,7 @@ def create_metric_model(
 @router.put("/create_modality")
 def create_modality_model(
     new_modality_object: ModalityModelRequest,
-    modality_dao: ModalityDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> None:
     """
     Creates modality model in the database.
@@ -494,6 +516,7 @@ def create_modality_model(
     :param new_modality_object: new modality model item.
     :param modality_dao: DAO for modality models.
     """
+    modality_dao = ModalityDAO(session)
     modality_dao.create_modality(
         name=new_modality_object.name,
     )
@@ -502,7 +525,7 @@ def create_modality_model(
 @router.put("/create_model")
 def create_model(
     new_model_object: ModelRequest,
-    model_dao: ModelDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> None:
     """
     Creates model model in the database.
@@ -511,6 +534,7 @@ def create_model(
     :param model_dao: DAO for model models.
     """
     uploaded_at = datetime.now(timezone.utc)
+    model_dao = ModelDAO(session)
     model_dao.create_model(
         mdl_code=new_model_object.mdl_code,
         uploaded_at=uploaded_at,
@@ -526,7 +550,7 @@ def update_model(  # noqa: WPS211
     uploaded_at: Optional[datetime] = None,
     task: Optional[str] = None,
     active: Optional[bool] = None,
-    model_dao: ModelDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> None:
     """
     Update specific model model.
@@ -538,6 +562,7 @@ def update_model(  # noqa: WPS211
     :param active: is model instance active.
     :param model_dao: DAO for model models.
     """
+    model_dao = ModelDAO(session)
     model_dao.update_model(
         id=id,
         mdl_code=mdl_code,
@@ -550,7 +575,7 @@ def update_model(  # noqa: WPS211
 @router.put("/create_provider")
 def create_provider_model(
     new_provider_object: ProviderModelRequest,
-    provider_dao: ProviderDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> None:
     """
     Creates provider model in the database.
@@ -558,6 +583,7 @@ def create_provider_model(
     :param new_provider_object: new provider model item.
     :param provider_dao: DAO for provider models.
     """
+    provider_dao = ProviderDAO(session)
     provider_dao.create_provider(
         name=new_provider_object.name,
         image_url=new_provider_object.image_url,
@@ -568,8 +594,7 @@ def create_provider_model(
 @router.post("/create_recharge")
 def create_recharge_model(
     new_recharge_object: RechargeModelRequest,
-    recharge_dao: RechargeDAO = Depends(),
-    user_dao: UsersDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> None:
     """
     Creates recharge model in the database.
@@ -578,7 +603,8 @@ def create_recharge_model(
     :param recharge_dao: DAO for recharge models.
     :param user_dao: DAO for user models.
     """
-
+    recharge_dao = RechargeDAO(session)
+    user_dao = UsersDAO(session)
     if (
         new_recharge_object.type == "payment"
         and new_recharge_object.transaction_id is None
@@ -606,7 +632,7 @@ def create_recharge_model(
 @router.put("/create_recharge_type")
 def create_recharge_type_model(
     new_recharge_type_object: RechargeTypeModelRequest,
-    recharge_type_dao: RechargeTypeDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> None:
     """
     Creates recharge_type model in the database.
@@ -614,6 +640,7 @@ def create_recharge_type_model(
     :param new_recharge_type_object: new recharge_type model item.
     :param recharge_type_dao: DAO for recharge_type models.
     """
+    recharge_type_dao = RechargeTypeDAO(session)
     recharge_type_dao.create_recharge_type(
         type=new_recharge_type_object.type,
     )
@@ -622,7 +649,7 @@ def create_recharge_type_model(
 @router.put("/create_task")
 def create_task_model(
     new_task_object: TaskModelRequest,
-    task_dao: TaskDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> None:
     """
     Creates task model in the database.
@@ -630,6 +657,7 @@ def create_task_model(
     :param new_task_object: new task model item.
     :param task_dao: DAO for task models.
     """
+    task_dao = TaskDAO(session)
     task_dao.create_task(
         name=new_task_object.name,
         modality=new_task_object.modality,
@@ -640,7 +668,7 @@ def create_task_model(
 def create_beta_list(
     email: str,
     type: str,
-    beta_list_dao: BetaListDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> None:
     """
     Creates beta list model in the database.
@@ -648,6 +676,7 @@ def create_beta_list(
     :param new_beta_list_object: new beta list model item.
     :param beta_list_dao: DAO for beta_list models.
     """
+    beta_list_dao = BetaListDAO(session)
     beta_list_dao.create_beta_list(email=email, type=type)
 
 
@@ -659,7 +688,7 @@ def update_benchmark_run(  # noqa: WPS211
     region: Optional[str] = None,
     seq_len: Optional[str] = None,
     measured_at: Optional[datetime] = None,
-    benchmark_run_dao: BenchmarkRunDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> None:
     """
     Update specific benchmark_run model.
@@ -672,6 +701,7 @@ def update_benchmark_run(  # noqa: WPS211
     :param measured_at: measured_at of benchmark_run instance.
     :param benchmark_run_dao: DAO for benchmark_run models.
     """
+    benchmark_run_dao = BenchmarkRunDAO(session)
     benchmark_run_dao.update_benchmark_run(
         id=id,
         endpoint_id=endpoint_id,
@@ -690,7 +720,7 @@ def update_datapoint(  # noqa: WPS211
     value: Optional[float] = None,
     tooltip: Optional[str] = None,
     measured_at: Optional[datetime] = None,
-    datapoint_dao: DatapointDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> None:
     """
     Update specific datapoint model.
@@ -703,6 +733,7 @@ def update_datapoint(  # noqa: WPS211
     :param measured_at: measured_at of datapoint instance.
     :param datapoint_dao: DAO for datapoint models.
     """
+    datapoint_dao = DatapointDAO(session)
     datapoint_dao.update_datapoint(
         id=id,
         benchmark_run_id=benchmark_run_id,
@@ -717,7 +748,7 @@ def update_datapoint(  # noqa: WPS211
 def update_user_stripe_customer_id(  # noqa: WPS211
     id: str,  # noqa: WPS125
     stripe_customer_id: str,
-    users_dao: UsersDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> None:
     """
     Update the stripe customer id of a user.
@@ -726,6 +757,7 @@ def update_user_stripe_customer_id(  # noqa: WPS211
     :param stripe_customer_id: stripe customer id.
     :param users_dao: DAO for users models.
     """
+    users_dao = UsersDAO(session)
     users_dao.set_stripe_customer_id(user_id=id, stripe_id=stripe_customer_id)
     users_dao.session.commit()
 
@@ -734,7 +766,7 @@ def update_user_stripe_customer_id(  # noqa: WPS211
 def update_user_autorecharge(  # noqa: WPS211
     id: str,  # noqa: WPS125
     enable: bool,
-    users_dao: UsersDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> None:
     """
     Update the autorecharge status of a user.
@@ -743,6 +775,7 @@ def update_user_autorecharge(  # noqa: WPS211
     :param enable: whether to enable or disable autorecharge.
     :param users_dao: DAO for users models.
     """
+    users_dao = UsersDAO(session)
     users_dao.enable_autorecharge(user_id=id, enable=enable)
     users_dao.session.commit()
 
@@ -751,7 +784,7 @@ def update_user_autorecharge(  # noqa: WPS211
 def update_user_autorecharge_threshold(  # noqa: WPS211
     id: str,  # noqa: WPS125
     threshold: float,
-    users_dao: UsersDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> None:
     """
     Update the autorecharge threshold of a user.
@@ -760,6 +793,7 @@ def update_user_autorecharge_threshold(  # noqa: WPS211
     :param threshold: new autorecharge threshold.
     :param users_dao: DAO for users models.
     """
+    users_dao = UsersDAO(session)
     users_dao.set_autorecharge_threshold(user_id=id, threshold=threshold)
     users_dao.session.commit()
 
@@ -768,7 +802,7 @@ def update_user_autorecharge_threshold(  # noqa: WPS211
 def update_user_autorecharge_qty(  # noqa: WPS211
     id: str,  # noqa: WPS125
     qty: float,
-    users_dao: UsersDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> None:
     """
     Update the autorecharge quantity of a user.
@@ -777,6 +811,7 @@ def update_user_autorecharge_qty(  # noqa: WPS211
     :param qty: new autorecharge quantity.
     :param users_dao: DAO for users models.
     """
+    users_dao = UsersDAO(session)
     users_dao.set_autorecharge_qty(user_id=id, qty=qty)
     users_dao.session.commit()
 
@@ -784,8 +819,12 @@ def update_user_autorecharge_qty(  # noqa: WPS211
 @router.put("/create_custom_router")
 def create_custom_router(
     custom_router_object: CustomRouterRequest,
-    custom_router_dao: CustomRouterDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> None:
+    """
+    Creates a custom router in the database.
+    """
+    custom_router_dao = CustomRouterDAO(session)
     custom_router_dao.create_custom_router(
         user_id=custom_router_object.user_id,
         router_name=custom_router_object.router_name,
@@ -797,22 +836,24 @@ def create_custom_router(
 def update_user_prompt_telemetry(
     user_id: str,
     activated: bool,
-    users_dao: UsersDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> None:
     """
     Updates database evaluation model in the database.
     """
+    users_dao = UsersDAO(session)
     users_dao.set_prompt_telemetry(user_id, activated)
 
 
 @router.get("/user_prompt_telemetry")
 def get_user_prompt_telemetry(
     user_id: str,
-    users_dao: UsersDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> bool:
     """
     Returns state of the store prompts attr for a given user.
     """
+    users_dao = UsersDAO(session)
     return users_dao.is_telemetry_activated(user_id)
 
 
@@ -820,11 +861,12 @@ def get_user_prompt_telemetry(
 def create_credit_card_fingerprint(
     user_id: str,
     fingerprint: str,
-    credit_card_fingerprint_dao: CreditCardFingerprintDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> None:
     """
     Creates a credit card fingerprint entry in the database.
     """
+    credit_card_fingerprint_dao = CreditCardFingerprintDAO(session)
     credit_card_fingerprint_dao.create(user_id, fingerprint)
 
 
@@ -832,11 +874,12 @@ def create_credit_card_fingerprint(
 def duplicated_credit_card_fingerprint(
     user_id: str,
     fingerprint: str,
-    credit_card_fingerprint_dao: CreditCardFingerprintDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> bool:
     """
     Creates a credit card fingerprint entry in the database.
     """
+    credit_card_fingerprint_dao = CreditCardFingerprintDAO(session)
     results = credit_card_fingerprint_dao.filter(fingerprint=fingerprint)
     results = [r for r in results if r.user_id != user_id]
     if len(results) > 0:
@@ -850,22 +893,24 @@ def duplicated_credit_card_fingerprint(
 )
 def get_credit_card_fingerprint(
     user_id: str,
-    credit_card_fingerprint_dao: CreditCardFingerprintDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> List[CreditCardFingerprint]:
     """
     Returns the credit card fingerprints entry in the database matching a user id.
     """
+    credit_card_fingerprint_dao = CreditCardFingerprintDAO(session)
     return credit_card_fingerprint_dao.filter(user_id=user_id)
 
 
 @router.post("/run_demo")
 def run_demo(
     demo_object: DemoModelRequest,
-    api_key_dao: ApiKeyDAO = Depends(),
+    session=Depends(get_db_session),
 ) -> None:
     """
     Run a given demo for the user in an isolated process.
     """
+    api_key_dao = ApiKeyDAO(session)
     api_key = api_key_dao.filter(user_id=demo_object.user_id)
     if not api_key:
         raise HTTPException(status_code=401, detail="Unauthorized")
@@ -962,12 +1007,13 @@ def run_demo(
 )
 def write_files(
     request: FileWriteRequest,
-    project_dao: ProjectDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Write/Update files to the Google Cloud Storage bucket.
     The files will be stored at <user-id>/<project>/<path>
     """
+    project_dao = ProjectDAO(session)
     project = project_dao.get_by_user_and_name(
         user_id=request.user_id,
         name=request.project,
@@ -1035,12 +1081,13 @@ def get_files(
     user_id: str,
     project: str,
     staging: bool = False,
-    project_dao: ProjectDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Get all files in a user's project folder in the bucket.
     Returns a flat list of file paths and contents.
     """
+    project_dao = ProjectDAO(session)
     project_obj = project_dao.get_by_user_and_name(
         user_id=user_id,
         name=project,
@@ -1120,11 +1167,12 @@ def get_file_contents(
     project: str,
     path: str,
     staging: bool = False,
-    project_dao: ProjectDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Get the contents of a specific file in the bucket.
     """
+    project_dao = ProjectDAO(session)
     project_obj = project_dao.get_by_user_and_name(
         user_id=user_id,
         name=project,
@@ -1200,12 +1248,13 @@ def delete_file_or_folder(
     project: str,
     path: str,
     staging: bool = False,
-    project_dao: ProjectDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Delete a file or folder from the user's project directory.
     If the path points to a folder, all contents will be deleted recursively.
     """
+    project_dao = ProjectDAO(session)
     project_obj = project_dao.get_by_user_and_name(
         user_id=user_id,
         name=project,

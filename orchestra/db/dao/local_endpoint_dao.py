@@ -1,16 +1,14 @@
-from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
-from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import LocalEndpoint
 
 
 class LocalEndpointDAO:
     """Class for accessing local endpoint table."""
 
-    def __init__(self, session: Session = Depends(get_db_session)):
+    def __init__(self, session: Session):
         self.session = session
 
     def get_or_create_local_endpoint(

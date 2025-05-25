@@ -1,10 +1,12 @@
 from typing import List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
 
 from orchestra.db.dao.interface_dao import InterfaceDAO
 from orchestra.db.dao.tab_dao import TabDAO
 from orchestra.db.dao.tile_dao import TileDAO
+from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Interface, Tab, Tile
 from orchestra.web.api.interface.schema import (
     CreateTabRequest,
@@ -161,11 +163,13 @@ def create_tab(
         False,
         description="Whether to create a checkpoint tab (manual save)",
     ),
-    tab_dao: TabDAO = Depends(),
-    interface_dao: InterfaceDAO = Depends(),
-    tile_dao: TileDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
     """Create a new tab."""
+    tab_dao = TabDAO(session)
+    interface_dao = InterfaceDAO(session)
+    tile_dao = TileDAO(session)
+
     # Get the interface, first by ID if provided in the request
     if not getattr(request, "interface_id", None):
         raise HTTPException(
@@ -280,11 +284,13 @@ def get_tab(
         False,
         description="Whether to get a checkpoint tab (manual save)",
     ),
-    interface_dao: InterfaceDAO = Depends(),
-    tab_dao: TabDAO = Depends(),
-    tile_dao: TileDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
     """Get a specific tab by ID or by interface_id and name."""
+    interface_dao = InterfaceDAO(session)
+    tab_dao = TabDAO(session)
+    tile_dao = TileDAO(session)
+
     # Use helper function to get tab
     tab, _ = _get_tab(
         tab_id=tab_id,
@@ -359,11 +365,13 @@ def list_tabs(
         False,
         description="Whether to list checkpoint tabs (manual save)",
     ),
-    interface_dao: InterfaceDAO = Depends(),
-    tab_dao: TabDAO = Depends(),
-    tile_dao: TileDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
     """List all tabs for an interface."""
+    interface_dao = InterfaceDAO(session)
+    tab_dao = TabDAO(session)
+    tile_dao = TileDAO(session)
+
     # Get interface
     interface = interface_dao.get(interface_id)
     if not interface:
@@ -448,11 +456,13 @@ def update_tab(
         False,
         description="Whether this is a checkpoint update (manual save)",
     ),
-    interface_dao: InterfaceDAO = Depends(),
-    tab_dao: TabDAO = Depends(),
-    tile_dao: TileDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
     """Update a tab by ID or by interface_id and name."""
+    interface_dao = InterfaceDAO(session)
+    tab_dao = TabDAO(session)
+    tile_dao = TileDAO(session)
+
     # Use helper function to get tab
 
     # Convert Pydantic model to dict, excluding unset fields
@@ -545,11 +555,13 @@ def create_tab_checkpoint(
         description="The interface ID the tab belongs to",
     ),
     name: Optional[str] = Query(None, description="The name of the tab to checkpoint"),
-    interface_dao: InterfaceDAO = Depends(),
-    tab_dao: TabDAO = Depends(),
-    tile_dao: TileDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
     """Create a manual checkpoint (save) of a tab and all its tiles."""
+    interface_dao = InterfaceDAO(session)
+    tab_dao = TabDAO(session)
+    tile_dao = TileDAO(session)
+
     # Use helper function to get tab with for_update=True to ensure we're operating on the active tab
     tab, interface = _get_tab(
         tab_id=tab_id,
@@ -668,11 +680,13 @@ def delete_tab(
         description="The interface ID the tab belongs to",
     ),
     name: Optional[str] = Query(None, description="The name of the tab to delete"),
-    interface_dao: InterfaceDAO = Depends(),
-    tab_dao: TabDAO = Depends(),
-    tile_dao: TileDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
     """Delete a tab by ID or by interface_id and name."""
+    interface_dao = InterfaceDAO(session)
+    tab_dao = TabDAO(session)
+    tile_dao = TileDAO(session)
+
     # Use helper function to get tab with for_update=True to ensure we're deleting the active tab
     tab, interface = _get_tab(
         tab_id=tab_id,
@@ -757,10 +771,12 @@ def get_tab_checkpoint(
         None,
         description="The name of the tab to get checkpoint for",
     ),
-    tab_dao: TabDAO = Depends(),
-    tile_dao: TileDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
     """Get the checkpoint (manual save) for a tab by ID or by interface_id and name."""
+    tab_dao = TabDAO(session)
+    tile_dao = TileDAO(session)
+
     # First get the active tab to use as a reference
     tab = None
     if tab_id:
