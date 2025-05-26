@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.recording_dao import RecordingDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
+from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.call_recording_service import CallRecordingService
@@ -20,7 +21,7 @@ from orchestra.web.api.assistant.schema import (
     VoiceCreate,
     VoiceRead,
 )
-
+from orchestra.settings import settings
 
 def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:
     """
@@ -35,13 +36,15 @@ def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:
 router = APIRouter()
 admin_router = APIRouter()
 
+ASSISTANT_CREATION_COST = Decimal("10.0")
+
 
 @router.post(
     "/assistant",
     response_model=InfoResponse[AssistantRead],
     status_code=status.HTTP_200_OK,
     summary="Create a new assistant",
-    description="Creates a new assistant for the authenticated user with the specified configuration.",
+    description="Creates a new assistant for the authenticated user with the specified configuration. This action will deduct credits from the user account.",
     tags=["Assistants"],
     responses={
         200: {
@@ -63,6 +66,14 @@ admin_router = APIRouter()
                             "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                         },
                     },
+                },
+            },
+        },
+        402: {
+            "description": "Insufficient credits",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Insufficient credits to create an assistant."},
                 },
             },
         },
@@ -94,50 +105,93 @@ def create_assistant(
 
     This endpoint allows users to create a personalized assistant with specific
     attributes like name, age, and operational limits. Each assistant is tied
-    to the authenticated user's account.
+    to the authenticated user's account. Creating an assistant incurs a credit cost.
     """
-    dao = AssistantDAO(session)
+    user_id = request.state.user_id
+    users_dao = UsersDAO(session)
+    assistant_dao = AssistantDAO(session)
+    assistant = None
+
+    # Phase 1: Pre-checks and prepare assistant data
     try:
-        assistant = dao.create_assistant(
-            user_id=request.state.user_id,
+        if not settings.is_staging:
+            user = users_dao.get_user_with_id(user_id)
+            if user.credits < ASSISTANT_CREATION_COST:
+                raise HTTPException(
+                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                    detail="Insufficient credits to create an assistant.",
+                )
+
+        parsed_weekly_limit = (
+            Decimal(assistant_in.weekly_limit)
+            if assistant_in.weekly_limit is not None
+            else None
+        )
+
+        assistant = assistant_dao.create_assistant(
+            user_id=user_id,
             first_name=assistant_in.first_name,
             surname=assistant_in.surname,
             age=assistant_in.age,
             region=assistant_in.region,
             profile_photo=assistant_in.profile_photo,
             about=assistant_in.about,
-            weekly_limit=Decimal(assistant_in.weekly_limit),
+            weekly_limit=parsed_weekly_limit,
             max_parallel=assistant_in.max_parallel,
             phone=assistant_in.phone,
             email=assistant_in.email,
             whatsapp_sid=assistant_in.whatsapp_sid,
             voice_id=assistant_in.voice_id,
         )
-
-        return InfoResponse(
-            info=AssistantRead(
-                agent_id=str(assistant.agent_id),
-                first_name=assistant.first_name,
-                surname=assistant.surname,
-                age=assistant.age,
-                region=assistant.region,
-                profile_photo=assistant.profile_photo,
-                about=assistant.about,
-                weekly_limit=float(assistant.weekly_limit),
-                max_parallel=assistant.max_parallel,
-                created_at=assistant.created_at,
-                updated_at=assistant.updated_at,
-                phone=assistant.phone,
-                email=assistant.email,
-                whatsapp_sid=assistant.whatsapp_sid,
-                voice_id=assistant.voice_id,
-            ),
-        )
-    except Exception as e:
+    except HTTPException:
+        raise
+    except Exception as e_prepare:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Error creating assistant: {str(e)}",
+            detail=f"Failed to create assistant: {str(e_prepare)}",
         )
+
+    # Phase 2: Deduct credits. The commit within recharge_credit will persist
+    # both the assistant and the credit change atomically.
+    if not settings.is_staging:
+        try:
+            users_dao.recharge_credit(
+                user_id=user_id,
+                quantity=-float(ASSISTANT_CREATION_COST),
+            )
+        except Exception as e_commit:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Payment processing failed. Assistant creation has been rolled back. Details: {str(e_commit)}",
+            )
+
+    if assistant is None: 
+         # Should ideally not be reached if Phase 1 fails
+         raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create assistant.",
+        )
+
+    # Phase 3: Prepare and return response
+    return InfoResponse(
+        info=AssistantRead(
+            agent_id=str(assistant.agent_id),
+            first_name=assistant.first_name,
+            surname=assistant.surname,
+            age=assistant.age,
+            region=assistant.region,
+            profile_photo=assistant.profile_photo,
+            about=assistant.about,
+            weekly_limit=float(assistant.weekly_limit) if assistant.weekly_limit is not None else None,
+            max_parallel=assistant.max_parallel,
+            created_at=assistant.created_at,
+            updated_at=assistant.updated_at,
+            phone=assistant.phone,
+            email=assistant.email,
+            whatsapp_sid=assistant.whatsapp_sid,
+            voice_id=assistant.voice_id,
+        ),
+    )
 
 
 @router.get(
