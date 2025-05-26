@@ -5,11 +5,12 @@ import tempfile
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.param_functions import Depends
 from google.cloud.storage import Client
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
+from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.beta_list_dao import BetaListDAO
 from orchestra.db.dao.credit_card_fingerprint import CreditCardFingerprintDAO
@@ -63,6 +64,8 @@ from orchestra.web.api.admin.schema import (  # noqa: WPS235
     TaskModelResponse,
     UsersModelResponse,
 )
+from orchestra.web.api.assistant.schema import AssistantRead, InfoResponse
+from orchestra.web.api.assistant.views import normalize_phone_parameter
 
 router = APIRouter()
 
@@ -440,6 +443,64 @@ def get_task(
     """
     task_dao = TaskDAO(session)
     return task_dao.filter(name=name)
+
+
+@router.get(
+    "/assistant",
+    response_model=InfoResponse[List[AssistantRead]],
+    summary="Admin: list all assistants",
+    description="Retrieve every assistant in the system, optionally filtered by phone or email.",
+)
+def admin_list_assistants(
+    phone: Optional[str] = Query(
+        None,
+        description="Only return assistants whose phone number matches this E.164-style value (leading '+' is URL-encoded).",
+    ),
+    email: Optional[str] = Query(
+        None,
+        description="Only return assistants whose email address matches this value.",
+    ),
+    session=Depends(get_db_session),
+) -> InfoResponse[List[AssistantRead]]:
+    """
+    List all assistants in the system with optional filtering by phone or email.
+
+    This admin endpoint returns all assistants across all users, with optional
+    filtering capabilities for phone numbers and email addresses.
+    """
+    # Normalize phone parameter to handle URL-decoded '+' characters
+    phone = normalize_phone_parameter(phone)
+
+    dao = AssistantDAO(session)
+    try:
+        assistants = dao.list_all_assistants(phone=phone, email=email)
+        return InfoResponse(
+            info=[
+                AssistantRead(
+                    agent_id=str(a.agent_id),
+                    first_name=a.first_name,
+                    surname=a.surname,
+                    age=a.age,
+                    region=a.region,
+                    profile_photo=a.profile_photo,
+                    about=a.about,
+                    weekly_limit=float(a.weekly_limit),
+                    max_parallel=a.max_parallel,
+                    created_at=a.created_at,
+                    updated_at=a.updated_at,
+                    phone=a.phone,
+                    email=a.email,
+                    whatsapp_sid=a.whatsapp_sid,
+                    voice_id=a.voice_id,
+                )
+                for a in assistants
+            ],
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Error fetching assistants: {str(e)}",
+        )
 
 
 @router.put("/create_datapoint")
@@ -1028,9 +1089,11 @@ def write_files(
         # Initialize the Google Cloud Storage client
         client = Client()
         bucket = client.bucket(
-            "interface-file-system-staging"
-            if request.staging
-            else "interface-file-system",
+            (
+                "interface-file-system-staging"
+                if request.staging
+                else "interface-file-system"
+            ),
         )
 
         # Construct the full path in the bucket
