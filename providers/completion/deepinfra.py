@@ -61,7 +61,7 @@ supported_models = {
     "llama-3.2-1b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.2-1B-Instruct",
         "context_window": 128000,
-        "cost": {"prompt": 0.01, "completion": 0.01},
+        "cost": {"prompt": 0.005, "completion": 0.01},
     },
     "llama-3.2-3b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.2-3B-Instruct",
@@ -126,22 +126,22 @@ supported_models = {
     "mistral-small": {
         "endpoint": "mistralai/Mistral-Small-24B-Instruct-2501",
         "context_window": 32000,
-        "cost": {"prompt": 0.07, "completion": 0.14},
+        "cost": {"prompt": 0.06, "completion": 0.12},
     },
     "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "deepinfra/mistralai/Mixtral-8x7B-Instruct-v0.1",
         "context_window": 32768,
-        "cost": {"prompt": 0.24, "completion": 0.24},
+        "cost": {"prompt": 0.08, "completion": 0.24},
     },
     "mistral-7b-instruct-v0.3": {
         "endpoint": "deepinfra/mistralai/Mistral-7B-Instruct-v0.3",
         "context_window": 32768,
-        "cost": {"prompt": 0.029, "completion": 0.055},
+        "cost": {"prompt": 0.028, "completion": 0.054},
     },
     "mistral-nemo": {
         "endpoint": "deepinfra/mistralai/Mistral-Nemo-Instruct-2407",
         "context_window": 128000,
-        "cost": {"prompt": 0.035, "completion": 0.08},
+        "cost": {"prompt": 0.025, "completion": 0.07},
     },
     "qwen-3-235b-a22b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen3-235B-A22B",
@@ -151,7 +151,7 @@ supported_models = {
     "qwen-3-30b-a3b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen3-30B-A3B",
         "context_window": 40000,
-        "cost": {"prompt": 0.1, "completion": 0.3},
+        "cost": {"prompt": 0.08, "completion": 0.29},
     },
     "qwen-2.5-coder-32b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen2.5-Coder-32B-Instruct",
@@ -161,7 +161,7 @@ supported_models = {
     "qwen-2.5-7b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen2.5-7B-Instruct",
         "context_window": 32000,
-        "cost": {"prompt": 0.05, "completion": 0.1},
+        "cost": {"prompt": 0.04, "completion": 0.1},
     },
     "qwen-2.5-72b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen2.5-72B-Instruct",

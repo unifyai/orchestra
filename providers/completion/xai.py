@@ -27,10 +27,10 @@ class XAI(BaseCompletionProvider):
 
 
 supported_models = {
-    "grok-3-mini-fast": {
-        "endpoint": "xai/grok-3-mini-fast",
+    "grok-3": {
+        "endpoint": "xai/grok-3",
         "context_window": 131072,
-        "cost": {"prompt": 0.6, "completion": 4},
+        "cost": {"prompt": 3, "completion": 15},
     },
     "grok-3-mini": {
         "endpoint": "xai/grok-3-mini",
@@ -42,10 +42,10 @@ supported_models = {
         "context_window": 131072,
         "cost": {"prompt": 5, "completion": 25},
     },
-    "grok-3": {
-        "endpoint": "xai/grok-3",
+    "grok-3-mini-fast": {
+        "endpoint": "xai/grok-3-mini-fast",
         "context_window": 131072,
-        "cost": {"prompt": 3, "completion": 15},
+        "cost": {"prompt": 0.6, "completion": 4},
     },
     "grok-2-vision": {
         "endpoint": "xai/grok-2-vision-latest",
