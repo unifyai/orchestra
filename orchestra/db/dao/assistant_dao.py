@@ -130,6 +130,22 @@ class AssistantDAO:
         self.session.add(assistant)
         return assistant
 
+    def list_all_assistants(
+        self,
+        phone: Optional[str] = None,
+        email: Optional[str] = None,
+    ) -> List[Assistant]:
+        """
+        List all Assistants across all users with optional filtering.
+        """
+        stmt = select(Assistant)
+        if phone is not None:
+            stmt = stmt.where(Assistant.phone == phone)
+        if email is not None:
+            stmt = stmt.where(Assistant.email == email)
+        result = self.session.execute(stmt).scalars().all()
+        return result
+
     def list_all_assistant_emails(self) -> List[str]:
         """
         List all non-null email addresses from all Assistants.

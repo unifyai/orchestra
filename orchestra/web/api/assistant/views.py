@@ -250,8 +250,14 @@ def create_assistant(
 def list_assistants(
     request: Request,
     session: Session = Depends(get_db_session),
-    phone: Optional[str] = Query(None),
-    email: Optional[str] = Query(None),
+    phone: Optional[str] = Query(
+        None,
+        description="Only return assistants whose phone number matches this E.164-style value (leading '+' is URL-encoded).",
+    ),
+    email: Optional[str] = Query(
+        None,
+        description="Only return assistants whose email address matches this value.",
+    ),
 ) -> InfoResponse[List[AssistantRead]]:
     """
     List all assistants for the authenticated user.
