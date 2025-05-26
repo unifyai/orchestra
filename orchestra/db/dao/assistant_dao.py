@@ -29,6 +29,7 @@ class AssistantDAO:
         max_parallel: int,
         phone: Optional[str] = None,
         email: Optional[str] = None,
+        whatsapp_sid: Optional[str] = None,
         voice_id: Optional[str] = None,
     ) -> Assistant:
         """
@@ -46,6 +47,7 @@ class AssistantDAO:
             max_parallel=max_parallel,
             phone=phone,
             email=email,
+            whatsapp_sid=whatsapp_sid,
             voice_id=voice_id,
         )
         self.session.add(assistant)
@@ -63,11 +65,20 @@ class AssistantDAO:
         result = self.session.execute(stmt).scalar_one_or_none()
         return result
 
-    def list_assistants_for_user(self, user_id: str) -> List[Assistant]:
+    def list_assistants_for_user(
+        self,
+        user_id: str,
+        phone: Optional[str] = None,
+        email: Optional[str] = None,
+    ) -> List[Assistant]:
         """
         List all Assistants belonging to a specific user.
         """
         stmt = select(Assistant).where(Assistant.user_id == user_id)
+        if phone is not None:
+            stmt = stmt.where(Assistant.phone == phone)
+        if email is not None:
+            stmt = stmt.where(Assistant.email == email)
         result = self.session.execute(stmt).scalars().all()
         return result
 
@@ -93,6 +104,7 @@ class AssistantDAO:
         about: Optional[str] = None,
         phone: Optional[str] = None,
         email: Optional[str] = None,
+        whatsapp_sid: Optional[str] = None,
         voice_id: Optional[str] = None,
     ) -> Optional[Assistant]:
         """
@@ -111,6 +123,8 @@ class AssistantDAO:
             assistant.phone = phone
         if email is not None:
             assistant.email = email
+        if whatsapp_sid is not None:
+            assistant.whatsapp_sid = whatsapp_sid
         if voice_id is not None:
             assistant.voice_id = voice_id
         self.session.add(assistant)
