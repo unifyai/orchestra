@@ -68,19 +68,44 @@ supported_models = {
         "context_window": 64000,
         "cost": {"prompt": 3.75, "completion": 10},
     },
-    "claude-3.5-sonnet": {
-        "endpoint": "replicate/anthropic/claude-3.5-sonnet",
+    "o4-mini": {
+        "endpoint": "replicate/openai/o4-mini",
         "context_window": 200000,
-        "cost": {"prompt": 3.75, "completion": 18.75},
+        "cost": {"prompt": 1, "completion": 4},
+    },
+    "gpt-4.1": {
+        "endpoint": "replicate/openai/gpt-4.1",
+        "context_window": 1047576,
+        "cost": {"prompt": 2, "completion": 8},
+    },
+    "gpt-4.1-mini": {
+        "endpoint": "replicate/openai/gpt-4.1-mini",
+        "context_window": 1047576,
+        "cost": {"prompt": 0.4, "completion": 1.6},
+    },
+    "gpt-4.1-nano": {
+        "endpoint": "replicate/openai/gpt-4.1-nano",
+        "context_window": 1047576,
+        "cost": {"prompt": 0.1, "completion": 0.4},
+    },
+    "claude-4-sonnet": {
+        "endpoint": "replicate/anthropic/claude-4-sonnet",
+        "context_window": 200000,
+        "cost": {"prompt": 3, "completion": 15},
+    },
+    "claude-3.7-sonnet": {
+        "endpoint": "replicate/anthropic/claude-3.7-sonnet",
+        "context_window": 200000,
+        "cost": {"prompt": 3, "completion": 15},
     },
     "claude-3.5-haiku": {
         "endpoint": "replicate/anthropic/claude-3.5-haiku",
         "context_window": 200000,
         "cost": {"prompt": 1, "completion": 5},
     },
-    "claude-3.7-sonnet": {
-        "endpoint": "replicate/anthropic/claude-3.7-sonnet",
+    "claude-3.5-sonnet": {
+        "endpoint": "replicate/anthropic/claude-3.5-sonnet",
         "context_window": 200000,
-        "cost": {"prompt": 3, "completion": 15},
+        "cost": {"prompt": 3.75, "completion": 18.75},
     },
 }
