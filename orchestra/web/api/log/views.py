@@ -4041,42 +4041,44 @@ async def process_traffic_logs(
             request={"subscription": subscription_path, "max_messages": pull_limit},
         )
 
-        processed_count = 0
-        ack_ids = []
+        entries: List[Dict[str, Any]] = []
+        ack_ids: List[str] = []
 
-        # Process the received messages
         for received_message in response.received_messages:
-            message = received_message.message
             ack_ids.append(received_message.ack_id)
 
-            # Decode the message data
-            message_data = message.data.decode("utf-8")
-            entry = json.loads(message_data)
+            try:
+                data = json.loads(received_message.message.data.decode("utf-8"))
+            except json.JSONDecodeError:
+                # Malformed payload – acknowledge and skip so it doesn’t poison the queue
+                continue
 
-            # Extract fields from the entry
-            entry.pop("project_id", None)
-            entry.pop("context_id", None)
-            entry.pop("project_name", None)
+            for key in ("project_id", "context_id", "project_name"):
+                data.pop(key, None)
 
-            # Create log entry
-            event_ids = create_logs_internal(
-                project_id=project_id,
-                context_id=context_id,
-                request=CreateLogConfig(
-                    entries=entry,
-                    project=PROJ_NAME,
-                    context=None,
-                ),
-                project_dao=project_dao,
-                field_type_dao=field_type_dao,
-                log_event_dao=log_event_dao,
-                log_dao=log_dao,
-                context_dao=context_dao,
-                context_obj=context_obj,
-            )
+            entries.append(data)
 
-            processed_count += 1
+        if not entries:
+            return {"message": "No new traffic-log messages", "status": "success"}
 
+        # batch ingestion
+        create_logs_internal(
+            project_id=project_id,
+            context_id=context_id,
+            request=CreateLogConfig(
+                entries=entries,
+                project=PROJ_NAME,
+                context=None,
+            ),
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            log_event_dao=log_event_dao,
+            log_dao=log_dao,
+            context_dao=context_dao,
+            context_obj=context_obj,
+        )
+
+        processed_count = len(entries)
         # Acknowledge the processed messages
         if ack_ids:
             subscriber.acknowledge(
