@@ -1032,6 +1032,7 @@ class Assistant(Base):
     max_parallel = Column(Integer, nullable=True)
     phone = Column(String, nullable=True)
     email = Column(String, nullable=True)
+    whatsapp_sid = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
     recordings = relationship(
