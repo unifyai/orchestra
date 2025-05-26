@@ -6,11 +6,12 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.recording_dao import RecordingDAO
-from orchestra.db.dao.voice_dao import VoiceDAO
 from orchestra.db.dao.users_dao import UsersDAO
+from orchestra.db.dao.voice_dao import VoiceDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.call_recording_service import CallRecordingService
+from orchestra.settings import settings
 from orchestra.web.api.assistant.schema import (
     AssistantCreate,
     AssistantRead,
@@ -21,7 +22,7 @@ from orchestra.web.api.assistant.schema import (
     VoiceCreate,
     VoiceRead,
 )
-from orchestra.settings import settings
+
 
 def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:
     """
@@ -73,7 +74,9 @@ ASSISTANT_CREATION_COST = Decimal("10.0")
             "description": "Insufficient credits",
             "content": {
                 "application/json": {
-                    "example": {"detail": "Insufficient credits to create an assistant."},
+                    "example": {
+                        "detail": "Insufficient credits to create an assistant.",
+                    },
                 },
             },
         },
@@ -165,9 +168,9 @@ def create_assistant(
                 detail=f"Payment processing failed. Assistant creation has been rolled back. Details: {str(e_commit)}",
             )
 
-    if assistant is None: 
-         # Should ideally not be reached if Phase 1 fails
-         raise HTTPException(
+    if assistant is None:
+        # Should ideally not be reached if Phase 1 fails
+        raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to create assistant.",
         )
@@ -182,7 +185,11 @@ def create_assistant(
             region=assistant.region,
             profile_photo=assistant.profile_photo,
             about=assistant.about,
-            weekly_limit=float(assistant.weekly_limit) if assistant.weekly_limit is not None else None,
+            weekly_limit=(
+                float(assistant.weekly_limit)
+                if assistant.weekly_limit is not None
+                else None
+            ),
             max_parallel=assistant.max_parallel,
             created_at=assistant.created_at,
             updated_at=assistant.updated_at,
