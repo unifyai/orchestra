@@ -1,5 +1,5 @@
 -- Users
-INSERT INTO users VALUES (:user_id, 10, null, False, -1, 0);
+INSERT INTO users VALUES (:user_id, 10000, null, False, -1, 0);
 INSERT INTO users VALUES ('stripe_autorecharge', 10, null, False, -1, 0);
 INSERT INTO users VALUES ('user1', 1, null, False, -1, 0);
 INSERT INTO users VALUES ('user2', 9.99, null, False, -1, 0);
