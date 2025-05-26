@@ -563,7 +563,7 @@ def create_from_logs(
 
             # 5) Perform bulk update
             if updates:
-                log_dao.bulk_update(updates)
+                log_dao.bulk_update(updates, overwrite=True, field_types=field_types)
 
                 # 6) Create or update field type record
                 field_type_dao.create_field_type_if_absent(
@@ -1457,7 +1457,11 @@ def update_logs(
     # First, handle flat updates
     if all_updates:
         try:
-            log_dao.bulk_update(all_updates, field_types=field_types)
+            log_dao.bulk_update(
+                all_updates,
+                field_types=field_types,
+                overwrite=body.overwrite,
+            )
 
             # Check for duplicates if context doesn't allow duplicates
             if "ctx_ids" in locals() and ctx_ids:
