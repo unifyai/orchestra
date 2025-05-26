@@ -14,8 +14,8 @@ def _get_sample_wav_bytes() -> bytes:
 
 
 @pytest.mark.anyio
-async def test_create_assistant_success(client: AsyncClient, mocker):
-    mocker.patch.object(settings, "is_staging", True)
+async def test_create_assistant_success(client: AsyncClient, monkeypatch):
+    monkeypatch.setattr(settings, "is_staging", True)
     # `POST /v0/assistant` with full payload -> 200 OK and returns created assistant
     payload = {
         "first_name": "Alice",
@@ -49,8 +49,8 @@ async def test_create_assistant_success(client: AsyncClient, mocker):
 
 
 @pytest.mark.anyio
-async def test_create_assistant_missing_field(client: AsyncClient, mocker):
-    mocker.patch.object(settings, "is_staging", True)
+async def test_create_assistant_missing_field(client: AsyncClient, monkeypatch):
+    monkeypatch.setattr(settings, "is_staging", True)
     # `POST /v0/assistant` missing surname -> 422 Unprocessable Entity
     payload = {
         "first_name": "Bob",
@@ -72,8 +72,8 @@ async def test_list_assistants_empty(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_list_assistants_after_create(client: AsyncClient, mocker):
-    mocker.patch.object(settings, "is_staging", True)
+async def test_list_assistants_after_create(client: AsyncClient, monkeypatch):
+    monkeypatch.setattr(settings, "is_staging", True)
     # Create two assistants then `GET /v0/assistant` -> list of two
     payload1 = {
         "first_name": "Carol",
@@ -121,8 +121,8 @@ async def test_list_assistants_after_create(client: AsyncClient, mocker):
 
 
 @pytest.mark.anyio
-async def test_update_weekly_limit_only(client: AsyncClient, mocker):
-    mocker.patch.object(settings, "is_staging", True)
+async def test_update_weekly_limit_only(client: AsyncClient, monkeypatch):
+    monkeypatch.setattr(settings, "is_staging", True)
     # Create assistant, then `PATCH /v0/assistant/{id}/config` weekly_limit only -> updated
     payload = {
         "first_name": "Eve",
@@ -156,8 +156,8 @@ async def test_update_weekly_limit_only(client: AsyncClient, mocker):
 
 
 @pytest.mark.anyio
-async def test_update_max_parallel_only(client: AsyncClient, mocker):
-    mocker.patch.object(settings, "is_staging", True)
+async def test_update_max_parallel_only(client: AsyncClient, monkeypatch):
+    monkeypatch.setattr(settings, "is_staging", True)
     # Create assistant, then `PATCH /v0/assistant/{id}/config` max_parallel only -> updated
     payload = {
         "first_name": "Frank",
@@ -201,8 +201,8 @@ async def test_update_not_found(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_delete_assistant_success(client: AsyncClient, mocker):
-    mocker.patch.object(settings, "is_staging", True)
+async def test_delete_assistant_success(client: AsyncClient, monkeypatch):
+    monkeypatch.setattr(settings, "is_staging", True)
     # Create assistant, then `DELETE /v0/assistant/{id}` -> 200 OK and removed
     payload = {
         "first_name": "Grace",
@@ -231,8 +231,8 @@ async def test_delete_assistant_not_found(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_update_about_only(client: AsyncClient, mocker):
-    mocker.patch.object(settings, "is_staging", True)
+async def test_update_about_only(client: AsyncClient, monkeypatch):
+    monkeypatch.setattr(settings, "is_staging", True)
     # Create assistant, then `PATCH /v0/assistant/{id}/config` about only -> updated
     payload = {
         "first_name": "Hannah",
@@ -263,8 +263,8 @@ async def test_update_about_only(client: AsyncClient, mocker):
 
 
 @pytest.mark.anyio
-async def test_update_phone_only(client: AsyncClient, mocker):
-    mocker.patch.object(settings, "is_staging", True)
+async def test_update_phone_only(client: AsyncClient, monkeypatch):
+    monkeypatch.setattr(settings, "is_staging", True)
     # Create assistant, then `PATCH /v0/assistant/{id}/config` phone only -> updated
     payload = {
         "first_name": "Ian",
@@ -294,8 +294,8 @@ async def test_update_phone_only(client: AsyncClient, mocker):
 
 
 @pytest.mark.anyio
-async def test_update_email_only(client: AsyncClient, mocker):
-    mocker.patch.object(settings, "is_staging", True)
+async def test_update_email_only(client: AsyncClient, monkeypatch):
+    monkeypatch.setattr(settings, "is_staging", True)
     # Create assistant, then `PATCH /v0/assistant/{id}/config` email only -> updated
     payload = {
         "first_name": "Julia",
@@ -325,8 +325,8 @@ async def test_update_email_only(client: AsyncClient, mocker):
 
 
 @pytest.mark.anyio
-async def test_update_multiple_fields(client: AsyncClient, mocker):
-    mocker.patch.object(settings, "is_staging", True)
+async def test_update_multiple_fields(client: AsyncClient, monkeypatch):
+    monkeypatch.setattr(settings, "is_staging", True)
     # Create assistant, then `PATCH /v0/assistant/{id}/config` with multiple fields -> all updated
     payload = {
         "first_name": "Kevin",
@@ -360,8 +360,8 @@ async def test_update_multiple_fields(client: AsyncClient, mocker):
 
 
 @pytest.mark.anyio
-async def test_assistant_recordings_audio_lifecycle(client: AsyncClient, mocker):
-    mocker.patch.object(settings, "is_staging", True)
+async def test_assistant_recordings_audio_lifecycle(client: AsyncClient, monkeypatch):
+    monkeypatch.setattr(settings, "is_staging", True)
     # Create a new assistant
     payload = {
         "first_name": "Kevin",
@@ -424,8 +424,8 @@ async def test_assistant_recordings_audio_lifecycle(client: AsyncClient, mocker)
 
 
 @pytest.mark.anyio
-async def test_admin_list_assistant_emails(client: AsyncClient, mocker):
-    mocker.patch.object(settings, "is_staging", True)
+async def test_admin_list_assistant_emails(client: AsyncClient, monkeypatch):
+    monkeypatch.setattr(settings, "is_staging", True)
     # Create two assistants
     payload1 = {
         "first_name": "Laura",
@@ -483,8 +483,8 @@ async def test_admin_list_assistant_emails(client: AsyncClient, mocker):
 
 
 @pytest.mark.anyio
-async def test_create_assistant_with_whatsapp_sid(client: AsyncClient, mocker):
-    mocker.patch.object(settings, "is_staging", True)
+async def test_create_assistant_with_whatsapp_sid(client: AsyncClient, monkeypatch):
+    monkeypatch.setattr(settings, "is_staging", True)
     # Create assistant with whatsapp_sid -> verify it appears in create and list responses
     payload = {
         "first_name": "Nina",
@@ -516,8 +516,8 @@ async def test_create_assistant_with_whatsapp_sid(client: AsyncClient, mocker):
 
 
 @pytest.mark.anyio
-async def test_update_whatsapp_sid_only(client: AsyncClient, mocker):
-    mocker.patch.object(settings, "is_staging", True)
+async def test_update_whatsapp_sid_only(client: AsyncClient, monkeypatch):
+    monkeypatch.setattr(settings, "is_staging", True)
     # Create assistant, then PATCH whatsapp_sid only -> updated
     payload = {
         "first_name": "Oscar",
@@ -548,8 +548,8 @@ async def test_update_whatsapp_sid_only(client: AsyncClient, mocker):
 
 
 @pytest.mark.anyio
-async def test_search_assistants_by_phone(client: AsyncClient, mocker):
-    mocker.patch.object(settings, "is_staging", True)
+async def test_search_assistants_by_phone(client: AsyncClient, monkeypatch):
+    monkeypatch.setattr(settings, "is_staging", True)
     # Create two assistants with distinct phone values, search by phone
     payload1 = {
         "first_name": "Paul",
@@ -593,8 +593,8 @@ async def test_search_assistants_by_phone(client: AsyncClient, mocker):
 
 
 @pytest.mark.anyio
-async def test_search_assistants_by_email(client: AsyncClient, mocker):
-    mocker.patch.object(settings, "is_staging", True)
+async def test_search_assistants_by_email(client: AsyncClient, monkeypatch):
+    monkeypatch.setattr(settings, "is_staging", True)
     # Create two assistants with distinct email values, search by email
     payload1 = {
         "first_name": "Rachel",
@@ -638,8 +638,8 @@ async def test_search_assistants_by_email(client: AsyncClient, mocker):
 
 
 @pytest.mark.anyio
-async def test_admin_list_assistants_filter_phone(client: AsyncClient, mocker):
-    mocker.patch.object(settings, "is_staging", True)
+async def test_admin_list_assistants_filter_phone(client: AsyncClient, monkeypatch):
+    monkeypatch.setattr(settings, "is_staging", True)
     # Create assistants with different phone values, filter by phone
     payload1 = {
         "first_name": "Phone",
@@ -686,8 +686,8 @@ async def test_admin_list_assistants_filter_phone(client: AsyncClient, mocker):
 
 
 @pytest.mark.anyio
-async def test_admin_list_assistants_filter_email(client: AsyncClient, mocker):
-    mocker.patch.object(settings, "is_staging", True)
+async def test_admin_list_assistants_filter_email(client: AsyncClient, monkeypatch):
+    monkeypatch.setattr(settings, "is_staging", True)
     # Create assistants with different email values, filter by email
     payload1 = {
         "first_name": "Email",
