@@ -45,12 +45,12 @@ supported_models = {
     },
     "llama-4-maverick-instruct": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/llama4-maverick-instruct-basic",
-        "context_window": 1000000,
+        "context_window": 1024000,
         "cost": {"prompt": 0.22, "completion": 0.88},
     },
     "llama-4-scout-instruct": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/llama4-scout-instruct-basic",
-        "context_window": 128000,
+        "context_window": 1024000,
         "cost": {"prompt": 0.15, "completion": 0.6},
     },
     "llama-3.3-70b-chat": {

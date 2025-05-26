@@ -28,6 +28,11 @@ class Mistral(BaseCompletionProvider):
 
 
 supported_models = {
+    "mistral-medium": {
+        "endpoint": "mistral/mistral-medium-latest",
+        "context_window": 128000,
+        "cost": {"prompt": 0.4, "completion": 2},
+    },
     "mistral-small": {
         "endpoint": "mistral/mistral-small-latest",
         "context_window": 128000,
