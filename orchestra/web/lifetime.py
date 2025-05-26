@@ -45,8 +45,9 @@ def _setup_db(app: FastAPI) -> None:  # pragma: no cover
         engine = create_engine(
             str(settings.db_url),
             echo=settings.db_echo,
-            pool_size=700,
+            pool_size=50,
             max_overflow=100,  # noqa: WPS432, E501
+            pool_pre_ping=True,
         )
     else:
         # Use Cloud SQL connector for GCP deployment
