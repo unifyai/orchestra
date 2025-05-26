@@ -1,7 +1,7 @@
 from decimal import Decimal
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
@@ -20,6 +20,17 @@ from orchestra.web.api.assistant.schema import (
     VoiceCreate,
     VoiceRead,
 )
+
+
+def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:
+    """
+    Normalize phone parameter that may have been URL-decoded.
+    FastAPI URL-decodes '+' to space, so convert leading space back to '+'.
+    """
+    if raw_phone and raw_phone.startswith(" "):
+        return "+" + raw_phone[1:]
+    return raw_phone
+
 
 router = APIRouter()
 admin_router = APIRouter()
@@ -99,6 +110,7 @@ def create_assistant(
             max_parallel=assistant_in.max_parallel,
             phone=assistant_in.phone,
             email=assistant_in.email,
+            whatsapp_sid=assistant_in.whatsapp_sid,
             voice_id=assistant_in.voice_id,
         )
 
@@ -117,6 +129,7 @@ def create_assistant(
                 updated_at=assistant.updated_at,
                 phone=assistant.phone,
                 email=assistant.email,
+                whatsapp_sid=assistant.whatsapp_sid,
                 voice_id=assistant.voice_id,
             ),
         )
@@ -183,6 +196,8 @@ def create_assistant(
 def list_assistants(
     request: Request,
     session: Session = Depends(get_db_session),
+    phone: Optional[str] = Query(None),
+    email: Optional[str] = Query(None),
 ) -> InfoResponse[List[AssistantRead]]:
     """
     List all assistants for the authenticated user.
@@ -190,9 +205,16 @@ def list_assistants(
     Retrieves all assistants created by the current user, including their
     configuration details and operational limits.
     """
+    # Correct for URL-decoded '+' in query parameters.
+    phone = normalize_phone_parameter(phone)
+
     dao = AssistantDAO(session)
     try:
-        assistants = dao.list_assistants_for_user(request.state.user_id)
+        assistants = dao.list_assistants_for_user(
+            request.state.user_id,
+            phone=phone,
+            email=email,
+        )
         return InfoResponse(
             info=[
                 AssistantRead(
@@ -209,6 +231,7 @@ def list_assistants(
                     updated_at=a.updated_at,
                     phone=a.phone,
                     email=a.email,
+                    whatsapp_sid=a.whatsapp_sid,
                     voice_id=a.voice_id,
                 )
                 for a in assistants
@@ -347,6 +370,7 @@ def update_assistant_config(
             about=update.about,
             phone=update.phone,
             email=update.email,
+            whatsapp_sid=update.whatsapp_sid,
             weekly_limit=weekly_limit,
             max_parallel=update.max_parallel,
             voice_id=update.voice_id,
@@ -371,6 +395,7 @@ def update_assistant_config(
                 updated_at=updated.updated_at,
                 phone=updated.phone,
                 email=updated.email,
+                whatsapp_sid=updated.whatsapp_sid,
                 voice_id=updated.voice_id,
             ),
         )
