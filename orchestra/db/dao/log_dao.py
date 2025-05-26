@@ -654,6 +654,10 @@ class LogDAO:
         # Start transaction
         history_entries: list[dict] = []
         json_history_entries: list[dict] = []
+        rows_json: list[dict] = []
+        rows_log_versioned: list[dict] = []
+        rows_log_versioned_pk2val: dict[tuple[int, str, int], Any] = {}
+        rows_json_pk2val: dict[tuple[int, str], Any] = {}
         contexts_to_update: set[int] = set()
         pending_log_rows: list[dict] = []
 
@@ -738,78 +742,45 @@ class LogDAO:
                     # Mark context for update
                     contexts_to_update.add(context_obj.id)
 
-                # Create JSON log for dict/list values
+                # Collect JSON-typed entries so we can insert them in one statement after the loop
                 if isinstance(value, (dict, list)):
-                    # Use upsert operation for JSON logs
-                    rowcount = self._upsert_json_log(
-                        log_event_id=log_event_id,
-                        key=key,
-                        value=value,
-                        overwrite=False,  # Always use overwrite=False for bulk_create
-                    )
-
-                    # If no row was affected, check if there's a conflict
-                    if rowcount == 0:
-                        # Re-SELECT the row with FOR UPDATE to lock it
-                        existing_json_log = (
-                            self.session.query(JSONLog)
-                            .filter_by(log_event_id=log_event_id, key=key)
-                            .with_for_update()
-                            .first()
+                    pk = (log_event_id, key)
+                    if pk in rows_json_pk2val and rows_json_pk2val[pk] != value:
+                        raise OverwriteError(
+                            f"Conflicting JSON values for key '{key}' in same batch",
                         )
-                        # If the existing value is different, raise OverwriteError
-                        if existing_json_log and existing_json_log.value != value:
-                            raise OverwriteError(
-                                f"Cannot overwrite existing JSON value for key '{key}'",
-                            )
+                    rows_json_pk2val[pk] = value
+                    rows_json.append(
+                        {
+                            "log_event_id": log_event_id,
+                            "key": key,
+                            "value": value,
+                        },
+                    )
 
                 # Create Log entry
                 if version is not None:
-                    # For versioned logs, use upsert to handle concurrency
-                    insert_stmt = (
-                        pg_insert(Log)
-                        .values(
-                            log_event_id=log_event_id,
-                            key=key,
-                            version=version,
-                            value=value,
-                            inferred_type=inferred_type,
-                            created_at=now,
-                            updated_at=now,
+                    pk_v = (log_event_id, key, version)
+                    if (
+                        pk_v in rows_log_versioned_pk2val
+                        and rows_log_versioned_pk2val[pk_v] != value
+                    ):
+                        raise OverwriteError(
+                            f"Conflicting values for key '{key}', version {version} "
+                            "in same batch",
                         )
-                        .on_conflict_do_nothing()
+                    rows_log_versioned_pk2val[pk_v] = value
+                    rows_log_versioned.append(
+                        {
+                            "log_event_id": log_event_id,
+                            "key": key,
+                            "value": value,
+                            "version": version,
+                            "inferred_type": inferred_type,
+                            "created_at": now,
+                            "updated_at": now,
+                        },
                     )
-                    result = self.session.execute(insert_stmt)
-
-                    # Check if inserted or if conflict existed
-                    if result.rowcount == 1:
-                        # Get the ID of the new row
-                        new_log = (
-                            self.session.query(Log)
-                            .filter_by(
-                                log_event_id=log_event_id,
-                                key=key,
-                                version=version,
-                            )
-                            .one()
-                        )
-                    else:
-                        # Check if existing row has the same value
-                        existing_log = (
-                            self.session.query(Log)
-                            .filter_by(
-                                log_event_id=log_event_id,
-                                key=key,
-                                version=version,
-                            )
-                            .one()
-                        )
-                        if existing_log.value != value:
-                            raise ValueError(
-                                f"Version mismatch: Attempted to insert (log_event_id={log_event_id}, "
-                                f"key='{key}', version={version}) with a different value.\n"
-                                f"Existing: {existing_log.value}\nNew: {value}",
-                            )
                 else:
                     pending_log_rows.append(
                         {
@@ -828,7 +799,56 @@ class LogDAO:
                 stmt = pg_insert(Log).values(pending_log_rows).on_conflict_do_nothing()
                 self.session.execute(stmt)
 
-            self.session.flush()
+            # Bulk-insert versioned rows in **one** statement
+            if rows_log_versioned:
+                # 1. pre-check for conflicting rows already in the DB
+                pks_v = list(rows_log_versioned_pk2val.keys())
+                rows_to_check = (
+                    self.session.query(Log)
+                    .filter(Log.log_event_id.in_([pk[0] for pk in pks_v]))
+                    .filter(Log.key.in_([pk[1] for pk in pks_v]))
+                    .filter(Log.version.in_([pk[2] for pk in pks_v]))
+                    .with_for_update()
+                    .all()
+                )
+                for row in rows_to_check:
+                    intended = rows_log_versioned_pk2val[
+                        (row.log_event_id, row.key, row.version)
+                    ]
+                    if row.value != intended:
+                        raise OverwriteError(
+                            f"Cannot overwrite existing value for key "
+                            f"'{row.key}', version {row.version}",
+                        )
+
+                stmt_v = (
+                    pg_insert(Log).values(rows_log_versioned).on_conflict_do_nothing()
+                )
+                self.session.execute(stmt_v)
+
+            # Detect JSON conflicts first
+            if rows_json_pk2val:
+                pks = list(rows_json_pk2val.keys())
+                conflicting = (
+                    self.session.query(JSONLog)
+                    .filter(JSONLog.log_event_id.in_([pk[0] for pk in pks]))
+                    .filter(JSONLog.key.in_([pk[1] for pk in pks]))
+                    .with_for_update()
+                    .all()
+                )
+                for row in conflicting:
+                    intended = rows_json_pk2val[(row.log_event_id, row.key)]
+                    if row.value != intended:
+                        raise OverwriteError(
+                            f"Cannot overwrite existing JSON value for key '{row.key}'",
+                        )
+
+            # Single multi-row UPSERT
+            if rows_json:
+                stmt_json = (
+                    pg_insert(JSONLog).values(rows_json).on_conflict_do_nothing()
+                )
+                self.session.execute(stmt_json)
 
             # Create history entries for versioned contexts
             for entry in history_entries:
@@ -899,87 +919,6 @@ class LogDAO:
         if row is None:
             raise ValueError(f"Failed to get next version for parameter {param_key}")
         return row[0]
-
-    def _upsert_json_log(
-        self,
-        log_event_id: int,
-        key: str,
-        value: Any,
-        overwrite: bool,
-    ) -> int:
-        """
-        Upsert a JSONLog entry using PostgreSQL's INSERT ... ON CONFLICT.
-
-        Args:
-            log_event_id: The log event ID
-            key: The key for the JSON log
-            value: The JSON value to store
-            overwrite: Whether to update existing entries (True) or do nothing (False)
-
-        Returns:
-            int: The number of rows affected (1 for insert/update, 0 for no change)
-        """
-        stmt = pg_insert(JSONLog).values(
-            log_event_id=log_event_id,
-            key=key,
-            value=value,
-        )
-        if overwrite:
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["log_event_id", "key"],
-                set_={"value": stmt.excluded.value},
-            )
-        else:
-            stmt = stmt.on_conflict_do_nothing()
-
-        result = self.session.execute(stmt)
-        return result.rowcount
-
-    def _upsert_log(
-        self,
-        log_event_id: int,
-        key: str,
-        value: Any,
-        inferred_type: str,
-        version: Optional[int] = None,
-        overwrite: bool = False,
-    ) -> int:
-        """
-        Upsert a Log entry using PostgreSQL's INSERT ... ON CONFLICT.
-
-        Args:
-            log_event_id: The log event ID
-            key: The key for the log
-            value: The value to store
-            inferred_type: The inferred type of the value
-            version: Optional version number
-            overwrite: Whether to update existing entries (True) or do nothing (False)
-
-        Returns:
-            int: The number of rows affected (1 for insert/update, 0 for no change)
-        """
-        stmt = pg_insert(Log).values(
-            log_event_id=log_event_id,
-            key=key,
-            value=value,
-            version=version,
-            inferred_type=inferred_type,
-            created_at=func.now(),
-            updated_at=func.now(),
-        )
-        if overwrite:
-            stmt = stmt.on_conflict_do_update(
-                index_elements=["log_event_id", "key", "version"],
-                set_={
-                    "value": stmt.excluded.value,
-                    "updated_at": func.now(),
-                },
-            )
-        else:
-            stmt = stmt.on_conflict_do_nothing()
-
-        result = self.session.execute(stmt)
-        return result.rowcount
 
     def bulk_update(
         self,
