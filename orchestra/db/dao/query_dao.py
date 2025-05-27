@@ -62,7 +62,7 @@ class QueryDAO:
         # ------------------------------------------------------------------ #
         # Debit the wallet ─ we now support decimal credits                  #
         # ------------------------------------------------------------------ #
-        user.credits -= credits
+        user.credits -= Decimal(str(credits))
 
         new_query = Query(
             user_id=user_id,
@@ -71,7 +71,7 @@ class QueryDAO:
             endpoint_id=endpoint_id,
             custom_endpoint_id=custom_endpoint_id,
             local_endpoint_id=local_endpoint_id,
-            credits=credits,
+            credits=Decimal(str(credits)),
             query_body=query_body,
             response_body=response_body,
             signature=signature,
