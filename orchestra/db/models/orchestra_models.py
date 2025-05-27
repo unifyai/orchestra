@@ -392,6 +392,9 @@ class AuthUser(Base):
     # Toggles managed by usage quotas
     queries_enabled = Column(Boolean, nullable=False, server_default="true")
     evaluations_enabled = Column(Boolean, nullable=False, server_default="true")
+    # Toggle for handling assistant hiring approval
+    assistant_hiring_approval = Column(String, nullable=True, index=True, server_default=None)
+    has_claimed_approval_link = Column(Boolean, nullable=False, server_default="false")
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
 
@@ -1047,6 +1050,15 @@ class Assistant(Base):
         index=True,
     )
 
+class AssistantHiringOneTimeApprovalLink(Base):
+    __tablename__ = "assistant_hiring_one_time_approval_link"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    token = Column(String, unique=True, index=True, nullable=False)
+    expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    user_id = Column(String, ForeignKey("auth_user.id"), nullable=True, index=True)
+    claimed_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 class Voice(Base):
     """Model class for the assistants voices table."""
