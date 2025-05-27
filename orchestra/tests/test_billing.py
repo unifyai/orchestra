@@ -1,281 +1,264 @@
 """
-End-to-end billing test-suite, collapsed into one module so `pytest` can
-run everything with a single file.
+Integration-style billing tests (matching test_credits pattern).
 
-Coverage:
-1. Migration smoke – columns exist.
-2. Monthly invoicer – groups rows, calls Stripe once, flips status.
-3. Webhook idempotency – double delivery does not double-charge.
-4. Daily guard – suspends PAST_DUE + empty-wallet users.
-
-The tests use an in-memory SQLite DB and monkey-patch `SessionLocal`
-inside each routine so every function shares the same SQLAlchemy session.
+1. Schema smoke – columns exist.
+2. Invoicer – aggregates rows, hits Stripe once, flips status.
+3. Webhook idempotency – double delivery, single effect.
+4. Billing guard – suspends PAST_DUE + zero balance.
+5. Pre-paid credits – skip invoicer.
 """
 from __future__ import annotations
 
 import contextlib
-import datetime as _dt
+import datetime as dt
+import hashlib
+import hmac
+import json
+import time
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Dict
 
 import pytest
 import sqlalchemy as sa
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session, sessionmaker
+from httpx import AsyncClient
+from sqlalchemy.orm import Session
 
-import orchestra.routines.billing_guard as guard
-import orchestra.routines.monthly_invoicer as invoicer
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Local imports (runtime code under test)
-# ─────────────────────────────────────────────────────────────────────────────
-from orchestra.db.base import Base
-from orchestra.db.dao.recharge_dao import RechargeDAO
-from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
-from orchestra.db.models.orchestra_models import Users as User
-from orchestra.db.models.orchestra_models import WebhookLog
+from orchestra.db.models.orchestra_models import (
+    Recharge,
+    RechargeStatus,
+    Users,
+    WebhookLog,
+)
 from orchestra.lib.time import month_end_utc
 from orchestra.observability.metrics import billing_suspended_total
-
-# FastAPI entry-point (if available) – skip webhook test when missing
-try:
-    from orchestra.main import app  # noqa: WPS433
-except ModuleNotFoundError:  # pragma: no cover
-    app = None
-client = TestClient(app) if app else None
+from orchestra.routines import billing_guard as guard
+from orchestra.routines import monthly_invoicer as invoicer
+from orchestra.settings import settings
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Fixtures
-# ═════════════════════════════════════════════════════════════════════════════
-@pytest.fixture
-def session() -> Session:
-    """Isolated in-memory DB for each test."""
-    engine = create_engine("sqlite:///:memory:", future=True, echo=False)
-    Base.metadata.create_all(engine)
+@contextlib.contextmanager
+def _guard_uses(dbsession: Session):
+    """Temporarily monkey-patch guard.SessionLocal to return the given session."""
+    import orchestra.routines.billing_guard as guard
 
-    conn = engine.connect()
-    tx = conn.begin()
-    SessionLocal = sessionmaker(bind=conn, expire_on_commit=False)
-    db = SessionLocal()
-
-    yield db
-
-    db.close()
-    tx.rollback()
-    conn.close()
-
-
-@pytest.fixture(autouse=True)
-def patch_sessionlocal(monkeypatch: pytest.MonkeyPatch, session: Session):
-    """
-    Force every `with SessionLocal()` in business code to reuse *our* session.
-    """
-
-    @contextlib.contextmanager
-    def _ctx():
-        yield session
-
-    # routines that open their own sessions
-    monkeypatch.setattr(invoicer, "SessionLocal", _ctx, raising=True)
-    monkeypatch.setattr(guard, "SessionLocal", _ctx, raising=True)
-
-    # webhook (optional – only if FastAPI is importable)
+    orig = guard.SessionLocal
+    guard.SessionLocal = lambda: dbsession
     try:
-        import orchestra.web.api.webhooks.stripe as wh
-
-        monkeypatch.setattr(wh, "SessionLocal", _ctx, raising=True)
-    except ModuleNotFoundError:
-        pass
-
-    yield
+        yield
+    finally:
+        guard.SessionLocal = orig
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# 1. Migration smoke
-# ═════════════════════════════════════════════════════════════════════════════
-def test_new_columns_exist(session: Session):
-    insp = sa.inspect(session.bind)
-
-    recharge_cols = {c["name"] for c in insp.get_columns("recharge")}
-    user_cols = {c["name"] for c in insp.get_columns("users")}
-
-    assert {"status", "stripe_invoice_id", "invoice_group"} <= recharge_cols
-    assert "billing_state" in user_cols
+@contextlib.contextmanager
+def _routine_uses_session(module, dbsession):
+    """Temporarily monkey-patch any module's SessionLocal to return the given session."""
+    orig = module.SessionLocal
+    module.SessionLocal = lambda: dbsession
+    try:
+        yield
+    finally:
+        module.SessionLocal = orig
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# 2. Monthly invoicer happy-path
-# ═════════════════════════════════════════════════════════════════════════════
-@pytest.fixture
-def mock_stripe(monkeypatch: pytest.MonkeyPatch):
-    """Replace the Stripe SDK with a dummy object that records invocations."""
-    calls: Dict[str, list] = {"item": [], "invoice": []}
+# --------------------------------------------------------------------------- #
+# Stripe dummy (shared by all tests)                                          #
+# --------------------------------------------------------------------------- #
+@pytest.fixture(autouse=True)
+def mock_stripe(monkeypatch) -> Dict[str, list]:
+    calls: Dict[str, list] = {"item": [], "invoice": [], "construct": []}
 
-    def _invoice_item_create(**kw):
+    def _item_create(**kw):
         calls["item"].append(kw)
 
-    class _Invoice(SimpleNamespace):
+    class _Inv(SimpleNamespace):
         pass
 
-    def _invoice_create(**kw):
+    def _inv_create(**kw):
         calls["invoice"].append(kw)
-        return _Invoice(id="in_test_123")
+        return _Inv(id="in_test_123")
+
+    def _construct_event(payload, sig_header, secret):
+        calls["construct"].append({"sig": sig_header})
+        return json.loads(payload)
 
     dummy = SimpleNamespace(
-        InvoiceItem=SimpleNamespace(create=_invoice_item_create),
-        Invoice=SimpleNamespace(create=_invoice_create),
+        InvoiceItem=SimpleNamespace(create=_item_create),
+        Invoice=SimpleNamespace(create=_inv_create),
+        Webhook=SimpleNamespace(construct_event=_construct_event),
     )
-    monkeypatch.setattr(invoicer, "stripe", dummy, raising=True)
+
+    # Patch both the stripe_client module AND the monthly_invoicer's stripe import
+    import orchestra.routines.monthly_invoicer as monthly_invoicer
+    import orchestra.services.stripe_client as stripe_client
+
+    monkeypatch.setattr(stripe_client, "stripe", dummy, raising=True)
+    monkeypatch.setattr(monthly_invoicer, "stripe", dummy, raising=True)
     return calls
 
 
-def test_invoicer_flips_rows(session: Session, mock_stripe):
-    # Previous month
-    today = _dt.date.today()
-    first_this_month = today.replace(day=1)
-    last_month_end = first_this_month - _dt.timedelta(days=1)
-    group_day = month_end_utc(
-        _dt.date(last_month_end.year, last_month_end.month, 1),
-    )
+# --------------------------------------------------------------------------- #
+# ensure settings have dummy secrets so pydantic doesn't explode              #
+# --------------------------------------------------------------------------- #
+@pytest.fixture(autouse=True)
+def _env_secrets(monkeypatch):
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
+    monkeypatch.setenv("STRIPE_SECRET_KEY_LIVE", "sk_test_dummy")
+    # ensure the live settings instance has the field
+    monkeypatch.setattr(settings, "STRIPE_WEBHOOK_SECRET", "whsec_test", raising=False)
 
-    # Seed dummy user & 3 pending rows
-    user = User(
-        id="user_1",
-        stripe_customer_id="cus_test_123",
-        billing_state="OK",
-        credit_balance=100,
-    )
-    session.add(user)
-    session.flush()
 
-    session.add_all(
-        [
+# --------------------------------------------------------------------------- #
+# Helpers                                                                     #
+# --------------------------------------------------------------------------- #
+TODAY = dt.date.today()
+FIRST_THIS_MONTH = TODAY.replace(day=1)
+LAST_MONTH_END = FIRST_THIS_MONTH - dt.timedelta(days=1)
+LAST_GROUP = month_end_utc(LAST_MONTH_END.replace(day=1))
+
+
+def _signed_hdr(body: str) -> str:
+    ts = str(int(time.time()))
+    sig_raw = f"{ts}.{body}"
+    sig = hmac.new(
+        settings.STRIPE_WEBHOOK_SECRET.encode(),
+        sig_raw.encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"t={ts},v1={sig}"
+
+
+# --------------------------------------------------------------------------- #
+# 0. Schema smoke                                                             #
+# --------------------------------------------------------------------------- #
+def test_schema_columns(dbsession: Session):
+    insp = sa.inspect(dbsession.bind)
+    rcols = {c["name"] for c in insp.get_columns("recharge")}
+    ucols = {c["name"] for c in insp.get_columns("users")}
+
+    assert {"status", "stripe_invoice_id", "invoice_group"} <= rcols
+    assert "billing_state" in ucols
+
+
+# --------------------------------------------------------------------------- #
+# 1. Invoicer aggregates rows & flips                                         #
+# --------------------------------------------------------------------------- #
+def test_invoicer_aggregates(dbsession: Session, mock_stripe):
+    uid = "user_inv"
+    dbsession.add(Users(id=uid, credits=0, stripe_customer_id="cus_test"))
+
+    for _ in range(3):
+        dbsession.add(
             Recharge(
-                user_id=user.id,
-                quantity=Decimal(10),
+                user_id=uid,
+                quantity=10,
                 amount_usd=Decimal("2.50"),
                 status=RechargeStatus.PENDING_INVOICE,
-                invoice_group=group_day,
-            )
-            for _ in range(3)
-        ],
-    )
-    session.commit()
+                invoice_group=LAST_GROUP,
+                type="usage",
+            ),
+        )
+    dbsession.commit()
 
-    # Run
-    invoicer.invoice_month(last_month_end.year, last_month_end.month)
+    with _routine_uses_session(invoicer, dbsession):
+        invoicer.invoice_month(LAST_MONTH_END.year, LAST_MONTH_END.month)
 
-    # One invoice, one item
-    assert len(mock_stripe["item"]) == 1
-    assert len(mock_stripe["invoice"]) == 1
-
-    refreshed = session.scalars(select(Recharge)).all()
-    assert all(r.status == RechargeStatus.INVOICE_CREATED for r in refreshed)
-    assert all(r.stripe_invoice_id for r in refreshed)
+    rows = dbsession.query(Recharge).filter_by(user_id=uid).all()
+    assert {r.status for r in rows} == {RechargeStatus.INVOICE_CREATED}
+    assert {r.stripe_invoice_id for r in rows} == {"in_test_123"}
+    assert len(mock_stripe["item"]) == 1 and len(mock_stripe["invoice"]) == 1
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# 3. Webhook idempotency
-# ═════════════════════════════════════════════════════════════════════════════
-@pytest.mark.skipif(app is None, reason="FastAPI app not importable")
-def test_webhook_is_idempotent(session: Session):
-    # Seed user + recharge awaiting payment
-    user = User(
-        id="u1",
-        stripe_customer_id="cus_test",
-        credit_balance=100,
-        billing_state="OK",
-    )
-    session.add(user)
-    session.flush()
-
-    recharge = Recharge(
-        user_id=user.id,
-        quantity=Decimal(5),
+# --------------------------------------------------------------------------- #
+# 2. Webhook idempotency (HTTP)                                               #
+# --------------------------------------------------------------------------- #
+@pytest.mark.anyio
+async def test_webhook_idempotent(client: AsyncClient, dbsession: Session):
+    uid = "webhook_u"
+    dbsession.add(Users(id=uid, stripe_customer_id="cus_x"))
+    rec = Recharge(
+        user_id=uid,
+        quantity=5,
         amount_usd=Decimal("1.25"),
         status=RechargeStatus.INVOICE_CREATED,
         stripe_invoice_id="in_test_1",
+        type="usage",
     )
-    session.add(recharge)
-    session.commit()
+    dbsession.add(rec)
+    dbsession.commit()
 
     payload = {
-        "id": "evt_test_1",
+        "id": "evt_test",
         "type": "invoice.payment_succeeded",
-        "data": {"object": {"id": "in_test_1", "status": "paid"}},
+        "data": {
+            "object": {
+                "id": "in_test_1",
+                "status": "paid",
+                "metadata": {"user_id": uid},
+            },
+        },
     }
+    body = json.dumps(payload)
+    hdr = _signed_hdr(body)
 
-    # Deliver twice
-    res1 = client.post("/webhooks/stripe", json=payload)
-    res2 = client.post("/webhooks/stripe", json=payload)
+    for _ in range(2):
+        res = await client.post(
+            "/v0/webhooks/stripe",
+            content=body,
+            headers={"Stripe-Signature": hdr},
+        )
+        assert res.status_code == 200
 
-    assert res1.status_code == res2.status_code == 200
-
-    session.refresh(recharge)
-    assert recharge.status == RechargeStatus.PAID
-    assert session.query(WebhookLog).count() == 1
+    dbsession.refresh(rec)
+    assert rec.status == RechargeStatus.PAID
+    assert dbsession.query(WebhookLog).count() == 1
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# 4. Daily billing-guard
-# ═════════════════════════════════════════════════════════════════════════════
-def test_billing_guard_suspends(session: Session):
+# --------------------------------------------------------------------------- #
+# 3. Billing guard                                                            #
+# --------------------------------------------------------------------------- #
+def test_guard_suspends(dbsession: Session):
+    dbsession.add_all(
+        [
+            Users(id="off", billing_state="PAST_DUE", credit_balance=0),
+            Users(id="ok", billing_state="OK", credit_balance=10),
+        ],
+    )
+    dbsession.commit()
+
     start = billing_suspended_total._value.get()
+    with _guard_uses(dbsession):
+        guard.suspend_past_due_users()
 
-    offender = User(id="u-past", billing_state="PAST_DUE", credit_balance=0)
-    safe_one = User(id="u-ok", billing_state="OK", credit_balance=10)
-    session.add_all([offender, safe_one])
-    session.commit()
-
-    guard.suspend_past_due_users()
-
-    session.refresh(offender)
-    session.refresh(safe_one)
-
-    assert offender.billing_state == "SUSPENDED"
-    assert safe_one.billing_state == "OK"
+    assert dbsession.get(Users, "off").billing_state == "SUSPENDED"
+    assert dbsession.get(Users, "ok").billing_state == "OK"
     assert billing_suspended_total._value.get() == start + 1
 
 
-def test_prepaid_credits_not_invoiced(session: Session):
-    """Prepaid credits should be marked PAID and excluded from invoicing."""
-    # Create user
-    user = User(id="test_user", credit_balance=100)
-    session.add(user)
-    session.flush()
-
-    # Simulate prepaid credit purchase
-    recharge_dao = RechargeDAO(session)
-    recharge = recharge_dao.create_recharge(
-        user_id=user.id,
+# --------------------------------------------------------------------------- #
+# 4. Pre-paid credit row must be skipped                                      #
+# --------------------------------------------------------------------------- #
+def test_prepaid_skip(dbsession: Session, mock_stripe):
+    uid = "prepaid_u"
+    dbsession.add(Users(id=uid, credits=100))
+    rec = Recharge(
+        user_id=uid,
         quantity=500,
         amount_usd=Decimal("5.00"),
-        invoice_group=month_end_utc(_dt.date.today()),
-        type_="payment",
-        transaction_id="pi_test_prepaid_123",
-        status=RechargeStatus.PAID,  # ← Already paid
+        status=RechargeStatus.PAID,
+        stripe_invoice_id="in_paid",
+        type="payment",
     )
+    dbsession.add(rec)
+    dbsession.commit()
 
-    # User balance should be credited
-    user.credit_balance += 500
-    session.commit()
+    # Store the ID to re-query the object after the invoicer runs
+    rec_id = rec.id
 
-    # Verify recharge is marked as PAID
-    assert recharge.status == RechargeStatus.PAID
-    assert user.credit_balance == 600
+    with _routine_uses_session(invoicer, dbsession):
+        invoicer.invoice_month(TODAY.year, TODAY.month)
 
-    # Run monthly invoicer - should skip PAID rows
-    pending_recharges = (
-        session.query(Recharge).filter_by(status=RechargeStatus.PENDING_INVOICE).all()
-    )
-
-    # Should be no pending invoices (prepaid was already paid)
-    assert len(pending_recharges) == 0
-
-    # Verify PAID recharge still exists but won't be invoiced
-    paid_recharges = session.query(Recharge).filter_by(status=RechargeStatus.PAID).all()
-    assert len(paid_recharges) == 1
-    assert paid_recharges[0].transaction_id == "pi_test_prepaid_123"
+    # Re-query the object instead of refreshing the detached one
+    rec = dbsession.query(Recharge).filter_by(id=rec_id).first()
+    assert rec.status == RechargeStatus.PAID
+    assert mock_stripe["invoice"] == mock_stripe["item"] == []

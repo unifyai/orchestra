@@ -3,10 +3,12 @@ import os
 
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy import select
 
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dao.webhook_log_dao import WebhookLogDAO
+from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
 
 router = APIRouter()
 
@@ -64,11 +66,17 @@ async def handle_stripe_webhook(
             logging.warning("Received invoice.paid with missing user_id metadata.")
             return {"status": "ok"}
 
-        # Retrieve pending Recharge record
-        recharge = recharge_dao.get_recharge_by_transaction_id(invoice_id)
-        if recharge and recharge.status == "pending":
-            # Mark the recharge as completed
-            recharge_dao.update_recharge_status(recharge.id, "completed")
+        # Retrieve recharge record by stripe_invoice_id (not transaction_id)
+        recharge = recharge_dao.session.execute(
+            select(Recharge).where(Recharge.stripe_invoice_id == invoice_id),
+        ).scalar()
+
+        if recharge and recharge.status in (
+            RechargeStatus.INVOICE_CREATED,
+            RechargeStatus.PENDING_INVOICE,
+        ):
+            # Mark the recharge as PAID (not "completed")
+            recharge_dao.update_recharge_status(recharge.id, RechargeStatus.PAID.value)
             try:
                 users_dao.recharge_credit(user_id, credits_purchased)
                 logging.info(
@@ -84,9 +92,17 @@ async def handle_stripe_webhook(
         logging.warning(f"Invoice payment failed: {data_object.get('id')}")
         # Update pending recharge to 'failed' if it exists
         invoice_id = data_object.get("id")
-        recharge = recharge_dao.get_recharge_by_transaction_id(invoice_id)
-        if recharge and recharge.status == "pending":
-            recharge_dao.update_recharge_status(recharge.id, "failed")
+        recharge = recharge_dao.session.execute(
+            select(Recharge).where(Recharge.stripe_invoice_id == invoice_id),
+        ).scalar()
+        if recharge and recharge.status in (
+            RechargeStatus.INVOICE_CREATED,
+            RechargeStatus.PENDING_INVOICE,
+        ):
+            recharge_dao.update_recharge_status(
+                recharge.id,
+                RechargeStatus.FAILED.value,
+            )
     elif event_type in ("charge.refunded", "charge.refund.updated"):
         # Dispute -> PaymentIntent (metadata) -> User
         payment_intent_id = data_object.get("payment_intent")
@@ -150,9 +166,18 @@ async def handle_stripe_webhook(
         logging.info(f"Invoice voided: {data_object.get('id')}")
         # Update any pending recharge to 'voided'
         invoice_id = data_object.get("id")
-        recharge = recharge_dao.get_recharge_by_transaction_id(invoice_id)
-        if recharge and recharge.status == "pending":
-            recharge_dao.update_recharge_status(recharge.id, "voided")
+        recharge = recharge_dao.session.execute(
+            select(Recharge).where(Recharge.stripe_invoice_id == invoice_id),
+        ).scalar()
+        if recharge and recharge.status in (
+            RechargeStatus.INVOICE_CREATED,
+            RechargeStatus.PENDING_INVOICE,
+        ):
+            # Note: "voided" is not in the enum, so we'll use FAILED as the closest equivalent
+            recharge_dao.update_recharge_status(
+                recharge.id,
+                RechargeStatus.FAILED.value,
+            )
     else:
         logging.info(f"Unhandled event type: {event_type}")
 

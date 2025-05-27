@@ -1,4 +1,26 @@
-"""Billing columns, monthly-invoicing objects
+"""Consolidated Billing Infrastructure
+
+This migration adds the complete billing system including:
+
+USERS table additions:
+- credits: User's current credit balance
+- autorecharge: Auto-recharge enabled flag
+- autorecharge_threshold: Threshold for triggering auto-recharge
+- autorecharge_qty: Quantity to recharge automatically
+- store_prompts: Whether to store user prompts
+- credit_balance: BigInteger credit balance field
+- billing_state: User's billing status (OK, PAST_DUE, SUSPENDED)
+
+RECHARGE table additions:
+- amount_usd: USD amount for the recharge
+- status: Recharge status enum (PENDING_INVOICE, INVOICE_CREATED, PAID, FAILED)
+- stripe_invoice_id: Associated Stripe invoice ID
+- invoice_group: Month-end date for grouping charges
+- Index on (status, invoice_group) for efficient querying
+
+This replaces the previous separate migrations:
+- 20240401_add_billing_columns.py
+- 20250520_monthly_invoicing.py
 
 """
 
