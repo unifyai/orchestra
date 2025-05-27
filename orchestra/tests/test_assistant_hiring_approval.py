@@ -1,7 +1,7 @@
 import pytest
 from httpx import AsyncClient
 from fastapi import status
-from utils import create_test_user, get_credits, ADMIN_HEADERS
+from .utils import create_test_user, get_credits, ADMIN_HEADERS
 from orchestra.web.api.assistant.views import ASSISTANT_CREATION_COST
 
 
