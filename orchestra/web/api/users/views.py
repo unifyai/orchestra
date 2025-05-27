@@ -493,7 +493,7 @@ async def update_query_logging_status(
 
 # -- Manage the approval status for user access to hiring assistants --
 @router.post(
-    "/auth-user/assistant-hiring-approval",
+    "/user/assistant-hiring-approval",
     response_model=AssistantHiringApprovalResponse,
     status_code=200,
 )
@@ -609,7 +609,7 @@ async def list_users_by_assistant_hiring_approval(
 
 # -- Manage one time approval links that grant automatic approval to users for hiring assistants --
 @router.post(
-    "/auth-user/claim-assistant-hiring-one-time-link",
+    "/user/claim-assistant-hiring-one-time-link",
     response_model=AssistantHiringApprovalResponse,
     status_code=200,
 )

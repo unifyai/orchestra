@@ -11,7 +11,7 @@ async def test_user_request_hiring_approval(client: AsyncClient):
 
     # Initial request
     response = await client.post(
-        "/v0/users/auth-user/assistant-hiring-approval", headers=test_user["headers"]
+        "/v0/user/assistant-hiring-approval", headers=test_user["headers"]
     )
     assert response.status_code == status.HTTP_200_OK, response.json()
     data = response.json()
@@ -30,7 +30,7 @@ async def test_user_request_hiring_approval(client: AsyncClient):
 
     # Request again (should indicate it's already pending)
     response_again = await client.post(
-        "/v0/users/auth-user/assistant-hiring-approval", headers=test_user["headers"]
+        "/v0/user/assistant-hiring-approval", headers=test_user["headers"]
     )
     assert response_again.status_code == status.HTTP_200_OK, response_again.json()
     data_again = response_again.json()
@@ -44,7 +44,7 @@ async def test_admin_manage_hiring_approval(client: AsyncClient):
     user_headers = test_user["headers"]
 
     # Endpoint for user to request approval
-    user_request_url = "/v0/users/auth-user/assistant-hiring-approval"
+    user_request_url = "/v0/user/assistant-hiring-approval"
 
     # 1. Admin approves user
     approve_url = f"/v0/admin/auth-user/{user_id}/assistant-hiring-approval/approved"
@@ -269,7 +269,7 @@ async def test_one_time_approval_links_flow(client: AsyncClient):
     # User claims the link
     claim_payload = {"token": one_time_token}
     response_claim = await client.post(
-        "/v0/users/auth-user/claim-assistant-hiring-one-time-link",
+        "/v0/user/claim-assistant-hiring-one-time-link",
         json=claim_payload,
         headers=user_headers,
     )
@@ -293,7 +293,7 @@ async def test_one_time_approval_links_flow(client: AsyncClient):
 
     # Try to claim again (by same user) - should indicate already used or success
     response_claim_again = await client.post(
-        "/v0/users/auth-user/claim-assistant-hiring-one-time-link",
+        "/v0/user/claim-assistant-hiring-one-time-link",
         json=claim_payload,
         headers=user_headers,
     )
@@ -358,7 +358,7 @@ async def test_one_time_link_single_benefit_and_multiple_links(client: AsyncClie
 
     # User 1 claims Link L1
     resp_u1_claim_l1 = await client.post(
-        "/v0/users/auth-user/claim-assistant-hiring-one-time-link",
+        "/v0/user/claim-assistant-hiring-one-time-link",
         json={"token": l1_token},
         headers=user1_headers,
     )
@@ -377,7 +377,7 @@ async def test_one_time_link_single_benefit_and_multiple_links(client: AsyncClie
 
     # --- User 1: Tries to claim SAME Link L1 again ---
     resp_u1_reclaim_l1 = await client.post(
-        "/v0/users/auth-user/claim-assistant-hiring-one-time-link",
+        "/v0/user/claim-assistant-hiring-one-time-link",
         json={"token": l1_token},
         headers=user1_headers,
     )
@@ -400,7 +400,7 @@ async def test_one_time_link_single_benefit_and_multiple_links(client: AsyncClie
     l2_id = resp_l2.json()["id"]
 
     resp_u1_claim_l2 = await client.post(
-        "/v0/users/auth-user/claim-assistant-hiring-one-time-link",
+        "/v0/user/claim-assistant-hiring-one-time-link",
         json={"token": l2_token},
         headers=user1_headers,
     )
@@ -435,7 +435,7 @@ async def test_one_time_link_single_benefit_and_multiple_links(client: AsyncClie
 
     # --- User 1 (revoked, but has_claimed=True): Tries to claim NEW Link L2 again ---
     resp_u1_claim_l2_after_revoke = await client.post(
-        "/v0/users/auth-user/claim-assistant-hiring-one-time-link",
+        "/v0/user/claim-assistant-hiring-one-time-link",
         json={"token": l2_token},
         headers=user1_headers,
     )
@@ -475,7 +475,7 @@ async def test_claim_invalid_one_time_link(client: AsyncClient):
 
     # Try to claim a non-existent token
     response_non_existent = await client.post(
-        "/v0/users/auth-user/claim-assistant-hiring-one-time-link",
+        "/v0/user/claim-assistant-hiring-one-time-link",
         json={"token": "this-token-does-not-exist"},
         headers=user_headers,
     )
@@ -497,14 +497,14 @@ async def test_claim_invalid_one_time_link(client: AsyncClient):
 
     # User A claims it
     await client.post(
-        "/v0/users/auth-user/claim-assistant-hiring-one-time-link",
+        "/v0/user/claim-assistant-hiring-one-time-link",
         json={"token": link_token_for_A},
         headers=user_A["headers"],
     )
 
     # User B tries to claim the same token
     response_user_B_claim = await client.post(
-        "/v0/users/auth-user/claim-assistant-hiring-one-time-link",
+        "/v0/user/claim-assistant-hiring-one-time-link",
         json={"token": link_token_for_A},
         headers=user_B["headers"],
     )
