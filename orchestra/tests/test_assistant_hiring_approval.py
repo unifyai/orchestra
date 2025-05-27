@@ -249,7 +249,7 @@ async def test_one_time_approval_links_flow(client: AsyncClient):
     test_user_link = await create_test_user(client, "link_user@example.com")
     user_id = test_user_link["id"]
     user_headers = test_user_link["headers"]
-    initial_credits = await get_credits(client)
+    initial_credits = await get_credits(client, user_headers=user_headers)
 
     # Admin creates a one-time link
     create_link_payload = {"expires_in_days": 1}
@@ -285,8 +285,8 @@ async def test_one_time_approval_links_flow(client: AsyncClient):
     assert user_details.json()["assistant_hiring_approval"] == "approved"
 
     # Verify credits were granted
-    credits_after_first_claim = await get_credits(client)
-    expected_credits_after_first_claim = initial_credits + ASSISTANT_CREATION_COST
+    credits_after_first_claim = await get_credits(client, user_headers=user_headers)
+    expected_credits_after_first_claim = initial_credits + + float(ASSISTANT_CREATION_COST)
     assert (
         credits_after_first_claim == expected_credits_after_first_claim
     ), f"Credits mismatch: expected {expected_credits_after_first_claim}, got {credits_after_first_claim}"
@@ -298,7 +298,8 @@ async def test_one_time_approval_links_flow(client: AsyncClient):
         headers=user_headers,
     )
     assert response_claim_again.status_code == status.HTTP_200_OK
-    assert "already used" in response_claim_again.json()["message"]
+    assert "already benefited" in response_claim_again.json()["message"]
+    assert response_claim_again.json()["assistant_hiring_approval"] == "approved"
 
     # Verify credits did not change after second claim attempt
     credits_after_second_claim_attempt = await get_credits(
@@ -368,7 +369,7 @@ async def test_one_time_link_single_benefit_and_multiple_links(client: AsyncClie
 
     # Verify User 1 state after claiming L1
     credits_u1_after_l1 = await get_credits(client, user_headers=user1_headers)
-    assert credits_u1_after_l1 == initial_credits_u1 + ASSISTANT_CREATION_COST
+    assert credits_u1_after_l1 == initial_credits_u1 + + float(ASSISTANT_CREATION_COST)
     user1_details_after_l1 = await client.get(
         f"/v0/admin/auth-user/by-user-id?user_id={user1_id}", headers=ADMIN_HEADERS
     )
