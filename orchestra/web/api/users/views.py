@@ -649,7 +649,7 @@ async def claim_assistant_hiring_one_time_link(
     if user_instance.has_claimed_approval_link:
         original_approval_status = user_instance.assistant_hiring_approval
         updated_approval_status = original_approval_status
-        message = "You have already benefited from a one-time approval link. This link was not consumed, and no new credits were awarded." # Default message
+        message = "You have already benefited from a one-time approval link. This link was not consumed, and no new credits were awarded."  # Default message
 
         was_re_activated = False
         if original_approval_status in ["revoked", "rejected", None, "pending"]:
@@ -661,13 +661,20 @@ async def claim_assistant_hiring_one_time_link(
                     status_code=500, detail="Failed to re-activate approval status."
                 )
             session.commit()
-            session.refresh(user_instance) # Refresh to get the latest state for user_instance
+            session.refresh(
+                user_instance
+            )  # Refresh to get the latest state for user_instance
             updated_approval_status = "approved"
-            was_re_activated = True # Mark that re-activation happened
+            was_re_activated = True  # Mark that re-activation happened
 
-        if was_re_activated and original_approval_status in ["revoked", "rejected", None, "pending"]: # Check original status for message
+        if was_re_activated and original_approval_status in [
+            "revoked",
+            "rejected",
+            None,
+            "pending",
+        ]:  # Check original status for message
             message = "Your assistant hiring access has been re-activated as you previously benefited from an approval link. This link was not consumed, and no new credits were awarded."
-        
+
         return AssistantHiringApprovalResponse(
             message=message,
             assistant_hiring_approval=updated_approval_status,
@@ -676,14 +683,14 @@ async def claim_assistant_hiring_one_time_link(
     # Link consumption logic (if user.has_claimed_approval_link is False)
     if link.user_id is not None:
         if link.user_id != user_instance.id:
-             raise HTTPException(
-                status_code=400, detail="Approval link has already been claimed by another user."
+            raise HTTPException(
+                status_code=400,
+                detail="Approval link has already been claimed by another user.",
             )
         return AssistantHiringApprovalResponse(
             message="You already used this specific approval link, but had not been marked as benefited. Status corrected.",
             assistant_hiring_approval=user_instance.assistant_hiring_approval,
         )
-
 
     if link.expires_at < datetime.datetime.now(datetime.timezone.utc):
         raise HTTPException(status_code=400, detail="Approval link has expired.")
@@ -705,9 +712,7 @@ async def claim_assistant_hiring_one_time_link(
                 status_code=500, detail="Failed to set approval status."
             )
 
-        auth_user_dao.update(
-            id=user_instance.id, has_claimed_approval_link=True
-        )
+        auth_user_dao.update(id=user_instance.id, has_claimed_approval_link=True)
 
         users_dao.recharge_credit(
             user_id=user_instance.id, quantity=float(ASSISTANT_CREATION_COST)
@@ -726,6 +731,7 @@ async def claim_assistant_hiring_one_time_link(
             status_code=500,
             detail=f"An unexpected error occurred during link processing: {str(e)}",
         )
+
 
 @admin_router.post(
     "/assistant-hiring-one-time-link",
