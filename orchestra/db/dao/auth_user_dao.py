@@ -42,29 +42,29 @@ class AuthUserDAO:
         self,
         id: Optional[str] = None,
         email: Optional[str] = None,
-        assistant_hiring_approval: Optional[str] = None,
-    ) -> List[AuthUser]:
+        assistant_hiring_approval: Optional[str] = "__use_default_no_filter__",  # Sentinel
+) -> List[AuthUser]: # Technically List[RowProxy]
         query = select(AuthUser)
         if id:
             query = query.where(AuthUser.id == id)
         if email:
             query = query.where(AuthUser.email == email)
-        if assistant_hiring_approval:
-            if assistant_hiring_approval not in ASSISTANT_HIRING_APPROVAL_STATUSES:
-                raise ValueError(
-                    f"Invalid assistant hiring approval status for filtering: {assistant_hiring_approval}"
-                )
+        if assistant_hiring_approval != "__use_default_no_filter__":
             if assistant_hiring_approval is None:
                 query = query.where(AuthUser.assistant_hiring_approval.is_(None))
             else:
+                if assistant_hiring_approval not in ASSISTANT_HIRING_APPROVAL_STATUSES:
+                    raise ValueError(
+                        f"Invalid assistant hiring approval status for filtering: {assistant_hiring_approval}"
+                    )
                 query = query.where(
                     AuthUser.assistant_hiring_approval == assistant_hiring_approval
                 )
 
         rows = self.session.execute(query)
-        return rows.fetchall()
+        return rows.fetchall() # Returns List[RowProxy]
 
-    def get_by_id(self, user_id: str) -> Optional[AuthUser]:
+    def get_by_id(self, user_id: str) -> Optional[AuthUser]: # Technically Optional[RowProxy]
         """Return a single AuthUser object or None given a user_id."""
         found = self.filter(id=user_id)
         return found[0] if found else None
