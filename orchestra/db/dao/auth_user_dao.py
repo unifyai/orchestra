@@ -129,17 +129,19 @@ class AuthUserDAO:
         if status not in ASSISTANT_HIRING_APPROVAL_STATUSES:
             raise ValueError(f"Invalid assistant hiring approval status: {status}")
 
-        user = self.get_by_id(user_id)
-        if user:
-            user.assistant_hiring_approval = status
+        user_row = self.get_by_id(user_id)
+        if user_row:
+            auth_user_instance = user_row[0]
+            auth_user_instance.assistant_hiring_approval = status
             return True
         return False
 
     def get_assistant_hiring_approval(self, user_id: str) -> Optional[str]:
         """Gets the assistant hiring approval status for a user."""
-        user = self.get_by_id(user_id)
-        if user:
-            return user.assistant_hiring_approval
+        user_row = self.get_by_id(user_id)
+        if user_row:
+            auth_user_instance = user_row[0]
+            return auth_user_instance.assistant_hiring_approval
         return None
 
     def get_users_by_assistant_hiring_approval(self, status: str) -> List[AuthUser]:

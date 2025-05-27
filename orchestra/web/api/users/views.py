@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.account_dao import AccountDAO
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.auth_user_dao import (
+    AuthUser,
     AuthUserDAO,
     ASSISTANT_HIRING_APPROVAL_STATUSES,
 )
@@ -574,26 +575,19 @@ async def list_users_by_assistant_hiring_approval(
     session: Session = Depends(get_db_session),
 ):
     auth_user_dao = AuthUserDAO(session)
-
-    users_to_list = []
+    
+    user_instances_to_list: List[AuthUser] = []
     if not status_filter or status_filter.lower() == "all":
-        auth_user_records = auth_user_dao.filter()
-        users_to_list = [u_row[0] for u_row in auth_user_records]
+        user_rows = auth_user_dao.filter()
+        user_instances_to_list = [row[0] for row in user_rows]
     elif status_filter.lower() == "none":
-        auth_user_records = auth_user_dao.filter(assistant_hiring_approval=None)
-        users_to_list = [u_row[0] for u_row in auth_user_records]
+        user_rows = auth_user_dao.filter(assistant_hiring_approval=None)
+        user_instances_to_list = [row[0] for row in user_rows]
     else:
-        if status_filter not in ASSISTANT_HIRING_APPROVAL_STATUSES:
-            valid_statuses = [
-                s for s in ASSISTANT_HIRING_APPROVAL_STATUSES if s is not None
-            ]
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid status. Must be one of {', '.join(valid_statuses)}, 'none', or 'all'.",
-            )
-        users_to_list = auth_user_dao.get_users_by_assistant_hiring_approval(
-            status_filter
-        )
+        if status_filter not in ASSISTANT_HIRING_APPROVAL_STATUSES or status_filter is None:
+             valid_statuses = [s for s in ASSISTANT_HIRING_APPROVAL_STATUSES if s is not None]
+             raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of {', '.join(valid_statuses)}, 'none', or 'all'.")
+        user_instances_to_list = auth_user_dao.get_users_by_assistant_hiring_approval(status_filter)
 
     return [
         AssistantHiringApprovalUserStatus(
@@ -601,9 +595,8 @@ async def list_users_by_assistant_hiring_approval(
             email=user.email,
             name=user.name,
             assistant_hiring_approval=user.assistant_hiring_approval,
-            created_at=user.created_at,
-        )
-        for user in users_to_list
+            created_at=user.created_at
+        ) for user in user_instances_to_list
     ]
 
 
