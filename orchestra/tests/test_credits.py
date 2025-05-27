@@ -14,39 +14,39 @@ from orchestra.web.api.admin.views import get_user
 
 # TODO: amount has to be stored in the user
 def test_positive_recharge(dbsession, worker_id) -> None:
-    recharge_credits(worker_id)
+    recharge_credits(worker_id, session=dbsession)
     users_dao = UsersDAO(dbsession)
     # user1
     simple = get_user("user1", dbsession)[0]
-    assert math.isclose(simple.credits, 3.5)
+    assert math.isclose(simple.credits, 3.5)  # 1 + 2.5 = 3.5
     # user2
     recharge_limited = get_user("user2", session=dbsession)[0]
-    assert math.isclose(recharge_limited.credits, 12.49)
+    assert math.isclose(recharge_limited.credits, 12.49)  # 9.99 + 2.5 = 12.49
     # user3
     recharge_not_needed_a = get_user("user3", session=dbsession)[0]
-    assert recharge_not_needed_a.credits == 12.5
+    assert math.isclose(recharge_not_needed_a.credits, 12.5)  # 10 + 2.5 = 12.5
     # user4
     recharge_not_needed_b = get_user("user4", session=dbsession)[0]
-    assert recharge_not_needed_b.credits == 22.5
+    assert math.isclose(recharge_not_needed_b.credits, 22.5)  # 20 + 2.5 = 22.5
 
 
 # TODO: amount has to be stored in the user
 def test_negative_recharge(dbsession, worker_id) -> None:
     # negative recharge
-    recharge_credits(worker_id, amount=-0.5)
+    recharge_credits(worker_id, amount=-0.5, session=dbsession)
     users_dao = UsersDAO(dbsession)
     # user1
     simple = get_user("user1", session=dbsession)[0]
-    assert math.isclose(simple.credits, 0.5)
+    assert math.isclose(simple.credits, 0.5)  # 1 - 0.5 = 0.5
     # user2
     recharge_limited = get_user("user2", session=dbsession)[0]
-    assert math.isclose(recharge_limited.credits, 9.49)
+    assert math.isclose(recharge_limited.credits, 9.49)  # 9.99 - 0.5 = 9.49
     # user3
     recharge_not_needed_a = get_user("user3", session=dbsession)[0]
-    assert recharge_not_needed_a.credits == 9.5
+    assert math.isclose(recharge_not_needed_a.credits, 9.5)  # 10 - 0.5 = 9.5
     # user4
     recharge_not_needed_b = get_user("user4", session=dbsession)[0]
-    assert recharge_not_needed_b.credits == 19.5
+    assert math.isclose(recharge_not_needed_b.credits, 19.5)  # 20 - 0.5 = 19.5
 
 
 @pytest.mark.anyio
@@ -171,6 +171,26 @@ async def test_autorecharge_qty(  # noqa: WPS218, E501
     assert response.status_code == status.HTTP_200_OK
     post = dbsession.execute(query).all()[0][5]
     assert post == 10
+
+
+# TODO: amount has to be stored in the user
+def test_initial_credits(dbsession, worker_id) -> None:
+    """Test to check initial user credits from seeding data."""
+    user1 = get_user("user1", dbsession)[0]
+    user2 = get_user("user2", dbsession)[0]
+    user3 = get_user("user3", dbsession)[0]
+    user4 = get_user("user4", dbsession)[0]
+
+    print(f"user1 initial credits: {user1.credits}")
+    print(f"user2 initial credits: {user2.credits}")
+    print(f"user3 initial credits: {user3.credits}")
+    print(f"user4 initial credits: {user4.credits}")
+
+    # Expected values for decimal credits
+    assert user1.credits == 1
+    assert math.isclose(user2.credits, 9.99)  # Should be 9.99 as decimal
+    assert user3.credits == 10
+    assert user4.credits == 20
 
 
 if __name__ == "__main__":

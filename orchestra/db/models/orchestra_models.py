@@ -162,7 +162,7 @@ class Users(Base):
     # IMPORTANT: If any change happens here the DB trigger must be updated as well!
     id = Column(String(), primary_key=True)
     credits = Column(
-        Integer,
+        Numeric,
         nullable=False,
         default=0,
         server_default="0",

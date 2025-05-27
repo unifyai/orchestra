@@ -183,12 +183,13 @@ def promo_code(
 @router.post("/recharge")
 def create_recharge(
     data: RechargeCreateSchema,
-    db: Session = Depends(get_db_session),
-    users_dao: UsersDAO = Depends(),
-    recharge_dao: RechargeDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ):
     """Create a recharge - either prepaid or auto-recharge."""
-    user = users_dao.get_user(data.user_id)
+    users_dao = UsersDAO(session)
+    recharge_dao = RechargeDAO(session)
+
+    user = users_dao.get_user_with_id(data.user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -213,6 +214,6 @@ def create_recharge(
 
     # Credit the user's balance immediately
     user.credit_balance += data.quantity
-    db.commit()
+    session.commit()
 
     return {"recharge_id": recharge.id, "new_balance": user.credit_balance}

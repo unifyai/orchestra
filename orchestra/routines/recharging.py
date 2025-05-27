@@ -1,17 +1,18 @@
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.consts import RECHARGE_TYPE_AUTO
+from orchestra.db.dao.recharge_dao import RechargeDAO
+from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
 from orchestra.db.models.orchestra_models import Users as User
 from orchestra.pricing import credits_to_usd
 from orchestra.settings import settings
-from orchestra.web.api.admin.schema import RechargeModelRequest
-from orchestra.web.api.admin.views import create_recharge_model, get_all_users_models
+from orchestra.web.api.admin.views import get_all_users_models
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -21,30 +22,86 @@ handler.setLevel(logging.INFO)
 logger.addHandler(handler)
 
 
-def recharge_credits(worker_id=None, amount=2.5):  # noqa: D103, WPS210
-    url = str(settings.db_url)
-    if worker_id:
-        url = url.replace("orchestra_test", f"orchestra_test_{worker_id}")
-    engine = create_engine(url)
-    session_factory = sessionmaker(engine, expire_on_commit=False)
-    with session_factory() as session:
+def recharge_credits(worker_id=None, amount=2.5, session=None):  # noqa: D103, WPS210
+    """Recharge all users with the specified amount of credits."""
+    if session is not None:
+        # Use the provided session
         all_users = get_all_users_models(session=session)
         recharge_quantity = amount  # TODO: add this to the user table
         for user in all_users:
+            # Directly handle the recharge logic instead of calling the FastAPI endpoint
+            user_dao = UsersDAO(session)
+            recharge_dao = RechargeDAO(session)
 
-            recharge_obj = RechargeModelRequest(
+            # Recharge the user's credits
+            user_dao.recharge_credit(
                 user_id=user.id,
                 quantity=recharge_quantity,
-                type="free",
             )
-            create_recharge_model(
-                new_recharge_object=recharge_obj,
-                session=session,
+
+            # Create the recharge record
+            at = datetime.now(timezone.utc)
+            amount_usd = credits_to_usd(int(recharge_quantity))
+            # Use month-end date for invoice grouping
+            first_next_month = (at.replace(day=1) + timedelta(days=32)).replace(day=1)
+            invoice_group = (first_next_month - timedelta(microseconds=1)).date()
+
+            recharge_dao.create_recharge(
+                user_id=user.id,
+                quantity=int(recharge_quantity),
+                amount_usd=amount_usd,
+                invoice_group=invoice_group,
+                type_="free",
+                transaction_id=None,
             )
-            session.commit()
+
+        # Don't commit when using external session - let the caller handle it
         logger.info(
             f"Recharged all users with {recharge_quantity} credits",
         )
+    else:
+        # Create our own session (original behavior)
+        url = str(settings.db_url)
+        if worker_id:
+            url = url.replace("orchestra_test", f"orchestra_test_{worker_id}")
+        engine = create_engine(url)
+        session_factory = sessionmaker(engine, expire_on_commit=False)
+        with session_factory() as session:
+            all_users = get_all_users_models(session=session)
+            recharge_quantity = amount  # TODO: add this to the user table
+            for user in all_users:
+                # Directly handle the recharge logic instead of calling the FastAPI endpoint
+                user_dao = UsersDAO(session)
+                recharge_dao = RechargeDAO(session)
+
+                # Recharge the user's credits
+                user_dao.recharge_credit(
+                    user_id=user.id,
+                    quantity=recharge_quantity,
+                )
+
+                # Create the recharge record
+                at = datetime.now(timezone.utc)
+                amount_usd = credits_to_usd(int(recharge_quantity))
+                # Use month-end date for invoice grouping
+                first_next_month = (at.replace(day=1) + timedelta(days=32)).replace(
+                    day=1,
+                )
+                invoice_group = (first_next_month - timedelta(microseconds=1)).date()
+
+                recharge_dao.create_recharge(
+                    user_id=user.id,
+                    quantity=int(recharge_quantity),
+                    amount_usd=amount_usd,
+                    invoice_group=invoice_group,
+                    type_="free",
+                    transaction_id=None,
+                )
+
+            session.commit()
+            logger.info(
+                f"Recharged all users with {recharge_quantity} credits",
+            )
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@ import os
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -39,6 +39,7 @@ from orchestra.db.models.orchestra_models import (  # noqa: WPS235
     Task,
     Users,
 )
+from orchestra.pricing import credits_to_usd
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
     BenchmarkRunModelResponse,
     CreditCardFingerprintModelResponse,
@@ -681,11 +682,18 @@ def create_recharge_model(
         quantity=new_recharge_object.quantity,
     )
 
+    # Calculate amount_usd and invoice_group for the new billing system
+    amount_usd = credits_to_usd(int(new_recharge_object.quantity))
+    # Use month-end date for invoice grouping
+    first_next_month = (at.replace(day=1) + timedelta(days=32)).replace(day=1)
+    invoice_group = (first_next_month - timedelta(microseconds=1)).date()
+
     recharge_dao.create_recharge(
-        at=at,
         user_id=new_recharge_object.user_id,
-        quantity=new_recharge_object.quantity,
-        type=new_recharge_object.type,
+        quantity=int(new_recharge_object.quantity),
+        amount_usd=amount_usd,
+        invoice_group=invoice_group,
+        type_=new_recharge_object.type,
         transaction_id=new_recharge_object.transaction_id,
     )
 

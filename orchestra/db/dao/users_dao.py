@@ -93,12 +93,12 @@ class UsersDAO:
         raw_users = self.session.execute(query)
         user = raw_users.scalars().first()
         if user is not None:
+            new_credits = user.credits + decimal.Decimal(quantity)
             setattr(  # noqa: B010
                 user,
                 "credits",
-                user.credits + decimal.Decimal(quantity),
+                new_credits,
             )
-        self.session.commit()
 
     def set_prompt_telemetry(
         self,
