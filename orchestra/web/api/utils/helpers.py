@@ -11,7 +11,9 @@ import stripe
 from anthropic import Anthropic
 from openai import OpenAI
 
-from orchestra.db.models.orchestra_models import Recharge
+from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
+from orchestra.lib.time import month_end_utc
+from orchestra.pricing import credits_to_usd
 
 oai_func = OpenAI(api_key="").chat.completions.create
 OPENAI_ALLOWED_ARGS = set(inspect.signature(oai_func).parameters.keys())
@@ -165,12 +167,13 @@ def recharge_and_generate_invoice(user, users_dao):
             # Record the pending transaction in the Recharge table
             # Note: Credit will be added by the webhook handler when payment is confirmed
             recharge = Recharge(
-                at=datetime.now(tz=timezone.utc),
                 user_id=user.id,
                 quantity=user.autorecharge_qty,
+                amount_usd=credits_to_usd(int(user.autorecharge_qty)),
+                invoice_group=month_end_utc(date.today()),
                 type="invoice",
                 transaction_id=finalized_invoice.id,
-                status="pending",
+                status=RechargeStatus.PENDING_INVOICE,
             )
             users_dao.session.add(recharge)
             users_dao.session.commit()
