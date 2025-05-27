@@ -249,7 +249,7 @@ async def test_one_time_approval_links_flow(client: AsyncClient):
     test_user_link = await create_test_user(client, "link_user@example.com")
     user_id = test_user_link["id"]
     user_headers = test_user_link["headers"]
-    initial_credits = await get_credits(client, user_headers=user_headers)
+    initial_credits = await get_credits(client)
 
     # Admin creates a one-time link
     create_link_payload = {"expires_in_days": 1}
@@ -285,7 +285,7 @@ async def test_one_time_approval_links_flow(client: AsyncClient):
     assert user_details.json()["assistant_hiring_approval"] == "approved"
 
     # Verify credits were granted
-    credits_after_first_claim = await get_credits(client, user_headers=user_headers)
+    credits_after_first_claim = await get_credits(client)
     expected_credits_after_first_claim = initial_credits + ASSISTANT_CREATION_COST
     assert (
         credits_after_first_claim == expected_credits_after_first_claim
