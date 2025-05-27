@@ -76,23 +76,36 @@ tools = [
     },
 ]
 
+
 async def create_test_user(client: AsyncClient, email: str) -> Dict[str, Any]:
-    response = await client.post("/v0/admin/auth-user", json={"email": email, "name": "Test"}, headers=ADMIN_HEADERS)
+    response = await client.post(
+        "/v0/admin/auth-user",
+        json={"email": email, "name": "Test"},
+        headers=ADMIN_HEADERS,
+    )
     assert response.status_code == status.HTTP_200_OK, response.json()
     user_data = response.json()
     user_id = user_data["id"]
     api_key = user_data.get("apiKey")
     if not api_key:
-        user_details_resp = await client.get(f"/v0/admin/auth-user/by-user-id?user_id={user_id}", headers=ADMIN_HEADERS)
+        user_details_resp = await client.get(
+            f"/v0/admin/auth-user/by-user-id?user_id={user_id}", headers=ADMIN_HEADERS
+        )
         assert user_details_resp.status_code == status.HTTP_200_OK
         api_key = user_details_resp.json().get("apiKey")
     assert api_key, f"API key not found for user {email}"
 
     user_auth_headers = {
         "accept": "application/json",
-        "Authorization": f"Bearer {api_key}"
-    }    
-    return {"id": user_id, "email": email, "headers": user_auth_headers, "api_key": api_key}
+        "Authorization": f"Bearer {api_key}",
+    }
+    return {
+        "id": user_id,
+        "email": email,
+        "headers": user_auth_headers,
+        "api_key": api_key,
+    }
+
 
 async def get_credits(client):
     response = await client.get("/v0/credits", headers=HEADERS)

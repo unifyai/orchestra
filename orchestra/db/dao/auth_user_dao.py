@@ -1,11 +1,20 @@
 from typing import List, Optional
 
-from sqlalchemy import select, update as sqlalchemy_update # Alias to avoid conflict if you name a var 'update'
+from sqlalchemy import (
+    select,
+)
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import AuthUser
 
-ASSISTANT_HIRING_APPROVAL_STATUSES = [None, "pending", "approved", "rejected", "revoked"]
+ASSISTANT_HIRING_APPROVAL_STATUSES = [
+    None,
+    "pending",
+    "approved",
+    "rejected",
+    "revoked",
+]
+
 
 class AuthUserDAO:
     def __init__(self, session: Session):
@@ -42,11 +51,15 @@ class AuthUserDAO:
             query = query.where(AuthUser.email == email)
         if assistant_hiring_approval:
             if assistant_hiring_approval not in ASSISTANT_HIRING_APPROVAL_STATUSES:
-                raise ValueError(f"Invalid assistant hiring approval status for filtering: {assistant_hiring_approval}")
+                raise ValueError(
+                    f"Invalid assistant hiring approval status for filtering: {assistant_hiring_approval}"
+                )
             if assistant_hiring_approval is None:
-                 query = query.where(AuthUser.assistant_hiring_approval.is_(None))
+                query = query.where(AuthUser.assistant_hiring_approval.is_(None))
             else:
-                query = query.where(AuthUser.assistant_hiring_approval == assistant_hiring_approval)
+                query = query.where(
+                    AuthUser.assistant_hiring_approval == assistant_hiring_approval
+                )
 
         rows = self.session.execute(query)
         return rows.fetchall()
@@ -90,7 +103,9 @@ class AuthUserDAO:
                 setattr(entry, "evaluations_enabled", evaluations_enabled)
             if assistant_hiring_approval is not None:
                 if assistant_hiring_approval not in ASSISTANT_HIRING_APPROVAL_STATUSES:
-                    raise ValueError(f"Unsupported hiring approval status: {assistant_hiring_approval}")
+                    raise ValueError(
+                        f"Unsupported hiring approval status: {assistant_hiring_approval}"
+                    )
                 setattr(entry, "assistant_hiring_approval", assistant_hiring_approval)
             if has_claimed_approval_link is not None:
                 setattr(entry, "has_claimed_approval_link", has_claimed_approval_link)
@@ -107,7 +122,9 @@ class AuthUserDAO:
             raise ValueError
 
     # -- Handle assistant hiring approval --
-    def set_assistant_hiring_approval(self, user_id: str, status: Optional[str]) -> bool:
+    def set_assistant_hiring_approval(
+        self, user_id: str, status: Optional[str]
+    ) -> bool:
         """Sets the assistant hiring approval status for a user."""
         if status not in ASSISTANT_HIRING_APPROVAL_STATUSES:
             raise ValueError(f"Invalid assistant hiring approval status: {status}")
@@ -128,7 +145,8 @@ class AuthUserDAO:
     def get_users_by_assistant_hiring_approval(self, status: str) -> List[AuthUser]:
         """Returns users matching a specific hiring status (e.g., "pending")."""
         if status not in ASSISTANT_HIRING_APPROVAL_STATUSES or status is None:
-            raise ValueError("Unsupported or invalid asssistant hiring approval status for querying list.")
+            raise ValueError(
+                "Unsupported or invalid asssistant hiring approval status for querying list."
+            )
         query = select(AuthUser).where(AuthUser.assistant_hiring_approval == status)
         return list(self.session.execute(query).scalars().all())
-    
