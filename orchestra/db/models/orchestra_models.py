@@ -635,6 +635,7 @@ class Context(Base):
         "LogEvent",
         secondary="log_event_context",
         back_populates="contexts",
+        passive_deletes=True,
     )
 
     __table_args__ = (
@@ -727,6 +728,7 @@ class LogEvent(Base):
         "Context",
         secondary="log_event_context",
         back_populates="log_events",
+        passive_deletes=True,
     )
     derived_logs = relationship(
         "DerivedLog",
@@ -1095,6 +1097,7 @@ class Assistant(Base):
     max_parallel = Column(Integer, nullable=True)
     phone = Column(String, nullable=True)
     email = Column(String, nullable=True)
+    whatsapp_sid = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
     recordings = relationship(
@@ -1102,6 +1105,30 @@ class Assistant(Base):
         back_populates="assistant",
         cascade="all, delete-orphan",
     )
+    voice_id = sa.Column(
+        sa.String,
+        sa.ForeignKey("voices.voice_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+
+class Voice(Base):
+    """Model class for the assistants voices table."""
+
+    __tablename__ = "voices"
+
+    voice_id = Column(String, primary_key=True)  # This will store Cartesia's voice ID
+    user_id = Column(
+        String,
+        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name = Column(String, nullable=False)
+    description = Column(String, nullable=False)
+    gender = Column(String, nullable=False)
+    language = Column(String, nullable=False)  # e.g., "en", "es"
 
 
 class Tab(Base):

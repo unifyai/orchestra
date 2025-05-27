@@ -1,15 +1,13 @@
-from fastapi import Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Tag
 
 
 class TagDAO:
     """Class for accessing tag table."""
 
-    def __init__(self, session: Session = Depends(get_db_session)):
+    def __init__(self, session: Session):
         self.session = session
 
     def get_all_tags(self, user_id):

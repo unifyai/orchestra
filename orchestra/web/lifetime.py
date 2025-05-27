@@ -45,8 +45,9 @@ def _setup_db(app: FastAPI) -> None:  # pragma: no cover
         engine = create_engine(
             str(settings.db_url),
             echo=settings.db_echo,
-            pool_size=700,
+            pool_size=50,
             max_overflow=100,  # noqa: WPS432, E501
+            pool_pre_ping=True,
         )
     else:
         # Use Cloud SQL connector for GCP deployment
@@ -205,6 +206,7 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
         app.url_path_for("swagger_ui_html"),
         app.url_path_for("swagger_ui_redirect"),
         app.url_path_for("redoc_html"),
+        app.url_path_for("metrics"),
     ]
 
     FastAPIInstrumentor().instrument_app(
@@ -253,12 +255,12 @@ def setup_observability(app: FastAPI) -> None:  # pragma: no cover
     # if settings.grafana_url:
     #     logger.info(f"Grafana dashboard available at {settings.grafana_url}")
 
-    # # Setup OpenTelemetry for distributed tracing
-    # try:
-    #     setup_opentelemetry(app)
-    # except Exception as e:
-    #     logger.error(f"Failed to setup OpenTelemetry: {e}")
-    #     logger.info("Continuing without distributed tracing")
+    # Setup OpenTelemetry for distributed tracing
+    try:
+        setup_opentelemetry(app)
+    except Exception as e:
+        logger.error(f"Failed to setup OpenTelemetry: {e}")
+        logger.info("Continuing without distributed tracing")
 
     # Setup SQLAlchemy instrumentation for query tracking
     # Only register DB listeners if the engine is already initialized
@@ -367,7 +369,7 @@ def register_startup_event(
             location=settings.vertexai_location,
         )
         app.middleware_stack = app.build_middleware_stack()
-        ensure_production_traffic_project_exists(app)
+        # ensure_production_traffic_project_exists(app)
         pass  # noqa: WPS420
 
     return _startup

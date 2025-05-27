@@ -1,5 +1,5 @@
 -- Users
-INSERT INTO users VALUES (:user_id, 10, null, False, -1, 0);
+INSERT INTO users VALUES (:user_id, 10000, null, False, -1, 0);
 INSERT INTO users VALUES ('stripe_autorecharge', 10, null, False, -1, 0);
 INSERT INTO users VALUES ('user1', 1, null, False, -1, 0);
 INSERT INTO users VALUES ('user2', 9.99, null, False, -1, 0);
@@ -19,7 +19,6 @@ INSERT INTO recharge_type VALUES ('free');
 INSERT INTO provider VALUES (1, 'openai', '', '');
 INSERT INTO provider VALUES (3, 'deepinfra', '', '');
 INSERT INTO provider VALUES (4, 'fireworks-ai', '', '');
-INSERT INTO provider VALUES (5, 'lepton-ai', '', '');
 INSERT INTO provider VALUES (6, 'replicate', '', '');
 INSERT INTO provider VALUES (7, 'together-ai', '', '');
 INSERT INTO provider VALUES (8, 'mistral-ai', '', '');
@@ -71,7 +70,6 @@ INSERT INTO model VALUES (15, 'grok-2', NOW(), 'dummy_task', true);
 
 INSERT INTO endpoint VALUES (1, 9, 3, NOW(), true);
 INSERT INTO endpoint VALUES (3, 13, 4, NOW(), true);
-INSERT INTO endpoint VALUES (4, 13, 5, NOW(), true);
 INSERT INTO endpoint VALUES (5, 9, 6, NOW(), true);
 INSERT INTO endpoint VALUES (6, 13, 7, NOW(), true);
 INSERT INTO endpoint VALUES (7, 11, 8, NOW(), true);

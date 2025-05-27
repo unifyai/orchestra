@@ -6,8 +6,6 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.consts import RECHARGE_TYPE_AUTO
-from orchestra.db.dao.recharge_dao import RechargeDAO
-from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
 from orchestra.db.models.orchestra_models import Users as User
 from orchestra.pricing import credits_to_usd
@@ -30,10 +28,7 @@ def recharge_credits(worker_id=None, amount=2.5):  # noqa: D103, WPS210
     engine = create_engine(url)
     session_factory = sessionmaker(engine, expire_on_commit=False)
     with session_factory() as session:
-        users_dao = UsersDAO(session)
-        recharge_dao = RechargeDAO(session)
-
-        all_users = get_all_users_models(users_dao)
+        all_users = get_all_users_models(session=session)
         recharge_quantity = amount  # TODO: add this to the user table
         for user in all_users:
 
@@ -44,8 +39,7 @@ def recharge_credits(worker_id=None, amount=2.5):  # noqa: D103, WPS210
             )
             create_recharge_model(
                 new_recharge_object=recharge_obj,
-                recharge_dao=recharge_dao,
-                user_dao=users_dao,
+                session=session,
             )
             session.commit()
         logger.info(

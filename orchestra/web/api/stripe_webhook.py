@@ -4,10 +4,12 @@ import os
 import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dao.webhook_log_dao import WebhookLogDAO
+from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
 
 router = APIRouter()
@@ -16,13 +18,15 @@ router = APIRouter()
 @router.post("/webhooks/stripe", include_in_schema=False)
 async def handle_stripe_webhook(
     request: Request,
-    users_dao: UsersDAO = Depends(UsersDAO),
-    recharge_dao: RechargeDAO = Depends(RechargeDAO),
-    webhook_log_dao: WebhookLogDAO = Depends(WebhookLogDAO),
+    session: Session = Depends(get_db_session),
 ):
     """
     Handle Stripe webhook events to update user credits based on payment outcomes.
     """
+    users_dao = UsersDAO(session)
+    recharge_dao = RechargeDAO(session)
+    webhook_log_dao = WebhookLogDAO(session)
+
     payload = await request.body()
     sig_header = request.headers.get("Stripe-Signature")
     stripe.api_key = os.environ.get("STRIPE_SECRET_KEY_LIVE")

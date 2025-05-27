@@ -467,3 +467,248 @@ async def test_admin_list_assistant_emails(client: AsyncClient):
     data = resp.json().get("info")
     assert isinstance(data, list)
     assert set(data) == {email1, email2}
+
+
+@pytest.mark.anyio
+async def test_create_assistant_with_whatsapp_sid(client: AsyncClient):
+    # Create assistant with whatsapp_sid -> verify it appears in create and list responses
+    payload = {
+        "first_name": "Nina",
+        "surname": "Rodriguez",
+        "age": 27,
+        "weekly_limit": 20.0,
+        "max_parallel": 2,
+        "region": "South America",
+        "profile_photo": "https://example.com/photos/nina.jpg",
+        "about": "WhatsApp integration specialist",
+        "whatsapp_sid": "WA1234567890abcdef",
+    }
+    resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "info" in body
+    data = body["info"]
+    assert data["whatsapp_sid"] == payload["whatsapp_sid"]
+    assert data["first_name"] == payload["first_name"]
+    assert data["phone"] is None
+    assert data["email"] is None
+
+    # Verify whatsapp_sid appears in list response
+    list_resp = await client.get("/v0/assistant", headers=HEADERS)
+    assert list_resp.status_code == 200
+    assistants = list_resp.json()["info"]
+    created_assistant = next(a for a in assistants if a["agent_id"] == data["agent_id"])
+    assert created_assistant["whatsapp_sid"] == payload["whatsapp_sid"]
+
+
+@pytest.mark.anyio
+async def test_update_whatsapp_sid_only(client: AsyncClient):
+    # Create assistant, then PATCH whatsapp_sid only -> updated
+    payload = {
+        "first_name": "Oscar",
+        "surname": "Thompson",
+        "age": 34,
+        "weekly_limit": 28.0,
+        "max_parallel": 3,
+        "region": "North America",
+        "profile_photo": "https://example.com/photos/oscar.jpg",
+        "about": "Communication systems engineer",
+    }
+    create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    aid = create.json()["info"]["agent_id"]
+    new_whatsapp_sid = "WA9876543210fedcba"
+    update_payload = {"whatsapp_sid": new_whatsapp_sid}
+    patch = await client.patch(
+        f"/v0/assistant/{aid}/config",
+        json=update_payload,
+        headers=HEADERS,
+    )
+    assert patch.status_code == 200
+    updated = patch.json()["info"]
+    assert updated["whatsapp_sid"] == new_whatsapp_sid
+    assert updated["phone"] is None
+    assert updated["email"] is None
+    assert updated["first_name"] == payload["first_name"]
+    assert updated["about"] == payload["about"]
+
+
+@pytest.mark.anyio
+async def test_search_assistants_by_phone(client: AsyncClient):
+    # Create two assistants with distinct phone values, search by phone
+    payload1 = {
+        "first_name": "Paul",
+        "surname": "Anderson",
+        "age": 31,
+        "weekly_limit": 15.0,
+        "max_parallel": 2,
+        "region": "Europe",
+        "profile_photo": "https://example.com/photos/paul.jpg",
+        "about": "Mobile app developer",
+        "phone": "+1-555-111-2222",
+    }
+    payload2 = {
+        "first_name": "Quinn",
+        "surname": "Davis",
+        "age": 26,
+        "weekly_limit": 18.0,
+        "max_parallel": 1,
+        "region": "Asia",
+        "profile_photo": "https://example.com/photos/quinn.jpg",
+        "about": "UX designer",
+        "phone": "+1-555-333-4444",
+    }
+
+    resp1 = await client.post("/v0/assistant", json=payload1, headers=HEADERS)
+    resp2 = await client.post("/v0/assistant", json=payload2, headers=HEADERS)
+    assert resp1.status_code == 200 and resp2.status_code == 200
+
+    aid1 = resp1.json()["info"]["agent_id"]
+
+    # Search by first assistant's phone
+    search_resp = await client.get(
+        f"/v0/assistant?phone={payload1['phone']}",
+        headers=HEADERS,
+    )
+    assert search_resp.status_code == 200
+    results = search_resp.json()["info"]
+    assert len(results) == 1
+    assert results[0]["agent_id"] == aid1
+    assert results[0]["phone"] == payload1["phone"]
+
+
+@pytest.mark.anyio
+async def test_search_assistants_by_email(client: AsyncClient):
+    # Create two assistants with distinct email values, search by email
+    payload1 = {
+        "first_name": "Rachel",
+        "surname": "Martinez",
+        "age": 29,
+        "weekly_limit": 22.0,
+        "max_parallel": 3,
+        "region": "North America",
+        "profile_photo": "https://example.com/photos/rachel.jpg",
+        "about": "Backend developer",
+        "email": "rachel.martinez@example.com",
+    }
+    payload2 = {
+        "first_name": "Sam",
+        "surname": "Johnson",
+        "age": 37,
+        "weekly_limit": 25.0,
+        "max_parallel": 4,
+        "region": "Australia",
+        "profile_photo": "https://example.com/photos/sam.jpg",
+        "about": "DevOps engineer",
+        "email": "sam.johnson@example.com",
+    }
+
+    resp1 = await client.post("/v0/assistant", json=payload1, headers=HEADERS)
+    resp2 = await client.post("/v0/assistant", json=payload2, headers=HEADERS)
+    assert resp1.status_code == 200 and resp2.status_code == 200
+
+    aid2 = resp2.json()["info"]["agent_id"]
+
+    # Search by second assistant's email
+    search_resp = await client.get(
+        f"/v0/assistant?email={payload2['email']}",
+        headers=HEADERS,
+    )
+    assert search_resp.status_code == 200
+    results = search_resp.json()["info"]
+    assert len(results) == 1
+    assert results[0]["agent_id"] == aid2
+    assert results[0]["email"] == payload2["email"]
+
+
+@pytest.mark.anyio
+async def test_admin_list_assistants_filter_phone(client: AsyncClient):
+    # Create assistants with different phone values, filter by phone
+    payload1 = {
+        "first_name": "Phone",
+        "surname": "Test1",
+        "age": 28,
+        "weekly_limit": 15.0,
+        "max_parallel": 1,
+        "region": "Asia",
+        "profile_photo": "https://example.com/photos/phone1.jpg",
+        "about": "Phone test assistant 1",
+        "phone": "+1-555-111-1111",
+    }
+    payload2 = {
+        "first_name": "Phone",
+        "surname": "Test2",
+        "age": 32,
+        "weekly_limit": 18.0,
+        "max_parallel": 2,
+        "region": "Australia",
+        "profile_photo": "https://example.com/photos/phone2.jpg",
+        "about": "Phone test assistant 2",
+        "phone": "+1-555-222-2222",
+    }
+
+    resp1 = await client.post("/v0/assistant", json=payload1, headers=HEADERS)
+    resp2 = await client.post("/v0/assistant", json=payload2, headers=HEADERS)
+    assert resp1.status_code == 200 and resp2.status_code == 200
+
+    aid1 = resp1.json()["info"]["agent_id"]
+
+    # Test admin endpoint with phone filter
+    admin_resp = await client.get(
+        f"/v0/admin/assistant?phone={payload1['phone']}",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    body = admin_resp.json()
+    assert "info" in body
+    results = body["info"]
+    assert isinstance(results, list)
+    assert len(results) == 1
+    assert results[0]["agent_id"] == aid1
+    assert results[0]["phone"] == payload1["phone"]
+
+
+@pytest.mark.anyio
+async def test_admin_list_assistants_filter_email(client: AsyncClient):
+    # Create assistants with different email values, filter by email
+    payload1 = {
+        "first_name": "Email",
+        "surname": "Test1",
+        "age": 26,
+        "weekly_limit": 12.0,
+        "max_parallel": 1,
+        "region": "South America",
+        "profile_photo": "https://example.com/photos/email1.jpg",
+        "about": "Email test assistant 1",
+        "email": "email.test1@example.com",
+    }
+    payload2 = {
+        "first_name": "Email",
+        "surname": "Test2",
+        "age": 40,
+        "weekly_limit": 30.0,
+        "max_parallel": 4,
+        "region": "Africa",
+        "profile_photo": "https://example.com/photos/email2.jpg",
+        "about": "Email test assistant 2",
+        "email": "email.test2@example.com",
+    }
+
+    resp1 = await client.post("/v0/assistant", json=payload1, headers=HEADERS)
+    resp2 = await client.post("/v0/assistant", json=payload2, headers=HEADERS)
+    assert resp1.status_code == 200 and resp2.status_code == 200
+
+    aid2 = resp2.json()["info"]["agent_id"]
+
+    # Test admin endpoint with email filter
+    admin_resp = await client.get(
+        f"/v0/admin/assistant?email={payload2['email']}",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    body = admin_resp.json()
+    assert "info" in body
+    results = body["info"]
+    assert isinstance(results, list)
+    assert len(results) == 1
+    assert results[0]["agent_id"] == aid2
+    assert results[0]["email"] == payload2["email"]

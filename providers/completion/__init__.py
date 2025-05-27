@@ -7,7 +7,6 @@ from providers.completion.deepinfra import Deepinfra
 from providers.completion.deepseek import DeepSeek
 from providers.completion.fireworksai import FireworksAI
 from providers.completion.groq import Groq
-from providers.completion.leptonai import LeptonAI
 from providers.completion.mistral import Mistral
 from providers.completion.openai import OpenAI
 from providers.completion.replicate import Replicate
@@ -22,7 +21,6 @@ PROVIDER_CLASSES = {
     "openai": OpenAI,
     "mistral-ai": Mistral,
     "groq": Groq,
-    "lepton-ai": LeptonAI,
     "fireworks-ai": FireworksAI,
     "deepinfra": Deepinfra,
     "deepseek": DeepSeek,

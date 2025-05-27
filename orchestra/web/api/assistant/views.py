@@ -1,11 +1,17 @@
 from decimal import Decimal
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from sqlalchemy.orm import Session
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.recording_dao import RecordingDAO
+from orchestra.db.dao.users_dao import UsersDAO
+from orchestra.db.dao.voice_dao import VoiceDAO
+from orchestra.db.dependencies import get_db_session
+from orchestra.services.bucket_service import BucketService
 from orchestra.services.call_recording_service import CallRecordingService
+from orchestra.settings import settings
 from orchestra.web.api.assistant.schema import (
     AssistantCreate,
     AssistantRead,
@@ -13,10 +19,25 @@ from orchestra.web.api.assistant.schema import (
     InfoResponse,
     RecordingCreate,
     RecordingInfo,
+    VoiceCreate,
+    VoiceRead,
 )
+
+
+def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:
+    """
+    Normalize phone parameter that may have been URL-decoded.
+    FastAPI URL-decodes '+' to space, so convert leading space back to '+'.
+    """
+    if raw_phone and raw_phone.startswith(" "):
+        return "+" + raw_phone[1:]
+    return raw_phone
+
 
 router = APIRouter()
 admin_router = APIRouter()
+
+ASSISTANT_CREATION_COST = Decimal("10.0")
 
 
 @router.post(
@@ -24,7 +45,7 @@ admin_router = APIRouter()
     response_model=InfoResponse[AssistantRead],
     status_code=status.HTTP_200_OK,
     summary="Create a new assistant",
-    description="Creates a new assistant for the authenticated user with the specified configuration.",
+    description="Creates a new assistant for the authenticated user with the specified configuration. This action will deduct credits from the user account.",
     tags=["Assistants"],
     responses={
         200: {
@@ -43,7 +64,18 @@ admin_router = APIRouter()
                             "updated_at": "2025-04-25T12:00:00Z",
                             "phone": "+1-555-123-4567",
                             "email": "alice.smith@example.com",
+                            "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                         },
+                    },
+                },
+            },
+        },
+        402: {
+            "description": "Insufficient credits",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Insufficient credits to create an assistant.",
                     },
                 },
             },
@@ -69,52 +101,104 @@ admin_router = APIRouter()
 def create_assistant(
     assistant_in: AssistantCreate,
     request: Request,
-    dao: AssistantDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ) -> InfoResponse[AssistantRead]:
     """
     Create a new assistant for the authenticated user.
 
     This endpoint allows users to create a personalized assistant with specific
     attributes like name, age, and operational limits. Each assistant is tied
-    to the authenticated user's account.
+    to the authenticated user's account. Creating an assistant incurs a credit cost.
     """
+    user_id = request.state.user_id
+    users_dao = UsersDAO(session)
+    assistant_dao = AssistantDAO(session)
+    assistant = None
+
+    # Phase 1: Pre-checks and prepare assistant data
     try:
-        assistant = dao.create_assistant(
-            user_id=request.state.user_id,
+        if not settings.is_staging:
+            user = users_dao.get_user_with_id(user_id)
+            if user.credits < ASSISTANT_CREATION_COST:
+                raise HTTPException(
+                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                    detail="Insufficient credits to create an assistant.",
+                )
+
+        parsed_weekly_limit = (
+            Decimal(assistant_in.weekly_limit)
+            if assistant_in.weekly_limit is not None
+            else None
+        )
+
+        assistant = assistant_dao.create_assistant(
+            user_id=user_id,
             first_name=assistant_in.first_name,
             surname=assistant_in.surname,
             age=assistant_in.age,
             region=assistant_in.region,
             profile_photo=assistant_in.profile_photo,
             about=assistant_in.about,
-            weekly_limit=Decimal(assistant_in.weekly_limit),
+            weekly_limit=parsed_weekly_limit,
             max_parallel=assistant_in.max_parallel,
             phone=assistant_in.phone,
             email=assistant_in.email,
+            whatsapp_sid=assistant_in.whatsapp_sid,
+            voice_id=assistant_in.voice_id,
         )
-
-        return InfoResponse(
-            info=AssistantRead(
-                agent_id=str(assistant.agent_id),
-                first_name=assistant.first_name,
-                surname=assistant.surname,
-                age=assistant.age,
-                region=assistant.region,
-                profile_photo=assistant.profile_photo,
-                about=assistant.about,
-                weekly_limit=float(assistant.weekly_limit),
-                max_parallel=assistant.max_parallel,
-                created_at=assistant.created_at,
-                updated_at=assistant.updated_at,
-                phone=assistant.phone,
-                email=assistant.email,
-            ),
-        )
-    except Exception as e:
+    except HTTPException:
+        raise
+    except Exception as e_prepare:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Error creating assistant: {str(e)}",
+            detail=f"Failed to create assistant: {str(e_prepare)}",
         )
+
+    # Phase 2: Deduct credits. The commit within recharge_credit will persist
+    # both the assistant and the credit change atomically.
+    if not settings.is_staging:
+        try:
+            users_dao.recharge_credit(
+                user_id=user_id,
+                quantity=-float(ASSISTANT_CREATION_COST),
+            )
+        except Exception as e_commit:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Payment processing failed. Assistant creation has been rolled back. Details: {str(e_commit)}",
+            )
+
+    if assistant is None:
+        # Should ideally not be reached if Phase 1 fails
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create assistant.",
+        )
+
+    # Phase 3: Prepare and return response
+    return InfoResponse(
+        info=AssistantRead(
+            agent_id=str(assistant.agent_id),
+            first_name=assistant.first_name,
+            surname=assistant.surname,
+            age=assistant.age,
+            region=assistant.region,
+            profile_photo=assistant.profile_photo,
+            about=assistant.about,
+            weekly_limit=(
+                float(assistant.weekly_limit)
+                if assistant.weekly_limit is not None
+                else None
+            ),
+            max_parallel=assistant.max_parallel,
+            created_at=assistant.created_at,
+            updated_at=assistant.updated_at,
+            phone=assistant.phone,
+            email=assistant.email,
+            whatsapp_sid=assistant.whatsapp_sid,
+            voice_id=assistant.voice_id,
+        ),
+    )
 
 
 @router.get(
@@ -143,6 +227,7 @@ def create_assistant(
                                 "region": "North America",
                                 "profile_photo": "https://example.com/photos/alice.jpg",
                                 "about": "Mathematician and writer known for work on Analytical Engine",
+                                "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                                 "created_at": "2025-04-25T12:00:00Z",
                                 "updated_at": "2025-04-25T12:00:00Z",
                             },
@@ -158,6 +243,7 @@ def create_assistant(
                                 "region": "South America",
                                 "profile_photo": "https://example.com/photos/bob.jpg",
                                 "about": "Machine learning expert with focus on computer vision",
+                                "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                                 "created_at": "2025-04-24T10:30:00Z",
                                 "updated_at": "2025-04-24T10:30:00Z",
                             },
@@ -170,7 +256,15 @@ def create_assistant(
 )
 def list_assistants(
     request: Request,
-    dao: AssistantDAO = Depends(),
+    session: Session = Depends(get_db_session),
+    phone: Optional[str] = Query(
+        None,
+        description="Only return assistants whose phone number matches this E.164-style value (leading '+' is URL-encoded).",
+    ),
+    email: Optional[str] = Query(
+        None,
+        description="Only return assistants whose email address matches this value.",
+    ),
 ) -> InfoResponse[List[AssistantRead]]:
     """
     List all assistants for the authenticated user.
@@ -178,8 +272,16 @@ def list_assistants(
     Retrieves all assistants created by the current user, including their
     configuration details and operational limits.
     """
+    # Correct for URL-decoded '+' in query parameters.
+    phone = normalize_phone_parameter(phone)
+
+    dao = AssistantDAO(session)
     try:
-        assistants = dao.list_assistants_for_user(request.state.user_id)
+        assistants = dao.list_assistants_for_user(
+            request.state.user_id,
+            phone=phone,
+            email=email,
+        )
         return InfoResponse(
             info=[
                 AssistantRead(
@@ -196,6 +298,8 @@ def list_assistants(
                     updated_at=a.updated_at,
                     phone=a.phone,
                     email=a.email,
+                    whatsapp_sid=a.whatsapp_sid,
+                    voice_id=a.voice_id,
                 )
                 for a in assistants
             ],
@@ -233,7 +337,7 @@ def list_assistants(
 def delete_assistant(
     assistant_id: int,
     request: Request,
-    dao: AssistantDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ) -> InfoResponse[str]:
     """
     Delete an assistant by ID for the authenticated user.
@@ -241,6 +345,7 @@ def delete_assistant(
     Permanently removes the specified assistant from the user's account.
     This action cannot be undone.
     """
+    dao = AssistantDAO(session)
     try:
         dao.delete_assistant(user_id=request.state.user_id, agent_id=assistant_id)
         return InfoResponse(info="Assistant deleted successfully")
@@ -276,6 +381,7 @@ def delete_assistant(
                             "email": "alice.smith@example.com",
                             "region": "North America",
                             "profile_photo": "https://example.com/photos/alice.jpg",
+                            "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                             "created_at": "2025-04-25T12:00:00Z",
                             "updated_at": "2025-04-25T14:30:00Z",
                         },
@@ -311,7 +417,7 @@ def update_assistant_config(
     assistant_id: int,
     update: AssistantUpdate,
     request: Request,
-    dao: AssistantDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ) -> InfoResponse[AssistantRead]:
     """
     Update about, phone, email, weekly_limit, and/or max_parallel for an existing assistant.
@@ -319,6 +425,7 @@ def update_assistant_config(
     Allows partial updates to an assistant's configuration. Only the fields
     provided in the request will be updated, while others remain unchanged.
     """
+    dao = AssistantDAO(session)
     try:
         weekly_limit: Optional[Decimal] = None
         if update.weekly_limit is not None:
@@ -330,8 +437,10 @@ def update_assistant_config(
             about=update.about,
             phone=update.phone,
             email=update.email,
+            whatsapp_sid=update.whatsapp_sid,
             weekly_limit=weekly_limit,
             max_parallel=update.max_parallel,
+            voice_id=update.voice_id,
         )
         if not updated:
             raise HTTPException(
@@ -353,6 +462,8 @@ def update_assistant_config(
                 updated_at=updated.updated_at,
                 phone=updated.phone,
                 email=updated.email,
+                whatsapp_sid=updated.whatsapp_sid,
+                voice_id=updated.voice_id,
             ),
         )
     except Exception as e:
@@ -405,7 +516,7 @@ async def create_recording(
     assistant_id: int,
     recording: RecordingCreate,
     request: Request,
-    recording_service: CallRecordingService = Depends(),
+    session: Session = Depends(get_db_session),
 ) -> InfoResponse[RecordingInfo]:
     """
     Add a new call recording for the specified assistant.
@@ -413,6 +524,14 @@ async def create_recording(
     This endpoint allows uploading a call recording by providing base64-encoded audio data.
     The system will decode the audio, store it securely, and associate it with the assistant.
     """
+    assistant_dao = AssistantDAO(session)
+    recording_dao = RecordingDAO(session)
+    bucket_service = BucketService()
+    recording_service = CallRecordingService(
+        assistant_dao=assistant_dao,
+        recording_dao=recording_dao,
+        bucket_service=bucket_service,
+    )
     try:
         mime = recording.content_type or "application/octet-stream"
         recording_model = await recording_service.record_call_from_raw(
@@ -477,8 +596,7 @@ async def create_recording(
 def list_recordings(
     assistant_id: int,
     request: Request,
-    recording_dao: RecordingDAO = Depends(),
-    assistant_dao: AssistantDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ) -> InfoResponse[List[RecordingInfo]]:
     """
     List all call recordings for the specified assistant.
@@ -486,6 +604,8 @@ def list_recordings(
     Retrieves all call recordings associated with the assistant, including their
     URLs and creation timestamps.
     """
+    assistant_dao = AssistantDAO(session)
+    recording_dao = RecordingDAO(session)
     try:
         # Verify assistant exists and belongs to user
         assistant = assistant_dao.get_assistant_by_id(
@@ -545,8 +665,7 @@ def delete_recording(
     assistant_id: int,
     recording_id: int,
     request: Request,
-    recording_dao: RecordingDAO = Depends(),
-    assistant_dao: AssistantDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ) -> InfoResponse[str]:
     """
     Delete a call recording by ID for the specified assistant.
@@ -554,6 +673,8 @@ def delete_recording(
     Permanently removes the specified recording from the system.
     This action cannot be undone.
     """
+    assistant_dao = AssistantDAO(session)
+    recording_dao = RecordingDAO(session)
     try:
         # Verify assistant exists and belongs to user
         assistant = assistant_dao.get_assistant_by_id(
@@ -587,6 +708,198 @@ def delete_recording(
         )
 
 
+@router.post(
+    "/assistant/voice",
+    response_model=InfoResponse[VoiceRead],
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new voice record",
+    description="Create a voice that can be used my any assistant during TTS.",
+    responses={
+        200: {
+            "description": "Voice created successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": {
+                            "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
+                            "name": "English Woman Calm 1",
+                            "description": "Calm and relaxting voice of an english-speaking woman",
+                            "gender": "female",
+                            "language": "en",
+                        },
+                    },
+                },
+            },
+        },
+        422: {
+            "description": "Validation Error",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": [
+                            {
+                                "loc": ["body", "name"],
+                                "msg": "field required",
+                                "type": "value_error.missing",
+                            },
+                        ],
+                    },
+                },
+            },
+        },
+    },
+    tags=["Voices"],
+)
+async def create_voice(
+    voice_in: VoiceCreate,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[VoiceRead]:
+    """
+    Create a new voice record in the database after it has been created/localized via Cartesia.
+    """
+    dao = VoiceDAO(session)
+    try:
+        voice = dao.create_voice(
+            user_id=request.state.user_id,
+            voice_id=voice_in.voice_id,  # This is Cartesia's ID
+            name=voice_in.name,
+            description=voice_in.description,
+            gender=voice_in.gender,
+            language=voice_in.language,
+        )
+
+        return InfoResponse(
+            info=VoiceRead(
+                voice_id=voice.voice_id,
+                name=voice.name,
+                description=voice.description,
+                gender=voice.gender,
+                language=voice.language,
+            ),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Error creating voice: {str(e)}",
+        )
+
+
+@router.get(
+    "/assistant/voice",
+    response_model=InfoResponse[List[VoiceRead]],
+    status_code=status.HTTP_200_OK,
+    summary="List all assistant voices for the user.",
+    description="Returns a list of all assistant voices created available for the user.",
+    responses={
+        200: {
+            "description": "List of voices retrieved successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": [
+                            {
+                                "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
+                                "name": "English Woman Calm 1",
+                                "description": "Calm and relaxting voice of an english-speaking woman",
+                                "gender": "female",
+                                "language": "en",
+                            },
+                            {
+                                "voice_id": "c99d36f3-5ffd-4253-803a-535c1bc9c306",
+                                "name": "English Male Deep 1",
+                                "description": "A deep, smoooth British man's voice perfect for narration.",
+                                "gender": "male",
+                                "language": "en",
+                            },
+                        ],
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Voice Not Found",
+            "content": {
+                "application/json": {"example": {"detail": "Voice not found."}},
+            },
+        },
+    },
+    tags=["Voices"],
+)
+def list_voices(
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[List[VoiceRead]]:
+    """
+    List all voices saved by the authenticated user.
+    """
+    dao = VoiceDAO(session)
+    try:
+        voices = dao.list_voices_for_user(
+            user_id=request.state.user_id,
+        )
+
+        return InfoResponse(
+            info=[
+                VoiceRead(
+                    voice_id=voice.voice_id,
+                    name=voice.name,
+                    description=voice.description,
+                    language=voice.language,
+                    gender=voice.gender,
+                )
+                for voice in voices
+            ],
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Error fetching user voices: {str(e)}",
+        )
+
+
+@router.delete(
+    "/assistant/voice/{voice_id}",
+    status_code=status.HTTP_200_OK,
+    response_model=InfoResponse[str],
+    summary="Delete a user's voice record",
+    description="Deletes a specific voice record by its Cartesia ID for the authenticated user. This does NOT delete the voice from Cartesia itself, that should be a separate Cartesia API call if needed.",
+    responses={
+        200: {
+            "description": "Voice deleted successfully",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Voice deleted successfully"},
+                },
+            },
+        },
+        404: {
+            "description": "Voice not found",
+            "content": {
+                "application/json": {"example": {"detail": "Voice not found."}},
+            },
+        },
+    },
+    tags=["Voices"],
+)
+def delete_voice(
+    voice_id: str,
+    request: Request,
+    session: Session = Depends(get_db_session),
+) -> InfoResponse[str]:
+    dao = VoiceDAO(session)
+    try:
+        dao.delete_voice(user_id=request.state.user_id, voice_id=voice_id)
+        return InfoResponse(info="Voice deleted successfully.")
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error deleting voice record: {str(e)}",
+        )
+
+
 ##################
 # Admin endpoints #
 ##################
@@ -598,8 +911,9 @@ def delete_recording(
     summary="Admin: list all assistant email addresses",
 )
 async def admin_list_assistant_emails(
-    dao: AssistantDAO = Depends(),
+    session: Session = Depends(get_db_session),
 ) -> InfoResponse[List[str]]:
+    dao = AssistantDAO(session)
     """Return every non-null email address that has been set on an Assistant."""
     emails = dao.list_all_assistant_emails()
     return InfoResponse(info=emails)

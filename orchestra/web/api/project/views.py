@@ -7,15 +7,14 @@ from typing import List
 
 import sqlalchemy
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
+from sqlalchemy.orm import Session
 
 from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.derived_log_dao import DerivedLogDAO
 from orchestra.db.dao.favorite_project_dao import FavoriteProjectDAO
-from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.interface_dao import InterfaceDAO
 from orchestra.db.dao.legacy_interface_dao import LegacyInterfaceDAO
-from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
@@ -35,6 +34,7 @@ from orchestra.db.models.orchestra_models import (
     LogEvent,
     LogEventContext,
     Organization,
+    Project,
     TempInterface,
 )
 from orchestra.settings import settings
@@ -49,6 +49,30 @@ from orchestra.web.api.project.schema import (
 from orchestra.web.api.utils.http_responses import not_found
 
 router = APIRouter()
+
+
+def get_project_or_404(
+    request_fastapi: Request,
+    project_name: str = Path(
+        ...,
+        description="Project name, may contain slashes",
+        example="proj/a",
+    ),
+    session: Session = Depends(get_db_session),
+) -> Project:
+
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    project = project_dao.get_by_user_and_name(
+        user_id=request_fastapi.state.user_id,
+        name=project_name,
+    )
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {project_name} not found.",
+        )
+    return project
 
 
 ###########################
@@ -85,12 +109,15 @@ router = APIRouter()
 )
 def get_favorites(
     request_fastapi: Request,
-    favorite_project_dao: FavoriteProjectDAO = Depends(),
-    project_dao: ProjectDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Returns a list of the user's favorite projects, sorted by position.
     """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    favorite_project_dao = FavoriteProjectDAO(session)
+
     favorites = favorite_project_dao.filter_by_user(request_fastapi.state.user_id)
 
     # Sort by position
@@ -158,14 +185,17 @@ def get_favorites(
 def create_favorite(
     request_fastapi: Request,
     favorite: FavoriteProjectIn,
-    favorite_project_dao: FavoriteProjectDAO = Depends(),
-    project_dao: ProjectDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Creates a new favorite project for the user.
 
     Each favorite must include a project name, icon, and position.
     """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    favorite_project_dao = FavoriteProjectDAO(session)
+
     user_id = request_fastapi.state.user_id
 
     # Verify project exists and user has access
@@ -240,12 +270,15 @@ def create_favorite(
 def get_favorite(
     request_fastapi: Request,
     id: int = Path(..., description="The ID of the favorite to retrieve"),
-    favorite_project_dao: FavoriteProjectDAO = Depends(),
-    project_dao: ProjectDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Returns details of a specific favorite project.
     """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    favorite_project_dao = FavoriteProjectDAO(session)
+
     user_id = request_fastapi.state.user_id
     # Get the favorite
     try:
@@ -303,14 +336,17 @@ def update_favorite(
     request_fastapi: Request,
     update: FavoriteProjectUpdate,
     id: int = Path(..., description="The ID of the favorite to update"),
-    favorite_project_dao: FavoriteProjectDAO = Depends(),
-    project_dao: ProjectDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Updates a specific favorite project.
 
     Only the provided fields will be updated.
     """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    favorite_project_dao = FavoriteProjectDAO(session)
+
     # Get the favorite
     user_id = request_fastapi.state.user_id
     try:
@@ -383,11 +419,12 @@ def update_favorite(
 def delete_favorite(
     request_fastapi: Request,
     id: int = Path(..., description="The ID of the favorite to delete"),
-    favorite_project_dao: FavoriteProjectDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Deletes a specific favorite project.
     """
+    favorite_project_dao = FavoriteProjectDAO(session)
     # Get the favorite
     user_id = request_fastapi.state.user_id
     try:
@@ -436,12 +473,14 @@ def delete_favorite(
 def create_project(
     request_fastapi: Request,
     request: ProjectConfig,
-    project_dao: ProjectDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Creates a logging project and adds this to your account. This project will
     have a set of logs associated with it.
     """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
 
     try:
         existing_project = project_dao.get_by_user_and_name(
@@ -465,181 +504,7 @@ def create_project(
 
 
 @router.delete(
-    "/project/{name}",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {"info": "Project deleted successfully!"},
-                },
-            },
-        },
-        404: {
-            "description": "Project Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Project <name> not found.",
-                    },
-                },
-            },
-        },
-    },
-)
-def delete_project(
-    request_fastapi: Request,
-    name: str = Path(
-        description="Name of the project to delete.",
-        example="eval-project",
-    ),
-    project_dao: ProjectDAO = Depends(),
-    session=Depends(get_db_session),
-):
-    """
-    Deletes a project from your account.
-    """
-    # Check if trying to delete the protected project (Unity)
-    if name == "Unity":
-        raise HTTPException(
-            status_code=403,
-            detail="The 'Unity' project cannot be deleted.",
-        )
-
-    # Check if trying to delete the protected project (Production Traffic)
-    ORGANIZATION_NAME = settings.orchestra_organization_name
-    OWNER_ID = settings.orchestra_owner_id
-    PROD_TRAFFIC_PROJECT_NAME = settings.orchestra_prod_traffic_name
-    CHAT_COMPLETIONS_PROJECT_NAME = settings.chat_completions_project_name
-    orchestra_org = (
-        session.query(Organization)
-        .filter(
-            Organization.name == ORGANIZATION_NAME,
-            Organization.owner_id == OWNER_ID,
-        )
-        .first()
-    )
-    try:
-        # Get the project using the new access-aware method
-        project = project_dao.get_by_user_and_name(
-            user_id=request_fastapi.state.user_id,
-            name=name,
-        )
-        project_id = project.id
-        if name == CHAT_COMPLETIONS_PROJECT_NAME:
-            raise HTTPException(
-                status_code=403,
-                detail=f"The '{CHAT_COMPLETIONS_PROJECT_NAME}' project cannot be deleted.",
-            )
-        if (
-            name == PROD_TRAFFIC_PROJECT_NAME
-            and project.organization_id == orchestra_org.id
-        ):
-            raise HTTPException(
-                status_code=403,
-                detail=f"The '{PROD_TRAFFIC_PROJECT_NAME}' project cannot be deleted.",
-            )
-        project_dao.delete(id=project_id)
-
-    except:
-        raise not_found(f"Project {name}")
-
-    return {"info": "Project deleted successfully"}
-
-
-@router.patch(
-    "/project/{name}",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {"info": "Project renamed successfully!"},
-                },
-            },
-        },
-        404: {
-            "description": "Project Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Project <name> not found.",
-                    },
-                },
-            },
-        },
-    },
-)
-def rename_project(
-    request_fastapi: Request,
-    request: ProjectConfig,
-    name: str = Path(
-        description="Name of the project to rename.",
-        example="old-project-name",
-    ),
-    project_dao: ProjectDAO = Depends(),
-):
-    """
-    Renames a project from `name` to `new_name` in your account.
-    """
-    # Check if trying to rename the protected Unity project
-    if name == "Unity":
-        raise HTTPException(
-            status_code=403,
-            detail="The 'Unity' project cannot be renamed.",
-        )
-    try:
-        # First verify the project exists and user has access
-        try:
-            project = project_dao.get_by_user_and_name(
-                user_id=request_fastapi.state.user_id,
-                name=name,
-            ).id
-            # Now rename it
-            project_dao.rename(
-                user_id=request_fastapi.state.user_id,
-                name=name,
-                new_name=request.name,
-            )
-        except:
-            raise ValueError("Project not found")
-    except:
-        raise not_found(f"Project {name}")
-    return {"info": "Project renamed successfully!"}
-
-
-@router.get(
-    "/projects",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": [
-                        "project_a",
-                        "project_b",
-                        "project_c",
-                    ],
-                },
-            },
-        },
-    },
-)
-def list_projects(
-    request_fastapi: Request,
-    project_dao: ProjectDAO = Depends(),
-):
-    """
-    Returns the names of all projects stored in your account.
-    """
-    raw_projects = project_dao.filter_by_user_access(
-        user_id=request_fastapi.state.user_id,
-    )
-    return [p[0].name for p in raw_projects]
-
-
-@router.delete(
-    "/project/{name}/logs",
+    "/project/{project_name:path}/logs",
     responses={
         200: {
             "description": "Project logs deleted.",
@@ -663,28 +528,15 @@ def list_projects(
 )
 def delete_project_logs(
     request_fastapi: Request,
-    name: str,
-    project_dao: ProjectDAO = Depends(),
-    log_event_dao: LogEventDAO = Depends(),
+    session: Session = Depends(get_db_session),
+    project: Project = Depends(get_project_or_404),
 ):
     """
     Deletes all logs in a project.
     """
-    # Verify project exists and user has access
-    try:
-        project = project_dao.get_by_user_and_name(
-            user_id=request_fastapi.state.user_id,
-            name=name,
-        )
-        project_id = project.id
-    except HTTPException:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project {name} not found.",
-        )
-
+    log_event_dao = LogEventDAO(session)
     # Get all log events for the project
-    log_events = log_event_dao.filter(project_id=project_id)
+    log_events = log_event_dao.filter(project_id=project.id)
 
     # Delete each log event (cascade delete will handle related logs)
     for event in log_events:
@@ -694,7 +546,7 @@ def delete_project_logs(
 
 
 @router.delete(
-    "/project/{name}/contexts",
+    "/project/{project_name:path}/contexts",
     responses={
         200: {
             "description": "Project contexts and logs deleted.",
@@ -720,36 +572,183 @@ def delete_project_logs(
 )
 def delete_project_contexts(
     request_fastapi: Request,
-    name: str = Path(
-        description="Name of the project to delete contexts from.",
-        example="test-project",
-    ),
-    project_dao: ProjectDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
+    project: Project = Depends(get_project_or_404),
+    session=Depends(get_db_session),
 ):
     """
     Deletes all contexts and their associated logs from a project.
     The project's interfaces remain untouched.
     """
-    # Verify project exists and user has access
-    try:
-        project = project_dao.get_by_user_and_name(
-            user_id=request_fastapi.state.user_id,
-            name=name,
-        )
-        project_id = project.id
-    except HTTPException:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project {name} not found.",
-        )
 
+    context_dao = ContextDAO(session)
     # Get all contexts for the project
-    contexts = context_dao.filter(project_id=project_id)
+    contexts = context_dao.filter(project_id=project.id)
     for context in contexts:
         context_dao.delete(context[0].id)
 
     return {"info": "Project contexts and logs deleted successfully!"}
+
+
+@router.delete(
+    "/project/{project_name:path}",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Project deleted successfully!"},
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project <name> not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def delete_project(
+    request_fastapi: Request,
+    project: Project = Depends(get_project_or_404),
+    session=Depends(get_db_session),
+):
+    """
+    Deletes a project from your account.
+    """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+
+    # Check if trying to delete the protected project (Unity)
+    if project.name == "Unity":
+        raise HTTPException(
+            status_code=403,
+            detail="The 'Unity' project cannot be deleted.",
+        )
+
+    # Check if trying to delete the protected project (Production Traffic)
+    ORGANIZATION_NAME = settings.orchestra_organization_name
+    OWNER_ID = settings.orchestra_owner_id
+    PROD_TRAFFIC_PROJECT_NAME = settings.orchestra_prod_traffic_name
+    CHAT_COMPLETIONS_PROJECT_NAME = settings.chat_completions_project_name
+    orchestra_org = (
+        session.query(Organization)
+        .filter(
+            Organization.name == ORGANIZATION_NAME,
+            Organization.owner_id == OWNER_ID,
+        )
+        .first()
+    )
+    try:
+        if project.name == CHAT_COMPLETIONS_PROJECT_NAME:
+            raise HTTPException(
+                status_code=403,
+                detail=f"The '{CHAT_COMPLETIONS_PROJECT_NAME}' project cannot be deleted.",
+            )
+        if (
+            project.name == PROD_TRAFFIC_PROJECT_NAME
+            and project.organization_id == orchestra_org.id
+        ):
+            raise HTTPException(
+                status_code=403,
+                detail=f"The '{PROD_TRAFFIC_PROJECT_NAME}' project cannot be deleted.",
+            )
+        project_dao.delete(id=project.id)
+
+    except:
+        raise not_found(f"Project {project.name}")
+
+    return {"info": "Project deleted successfully"}
+
+
+@router.patch(
+    "/project/{project_name:path}",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Project renamed successfully!"},
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project <name> not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def rename_project(
+    request_fastapi: Request,
+    request: ProjectConfig,
+    project: Project = Depends(get_project_or_404),
+    session=Depends(get_db_session),
+):
+    """
+    Renames a project from `name` to `new_name` in your account.
+    """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+
+    # Check if trying to rename the protected Unity project
+    if project.name == "Unity":
+        raise HTTPException(
+            status_code=403,
+            detail="The 'Unity' project cannot be renamed.",
+        )
+    try:
+        # Now rename it
+        project_dao.rename(
+            user_id=request_fastapi.state.user_id,
+            name=project.name,
+            new_name=request.name,
+        )
+    except:
+        raise not_found(f"Project {project.name}")
+    return {"info": "Project renamed successfully!"}
+
+
+@router.get(
+    "/projects",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": [
+                        "project_a",
+                        "project_b",
+                        "project_c",
+                    ],
+                },
+            },
+        },
+    },
+)
+def list_projects(
+    request_fastapi: Request,
+    session=Depends(get_db_session),
+):
+    """
+    Returns the names of all projects stored in your account.
+    """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+
+    raw_projects = project_dao.filter_by_user_access(
+        user_id=request_fastapi.state.user_id,
+    )
+    return [p[0].name for p in raw_projects]
 
 
 ###########################
@@ -784,15 +783,17 @@ admin_router = APIRouter()
 )
 def admin_share_project(
     request: ShareProjectRequest,
-    project_dao: ProjectDAO = Depends(),
-    auth_user_dao: AuthUserDAO = Depends(),
-    organization_dao: OrganizationDAO = Depends(),
-    organization_member_dao: OrganizationMemberDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Admin endpoint to share a project between users.
     This enables real-time collaboration between users.
     """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    auth_user_dao = AuthUserDAO(session)
+    organization_dao = OrganizationDAO(session)
+
     # Lookup the from_user and to_user
     from_user = auth_user_dao.get_by_id(request.from_user_id)
     to_user = auth_user_dao.get_by_id(request.to_user_id)
@@ -906,18 +907,6 @@ def admin_share_project(
 )
 def admin_duplicate_project(
     request: DuplicateProjectRequest,
-    project_dao: ProjectDAO = Depends(),
-    auth_user_dao: AuthUserDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
-    field_type_dao: FieldTypeDAO = Depends(),
-    log_event_dao: LogEventDAO = Depends(),
-    log_dao: LogDAO = Depends(),
-    derived_log_dao: DerivedLogDAO = Depends(),
-    legacy_interface_dao: LegacyInterfaceDAO = Depends(),
-    temp_interface_dao: TempInterfaceDAO = Depends(),
-    interface_dao: InterfaceDAO = Depends(),
-    tab_dao: TabDAO = Depends(),
-    tile_dao: TileDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
@@ -935,6 +924,18 @@ def admin_duplicate_project(
 
     The duplicate is a separate project where changes in one do not affect the other.
     """
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    auth_user_dao = AuthUserDAO(session)
+    context_dao = ContextDAO(session)
+    log_event_dao = LogEventDAO(session)
+    derived_log_dao = DerivedLogDAO(session)
+    legacy_interface_dao = LegacyInterfaceDAO(session)
+    temp_interface_dao = TempInterfaceDAO(session)
+    interface_dao = InterfaceDAO(session)
+    tab_dao = TabDAO(session)
+    tile_dao = TileDAO(session)
+
     # 1. Validate users exist
     from_user = auth_user_dao.get_by_id(request.from_user_id)
     to_user = auth_user_dao.get_by_id(request.to_user_id)

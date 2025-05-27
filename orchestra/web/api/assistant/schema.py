@@ -71,6 +71,16 @@ class AssistantCreate(BaseModel):
         description="Email address for the assistant",
         example="ada.lovelace@example.com",
     )
+    whatsapp_sid: Optional[str] = Field(
+        None,
+        description="WhatsApp SID for Twilio integration",
+        example="whatsapp:+1234567890",
+    )
+    voice_id: Optional[str] = Field(  # This is Cartesia's voice ID
+        None,
+        description="Id of the voice (Cartesia ID) to use for the assistant",
+        example="bf0a246a-8642-498a-9950-80c35e9276b5",
+    )
 
     class Config:
         orm_mode = True
@@ -86,6 +96,8 @@ class AssistantCreate(BaseModel):
                 "about": "Mathematician and writer known for work on Analytical Engine",
                 "phone": "+1-555-123-4567",
                 "email": "ada.lovelace@example.com",
+                "whatsapp_sid": "whatsapp:+1234567890",
+                "voice_id": "cartesia_generated_voice_id_123",
             },
         }
 
@@ -110,16 +122,6 @@ class AssistantRead(AssistantCreate):
         description="Timestamp when the assistant was last updated",
         example="2025-04-26T14:15:00Z",
     )
-    phone: Optional[str] = Field(
-        None,
-        description="Contact phone number for the assistant",
-        example="+1-555-123-4567",
-    )
-    email: Optional[str] = Field(
-        None,
-        description="Email address for the assistant",
-        example="ada.lovelace@example.com",
-    )
 
     class Config:
         orm_mode = True
@@ -135,6 +137,8 @@ class AssistantRead(AssistantCreate):
                 "about": "Mathematician and writer known for work on Analytical Engine",
                 "phone": "+1-555-123-4567",
                 "email": "ada.lovelace@example.com",
+                "whatsapp_sid": "whatsapp:+1234567890",
+                "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "agent_id": "12345",
                 "created_at": "2025-04-25T10:30:00Z",
                 "updated_at": "2025-04-26T14:15:00Z",
@@ -173,6 +177,16 @@ class AssistantUpdate(BaseModel):
         description="Email address for the assistant",
         example="ada.lovelace@newdomain.com",
     )
+    whatsapp_sid: Optional[str] = Field(
+        None,
+        description="WhatsApp SID for Twilio integration",
+        example="whatsapp:+1234567890",
+    )
+    voice_id: Optional[str] = Field(  # This is Cartesia's voice ID
+        None,
+        description="Id of the voice (Cartesia ID) to use for the assistant",
+        example="bf0a246a-8642-498a-9950-80c35e9276b5",
+    )
 
     class Config:
         orm_mode = True
@@ -183,6 +197,8 @@ class AssistantUpdate(BaseModel):
                 "about": "Award-winning mathematician specializing in algorithm development",
                 "phone": "+1-555-987-6543",
                 "email": "ada.lovelace@newdomain.com",
+                "whatsapp_sid": "whatsapp:+1234567890",
+                "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
             },
         }
 
@@ -220,5 +236,68 @@ class RecordingInfo(BaseModel):
                 "id": 123,
                 "url": "https://storage.example.com/recordings/call_123.wav",
                 "created_at": "2025-05-08T14:30:00Z",
+            },
+        }
+
+
+class VoiceCreate(BaseModel):
+    """
+    Schema for creating a new assistant voice entry in our DB.
+    The voice_id is provided by Cartesia after a successful clone/localize.
+    """
+
+    voice_id: str = Field(
+        ...,
+        description="Cartesia Voice ID",
+        example="bf0a246a-8642-498a-9950-80c35e9276b5",
+    )
+    name: str = Field(
+        ...,
+        description="User-given name for the voice",
+        example="English Woman Calm 1",
+    )
+    description: str = Field(
+        ...,
+        description="Description of the voice",
+        example="Calm and relaxing voice of an english-speaking woman",
+    )
+    gender: str = Field(
+        ...,
+        description="Gender of the voice",
+        example="female",
+    )
+    language: str = Field(
+        ...,
+        description="Language code of the voice",
+        example="en",
+    )
+
+    class Config:
+        orm_mode = True
+        schema_extra = {
+            "example": {
+                "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
+                "name": "English Woman Calm 1",
+                "description": "Calm and relaxting voice of an english-speaking woman",
+                "gender": "female",
+                "language": "en",
+            },
+        }
+
+
+class VoiceRead(VoiceCreate):
+    """
+    Schema for reading voice data from the DB.
+    """
+
+    class Config:
+        orm_mode = True
+        schema_extra = {
+            "example": {
+                "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
+                "name": "English Woman Calm 1",
+                "description": "Calm and relaxting voice of an english-speaking woman",
+                "gender": "female",
+                "language": "en",
             },
         }

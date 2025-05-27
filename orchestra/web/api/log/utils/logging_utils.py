@@ -141,11 +141,13 @@ def log_chat_completion_event(
             project.id,
             name="",
         )
+        context_obj = session.get(Context, context_id)
         # Create the logs
         log_event_ids = create_logs_internal(
             request=config,
             project_id=project.id,
             context_id=context_id,
+            context_obj=context_obj,
             project_dao=project_dao,
             field_type_dao=field_type_dao,
             log_event_dao=log_event_dao,
@@ -358,6 +360,9 @@ def _get_logs_query(
     context_obj = context_dao.filter(name=context_name, project_id=project_id)
     if context_obj:
         context_id = context_obj[0][0].id
+        log_event_query = log_event_query.join(LogEventContext).filter(
+            LogEventContext.context_id == context_id,
+        )
     else:
         context_id = None
     field_types = field_type_dao.get_field_types(project_id, context_id=context_id)
@@ -412,6 +417,7 @@ def _get_logs_query(
             else:
                 log_event_query = log_event_query.filter(condition)
 
+    # FIXME: potential duplicate logic
     if context:
         context_obj = context_dao.filter(name=context, project_id=project_id)
     else:
@@ -436,19 +442,6 @@ def _get_logs_query(
             status_code=400,
             detail="Cannot return versions for unversioned context",
         )
-
-    log_event_query = log_event_query.filter(
-        exists(
-            select(1)
-            .select_from(LogEventContext)
-            .where(
-                and_(
-                    LogEventContext.log_event_id == LogEvent.id,
-                    LogEventContext.context_id == ctx_id_val,
-                ),
-            ),
-        ),
-    )
 
     # Turn into a subquery => these are the log_event_ids we care about so far
     relevant_log_events = log_event_query.subquery(name="relevant_log_events")
@@ -706,6 +699,7 @@ def create_logs_internal(
     log_event_dao: LogEventDAO,
     log_dao: LogDAO,
     context_dao: ContextDAO,
+    context_obj: Context | None = None,
 ):
     """
     Core implementation of log creation logic, extracted from the create_logs endpoint.
@@ -864,7 +858,8 @@ def create_logs_internal(
         current_entries = entries_list[min(i, entries_len - 1)]
         current_params = params_list[min(i, params_len - 1)]
 
-        # Extract explicit types
+        # Extract explicit types - NOTE: This mutates entries/params dicts in-place
+        # Callers should pass fresh copies if they need to reuse the original dicts
         entries_explicit_types = (
             current_entries.pop("explicit_types", {})
             if isinstance(current_entries, dict)
@@ -886,7 +881,7 @@ def create_logs_internal(
                     else False
                 )
                 # If in a versioned context, force mutable=True
-                if context_id and context_dao.is_versioned(context_id):
+                if context_obj and context_obj.is_versioned:
                     mutable = True
                 new_field_types.append(
                     {
@@ -936,7 +931,7 @@ def create_logs_internal(
                     else False
                 )
                 # If in a versioned context, force mutable=True
-                if context_id and context_dao.is_versioned(context_id):
+                if context_obj and context_obj.is_versioned:
                     mutable = True
                 new_field_types.append(
                     {
@@ -980,27 +975,21 @@ def create_logs_internal(
 
     # Bulk create all log records
     try:
-        log_dao.bulk_create(log_records_to_create)
+        log_dao.bulk_create(log_records_to_create, context_obj=context_obj)
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
     # Check for duplicates if context doesn't allow duplicates
-    context_obj = None
-    if context_id:
-        context_obj = (
-            context_dao.session.query(Context).filter_by(id=context_id).first()
-        )
-        # Check if context doesn't allow duplicates
-        if context_obj and not context_obj.allow_duplicates:
-            for log_event_id in log_event_ids:
-                # Check for duplicates
-                duplicate = context_dao.check_for_duplicates(context_id, log_event_id)
-                if duplicate:
-                    log_event_dao.delete(log_event_id)
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Duplicate log detected in context '{context_obj.name}' which doesn't allow duplicates. Log event ID: {log_event_id}",
-                    )
+    if context_obj and not context_obj.allow_duplicates:
+        for log_event_id in log_event_ids:
+            # Check for duplicates
+            duplicate = context_dao.check_for_duplicates(context_obj.id, log_event_id)
+            if duplicate:
+                log_event_dao.delete(log_event_id)
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Duplicate log detected in context '{context_obj.name}' which doesn't allow duplicates. Log event ID: {log_event_id}",
+                )
     if context_obj and context_obj.is_versioned:
         # archive the new state
         context_dao.archive_context_state(
@@ -1358,6 +1347,32 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
         )
         .order_by(paginated_ids_subq.c.row_num, filtered_logs_subq.c.created_at)
     )
+
+    if False:
+        from sqlalchemy import text
+
+        try:
+            import json
+
+            # Execute EXPLAIN ANALYZE with the same parameters
+            compiled_sql = final_logs_query.statement.compile(
+                dialect=session.bind.dialect,
+                compile_kwargs={"literal_binds": True},
+            ).string
+            compiled_sql = (
+                "EXPLAIN (ANALYZE, BUFFERS, TIMING, COSTS, VERBOSE, FORMAT JSON) "
+                + compiled_sql
+            )
+            explain_query = text(compiled_sql)
+            explain_result = session.execute(explain_query)
+            explain_output = explain_result.fetchone()[0]
+            with open("explain_analyze.json", "w") as f:
+                f.write(compiled_sql + "\n")
+                f.write(json.dumps(explain_output, indent=4))
+                print("Explain analyze written to explain_analyze.json")
+        except Exception as explain_error:
+            print(f"Error getting explain analyze: {explain_error}")
+
     return final_logs_query.all()
 
 

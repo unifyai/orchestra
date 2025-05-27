@@ -29,6 +29,7 @@ from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_dao import ImmutableFieldError, LogDAO, OverwriteError
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
+from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
@@ -123,11 +124,7 @@ admin_router = APIRouter()
 def create_logs(
     request_fastapi: Request,
     request: CreateLogConfig,
-    project_dao: ProjectDAO = Depends(),
-    field_type_dao: FieldTypeDAO = Depends(),
-    log_event_dao: LogEventDAO = Depends(),
-    log_dao: LogDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Creates one or more logs associated to a project. Logs are
@@ -161,6 +158,14 @@ def create_logs(
 
     This method returns the ids of the new stored logs.
     """
+    # Instantiate DAOs with shared session
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    field_type_dao = FieldTypeDAO(session)
+    log_event_dao = LogEventDAO(session)
+    context_dao = ContextDAO(session)
+    log_dao = LogDAO(session, context_dao)
+
     # check if the project exists
     try:
         user_id = request_fastapi.state.user_id
@@ -193,11 +198,15 @@ def create_logs(
         # get the default context
         context_id = context_dao.get_or_create(project_id, name="")
 
+    # Load the Context object once
+    context_obj = session.get(Context, context_id)
+
     # Call the internal implementation with validated project and context
     event_ids = create_logs_internal(
         request=request,
         project_id=project_id,
         context_id=context_id,
+        context_obj=context_obj,
         project_dao=project_dao,
         field_type_dao=field_type_dao,
         log_event_dao=log_event_dao,
@@ -421,11 +430,6 @@ def prepare_resolved_ids(
 def create_from_logs(
     request_fastapi: Request,
     body: CreateDerivedEntriesConfig,
-    project_dao: ProjectDAO = Depends(),
-    field_type_dao: FieldTypeDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
-    derived_log_dao: DerivedLogDAO = Depends(),
-    log_dao: LogDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
@@ -441,6 +445,13 @@ def create_from_logs(
     - A string: Uses the string as the context name with default values (description=None, is_versioned=False)
     - An object: Uses the object's name, description, and is_versioned properties
     """
+    # Instantiate DAOs with shared session
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    field_type_dao = FieldTypeDAO(session)
+    context_dao = ContextDAO(session)
+    log_dao = LogDAO(session, context_dao)
+
     user_id = request_fastapi.state.user_id
 
     # 1) Validate the project
@@ -552,7 +563,7 @@ def create_from_logs(
 
             # 5) Perform bulk update
             if updates:
-                log_dao.bulk_update(updates)
+                log_dao.bulk_update(updates, overwrite=True, field_types=field_types)
 
                 # 6) Create or update field type record
                 field_type_dao.create_field_type_if_absent(
@@ -579,7 +590,6 @@ def create_from_logs(
             )
     else:
         # Original derived log creation logic
-        created_derived_ids = []
         try:
             # Check if this is a filter-based derived log
             is_filter_based = False
@@ -611,7 +621,9 @@ def create_from_logs(
             # get the filtered log events
             log_event_ids_subq = (
                 session.query(LogEvent.id)
-                .filter(project_obj.id == LogEvent.project_id)
+                .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
+                .filter(LogEvent.project_id == project_obj.id)
+                .filter(LogEventContext.context_id == context_id)
                 .subquery(name="log_event_ids_subq")
             )
             computed_values = _compute_expression(
@@ -632,7 +644,7 @@ def create_from_logs(
             }
             # Iterate over the computed values and resolved IDs
             non_null_value = None
-            for i, (_, value) in enumerate(computed_values):
+            for i, (le, value) in enumerate(computed_values):
                 # Get all log IDs involved in this specific computation
                 involved_log_ids = list(set(ids[i] for ids in resolved_ids.values()))
 
@@ -641,7 +653,7 @@ def create_from_logs(
                     if isinstance(value, np.ndarray):
                         # add the embedding to the vector index table
                         embeddings = Embedding(
-                            ref_id=log_event_id,
+                            ref_id=le,
                             key=body.key,
                             model=DEFAULT_EMBEDDING_MODEL,
                             vector=value,
@@ -720,7 +732,7 @@ def create_from_logs(
                 detail=f"Failed to create derived logs with key='{body.key}'. Error: {e}",
             )
         return {
-            "info": f"Created {len(created_derived_ids)} derived logs with key='{body.key}'.",
+            "info": f"Created {len(computed_values)} derived logs with key='{body.key}'.",
         }
 
 
@@ -762,11 +774,6 @@ def create_from_logs(
 def update_derived_log(
     request_fastapi: Request,
     body: UpdateDerivedEntriesConfig,
-    derived_log_dao: DerivedLogDAO = Depends(),
-    log_event_dao: LogEventDAO = Depends(),
-    project_dao: ProjectDAO = Depends(),
-    field_type_dao: FieldTypeDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
@@ -779,6 +786,13 @@ def update_derived_log(
     - A string: Uses the string as the context name with default values (description=None, is_versioned=False)
     - An object: Uses the object's name, description, and is_versioned properties
     """
+    # Instantiate DAOs with shared session
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    field_type_dao = FieldTypeDAO(session)
+    context_dao = ContextDAO(session)
+    derived_log_dao = DerivedLogDAO(session)
+
     user_id = request_fastapi.state.user_id
 
     # 1) Validate the project
@@ -1051,12 +1065,6 @@ def update_derived_log(
 def update_logs(
     request_fastapi: Request,
     body: UpdateLogRequest,
-    project_dao: ProjectDAO = Depends(),
-    log_dao: LogDAO = Depends(),
-    log_event_dao: LogEventDAO = Depends(),
-    field_type_dao: FieldTypeDAO = Depends(),
-    derived_log_dao: DerivedLogDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
@@ -1070,6 +1078,15 @@ def update_logs(
     A dictionary of "explicit_types" can be passed as part of the `entries`.
     If present, it will override the inferred type of any matching key in all logs.
     """
+    # Instantiate DAOs with shared session
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    field_type_dao = FieldTypeDAO(session)
+    log_event_dao = LogEventDAO(session)
+    context_dao = ContextDAO(session)
+    log_dao = LogDAO(session, context_dao)
+    derived_log_dao = DerivedLogDAO(session)
+
     # Get user ID for permission checks
     user_id = request_fastapi.state.user_id
 
@@ -1440,7 +1457,11 @@ def update_logs(
     # First, handle flat updates
     if all_updates:
         try:
-            log_dao.bulk_update(all_updates, field_types=field_types)
+            log_dao.bulk_update(
+                all_updates,
+                field_types=field_types,
+                overwrite=body.overwrite,
+            )
 
             # Check for duplicates if context doesn't allow duplicates
             if "ctx_ids" in locals() and ctx_ids:
@@ -1613,11 +1634,6 @@ def update_logs(
 def delete_logs(
     request_fastapi: Request,
     body: DeleteLogEntryRequest,
-    log_event_dao: LogEventDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
-    project_dao: ProjectDAO = Depends(),
-    field_type_dao: FieldTypeDAO = Depends(),
-    log_dao: LogDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
@@ -1633,6 +1649,14 @@ def delete_logs(
             - 'base': Only delete base logs
             - 'derived': Only delete derived logs
     """
+    # Instantiate DAOs with shared session
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    field_type_dao = FieldTypeDAO(session)
+    log_event_dao = LogEventDAO(session)
+    context_dao = ContextDAO(session)
+    log_dao = LogDAO(session, context_dao)
+
     if body.source_type not in ("all", "base", "derived"):
         raise HTTPException(
             status_code=400,
@@ -2216,9 +2240,6 @@ def get_logs(
         "42",
         description="If provided, use this seed for deterministic random ordering instead of the default.",
     ),
-    project_dao: ProjectDAO = Depends(),
-    field_type_dao: FieldTypeDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
@@ -2261,6 +2282,12 @@ def get_logs(
     - Returns only the latest version of each log
     - from_ids and exclude_ids should be strings of '&'-separated log event IDs
     """
+    # Instantiate DAOs with shared session
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    field_type_dao = FieldTypeDAO(session)
+    context_dao = ContextDAO(session)
+
     try:
         project_id = project_dao.get_by_user_and_name(
             name=project,
@@ -2626,9 +2653,6 @@ def get_logs_latest_timestamp(
     ),
     limit: Optional[int] = Query(None, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    project_dao: ProjectDAO = Depends(),
-    field_type_dao: FieldTypeDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
     session=Depends(get_db_session),
     randomize: bool = Query(
         False,
@@ -2639,6 +2663,12 @@ def get_logs_latest_timestamp(
     Returns the update timestamp of the most recently updated log within the specified
     page and filter bounds.
     """
+    # Instantiate DAOs with shared session
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    field_type_dao = FieldTypeDAO(session)
+    context_dao = ContextDAO(session)
+
     return _get_logs_query(
         request_fastapi,
         project=project,
@@ -2683,9 +2713,6 @@ def get_logs_metric(
     default_metric: str = Path(...),
     project: str = Query(...),
     request: Optional[GetLogsMetricRequest] = Body(None),
-    project_dao: ProjectDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
-    field_type_dao: FieldTypeDAO = Depends(),
     session=Depends(get_db_session),
 ) -> Union[Dict[str, Any], float, int, bool, str, None]:
     """
@@ -2736,6 +2763,12 @@ def get_logs_metric(
     The group_by parameter can be a string for single-level grouping or a list of strings for
     nested grouping. Each group_by field can be prefixed with "params/" to indicate it's a parameter.
     """
+    # Instantiate DAOs with shared session
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    field_type_dao = FieldTypeDAO(session)
+    context_dao = ContextDAO(session)
+
     # Handle old usage if request body is not provided
     if request is None:
         key_param = request_fastapi.query_params.get("key")
@@ -2984,9 +3017,6 @@ def get_log_groups(
         "be set if `from_ids` is set.",
         example="0&1&2",
     ),
-    project_dao: ProjectDAO = Depends(),
-    field_type_dao: FieldTypeDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
     session=Depends(get_db_session),
 ) -> Dict[str, Any]:
     """
@@ -2995,6 +3025,12 @@ def get_log_groups(
     The logs can be filtered using filter_expr, from_ids, and exclude_ids parameters
     before grouping.
     """
+    # Instantiate DAOs with shared session
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    field_type_dao = FieldTypeDAO(session)
+    context_dao = ContextDAO(session)
+
     # Get filtered logs using _get_logs_query
     # raw_rows is a list of:
     # - row_key
@@ -3047,7 +3083,7 @@ def get_log_groups(
     return {k: next(iter(v)) for k, v in groups.items()}
 
 
-@router.post(
+@router.patch(
     "/logs/rename_field",
     responses={
         200: {
@@ -3085,10 +3121,7 @@ def get_log_groups(
 def rename_field(
     request_fastapi: Request,
     request: RenameFieldRequest,
-    project_dao: ProjectDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
-    field_type_dao: FieldTypeDAO = Depends(),
-    log_dao: LogDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Renames a field across all logs in a project. This includes:
@@ -3097,6 +3130,13 @@ def rename_field(
 
     The operation is atomic - either all renames succeed or none do.
     """
+    # Instantiate DAOs with shared session
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    field_type_dao = FieldTypeDAO(session)
+    context_dao = ContextDAO(session)
+    log_dao = LogDAO(session, context_dao)
+
     try:
         # Check if this is the protected Unity/Tasks context
         if request.project == "Unity" and request.context == "Tasks":
@@ -3234,9 +3274,6 @@ def rename_field(
 def join_logs(
     request_fastapi: Request,
     request: JoinLogsRequest,
-    project_dao: ProjectDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
-    field_type_dao: FieldTypeDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
@@ -3258,6 +3295,12 @@ def join_logs(
     Returns:
         JSON response with info about the join operation
     """
+    # Instantiate DAOs with shared session
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    field_type_dao = FieldTypeDAO(session)
+    context_dao = ContextDAO(session)
+
     # Validate input parameters
     user_id = request_fastapi.state.user_id
 
@@ -3392,9 +3435,6 @@ def get_fields(
         description="Optional context name to filter fields types",
         example="training",
     ),
-    project_dao: ProjectDAO = Depends(),
-    field_type_dao: FieldTypeDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
@@ -3408,6 +3448,12 @@ def get_fields(
     - created_at: When the field was first created
     - artifacts: For derived entries, contains the equation
     """
+    # Instantiate DAOs with shared session
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    field_type_dao = FieldTypeDAO(session)
+    context_dao = ContextDAO(session)
+
     try:
         user_id = request_fastapi.state.user_id
         project_obj = project_dao.get_by_user_and_name(name=project, user_id=user_id)
@@ -3493,9 +3539,7 @@ def get_fields(
 def create_fields(
     request_fastapi: Request,
     request: CreateFieldsRequest,
-    project_dao: ProjectDAO = Depends(),
-    field_type_dao: FieldTypeDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
+    session=Depends(get_db_session),
 ):
     """
     Creates one or more fields in a project. Fields are field definitions that can be used
@@ -3504,6 +3548,12 @@ def create_fields(
     Each field can have an optional description. If a field already exists, its description
     will be updated.
     """
+    # Instantiate DAOs with shared session
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    field_type_dao = FieldTypeDAO(session)
+    context_dao = ContextDAO(session)
+
     # Validate project
     try:
         user_id = request_fastapi.state.user_id
@@ -3572,10 +3622,6 @@ def create_fields(
 def delete_fields(
     request_fastapi: Request,
     request: DeleteFieldsRequest,
-    project_dao: ProjectDAO = Depends(),
-    field_type_dao: FieldTypeDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
-    log_event_dao: LogEventDAO = Depends(),
     session=Depends(get_db_session),
 ):
     """
@@ -3585,6 +3631,13 @@ def delete_fields(
 
     This operation cannot be undone, so use with caution.
     """
+    # Instantiate DAOs with shared session
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    field_type_dao = FieldTypeDAO(session)
+    log_event_dao = LogEventDAO(session)
+    context_dao = ContextDAO(session)
+
     # Check if this is the protected Unity/Tasks context
     if request.project == "Unity" and request.context == "Tasks":
         raise HTTPException(
@@ -3707,7 +3760,6 @@ def delete_fields(
 )
 def update_active_derived_logs(
     session=Depends(get_db_session),
-    field_type_dao: FieldTypeDAO = Depends(),
     _=Depends(auth_admin_key),
 ):
     """
@@ -3715,6 +3767,8 @@ def update_active_derived_logs(
     for new log events that match the filter criteria.
     This endpoint  is designed to be calledby internal processes (e.g., Cloud Scheduler) or administrators.
     """
+    # Instantiate DAO with shared session
+    field_type_dao = FieldTypeDAO(session)
 
     try:
         # Get all active templates
@@ -3939,18 +3993,20 @@ def update_active_derived_logs(
 async def process_traffic_logs(
     max_messages: int = Query(100, description="Maximum number of messages to pull"),
     session=Depends(get_db_session),
-    project_dao: ProjectDAO = Depends(),
-    log_event_dao: LogEventDAO = Depends(),
-    log_dao: LogDAO = Depends(),
-    field_type_dao: FieldTypeDAO = Depends(),
-    context_dao: ContextDAO = Depends(),
-    organization_dao: OrganizationDAO = Depends(),
     _=Depends(auth_admin_key),
 ):
     """
     Admin endpoint to manually pull and process traffic log messages from PubSub.
     This endpoint is designed to be called by internal processes (e.g., Cloud Scheduler) or administrators.
     """
+    # Instantiate DAOs with shared session
+    organization_dao = OrganizationDAO(session)
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
+    field_type_dao = FieldTypeDAO(session)
+    log_event_dao = LogEventDAO(session)
+    context_dao = ContextDAO(session)
+    log_dao = LogDAO(session, context_dao)
     try:
         from google.cloud import pubsub_v1
 
@@ -3969,6 +4025,7 @@ async def process_traffic_logs(
             description=None,
             is_versioned=False,
         )
+        context_obj = session.get(Context, context_id)
         # Configure the subscriber client
         subscriber = pubsub_v1.SubscriberClient()
         subscription_path = subscriber.subscription_path(
@@ -3984,41 +4041,44 @@ async def process_traffic_logs(
             request={"subscription": subscription_path, "max_messages": pull_limit},
         )
 
-        processed_count = 0
-        ack_ids = []
+        entries: List[Dict[str, Any]] = []
+        ack_ids: List[str] = []
 
-        # Process the received messages
         for received_message in response.received_messages:
-            message = received_message.message
             ack_ids.append(received_message.ack_id)
 
-            # Decode the message data
-            message_data = message.data.decode("utf-8")
-            entry = json.loads(message_data)
+            try:
+                data = json.loads(received_message.message.data.decode("utf-8"))
+            except json.JSONDecodeError:
+                # Malformed payload – acknowledge and skip so it doesn’t poison the queue
+                continue
 
-            # Extract fields from the entry
-            entry.pop("project_id", None)
-            entry.pop("context_id", None)
-            entry.pop("project_name", None)
+            for key in ("project_id", "context_id", "project_name"):
+                data.pop(key, None)
 
-            # Create log entry
-            event_ids = create_logs_internal(
-                project_id=project_id,
-                context_id=context_id,
-                request=CreateLogConfig(
-                    entries=entry,
-                    project=PROJ_NAME,
-                    context=None,
-                ),
-                project_dao=project_dao,
-                field_type_dao=field_type_dao,
-                log_event_dao=log_event_dao,
-                log_dao=log_dao,
-                context_dao=context_dao,
-            )
+            entries.append(data)
 
-            processed_count += 1
+        if not entries:
+            return {"message": "No new traffic-log messages", "status": "success"}
 
+        # batch ingestion
+        create_logs_internal(
+            project_id=project_id,
+            context_id=context_id,
+            request=CreateLogConfig(
+                entries=entries,
+                project=PROJ_NAME,
+                context=None,
+            ),
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            log_event_dao=log_event_dao,
+            log_dao=log_dao,
+            context_dao=context_dao,
+            context_obj=context_obj,
+        )
+
+        processed_count = len(entries)
         # Acknowledge the processed messages
         if ack_ids:
             subscriber.acknowledge(

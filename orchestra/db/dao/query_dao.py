@@ -2,12 +2,10 @@ import datetime
 from decimal import Decimal
 from typing import List, Optional
 
-from fastapi import Depends
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
-from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Query, QueryTagAssociation, Tag
 from orchestra.db.models.orchestra_models import Users as User
 from orchestra.errors import OutOfCreditError
@@ -16,7 +14,7 @@ from orchestra.errors import OutOfCreditError
 class QueryDAO:
     """Class for accessing query table."""
 
-    def __init__(self, session: Session = Depends(get_db_session)):
+    def __init__(self, session: Session):
         self.session = session
 
     def create_query(

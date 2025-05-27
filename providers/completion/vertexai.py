@@ -65,13 +65,13 @@ class VertexAI(BaseCompletionProvider):
 
 supported_models = {
     "gemini-2.5-flash": {
-        "endpoint": "vertex_ai/gemini-2.5-flash-preview-04-17",
+        "endpoint": "vertex_ai/gemini-2.5-flash-preview-05-20",
         "region": "us-central1",
         "context_window": 200000,
         "cost": {"prompt": 0.15, "completion": 0.6},
     },
     "gemini-2.5-pro": {
-        "endpoint": "vertex_ai/gemini-2.5-pro-preview-03-25",
+        "endpoint": "vertex_ai/gemini-2.5-pro-preview-05-06",
         "region": "us-central1",
         "context_window": 200000,
         "cost": {"prompt": 1.25, "completion": 10},
@@ -100,12 +100,6 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 1.25, "completion": 5},
     },
-    "gemini-1.5-pro-001": {
-        "endpoint": "vertex_ai/gemini-1.5-pro-001",
-        "region": "us-west1",
-        "context_window": 128000,
-        "cost": {"prompt": 1.25, "completion": 5},
-    },
     "gemini-1.5-flash": {
         "endpoint": "vertex_ai/gemini-1.5-flash",
         "region": "us-west1",
@@ -114,12 +108,6 @@ supported_models = {
     },
     "gemini-1.5-flash-002": {
         "endpoint": "vertex_ai/gemini-1.5-flash-002",
-        "region": "us-west1",
-        "context_window": 128000,
-        "cost": {"prompt": 0.075, "completion": 0.3},
-    },
-    "gemini-1.5-flash-001": {
-        "endpoint": "vertex_ai/gemini-1.5-flash-001",
         "region": "us-west1",
         "context_window": 128000,
         "cost": {"prompt": 0.075, "completion": 0.3},
@@ -159,6 +147,18 @@ supported_models = {
         "region": "us-east5",
         "context_window": 200000,
         "cost": {"prompt": 3, "completion": 15},
+    },
+    "claude-4-sonnet": {
+        "endpoint": "vertex_ai/claude-sonnet-4@20250514",
+        "region": "us-east5",
+        "context_window": 200000,
+        "cost": {"prompt": 3, "completion": 15},
+    },
+    "claude-4-opus": {
+        "endpoint": "vertex_ai/claude-opus-4@20250514",
+        "region": "us-east5",
+        "context_window": 200000,
+        "cost": {"prompt": 15, "completion": 75},
     },
     "llama-3.1-8b-chat": {
         "endpoint": "vertex_ai/meta/llama3-8b-instruct-maas",

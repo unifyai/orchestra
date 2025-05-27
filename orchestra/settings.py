@@ -38,6 +38,7 @@ class Settings(BaseSettings):
 
     # Current environment
     environment: str = "dev"
+    is_staging: bool = os.environ.get("STAGING", "False") == "True"
 
     log_level: LogLevel = LogLevel.INFO
     # Variables for the database

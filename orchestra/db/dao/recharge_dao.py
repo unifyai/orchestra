@@ -3,18 +3,16 @@ from datetime import date
 from decimal import Decimal
 from typing import List, Optional
 
-from fastapi import Depends
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
 
 
 class RechargeDAO:
     """Class for accessing recharge table."""
 
-    def __init__(self, session: Session = Depends(get_db_session)):
+    def __init__(self, session: Session):
         self.session = session
 
     def create_recharge(
