@@ -1,7 +1,9 @@
 # TODO: Add extra parameters to the tests payload (_partial_openai_payload)
 # TODO: Add logging to the tests to see the actual responses manually if needed
 import os
-from typing import Dict
+from typing import Dict, Any, Optional
+from httpx import AsyncClient
+from fastapi import status
 
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
 admin_api_key = str(os.getenv("ORCHESTRA_ADMIN_KEY"))
@@ -75,9 +77,43 @@ tools = [
 ]
 
 
-async def get_credits(client):
-    response = await client.get("/v0/credits", headers=HEADERS)
-    return response.json()["credits"]
+async def create_test_user(client: AsyncClient, email: str) -> Dict[str, Any]:
+    response = await client.post(
+        "/v0/admin/auth-user",
+        json={"email": email, "name": "Test"},
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == status.HTTP_200_OK, response.json()
+    user_data = response.json()
+    user_id = user_data["id"]
+    api_key = user_data.get("apiKey")
+    if not api_key:
+        user_details_resp = await client.get(
+            f"/v0/admin/auth-user/by-user-id?user_id={user_id}", headers=ADMIN_HEADERS
+        )
+        assert user_details_resp.status_code == status.HTTP_200_OK
+        api_key = user_details_resp.json().get("apiKey")
+    assert api_key, f"API key not found for user {email}"
+
+    user_auth_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    return {
+        "id": user_id,
+        "email": email,
+        "headers": user_auth_headers,
+        "api_key": api_key,
+    }
+
+
+async def get_credits(
+    client: AsyncClient, user_headers: Optional[Dict[str, Any]] = None
+):
+    headers_to_use = user_headers if user_headers is not None else HEADERS
+    response = await client.get("/v0/credits", headers=headers_to_use)
+    credits_value = response.json().get("credits")
+    return credits_value
 
 
 def _partial_openai_payload(temperature=0.5, max_tokens=100, stream=False):
