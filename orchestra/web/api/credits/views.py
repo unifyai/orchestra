@@ -213,7 +213,7 @@ def create_recharge(
     )
 
     # Credit the user's balance immediately
-    user.credit_balance += data.quantity
+    user.credits += data.quantity
     session.commit()
 
-    return {"recharge_id": recharge.id, "new_balance": user.credit_balance}
+    return {"recharge_id": recharge.id, "new_balance": user.credits}

@@ -220,8 +220,8 @@ async def test_webhook_idempotent(client: AsyncClient, dbsession: Session):
 def test_guard_suspends(dbsession: Session):
     dbsession.add_all(
         [
-            Users(id="off", billing_state="PAST_DUE", credit_balance=0),
-            Users(id="ok", billing_state="OK", credit_balance=10),
+            Users(id="off", billing_state="PAST_DUE", credits=0),
+            Users(id="ok", billing_state="OK", credits=10),
         ],
     )
     dbsession.commit()

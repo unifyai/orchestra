@@ -35,7 +35,7 @@ def suspend_past_due_users() -> None:
                 session.query(User)
                 .filter(
                     User.billing_state == "PAST_DUE",
-                    User.credit_balance <= 0,
+                    User.credits <= 0,
                 )
                 .update(
                     {"billing_state": "SUSPENDED"},

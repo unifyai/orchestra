@@ -1,5 +1,5 @@
 import logging
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import create_engine
@@ -112,7 +112,7 @@ if __name__ == "__main__":
 def _month_end_utc(ts: datetime | None = None) -> datetime:
     """Return the 23:59:59.999 of the month that `ts` falls in (UTC)."""
     if ts is None:
-        ts = datetime.now(UTC)
+        ts = datetime.now(timezone.utc)
 
     first_next_month = (ts.replace(day=1) + timedelta(days=32)).replace(day=1)
     return first_next_month - timedelta(microseconds=1)
