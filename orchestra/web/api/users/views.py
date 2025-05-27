@@ -670,7 +670,7 @@ async def claim_assistant_hiring_one_time_link(
             )
 
         # Flag user as having claimed a link
-        auth_user_dao.update(ide=user.id, has_claimed_approval_link=True)
+        auth_user_dao.update(id=user.id, has_claimed_approval_link=True)
 
         # Grant credits
         users_dao.recharge_credit(
