@@ -286,7 +286,9 @@ async def test_one_time_approval_links_flow(client: AsyncClient):
 
     # Verify credits were granted
     credits_after_first_claim = await get_credits(client, user_headers=user_headers)
-    expected_credits_after_first_claim = initial_credits + + float(ASSISTANT_CREATION_COST)
+    expected_credits_after_first_claim = initial_credits + float(
+        ASSISTANT_CREATION_COST
+    )
     assert (
         credits_after_first_claim == expected_credits_after_first_claim
     ), f"Credits mismatch: expected {expected_credits_after_first_claim}, got {credits_after_first_claim}"
@@ -369,7 +371,7 @@ async def test_one_time_link_single_benefit_and_multiple_links(client: AsyncClie
 
     # Verify User 1 state after claiming L1
     credits_u1_after_l1 = await get_credits(client, user_headers=user1_headers)
-    assert credits_u1_after_l1 == initial_credits_u1 + + float(ASSISTANT_CREATION_COST)
+    assert credits_u1_after_l1 == initial_credits_u1 + float(ASSISTANT_CREATION_COST)
     user1_details_after_l1 = await client.get(
         f"/v0/admin/auth-user/by-user-id?user_id={user1_id}", headers=ADMIN_HEADERS
     )

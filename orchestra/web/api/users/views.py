@@ -517,7 +517,7 @@ async def request_assistant_hiring_approval(
             assistant_hiring_approval=current_status,
         )
     if current_status == "pending":
-         return AssistantHiringApprovalResponse(
+        return AssistantHiringApprovalResponse(
             message="Request for assistant hiring is already pending.",
             assistant_hiring_approval=current_status,
         )
@@ -582,22 +582,31 @@ async def list_users_by_assistant_hiring_approval(
     session: Session = Depends(get_db_session),
 ):
     auth_user_dao = AuthUserDAO(session)
-    
-    users_to_return: List[AuthUser] = [] # This will hold AuthUser ORM instances
+
+    users_to_return: List[AuthUser] = []  # This will hold AuthUser ORM instances
 
     if not status_filter or status_filter.lower() == "all":
-        user_rows = auth_user_dao.filter() # No approval filter (uses sentinel default)
+        user_rows = auth_user_dao.filter()  # No approval filter (uses sentinel default)
         users_to_return = [row[0] for row in user_rows if row]
     elif status_filter.lower() == "none":
-        user_rows = auth_user_dao.filter(assistant_hiring_approval=None) # Explicitly filter for None
+        user_rows = auth_user_dao.filter(
+            assistant_hiring_approval=None
+        )  # Explicitly filter for None
         users_to_return = [row[0] for row in user_rows if row]
     else:
         # For specific statuses like "pending", "approved", etc.
-        valid_statuses_for_direct_filter = [s for s in ASSISTANT_HIRING_APPROVAL_STATUSES if s is not None]
+        valid_statuses_for_direct_filter = [
+            s for s in ASSISTANT_HIRING_APPROVAL_STATUSES if s is not None
+        ]
         if status_filter not in valid_statuses_for_direct_filter:
-             raise HTTPException(status_code=400, detail=f"Invalid status filter. Must be one of {', '.join(valid_statuses_for_direct_filter)}, 'none', or 'all'.")
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid status filter. Must be one of {', '.join(valid_statuses_for_direct_filter)}, 'none', or 'all'.",
+            )
         # get_users_by_assistant_hiring_approval already returns List[AuthUser] (ORM instances)
-        users_to_return = auth_user_dao.get_users_by_assistant_hiring_approval(status_filter)
+        users_to_return = auth_user_dao.get_users_by_assistant_hiring_approval(
+            status_filter
+        )
 
     return [
         AssistantHiringApprovalUserStatus(
@@ -605,9 +614,11 @@ async def list_users_by_assistant_hiring_approval(
             email=user.email,
             name=user.name,
             assistant_hiring_approval=user.assistant_hiring_approval,
-            created_at=user.created_at
-        ) for user in users_to_return
+            created_at=user.created_at,
+        )
+        for user in users_to_return
     ]
+
 
 # -- Manage one time approval links that grant automatic approval to users for hiring assistants --
 @router.post(
@@ -637,16 +648,25 @@ async def claim_assistant_hiring_one_time_link(
     if user_instance.has_claimed_approval_link:
         current_approval_status = user_instance.assistant_hiring_approval
         message = "You have already benefited from a one-time approval link. This link was not consumed, and no new credits were awarded."
-        
+
         # If access was revoked/rejected, re-activate it to 'approved'
-        if current_approval_status in ["revoked", "rejected", None, "pending"]: # also handle if somehow it was pending or None
-            if not auth_user_dao.set_assistant_hiring_approval(user_instance.id, "approved"):
+        if current_approval_status in [
+            "revoked",
+            "rejected",
+            None,
+            "pending",
+        ]:  # also handle if somehow it was pending or None
+            if not auth_user_dao.set_assistant_hiring_approval(
+                user_instance.id, "approved"
+            ):
                 session.rollback()
-                raise HTTPException(status_code=500, detail="Failed to re-activate approval status.")
+                raise HTTPException(
+                    status_code=500, detail="Failed to re-activate approval status."
+                )
             session.commit()
             current_approval_status = "approved"
             if user_instance.assistant_hiring_approval in ["revoked", "rejected"]:
-                 message = "Your assistant hiring access has been re-activated as you previously benefited from an approval link. This link was not consumed, and no new credits were awarded."
+                message = "Your assistant hiring access has been re-activated as you previously benefited from an approval link. This link was not consumed, and no new credits were awarded."
         return AssistantHiringApprovalResponse(
             message=message,
             assistant_hiring_approval=current_approval_status,
@@ -654,14 +674,17 @@ async def claim_assistant_hiring_one_time_link(
 
     # Link consumption logic (if user.has_claimed_approval_link is False)
     if link.user_id is not None:
-        if link.user_id == user_instance.id: # Should not happen if has_claimed_approval_link is false
+        if (
+            link.user_id == user_instance.id
+        ):  # Should not happen if has_claimed_approval_link is false
             return AssistantHiringApprovalResponse(
-                message="You already used this specific approval link.", # This state is rare if has_claimed_approval_link is the master flag
+                message="You already used this specific approval link.",  # This state is rare if has_claimed_approval_link is the master flag
                 assistant_hiring_approval=user_instance.assistant_hiring_approval,
             )
         else:
             raise HTTPException(
-                status_code=400, detail="Approval link has already been claimed by another user."
+                status_code=400,
+                detail="Approval link has already been claimed by another user.",
             )
 
     if link.expires_at < datetime.datetime.now(datetime.timezone.utc):
@@ -672,16 +695,22 @@ async def claim_assistant_hiring_one_time_link(
         if not claimed_link:
             session.rollback()
             raise HTTPException(
-                status_code=400, # Or 500 if it's unexpected
+                status_code=400,  # Or 500 if it's unexpected
                 detail="Failed to claim approval link. It might be invalid, expired or already claimed by another.",
             )
 
-        if not auth_user_dao.set_assistant_hiring_approval(user_instance.id, "approved"):
+        if not auth_user_dao.set_assistant_hiring_approval(
+            user_instance.id, "approved"
+        ):
             session.rollback()
-            raise HTTPException(status_code=500, detail="Failed to set approval status.")
+            raise HTTPException(
+                status_code=500, detail="Failed to set approval status."
+            )
 
         # Flag user as having benefited from a link for the first time
-        auth_user_dao.update(id=user_instance.id, has_claimed_approval_link=True) # Corrected: ide -> id
+        auth_user_dao.update(
+            id=user_instance.id, has_claimed_approval_link=True
+        )  # Corrected: ide -> id
 
         users_dao.recharge_credit(
             user_id=user_instance.id, quantity=float(ASSISTANT_CREATION_COST)
@@ -692,7 +721,7 @@ async def claim_assistant_hiring_one_time_link(
             message="Approval link successfully claimed and credits awarded.",
             assistant_hiring_approval="approved",
         )
-    except HTTPException: # Re-raise HTTP exceptions
+    except HTTPException:  # Re-raise HTTP exceptions
         raise
     except Exception as e:
         session.rollback()
@@ -700,6 +729,7 @@ async def claim_assistant_hiring_one_time_link(
             status_code=500,
             detail=f"An unexpected error occurred during link processing: {str(e)}",
         )
+
 
 @admin_router.post(
     "/assistant-hiring-one-time-link",

@@ -42,8 +42,10 @@ class AuthUserDAO:
         self,
         id: Optional[str] = None,
         email: Optional[str] = None,
-        assistant_hiring_approval: Optional[str] = "__use_default_no_filter__",  # Sentinel
-) -> List[AuthUser]: # Technically List[RowProxy]
+        assistant_hiring_approval: Optional[
+            str
+        ] = "__use_default_no_filter__",  # Sentinel
+    ) -> List[AuthUser]:  # Technically List[RowProxy]
         query = select(AuthUser)
         if id:
             query = query.where(AuthUser.id == id)
@@ -62,9 +64,11 @@ class AuthUserDAO:
                 )
 
         rows = self.session.execute(query)
-        return rows.fetchall() # Returns List[RowProxy]
+        return rows.fetchall()  # Returns List[RowProxy]
 
-    def get_by_id(self, user_id: str) -> Optional[AuthUser]: # Technically Optional[RowProxy]
+    def get_by_id(
+        self, user_id: str
+    ) -> Optional[AuthUser]:  # Technically Optional[RowProxy]
         """Return a single AuthUser object or None given a user_id."""
         found = self.filter(id=user_id)
         return found[0] if found else None

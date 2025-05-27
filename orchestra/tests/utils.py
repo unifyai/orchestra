@@ -107,11 +107,14 @@ async def create_test_user(client: AsyncClient, email: str) -> Dict[str, Any]:
     }
 
 
-async def get_credits(client: AsyncClient, user_headers: Optional[Dict[str, Any]] = None):
+async def get_credits(
+    client: AsyncClient, user_headers: Optional[Dict[str, Any]] = None
+):
     headers_to_use = user_headers if user_headers is not None else HEADERS
-    response = await client.get("/v0/credits", headers=headers_to_use)    
+    response = await client.get("/v0/credits", headers=headers_to_use)
     credits_value = response.json().get("credits")
     return credits_value
+
 
 def _partial_openai_payload(temperature=0.5, max_tokens=100, stream=False):
     return {
