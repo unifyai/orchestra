@@ -61,6 +61,7 @@ python-json-logger = "^3.2.1"
 python-logging-loki = "^0.3.1"
 wget = "^3.2"
 pgvector = "^0.4.1"
+aiosmtplib = "^4.0.1"
 
 [tool.poetry.group.dev.dependencies]
 types-requests = "*"
