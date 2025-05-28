@@ -153,9 +153,9 @@ class Settings(BaseSettings):
     # Variables for email sending
     smtp_hostname: str = "smtp.gmail.com"
     smtp_port: int = 465
-    smtp_username: str = os.getenv("ONBOARDING_EMAIL")
-    smtp_password: str = os.getenv("ONBOARDING_PASSWORD")
-    smtp_sender_email: str = os.getenv("ONBOARDING_EMAIL")
+    smtp_username: Optional[str] = os.getenv("ONBOARDING_EMAIL")
+    smtp_password: Optional[str] = os.getenv("ONBOARDING_PASSWORD")
+    smtp_sender_email: Optional[str] = os.getenv("ONBOARDING_EMAIL")
     smtp_use_starttls: bool = False
     smtp_use_ssl: bool = True
 
