@@ -1,5 +1,6 @@
 import ast
 import re
+import textwrap
 
 from fastapi import HTTPException
 
@@ -66,7 +67,7 @@ def parse_nested(s, pos):
 
 def _relabel_identifiers(tokens, field_names):
     new_tokens = []
-    for (kind, value) in tokens:
+    for kind, value in tokens:
         if kind == "IDENTIFIER":
             if field_names and (value not in field_names):
                 # TODO: what to do here?
@@ -140,9 +141,7 @@ def _tokenize(s):
             value = (
                 None
                 if value == "None"
-                else float(value)
-                if "." in value
-                else int(value)
+                else float(value) if "." in value else int(value)
             )
             tokens.append(("NUMBER", value))
         elif kind == "STRING":
@@ -842,7 +841,7 @@ def str_filter_exp_to_dict_using_ast(expr: str, field_names=None) -> dict:
         # Handle problematic field names by creating placeholders
         special_fields = {}
         problematic_chars = {"-", "/", "+", "*", "&", "|", "^"}
-        processed_expr = expr
+        processed_expr = textwrap.dedent(expr).replace("\n", " ")
 
         if field_names:
             # Replace problematic field names with placeholders
