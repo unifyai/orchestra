@@ -579,6 +579,8 @@ async def list_users_by_assistant_hiring_approval(
         None,
         description=f"Filter by status: {', '.join(s for s in ASSISTANT_HIRING_APPROVAL_STATUSES if s is not None)}, 'none', or 'all'",
     ),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
     session: Session = Depends(get_db_session),
 ):
     auth_user_dao = AuthUserDAO(session)
@@ -586,11 +588,13 @@ async def list_users_by_assistant_hiring_approval(
     users_to_return: List[AuthUser] = []  # This will hold AuthUser ORM instances
 
     if not status_filter or status_filter.lower() == "all":
-        user_rows = auth_user_dao.filter()  # No approval filter (uses sentinel default)
+        user_rows = auth_user_dao.filter(
+            limit=limit, offset=offset
+        )  # No approval filter (uses sentinel default)
         users_to_return = [row[0] for row in user_rows if row]
     elif status_filter.lower() == "none":
         user_rows = auth_user_dao.filter(
-            assistant_hiring_approval=None
+            assistant_hiring_approval=None, limit=limit, offset=offset
         )  # Explicitly filter for None
         users_to_return = [row[0] for row in user_rows if row]
     else:
@@ -605,7 +609,7 @@ async def list_users_by_assistant_hiring_approval(
             )
         # get_users_by_assistant_hiring_approval already returns List[AuthUser] (ORM instances)
         users_to_return = auth_user_dao.get_users_by_assistant_hiring_approval(
-            status_filter
+            status_filter, limit=limit, offset=offset
         )
 
     return [
