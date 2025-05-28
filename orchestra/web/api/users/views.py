@@ -564,7 +564,10 @@ async def set_user_assistant_hiring_status(
     user_instance = user[0]
     if auth_user_dao.set_assistant_hiring_approval(target_user_id, status):
         session.commit()
-        if status == "approved" and user_instance.assistant_hiring_approval != "approved":
+        if (
+            status == "approved"
+            and user_instance.assistant_hiring_approval != "approved"
+        ):
             try:
                 email_recipient = user_instance.name or "there"
                 to_email = user_instance.email
@@ -587,7 +590,9 @@ async def set_user_assistant_hiring_status(
                 email_task = send_email_async(to_email, email_subject, email_body)
                 asyncio.create_task(email_task)
             except Exception as e:
-                logger.error(f"Failed to schedule email for user {target_user_id} approval: {e}")
+                logger.error(
+                    f"Failed to schedule email for user {target_user_id} approval: {e}"
+                )
         return AssistantHiringApprovalResponse(
             message=f"User {target_user_id} assistant hiring approval status set to '{status}'.",
             assistant_hiring_approval=status,
