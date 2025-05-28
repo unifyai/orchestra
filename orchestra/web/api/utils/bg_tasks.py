@@ -11,6 +11,7 @@ from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.dao.users_dao import UsersDAO
+from orchestra.lib.billing import queue_auto_recharge
 from orchestra.web.api.log.utils.logging_utils import log_chat_completion_event
 from orchestra.web.api.query.schema import QueryModelRequest
 from orchestra.web.api.query.views import create_query_model
@@ -182,9 +183,12 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
                 and user.credits <= user.autorecharge_threshold
                 and user.autorecharge_qty > 0
             ):
-                # TODO: uncomment this once autorecharge is tested more thoroughly
-                pass
-                # recharge_and_generate_invoice(user, users_dao)
+                # Queue auto-recharge for monthly invoicing (replaces immediate Stripe call)
+                queue_auto_recharge(session, user, int(user.autorecharge_qty))
+
+                # Credit user immediately (they pay later via monthly invoice)
+                users_dao.recharge_credit(user_id, int(user.autorecharge_qty))
+                session.commit()
 
             telemetry_to_pub_sub(
                 user_id,

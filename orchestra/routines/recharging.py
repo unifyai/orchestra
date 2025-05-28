@@ -1,15 +1,13 @@
 import logging
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from orchestra.consts import RECHARGE_TYPE_AUTO
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
 from orchestra.db.models.orchestra_models import Users as User
+from orchestra.lib.billing import queue_auto_recharge
 from orchestra.pricing import credits_to_usd
 from orchestra.settings import settings
 from orchestra.web.api.admin.views import get_all_users_models
@@ -125,13 +123,5 @@ def _queue_recharge(session: Session, user: User, credits: int) -> None:
     Stripe is invoiced in bulk by the monthly-invoicing cron so we
     do **not** call Stripe here.
     """
-    session.add(
-        Recharge(
-            user_id=user.id,
-            type=RECHARGE_TYPE_AUTO,
-            quantity=Decimal(credits),
-            amount_usd=credits_to_usd(credits),
-            invoice_group=_month_end_utc(),
-            status=RechargeStatus.PENDING_INVOICE,
-        ),
-    )
+    # Use the shared billing utility
+    queue_auto_recharge(session, user, credits)
