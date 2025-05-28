@@ -15,13 +15,13 @@ import datetime as _dt
 from decimal import Decimal
 from typing import Dict, List
 
+import stripe
 from sqlalchemy import select
 
 from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
 from orchestra.db.session import SessionLocal
 from orchestra.lib.time import month_end_utc  # helper already exists
 from orchestra.observability.metrics import invoice_created_total
-from orchestra.services import stripe_client as stripe
 
 
 # --------------------------------------------------------------------------- #

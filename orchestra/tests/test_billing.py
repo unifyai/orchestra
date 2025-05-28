@@ -92,11 +92,9 @@ def mock_stripe(monkeypatch) -> Dict[str, list]:
         Webhook=SimpleNamespace(construct_event=_construct_event),
     )
 
-    # Patch both the stripe_client module AND the monthly_invoicer's stripe import
+    # Patch the monthly_invoicer's stripe import directly
     import orchestra.routines.monthly_invoicer as monthly_invoicer
-    import orchestra.services.stripe_client as stripe_client
 
-    monkeypatch.setattr(stripe_client, "stripe", dummy, raising=True)
     monkeypatch.setattr(monthly_invoicer, "stripe", dummy, raising=True)
     return calls
 
