@@ -45,6 +45,8 @@ class AuthUserDAO:
         assistant_hiring_approval: Optional[
             str
         ] = "__use_default_no_filter__",  # Sentinel
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
     ) -> List[AuthUser]:  # Technically List[RowProxy]
         query = select(AuthUser)
         if id:
@@ -62,6 +64,11 @@ class AuthUserDAO:
                 query = query.where(
                     AuthUser.assistant_hiring_approval == assistant_hiring_approval
                 )
+
+        if offset is not None:
+            query = query.offset(offset)
+        if limit is not None:
+            query = query.limit(limit)
 
         rows = self.session.execute(query)
         return rows.fetchall()  # Returns List[RowProxy]
@@ -148,11 +155,19 @@ class AuthUserDAO:
             return auth_user_instance.assistant_hiring_approval
         return None
 
-    def get_users_by_assistant_hiring_approval(self, status: str) -> List[AuthUser]:
+    def get_users_by_assistant_hiring_approval(
+        self, status: str, limit: Optional[int] = None, offset: Optional[int] = None
+    ) -> List[AuthUser]:
         """Returns users matching a specific hiring status (e.g., "pending")."""
         if status not in ASSISTANT_HIRING_APPROVAL_STATUSES or status is None:
             raise ValueError(
                 "Unsupported or invalid asssistant hiring approval status for querying list."
             )
         query = select(AuthUser).where(AuthUser.assistant_hiring_approval == status)
+
+        if offset is not None:
+            query = query.offset(offset)
+        if limit is not None:
+            query = query.limit(limit)
+
         return list(self.session.execute(query).scalars().all())
