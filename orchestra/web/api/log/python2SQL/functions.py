@@ -2398,7 +2398,11 @@ def _handle_dict_get(
             return value_expr, default_type
         else:
             # No default - use the inferred type directly
-            inferred_type = session.execute(select(result_type)).scalar_one()
+            try:
+                inferred_type = session.execute(select(result_type)).fetchall()
+                inferred_type = inferred_type[-1][0]
+            except Exception:
+                inferred_type = "str"
 
             # For scalar types, we need to extract the value with ->>
             if inferred_type in ("str", "int", "float", "bool"):
