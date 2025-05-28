@@ -749,6 +749,7 @@ async def claim_assistant_hiring_one_time_link(
             assistant_hiring_approval="approved",
         )
     except HTTPException:
+        session.rollback()
         raise
     except Exception as e:
         session.rollback()
