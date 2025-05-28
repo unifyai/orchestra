@@ -566,15 +566,24 @@ async def set_user_assistant_hiring_status(
         session.commit()
         if status == "approved" and user_instance.assistant_hiring_approval != "approved":
             try:
-                email_recipient_name = user_instance.name or "there"
+                email_recipient = user_instance.name or "there"
                 to_email = user_instance.email
                 email_subject = "Your Can Hire Unify Assistants!"
-                email_body = (
-                    f"Hey {email_recipient}, Dan from Unify here,\n\n"
-                    "Just wanted to let you know that your request to try your personal AI assistant been approved.\n\n"
-                    "You can now proceed with hiring your first assistant through the platform!\n\n"
-                    "Best,\nDan, (CEO @ Unify)"
-                )
+                email_body = f"""
+                <html>
+                <body>
+                    <p>Hey {email_recipient}, Dan from Unify here,</p>
+                    <br/>
+                    <p>Just wanted to let you know that your request has been approved.</p>
+                    <p>You can now <a href="https://console.unify.ai/team">hire your first AI assistant</a>! 🤖</p>
+                    <br/>
+                    <p>Let me know if there's anything I can help with as you get started :)</p>
+                    <br/>
+                    <p>My inbox is always open,<br>
+                    Dan</p>
+                </body>
+                </html>
+                """
                 email_task = send_email_async(to_email, email_subject, email_body)
                 asyncio.create_task(email_task)
             except Exception as e:
