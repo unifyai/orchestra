@@ -53,6 +53,7 @@ __all__ = [
     "_handle_str_method",
 ]
 
+
 # Helper function for functions (len, str, type, round, round_timestamp, exists, version, isNone)
 def _handle_date_function(rhs_expr, session):
     """
@@ -1153,9 +1154,11 @@ def _handle_if_expr(
     ):
         raw_test = _inflate_scalar_or_subquery(
             raw_test,
-            "bool"
-            if not isinstance(raw_test, BindParameter)
-            else LogDAO.infer_type("", raw_test.value),
+            (
+                "bool"
+                if not isinstance(raw_test, BindParameter)
+                else LogDAO.infer_type("", raw_test.value)
+            ),
             ids_subq,
             in_comprehension,
         )
@@ -2247,12 +2250,23 @@ def ensure_jsonb(expr):
     Returns:
         SQLAlchemy expression of JSONB type
     """
+    # For Python literals / bind params, wrap with to_jsonb (handles any type)
     if isinstance(expr, BindParameter):
-        # For literal values, use to_jsonb for proper conversion
         return func.to_jsonb(literal(expr.value))
-    else:
-        # For SQL expressions, cast to JSONB
-        return cast(expr, JSONB)
+
+    # If expression is already JSON/JSONB, leave as-is
+    try:
+        from sqlalchemy.dialects.postgresql import JSON as _PGJSON
+        from sqlalchemy.dialects.postgresql import JSONB as _PGJSONB
+
+        if isinstance(getattr(expr, "type", None), (_PGJSON, _PGJSONB)):
+            return expr
+    except Exception:
+        # If inspection fails just fall through and convert
+        pass
+
+    # Fallback: use PostgreSQL's to_jsonb which can accept any SQL type
+    return func.to_jsonb(expr)
 
 
 def _handle_dict_get(
@@ -2399,7 +2413,11 @@ def _handle_dict_get(
 
     # Handle subquery containers
     if isinstance(container_sql, Subquery):
-        container_val, _ = _select_value(container_sql, session, is_collection=True)
+        container_val, container_type = _select_value(
+            container_sql,
+            session,
+            is_collection=True,
+        )
 
         # Process key value
         if isinstance(key_sql, Subquery):
