@@ -150,6 +150,15 @@ class Settings(BaseSettings):
         else "europe-west1"
     )
 
+    # Variables for email sending
+    smtp_hostname = "smtp.gmail.com"
+    smtp_port = 465
+    smtp_username = os.getenv("ONBOARDING_EMAIL")
+    smtp_password = os.getenv("ONBOARDING_PASSWORD")
+    smtp_sender_email = os.getenv("ONBOARDING_EMAIL")
+    smtp_use_starttls = "false"
+    smtp_use_ssl = "true"
+
     @property
     def db_url(self) -> URL:
         """

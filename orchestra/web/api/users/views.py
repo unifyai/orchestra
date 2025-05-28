@@ -2,6 +2,8 @@ import base64
 import datetime
 import secrets
 from typing import Optional, List
+import asyncio
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Query
 from sqlalchemy.orm import Session
@@ -35,9 +37,12 @@ from orchestra.web.api.users.schema import (
 )
 from orchestra.web.api.utils.http_responses import not_found
 from orchestra.web.api.assistant.views import ASSISTANT_CREATION_COST
+from orchestra.web.api.utils.email import send_email_async
 
 admin_router = APIRouter()
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
 # TODO: Move exceptions to exceptions file
 # TODO: Fetch organization if it exists when reading user info
 # TODO: Return tier in user info endpoints + double check rest of the information
@@ -556,8 +561,24 @@ async def set_user_assistant_hiring_status(
     if not user:
         raise not_found(f"User ID: {target_user_id}")
 
+    user_instance = user[0]
     if auth_user_dao.set_assistant_hiring_approval(target_user_id, status):
         session.commit()
+        if status == "approved" and user_instance.assistant_hiring_approval != "approved":
+            try:
+                email_recipient_name = user_instance.name or "there"
+                to_email = user_instance.email
+                email_subject = "Your Can Hire Unify Assistants!"
+                email_body = (
+                    f"Hey {email_recipient}, Dan from Unify here,\n\n"
+                    "Just wanted to let you know that your request to try your personal AI assistant been approved.\n\n"
+                    "You can now proceed with hiring your first assistant through the platform!\n\n"
+                    "Best,\nDan, (CEO @ Unify)"
+                )
+                email_task = send_email_async(to_email, email_subject, email_body)
+                asyncio.create_task(email_task)
+            except Exception as e:
+                logger.error(f"Failed to schedule email for user {target_user_id} approval: {e}")
         return AssistantHiringApprovalResponse(
             message=f"User {target_user_id} assistant hiring approval status set to '{status}'.",
             assistant_hiring_approval=status,
