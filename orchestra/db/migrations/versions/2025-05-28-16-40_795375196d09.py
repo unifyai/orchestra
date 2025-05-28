@@ -30,8 +30,8 @@ import sqlalchemy as sa
 from alembic import op
 
 # ──────────────────────────────────────────────────────────────────────────────
-revision: str = "20250523_consolidated_billing"
-down_revision: str | None = "df96cf4dc6f9"
+revision: str = "795375196d09"
+down_revision: str | None = "000958ab98b9"
 branch_labels = None
 depends_on = None
 # ──────────────────────────────────────────────────────────────────────────────
@@ -39,49 +39,66 @@ depends_on = None
 
 def upgrade() -> None:
     # 1 ───────────── USERS wallet / settings  ────────────────────────────────
-    op.add_column(
-        "users",
-        sa.Column("credits", sa.Numeric(), nullable=False, server_default="0"),
-    )
-    op.add_column(
-        "users",
-        sa.Column(
-            "autorecharge",
-            sa.Boolean(),
-            nullable=False,
-            server_default=sa.text("false"),
-        ),
-    )
-    op.add_column(
-        "users",
-        sa.Column(
-            "autorecharge_threshold",
-            sa.Numeric(),
-            nullable=False,
-            server_default="0",
-        ),
-    )
-    op.add_column(
-        "users",
-        sa.Column(
-            "autorecharge_qty",
-            sa.Numeric(),
-            nullable=False,
-            server_default="0",
-        ),
-    )
-    op.add_column(
-        "users",
-        sa.Column(
-            "store_prompts",
-            sa.Boolean(),
-            nullable=False,
-            server_default=sa.text("true"),
-        ),
-    )
+    # NOTE: credits column already exists from earlier migration 0642c18bdb15
+    # op.add_column(
+    #     "users",
+    #     sa.Column("credits", sa.Numeric(), nullable=False, server_default="0"),
+    # )
+
+    # NOTE: autorecharge columns already exist from migration 2e5aa4cdd7a4
+    # op.add_column(
+    #     "users",
+    #     sa.Column(
+    #         "autorecharge",
+    #         sa.Boolean(),
+    #         nullable=False,
+    #         server_default=sa.text("false"),
+    #     ),
+    # )
+    # op.add_column(
+    #     "users",
+    #     sa.Column(
+    #         "autorecharge_threshold",
+    #         sa.Numeric(),
+    #         nullable=False,
+    #         server_default="0",
+    #     ),
+    # )
+    # op.add_column(
+    #     "users",
+    #     sa.Column(
+    #         "autorecharge_qty",
+    #         sa.Numeric(),
+    #         nullable=False,
+    #         server_default="0",
+    #     ),
+    # )
+
+    # NOTE: store_prompts column already exists from migration b7218594ae58
+    # op.add_column(
+    #     "users",
+    #     sa.Column(
+    #         "store_prompts",
+    #         sa.Boolean(),
+    #         nullable=False,
+    #         server_default=sa.text("true"),
+    #     ),
+    # )
 
     # 2 ───────────── Extra tweaks to USERS  ──────────────────────────────────
     op.add_column("users", sa.Column("credit_balance", sa.BigInteger()))
+
+    # Add billing_state column first
+    op.add_column(
+        "users",
+        sa.Column(
+            "billing_state",
+            sa.VARCHAR(),
+            nullable=False,
+            server_default=sa.text("'OK'"),
+        ),
+    )
+    # Then alter it to be nullable
     op.alter_column(
         "users",
         "billing_state",
@@ -95,6 +112,9 @@ def upgrade() -> None:
         "recharge",
         sa.Column("amount_usd", sa.Numeric(), nullable=False),
     )
+
+    # Ensure no conflicting old status column exists
+    op.execute("ALTER TABLE recharge DROP COLUMN IF EXISTS status")
 
     recharge_status = sa.Enum(
         "PENDING_INVOICE",
@@ -127,7 +147,7 @@ def upgrade() -> None:
         "at",
         existing_type=sa.TIMESTAMP(),
         nullable=False,
-        server_default=sa.func.now(),
+        server_default=sa.text("now()"),
     )
 
     # 4 ───────────── enum DDL on very old Postgres versions (optional) ───────
@@ -144,18 +164,12 @@ def downgrade() -> None:
     sa.Enum(name="recharge_status").drop(op.get_bind(), checkfirst=True)
 
     # 2 ← undo USERS tweaks ---------------------------------------------------
-    op.alter_column(
-        "users",
-        "billing_state",
-        existing_type=sa.VARCHAR(),
-        nullable=False,
-        existing_server_default=sa.text("'OK'"),
-    )
+    op.drop_column("users", "billing_state")
     op.drop_column("users", "credit_balance")
 
     # 1 ← drop USERS wallet columns ------------------------------------------
-    op.drop_column("users", "store_prompts")
-    op.drop_column("users", "autorecharge_qty")
-    op.drop_column("users", "autorecharge_threshold")
-    op.drop_column("users", "autorecharge")
-    op.drop_column("users", "credits")
+    # op.drop_column("users", "store_prompts")
+    # op.drop_column("users", "autorecharge_qty")
+    # op.drop_column("users", "autorecharge_threshold")
+    # op.drop_column("users", "autorecharge")
+    # op.drop_column("users", "credits")
