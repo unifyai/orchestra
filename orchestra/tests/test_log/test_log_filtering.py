@@ -43,6 +43,10 @@ from . import (
             {"d": {"nullkey": None}},
         ),
         (
+            "d is None and d.get('x') is None",
+            {"d": None},
+        ),
+        (
             "((a == 5) and (b > 7)) or (len(c) < 10 and 'earth' not in d)",
             {"a": 5, "b": 8, "c": "abcdef", "d": "hello world"},
         ),
