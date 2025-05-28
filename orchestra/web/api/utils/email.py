@@ -2,7 +2,6 @@ import logging
 import aiosmtplib
 from email.mime.text import MIMEText
 from email.header import Header
-from email.utils import formataddr
 from orchestra.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -18,7 +17,7 @@ SMTP_USE_SSL = settings.smtp_use_ssl
 
 async def send_email_async(to_email: str, email_subject: str, email_body: str):
     """
-    Sends an email to a user.
+    Sends an email to a user using HTML content.
     """
     if not all([SMTP_HOSTNAME, SMTP_PORT, SMTP_SENDER_EMAIL]):
         logger.error(
@@ -27,7 +26,7 @@ async def send_email_async(to_email: str, email_subject: str, email_body: str):
         )
         return
 
-    msg = MIMEText(email_body, "plain", "utf-8")
+    msg = MIMEText(email_body, "html", "utf-8")
     msg["Subject"] = Header(email_subject, "utf-8")
     msg["From"] = SMTP_SENDER_EMAIL
     msg["To"] = to_email
