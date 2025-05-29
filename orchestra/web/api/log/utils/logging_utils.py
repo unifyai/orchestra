@@ -801,6 +801,7 @@ def create_logs_internal(
                     project_id,
                     field_name,
                     value,
+                    mutable=field_info.get("mutable", False),
                     field_category="param" if is_param else "entry",
                     context_id=context_id,
                 )
