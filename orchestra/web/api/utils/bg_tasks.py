@@ -3,19 +3,21 @@ import os
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
+from sqlalchemy.orm import sessionmaker
+
 from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.db.session import SessionLocal
 from orchestra.lib.billing import queue_auto_recharge
 from orchestra.web.api.log.utils.logging_utils import log_chat_completion_event
 from orchestra.web.api.query.schema import QueryModelRequest
 from orchestra.web.api.query.views import create_query_model
 from orchestra.web.api.utils.gcp import send_pubsub_msg
 from orchestra.web.api.utils.http_responses import internal_endpoint_not_found
+from orchestra.web.lifetime import get_engine
 
 
 def telemetry_to_pub_sub(
@@ -70,15 +72,16 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
     tags: Optional[list[str]] = None,
 ):
     """
-    Perform database operations.
+    Perform database operations for query logging.
 
     :param user_id: user id.
-    :param cost: cost of the operation.
+    :param cost: cost of the query.
     :param model: model name.
     :param provider: provider name.
 
     :raises HTTPException: when endpoint is not found.
     """
+    SessionLocal = sessionmaker(bind=get_engine(), expire_on_commit=False)
     with SessionLocal() as session:
         model_dao = ModelDAO(session)
         provider_dao = ProviderDAO(session)

@@ -7,15 +7,18 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy.orm import sessionmaker
+
 from orchestra.db.models.orchestra_models import Users as User
-from orchestra.db.session import SessionLocal
 from orchestra.observability.metrics import billing_suspended_total
+from orchestra.web.lifetime import get_engine
 
 logger = logging.getLogger(__name__)
 
 
 def suspend_past_due_users() -> None:
     """PUT any 'PAST_DUE & empty-wallet' accounts into SUSPENDED."""
+    SessionLocal = sessionmaker(bind=get_engine(), expire_on_commit=False)
     with SessionLocal() as session:
         try:
             count = (

@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, aliased
 
 from orchestra.db.models.orchestra_models import Query, QueryTagAssociation, Tag
 from orchestra.db.models.orchestra_models import Users as User
-from orchestra.errors import OutOfCreditError
+from orchestra.web.api.utils.http_responses import OutOfCreditError
 
 
 class QueryDAO:
@@ -127,7 +127,9 @@ class QueryDAO:
 
     def get_num_queries(self, user_id) -> int:
         return self.session.execute(
-            select(func.count()).select_from(Query).where(Query.user_id == user_id),
+            select(func.count(Query.id))
+            .select_from(Query)
+            .where(Query.user_id == user_id),
         ).scalar()
 
     def filter(

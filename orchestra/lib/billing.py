@@ -6,12 +6,26 @@ from decimal import Decimal
 
 from sqlalchemy.orm import Session
 
-from orchestra.consts import RECHARGE_TYPE_AUTO
-from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
+from orchestra.db.models.orchestra_models import (
+    RECHARGE_TYPE_AUTO,
+    Recharge,
+    RechargeStatus,
+)
 from orchestra.db.models.orchestra_models import Users as User
-from orchestra.pricing import credits_to_usd
 
 logger = logging.getLogger(__name__)
+
+
+def credits_to_usd(credits: int) -> Decimal:
+    """Convert credits to USD amount.
+
+    Args:
+        credits: Number of credits to convert
+
+    Returns:
+        USD amount as Decimal (rate: $0.01 per credit)
+    """
+    return Decimal(credits) * Decimal("0.01")
 
 
 def _month_end_utc(ts: datetime | None = None) -> datetime:

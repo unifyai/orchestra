@@ -4,9 +4,12 @@ from enum import Enum
 
 import sqlalchemy as sa
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import TIMESTAMP, BigInteger, Boolean, Column, Date
-from sqlalchemy import Enum as SAEnum
 from sqlalchemy import (
+    TIMESTAMP,
+    BigInteger,
+    Boolean,
+    Column,
+    Date,
     Float,
     ForeignKey,
     Index,
@@ -37,6 +40,13 @@ class RechargeStatus(StrEnum):
     INVOICE_CREATED = "INVOICE_CREATED"
     PAID = "PAID"
     FAILED = "FAILED"
+    DISPUTED = "DISPUTED"
+
+
+# Recharge type constants (moved from consts.py)
+RECHARGE_TYPE_AUTO = "auto"
+RECHARGE_TYPE_PAYMENT = "payment"
+RECHARGE_TYPE_PROMO = "promo"
 
 
 class Model(Base):
@@ -223,7 +233,7 @@ class Recharge(Base):
     type = Column(String())
     transaction_id = Column(String())
     status = Column(
-        SAEnum(RechargeStatus, name="recharge_status"),
+        String(),
         nullable=False,
         server_default=RechargeStatus.PENDING_INVOICE.value,
     )
@@ -233,7 +243,13 @@ class Recharge(Base):
     # ORM relationship (handy: recharge.user.billing_state)
     user = relationship("Users", back_populates="recharges")
 
-    __table_args__ = (Index("idx_recharge_pending", "status", "invoice_group"),)
+    __table_args__ = (
+        Index("idx_recharge_pending", "status", "invoice_group"),
+        sa.CheckConstraint(
+            "status IN ('PENDING_INVOICE','PAID','FAILED','INVOICE_CREATED','DISPUTED')",
+            name="ck_recharge_status",
+        ),
+    )
 
 
 class WebhookLog(Base):
@@ -459,7 +475,10 @@ class AuthUser(Base):
     evaluations_enabled = Column(Boolean, nullable=False, server_default="true")
     # Toggle for handling assistant hiring approval
     assistant_hiring_approval = Column(
-        String, nullable=True, index=True, server_default=None
+        String,
+        nullable=True,
+        index=True,
+        server_default=None,
     )
     has_claimed_approval_link = Column(Boolean, nullable=False, server_default="false")
     created_at = Column(TIMESTAMP, server_default=func.now())

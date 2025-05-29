@@ -1,11 +1,16 @@
 # Celery is optional when the test-suite runs without workers
-try:
-    from celery.schedules import crontab
-except ModuleNotFoundError:  # pragma: no cover
+from typing import TYPE_CHECKING
 
-    def crontab(*_a, **_kw):  # type: ignore
-        """Tiny stub that mimics `celery.schedules.crontab`."""
-        return ("stub-crontab", _a, _kw)
+if TYPE_CHECKING:
+    from celery.schedules import crontab
+else:
+    try:
+        from celery.schedules import crontab
+    except ModuleNotFoundError:  # pragma: no cover
+
+        def crontab(*_a, **_kw):  # type: ignore
+            """Tiny stub that mimics `celery.schedules.crontab`."""
+            return ("stub-crontab", _a, _kw)
 
 
 CELERY_BEAT_SCHEDULE = {

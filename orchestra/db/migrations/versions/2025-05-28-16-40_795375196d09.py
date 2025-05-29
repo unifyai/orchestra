@@ -116,24 +116,24 @@ def upgrade() -> None:
     # Ensure no conflicting old status column exists
     op.execute("ALTER TABLE recharge DROP COLUMN IF EXISTS status")
 
-    recharge_status = sa.Enum(
-        "PENDING_INVOICE",
-        "INVOICE_CREATED",
-        "PAID",
-        "FAILED",
-        name="recharge_status",
-    )
-    recharge_status.create(op.get_bind(), checkfirst=True)
-
+    # Use VARCHAR with CHECK constraint instead of enum
     op.add_column(
         "recharge",
         sa.Column(
             "status",
-            recharge_status,
+            sa.String(),
             nullable=False,
             server_default="PENDING_INVOICE",
         ),
     )
+
+    # Add CHECK constraint to enforce valid status values
+    op.create_check_constraint(
+        "ck_recharge_status",
+        "recharge",
+        "status IN ('PENDING_INVOICE','PAID','FAILED','INVOICE_CREATED','DISPUTED')",
+    )
+
     op.add_column("recharge", sa.Column("stripe_invoice_id", sa.String()))
     op.add_column("recharge", sa.Column("invoice_group", sa.Date()))
     op.create_index(
@@ -159,9 +159,9 @@ def downgrade() -> None:
     op.drop_index("idx_recharge_pending", table_name="recharge")
     op.drop_column("recharge", "invoice_group")
     op.drop_column("recharge", "stripe_invoice_id")
+    op.drop_constraint("ck_recharge_status", "recharge", type_="check")
     op.drop_column("recharge", "status")
     op.drop_column("recharge", "amount_usd")
-    sa.Enum(name="recharge_status").drop(op.get_bind(), checkfirst=True)
 
     # 2 ← undo USERS tweaks ---------------------------------------------------
     op.drop_column("users", "billing_state")

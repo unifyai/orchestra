@@ -7,8 +7,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.models.orchestra_models import Users as User
-from orchestra.lib.billing import queue_auto_recharge
-from orchestra.pricing import credits_to_usd
+from orchestra.lib.billing import credits_to_usd, queue_auto_recharge
 from orchestra.settings import settings
 from orchestra.web.api.admin.views import get_all_users_models
 

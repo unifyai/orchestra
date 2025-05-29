@@ -17,11 +17,12 @@ from typing import Dict, List
 
 import stripe
 from sqlalchemy import select
+from sqlalchemy.orm import sessionmaker
 
 from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
-from orchestra.db.session import SessionLocal
 from orchestra.lib.time import month_end_utc  # helper already exists
 from orchestra.observability.metrics import invoice_created_total
+from orchestra.web.lifetime import get_engine
 
 
 # --------------------------------------------------------------------------- #
@@ -44,6 +45,7 @@ def invoice_month(  # Celery entry-point
 
     group_day = month_end_utc(_dt.date(year, month, 1))
 
+    SessionLocal = sessionmaker(bind=get_engine(), expire_on_commit=False)
     with SessionLocal() as session:
         # Lock rows so concurrent workers do not double-invoice
         rows: List[Recharge] = (
@@ -113,16 +115,3 @@ def invoice_month(  # Celery entry-point
             invoice_created_total.inc()  # ← metric
 
         session.commit()
-
-    def _queue_recharge(self, user_id: str, group: date) -> bool:
-        """Queue recharges for invoicing - only PENDING_INVOICE rows."""
-        pending_recharges = (
-            self.session.query(Recharge)
-            .filter_by(
-                user_id=user_id,
-                status=RechargeStatus.PENDING_INVOICE,  # ← Excludes PAID rows
-                invoice_group=group,
-            )
-            .all()
-        )
-        # ... rest unchanged

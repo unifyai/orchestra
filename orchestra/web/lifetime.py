@@ -393,3 +393,20 @@ def register_shutdown_event(
         pass  # noqa: WPS420
 
     return _shutdown
+
+
+def get_session():
+    """
+    Get a database session using the canonical pattern.
+
+    This function creates a session using the same engine and configuration
+    as the rest of the application, providing a consistent way to get sessions
+    for FastAPI dependencies.
+
+    Returns:
+        A SQLAlchemy session instance.
+    """
+    from sqlalchemy.orm import sessionmaker
+
+    SessionLocal = sessionmaker(bind=get_engine(), expire_on_commit=False)
+    return SessionLocal()

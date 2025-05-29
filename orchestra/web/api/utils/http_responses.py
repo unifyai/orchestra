@@ -122,6 +122,11 @@ insufficient_credits_error = HTTPException(
     ),
 )
 
+
+class OutOfCreditError(RuntimeError):
+    """Raised when a suspended / over-drawn account attempts a paid action."""
+
+
 admin_not_authorized = HTTPException(
     status_code=status.HTTP_403_FORBIDDEN,
     detail="Admin access unauthorized, this incident will be reported.",

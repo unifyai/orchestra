@@ -12,7 +12,6 @@ from google.cloud.storage import Client
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
-from orchestra.db.dao.beta_list_dao import BetaListDAO
 from orchestra.db.dao.credit_card_fingerprint import CreditCardFingerprintDAO
 from orchestra.db.dao.custom_router_dao import CustomRouterDAO
 from orchestra.db.dao.datapoint_dao import DatapointDAO
@@ -39,7 +38,7 @@ from orchestra.db.models.orchestra_models import (  # noqa: WPS235
     Task,
     Users,
 )
-from orchestra.pricing import credits_to_usd
+from orchestra.lib.billing import credits_to_usd
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
     BenchmarkRunModelResponse,
     CreditCardFingerprintModelResponse,
@@ -721,32 +720,15 @@ def create_task_model(
     session=Depends(get_db_session),
 ) -> None:
     """
-    Creates task model in the database.
+    Create new task model in the database.
 
     :param new_task_object: new task model item.
     :param task_dao: DAO for task models.
     """
     task_dao = TaskDAO(session)
-    task_dao.create_task(
+    task_dao.create_task_model(
         name=new_task_object.name,
-        modality=new_task_object.modality,
     )
-
-
-@router.put("/create_beta_list")
-def create_beta_list(
-    email: str,
-    type: str,
-    session=Depends(get_db_session),
-) -> None:
-    """
-    Creates beta list model in the database.
-
-    :param new_beta_list_object: new beta list model item.
-    :param beta_list_dao: DAO for beta_list models.
-    """
-    beta_list_dao = BetaListDAO(session)
-    beta_list_dao.create_beta_list(email=email, type=type)
 
 
 @router.put("/update_benchmark_run")

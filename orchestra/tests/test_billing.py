@@ -43,26 +43,64 @@ from orchestra.settings import settings
 
 @contextlib.contextmanager
 def _guard_uses(dbsession: Session):
-    """Temporarily monkey-patch guard.SessionLocal to return the given session."""
-    import orchestra.routines.billing_guard as guard
+    """Temporarily monkey-patch guard's sessionmaker to return the given session."""
+    from sqlalchemy.orm import sessionmaker
 
-    orig = guard.SessionLocal
-    guard.SessionLocal = lambda: dbsession
+    # Store original sessionmaker
+    orig_sessionmaker = sessionmaker
+
+    # Create a mock sessionmaker that returns our test session
+    def mock_sessionmaker(*args, **kwargs):
+        class MockSessionLocal:
+            def __enter__(self):
+                return dbsession
+
+            def __exit__(self, *args):
+                pass
+
+        return MockSessionLocal
+
+    # Monkey-patch sessionmaker in the module
+    import sqlalchemy.orm
+
+    sqlalchemy.orm.sessionmaker = mock_sessionmaker
+
     try:
         yield
     finally:
-        guard.SessionLocal = orig
+        # Restore original sessionmaker
+        sqlalchemy.orm.sessionmaker = orig_sessionmaker
 
 
 @contextlib.contextmanager
 def _routine_uses_session(module, dbsession):
-    """Temporarily monkey-patch any module's SessionLocal to return the given session."""
-    orig = module.SessionLocal
-    module.SessionLocal = lambda: dbsession
+    """Temporarily monkey-patch any module's sessionmaker to return the given session."""
+    from sqlalchemy.orm import sessionmaker
+
+    # Store original sessionmaker
+    orig_sessionmaker = sessionmaker
+
+    # Create a mock sessionmaker that returns our test session
+    def mock_sessionmaker(*args, **kwargs):
+        class MockSessionLocal:
+            def __enter__(self):
+                return dbsession
+
+            def __exit__(self, *args):
+                pass
+
+        return MockSessionLocal
+
+    # Monkey-patch sessionmaker in the module
+    import sqlalchemy.orm
+
+    sqlalchemy.orm.sessionmaker = mock_sessionmaker
+
     try:
         yield
     finally:
-        module.SessionLocal = orig
+        # Restore original sessionmaker
+        sqlalchemy.orm.sessionmaker = orig_sessionmaker
 
 
 # --------------------------------------------------------------------------- #
@@ -214,6 +252,70 @@ async def test_webhook_idempotent(client: AsyncClient, dbsession: Session):
     dbsession.refresh(rec)
     assert rec.status == RechargeStatus.PAID
     assert dbsession.query(WebhookLog).count() == 1
+
+
+# --------------------------------------------------------------------------- #
+# 2.1. Webhook charge dispute regression test                                 #
+# --------------------------------------------------------------------------- #
+@pytest.mark.anyio
+async def test_webhook_charge_dispute_idempotent(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Test that charge.dispute.created events are handled correctly with idempotency."""
+    uid = "dispute_user"
+    dbsession.add(Users(id=uid, stripe_customer_id="cus_dispute", credits=100))
+    dbsession.commit()
+
+    payload = {
+        "id": "evt_dispute_test",
+        "type": "charge.dispute.created",
+        "data": {
+            "object": {
+                "id": "ch_dispute_123",
+                "payment_intent": "pi_test_123",
+                "invoice": "in_test_dispute",
+            },
+        },
+    }
+    body = json.dumps(payload)
+    hdr = _signed_hdr(body)
+
+    # Mock the Stripe PaymentIntent.retrieve call
+    import orchestra.web.api.webhooks.stripe as webhook_module
+
+    def mock_retrieve(payment_intent_id):
+        return {
+            "metadata": {
+                "user_id": uid,
+                "credits_purchased": "50",
+            },
+            "invoice": "in_test_dispute",
+        }
+
+    original_retrieve = webhook_module.stripe.PaymentIntent.retrieve
+    webhook_module.stripe.PaymentIntent.retrieve = mock_retrieve
+
+    try:
+        # Send the same event twice to test idempotency
+        for _ in range(2):
+            res = await client.post(
+                "/v0/webhooks/stripe",
+                content=body,
+                headers={"Stripe-Signature": hdr},
+            )
+            assert res.status_code == 200
+
+        # Verify only one webhook log entry was created (idempotency)
+        webhook_logs = (
+            dbsession.query(WebhookLog).filter_by(event_id="evt_dispute_test").all()
+        )
+        assert len(webhook_logs) == 1
+        assert webhook_logs[0].event_type == "charge.dispute.created"
+
+    finally:
+        # Restore original function
+        webhook_module.stripe.PaymentIntent.retrieve = original_retrieve
 
 
 # --------------------------------------------------------------------------- #

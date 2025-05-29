@@ -12,8 +12,8 @@ from anthropic import Anthropic
 from openai import OpenAI
 
 from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
+from orchestra.lib.billing import credits_to_usd
 from orchestra.lib.time import month_end_utc
-from orchestra.pricing import credits_to_usd
 
 oai_func = OpenAI(api_key="").chat.completions.create
 OPENAI_ALLOWED_ARGS = set(inspect.signature(oai_func).parameters.keys())
@@ -161,11 +161,11 @@ def recharge_and_generate_invoice(user, users_dao):
 
         if pay_invoice.status == "paid":
             logging.info(
-                f"Invoice {finalized_invoice.number} has been paid. Recording pending recharge.",
+                f"Invoice {finalized_invoice.number} has been paid. Recording paid recharge.",
             )
 
-            # Record the pending transaction in the Recharge table
-            # Note: Credit will be added by the webhook handler when payment is confirmed
+            # Record the paid transaction in the Recharge table
+            # Since we paid immediately, mark it as PAID and add credits immediately
             recharge = Recharge(
                 user_id=user.id,
                 quantity=user.autorecharge_qty,
@@ -173,9 +173,13 @@ def recharge_and_generate_invoice(user, users_dao):
                 invoice_group=month_end_utc(date.today()),
                 type="invoice",
                 transaction_id=finalized_invoice.id,
-                status=RechargeStatus.PENDING_INVOICE,
+                status=RechargeStatus.PAID,  # Mark as PAID since we paid immediately
+                stripe_invoice_id=finalized_invoice.id,
             )
             users_dao.session.add(recharge)
+
+            # Add credits immediately since payment succeeded
+            users_dao.recharge_credit(user.id, int(user.autorecharge_qty))
             users_dao.session.commit()
         else:
             logging.warning(
