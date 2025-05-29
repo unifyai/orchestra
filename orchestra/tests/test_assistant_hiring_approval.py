@@ -1,8 +1,10 @@
 import pytest
-from httpx import AsyncClient
 from fastapi import status
-from .utils import create_test_user, get_credits, ADMIN_HEADERS
+from httpx import AsyncClient
+
 from orchestra.web.api.assistant.views import ASSISTANT_CREATION_COST
+
+from .utils import ADMIN_HEADERS, create_test_user, get_credits
 
 
 @pytest.mark.anyio
@@ -11,7 +13,8 @@ async def test_user_request_hiring_approval(client: AsyncClient):
 
     # Initial request
     response = await client.post(
-        "/v0/user/assistant-hiring-approval", headers=test_user["headers"]
+        "/v0/user/assistant-hiring-approval",
+        headers=test_user["headers"],
     )
     assert response.status_code == status.HTTP_200_OK, response.json()
     data = response.json()
@@ -30,7 +33,8 @@ async def test_user_request_hiring_approval(client: AsyncClient):
 
     # Request again (should indicate it's already pending)
     response_again = await client.post(
-        "/v0/user/assistant-hiring-approval", headers=test_user["headers"]
+        "/v0/user/assistant-hiring-approval",
+        headers=test_user["headers"],
     )
     assert response_again.status_code == status.HTTP_200_OK, response_again.json()
     data_again = response_again.json()
@@ -54,14 +58,16 @@ async def test_admin_manage_hiring_approval(client: AsyncClient):
 
     # Verify status via admin GET
     user_details_resp = await client.get(
-        f"/v0/admin/auth-user/by-user-id?user_id={user_id}", headers=ADMIN_HEADERS
+        f"/v0/admin/auth-user/by-user-id?user_id={user_id}",
+        headers=ADMIN_HEADERS,
     )
     assert user_details_resp.status_code == status.HTTP_200_OK
     assert user_details_resp.json()["assistant_hiring_approval"] == "approved"
 
     # User requests again (should show approved)
     response_user_req_approved = await client.post(
-        user_request_url, headers=user_headers
+        user_request_url,
+        headers=user_headers,
     )
     assert response_user_req_approved.status_code == status.HTTP_200_OK
     assert "already approved" in response_user_req_approved.json()["message"]
@@ -74,14 +80,16 @@ async def test_admin_manage_hiring_approval(client: AsyncClient):
 
     # Verify status via admin GET
     user_details_resp_rejected = await client.get(
-        f"/v0/admin/auth-user/by-user-id?user_id={user_id}", headers=ADMIN_HEADERS
+        f"/v0/admin/auth-user/by-user-id?user_id={user_id}",
+        headers=ADMIN_HEADERS,
     )
     assert user_details_resp_rejected.status_code == status.HTTP_200_OK
     assert user_details_resp_rejected.json()["assistant_hiring_approval"] == "rejected"
 
     # User requests again (after rejection, user should be able to re-request and go to pending)
     response_user_req_after_reject = await client.post(
-        user_request_url, headers=user_headers
+        user_request_url,
+        headers=user_headers,
     )
     assert response_user_req_after_reject.status_code == status.HTTP_200_OK
     assert (
@@ -94,7 +102,8 @@ async def test_admin_manage_hiring_approval(client: AsyncClient):
 
     # Verify status is now pending via admin GET
     user_details_resp_pending_after_reject = await client.get(
-        f"/v0/admin/auth-user/by-user-id?user_id={user_id}", headers=ADMIN_HEADERS
+        f"/v0/admin/auth-user/by-user-id?user_id={user_id}",
+        headers=ADMIN_HEADERS,
     )
     assert user_details_resp_pending_after_reject.status_code == status.HTTP_200_OK
     assert (
@@ -113,14 +122,16 @@ async def test_admin_manage_hiring_approval(client: AsyncClient):
 
     # Verify status via admin GET
     user_details_resp_revoked = await client.get(
-        f"/v0/admin/auth-user/by-user-id?user_id={user_id}", headers=ADMIN_HEADERS
+        f"/v0/admin/auth-user/by-user-id?user_id={user_id}",
+        headers=ADMIN_HEADERS,
     )
     assert user_details_resp_revoked.status_code == status.HTTP_200_OK
     assert user_details_resp_revoked.json()["assistant_hiring_approval"] == "revoked"
 
     # User requests again (after revocation, user should be able to re-request and go to pending)
     response_user_req_after_revoke = await client.post(
-        user_request_url, headers=user_headers
+        user_request_url,
+        headers=user_headers,
     )
     assert response_user_req_after_revoke.status_code == status.HTTP_200_OK
     assert (
@@ -169,7 +180,8 @@ async def test_admin_list_users_by_hiring_status(client: AsyncClient):
 
     # List pending
     response_pending_list = await client.get(
-        f"{list_url_base}?status_filter=pending", headers=ADMIN_HEADERS
+        f"{list_url_base}?status_filter=pending",
+        headers=ADMIN_HEADERS,
     )
     assert response_pending_list.status_code == status.HTTP_200_OK
     pending_users = response_pending_list.json()
@@ -184,7 +196,8 @@ async def test_admin_list_users_by_hiring_status(client: AsyncClient):
 
     # List approved
     response_approved_list = await client.get(
-        f"{list_url_base}?status_filter=approved", headers=ADMIN_HEADERS
+        f"{list_url_base}?status_filter=approved",
+        headers=ADMIN_HEADERS,
     )
     assert response_approved_list.status_code == status.HTTP_200_OK
     approved_users = response_approved_list.json()
@@ -196,7 +209,8 @@ async def test_admin_list_users_by_hiring_status(client: AsyncClient):
 
     # List rejected
     response_rejected_list = await client.get(
-        f"{list_url_base}?status_filter=rejected", headers=ADMIN_HEADERS
+        f"{list_url_base}?status_filter=rejected",
+        headers=ADMIN_HEADERS,
     )
     assert response_rejected_list.status_code == status.HTTP_200_OK
     rejected_users = response_rejected_list.json()
@@ -208,7 +222,8 @@ async def test_admin_list_users_by_hiring_status(client: AsyncClient):
 
     # List revoked
     response_revoked_list = await client.get(
-        f"{list_url_base}?status_filter=revoked", headers=ADMIN_HEADERS
+        f"{list_url_base}?status_filter=revoked",
+        headers=ADMIN_HEADERS,
     )
     assert response_revoked_list.status_code == status.HTTP_200_OK
     revoked_users = response_revoked_list.json()
@@ -220,7 +235,8 @@ async def test_admin_list_users_by_hiring_status(client: AsyncClient):
 
     # List users with no status (None)
     response_none_list = await client.get(
-        f"{list_url_base}?status_filter=none", headers=ADMIN_HEADERS
+        f"{list_url_base}?status_filter=none",
+        headers=ADMIN_HEADERS,
     )
     assert response_none_list.status_code == status.HTTP_200_OK
     none_status_users = response_none_list.json()
@@ -232,7 +248,8 @@ async def test_admin_list_users_by_hiring_status(client: AsyncClient):
 
     # List all
     response_all_list = await client.get(
-        f"{list_url_base}?status_filter=all", headers=ADMIN_HEADERS
+        f"{list_url_base}?status_filter=all",
+        headers=ADMIN_HEADERS,
     )
     assert response_all_list.status_code == status.HTTP_200_OK
     all_users = response_all_list.json()
@@ -280,14 +297,15 @@ async def test_one_time_approval_links_flow(client: AsyncClient):
 
     # Verify user status is approved
     user_details = await client.get(
-        f"/v0/admin/auth-user/by-user-id?user_id={user_id}", headers=ADMIN_HEADERS
+        f"/v0/admin/auth-user/by-user-id?user_id={user_id}",
+        headers=ADMIN_HEADERS,
     )
     assert user_details.json()["assistant_hiring_approval"] == "approved"
 
     # Verify credits were granted
     credits_after_first_claim = await get_credits(client, user_headers=user_headers)
     expected_credits_after_first_claim = initial_credits + float(
-        ASSISTANT_CREATION_COST
+        ASSISTANT_CREATION_COST,
     )
     assert (
         credits_after_first_claim == expected_credits_after_first_claim
@@ -305,7 +323,8 @@ async def test_one_time_approval_links_flow(client: AsyncClient):
 
     # Verify credits did not change after second claim attempt
     credits_after_second_claim_attempt = await get_credits(
-        client, user_headers=user_headers
+        client,
+        user_headers=user_headers,
     )
     assert (
         credits_after_second_claim_attempt == credits_after_first_claim
@@ -313,12 +332,14 @@ async def test_one_time_approval_links_flow(client: AsyncClient):
 
     # Admin lists links, check if claimed
     response_list_links = await client.get(
-        "/v0/admin/assistant-hiring-one-time-link", headers=ADMIN_HEADERS
+        "/v0/admin/assistant-hiring-one-time-link",
+        headers=ADMIN_HEADERS,
     )
     assert response_list_links.status_code == status.HTTP_200_OK
     links = response_list_links.json()
     claimed_link_in_list = next(
-        (l for l in links if l["token"] == one_time_token), None
+        (l for l in links if l["token"] == one_time_token),
+        None,
     )
     assert claimed_link_in_list is not None
     assert claimed_link_in_list["user_id"] == user_id
@@ -326,7 +347,8 @@ async def test_one_time_approval_links_flow(client: AsyncClient):
 
     # Admin deletes the link
     response_delete_link = await client.delete(
-        f"/v0/admin/assistant-hiring-one-time-link/{link_id_db}", headers=ADMIN_HEADERS
+        f"/v0/admin/assistant-hiring-one-time-link/{link_id_db}",
+        headers=ADMIN_HEADERS,
     )
     assert response_delete_link.status_code == status.HTTP_204_NO_CONTENT
 
@@ -341,7 +363,8 @@ async def test_one_time_link_single_benefit_and_multiple_links(client: AsyncClie
     # Get initial state for user1
     initial_credits_u1 = await get_credits(client, user_headers=user1_headers)
     user1_details_before = await client.get(
-        f"/v0/admin/auth-user/by-user-id?user_id={user1_id}", headers=ADMIN_HEADERS
+        f"/v0/admin/auth-user/by-user-id?user_id={user1_id}",
+        headers=ADMIN_HEADERS,
     )
     assert (
         user1_details_before.json()["assistant_hiring_approval"] is None
@@ -373,7 +396,8 @@ async def test_one_time_link_single_benefit_and_multiple_links(client: AsyncClie
     credits_u1_after_l1 = await get_credits(client, user_headers=user1_headers)
     assert credits_u1_after_l1 == initial_credits_u1 + float(ASSISTANT_CREATION_COST)
     user1_details_after_l1 = await client.get(
-        f"/v0/admin/auth-user/by-user-id?user_id={user1_id}", headers=ADMIN_HEADERS
+        f"/v0/admin/auth-user/by-user-id?user_id={user1_id}",
+        headers=ADMIN_HEADERS,
     )
     assert user1_details_after_l1.json()["assistant_hiring_approval"] == "approved"
     assert user1_details_after_l1.json()["has_claimed_approval_link"] is True
@@ -417,10 +441,12 @@ async def test_one_time_link_single_benefit_and_multiple_links(client: AsyncClie
     assert credits_u1_after_l2_attempt == credits_u1_after_l1
 
     link_l2_details = await client.get(
-        f"/v0/admin/assistant-hiring-one-time-link", headers=ADMIN_HEADERS
+        f"/v0/admin/assistant-hiring-one-time-link",
+        headers=ADMIN_HEADERS,
     )  # List all links
     l2_from_list = next(
-        (link for link in link_l2_details.json() if link["id"] == l2_id), None
+        (link for link in link_l2_details.json() if link["id"] == l2_id),
+        None,
     )
     assert l2_from_list is not None
     assert l2_from_list["user_id"] is None
@@ -431,7 +457,8 @@ async def test_one_time_link_single_benefit_and_multiple_links(client: AsyncClie
         headers=ADMIN_HEADERS,
     )
     user1_details_revoked = await client.get(
-        f"/v0/admin/auth-user/by-user-id?user_id={user1_id}", headers=ADMIN_HEADERS
+        f"/v0/admin/auth-user/by-user-id?user_id={user1_id}",
+        headers=ADMIN_HEADERS,
     )
     assert user1_details_revoked.json()["assistant_hiring_approval"] == "revoked"
     assert user1_details_revoked.json()["has_claimed_approval_link"] is True
@@ -450,11 +477,13 @@ async def test_one_time_link_single_benefit_and_multiple_links(client: AsyncClie
 
     # Verify User 1 credits did NOT change, Link L2 STILL unclaimed
     credits_u1_after_l2_revoke_attempt = await get_credits(
-        client, user_headers=user1_headers
+        client,
+        user_headers=user1_headers,
     )
     assert credits_u1_after_l2_revoke_attempt == credits_u1_after_l1
     user1_details_after_l2_revoke_claim = await client.get(
-        f"/v0/admin/auth-user/by-user-id?user_id={user1_id}", headers=ADMIN_HEADERS
+        f"/v0/admin/auth-user/by-user-id?user_id={user1_id}",
+        headers=ADMIN_HEADERS,
     )
     assert (
         user1_details_after_l2_revoke_claim.json()["assistant_hiring_approval"]
@@ -462,10 +491,12 @@ async def test_one_time_link_single_benefit_and_multiple_links(client: AsyncClie
     )
 
     link_l2_details_after = await client.get(
-        f"/v0/admin/assistant-hiring-one-time-link", headers=ADMIN_HEADERS
+        f"/v0/admin/assistant-hiring-one-time-link",
+        headers=ADMIN_HEADERS,
     )
     l2_from_list_after = next(
-        (link for link in link_l2_details_after.json() if link["id"] == l2_id), None
+        (link for link in link_l2_details_after.json() if link["id"] == l2_id),
+        None,
     )
     assert l2_from_list_after is not None
     assert l2_from_list_after["user_id"] is None
@@ -518,7 +549,8 @@ async def test_claim_invalid_one_time_link(client: AsyncClient):
 
     # Verify User B's credits did not change
     user_B_credits_after_failed_attempt = await get_credits(
-        client, user_headers=user_B["headers"]
+        client,
+        user_headers=user_B["headers"],
     )
     assert (
         user_B_credits_after_failed_attempt == user_B_initial_credits

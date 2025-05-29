@@ -2,7 +2,7 @@ import datetime
 import uuid
 from typing import List, Optional
 
-from sqlalchemy import select, delete
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import AssistantHiringOneTimeApprovalLink
@@ -16,7 +16,8 @@ class AssistantHiringOneTimeApprovalLinkDAO:
         return str(uuid.uuid4())
 
     def create(
-        self, expires_at: datetime.datetime
+        self,
+        expires_at: datetime.datetime,
     ) -> AssistantHiringOneTimeApprovalLink:
         token = self.generate_token()
         link = AssistantHiringOneTimeApprovalLink(
@@ -28,25 +29,27 @@ class AssistantHiringOneTimeApprovalLinkDAO:
 
     def get_by_token(self, token: str) -> Optional[AssistantHiringOneTimeApprovalLink]:
         query = select(AssistantHiringOneTimeApprovalLink).where(
-            AssistantHiringOneTimeApprovalLink.token == token
+            AssistantHiringOneTimeApprovalLink.token == token,
         )
         return self.session.execute(query).scalar_one_or_none()
 
     def get_by_id(self, link_id: str) -> Optional[AssistantHiringOneTimeApprovalLink]:
         query = select(AssistantHiringOneTimeApprovalLink).where(
-            AssistantHiringOneTimeApprovalLink.id == link_id
+            AssistantHiringOneTimeApprovalLink.id == link_id,
         )
         return self.session.execute(query).scalar_one_or_none()
 
     def claim_link(
-        self, token: str, user_id: str
+        self,
+        token: str,
+        user_id: str,
     ) -> Optional[AssistantHiringOneTimeApprovalLink]:
         link = self.get_by_token(token)
         if link:
             if link.user_id is not None:  # Already claimed
                 return None
             if link.expires_at < datetime.datetime.now(
-                datetime.timezone.utc
+                datetime.timezone.utc,
             ):  # Expired
                 return None
 
@@ -57,7 +60,9 @@ class AssistantHiringOneTimeApprovalLinkDAO:
         return None
 
     def list_links(
-        self, limit: int = 100, offset: int = 0
+        self,
+        limit: int = 100,
+        offset: int = 0,
     ) -> List[AssistantHiringOneTimeApprovalLink]:
         query = (
             select(AssistantHiringOneTimeApprovalLink)
@@ -82,7 +87,7 @@ class AssistantHiringOneTimeApprovalLinkDAO:
             delete(AssistantHiringOneTimeApprovalLink)
             .where(AssistantHiringOneTimeApprovalLink.expires_at < now_utc)
             .where(
-                AssistantHiringOneTimeApprovalLink.user_id.is_(None)
+                AssistantHiringOneTimeApprovalLink.user_id.is_(None),
             )  # Only delete unclaimed expired links
         )
         result = self.session.execute(stmt)
