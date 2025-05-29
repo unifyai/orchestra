@@ -23,18 +23,11 @@ from orchestra.web.api.assistant.schema import (
     VoiceRead,
 )
 from orchestra.web.api.utils.assistant_infra import (
-    create_cloud_run_job,
-    create_email,
-    create_phone_number,
-    create_pubsub_topic,
-    create_whatsapp_sender,
     delete_cloud_run_job,
     delete_email,
     delete_phone_number,
     delete_pubsub_topic,
-    start_cloud_run_job,
     stop_cloud_run_job,
-    watch_email,
 )
 
 
@@ -161,153 +154,153 @@ def create_assistant(
             voice_id=assistant_in.voice_id,
         )
 
-        assistant_id = assistant.agent_id
-        # Infrastructure creation with rollback on failure
-        created_email = None
-        created_phone = None
-        created_whatsapp = None
-        created_pubsub = None
-        created_job = None
-        started_job = False
+        # assistant_id = assistant.agent_id
+        # # Infrastructure creation with rollback on failure
+        # created_email = None
+        # created_phone = None
+        # created_whatsapp = None
+        # created_pubsub = None
+        # created_job = None
+        # started_job = False
 
-        try:
-            # Step 1: create email
-            if assistant_in.email:
-                email_local = (
-                    assistant_in.email.split("@")[0]
-                    if "@" in assistant_in.email
-                    else assistant_in.email
-                )
-                email_response = create_email(
-                    email_local,
-                    assistant_in.first_name,
-                    assistant_in.surname,
-                )
-                if "detail" in email_response:
-                    raise Exception(
-                        f"Email creation failed: {email_response['detail']}",
-                    )
-                created_email = email_response.get("email") or assistant_in.email
+        # try:
+        #     # Step 1: create email
+        #     if assistant_in.email:
+        #         email_local = (
+        #             assistant_in.email.split("@")[0]
+        #             if "@" in assistant_in.email
+        #             else assistant_in.email
+        #         )
+        #         email_response = create_email(
+        #             email_local,
+        #             assistant_in.first_name,
+        #             assistant_in.surname,
+        #         )
+        #         if "detail" in email_response:
+        #             raise Exception(
+        #                 f"Email creation failed: {email_response['detail']}",
+        #             )
+        #         created_email = email_response.get("email") or assistant_in.email
 
-                # Step 2: watch email
-                watch_response = watch_email(created_email)
-                if "detail" in watch_response:
-                    raise Exception(
-                        f"Email watch setup failed: {watch_response['detail']}",
-                    )
+        #         # Step 2: watch email
+        #         watch_response = watch_email(created_email)
+        #         if "detail" in watch_response:
+        #             raise Exception(
+        #                 f"Email watch setup failed: {watch_response['detail']}",
+        #             )
 
-            # Step 3: create phone number (only if not provided)
-            if not assistant_in.phone:
-                phone_response = create_phone_number()
-                if "detail" in phone_response:
-                    raise Exception(
-                        f"Phone number creation failed: {phone_response['detail']}",
-                    )
-                created_phone = phone_response.get("phone_number")
-            else:
-                # Use the provided phone number
-                created_phone = assistant_in.phone
+        #     # Step 3: create phone number (only if not provided)
+        #     if not assistant_in.phone:
+        #         phone_response = create_phone_number()
+        #         if "detail" in phone_response:
+        #             raise Exception(
+        #                 f"Phone number creation failed: {phone_response['detail']}",
+        #             )
+        #         created_phone = phone_response.get("phone_number")
+        #     else:
+        #         # Use the provided phone number
+        #         created_phone = assistant_in.phone
 
-            # Step 4: create whatsapp sender
-            if created_phone:
-                whatsapp_response = create_whatsapp_sender(
-                    created_phone,
-                    assistant_in.first_name,
-                    assistant_in.surname,
-                )
-                if "detail" in whatsapp_response:
-                    raise Exception(
-                        f"WhatsApp sender creation failed: {whatsapp_response['detail']}",
-                    )
-                created_whatsapp = whatsapp_response.get("whatsapp_sid")
+        #     # Step 4: create whatsapp sender
+        #     if created_phone:
+        #         whatsapp_response = create_whatsapp_sender(
+        #             created_phone,
+        #             assistant_in.first_name,
+        #             assistant_in.surname,
+        #         )
+        #         if "detail" in whatsapp_response:
+        #             raise Exception(
+        #                 f"WhatsApp sender creation failed: {whatsapp_response['detail']}",
+        #             )
+        #         created_whatsapp = whatsapp_response.get("whatsapp_sid")
 
-            # Step 5: create pubsub topic
-            pubsub_response = create_pubsub_topic(str(assistant_id))
-            if "detail" in pubsub_response:
-                raise Exception(
-                    f"Pubsub topic creation failed: {pubsub_response['detail']}",
-                )
-            created_pubsub = True
+        #     # Step 5: create pubsub topic
+        #     pubsub_response = create_pubsub_topic(str(assistant_id))
+        #     if "detail" in pubsub_response:
+        #         raise Exception(
+        #             f"Pubsub topic creation failed: {pubsub_response['detail']}",
+        #         )
+        #     created_pubsub = True
 
-            # Step 6: create cloud run job
-            job_response = create_cloud_run_job(
-                assistant_id=str(assistant_id),
-                user_name=f"{assistant_in.first_name} {assistant_in.surname}",
-                assistant_number=created_phone or assistant_in.phone or "",
-                user_number="",  # This would need to be provided or retrieved from user data
-            )
-            if "detail" in job_response:
-                raise Exception(
-                    f"Cloud Run job creation failed: {job_response['detail']}",
-                )
-            created_job = True
+        #     # Step 6: create cloud run job
+        #     job_response = create_cloud_run_job(
+        #         assistant_id=str(assistant_id),
+        #         user_name=f"{assistant_in.first_name} {assistant_in.surname}",
+        #         assistant_number=created_phone or assistant_in.phone or "",
+        #         user_number="",  # This would need to be provided or retrieved from user data
+        #     )
+        #     if "detail" in job_response:
+        #         raise Exception(
+        #             f"Cloud Run job creation failed: {job_response['detail']}",
+        #         )
+        #     created_job = True
 
-            # Step 7: start cloud run job
-            start_response = start_cloud_run_job(str(assistant_id))
-            if "detail" in start_response:
-                raise Exception(
-                    f"Cloud Run job start failed: {start_response['detail']}",
-                )
-            started_job = True
+        #     # Step 7: start cloud run job
+        #     start_response = start_cloud_run_job(str(assistant_id))
+        #     if "detail" in start_response:
+        #         raise Exception(
+        #             f"Cloud Run job start failed: {start_response['detail']}",
+        #         )
+        #     started_job = True
 
-            # Update assistant with created infrastructure details
-            if created_email or created_phone or created_whatsapp:
-                assistant = assistant_dao.update_assistant(
-                    user_id=user_id,
-                    agent_id=assistant_id,
-                    email=created_email or assistant.email,
-                    phone=created_phone or assistant.phone,
-                    whatsapp_sid=created_whatsapp or assistant.whatsapp_sid,
-                )
+        #     # Update assistant with created infrastructure details
+        #     if created_email or created_phone or created_whatsapp:
+        #         assistant = assistant_dao.update_assistant(
+        #             user_id=user_id,
+        #             agent_id=assistant_id,
+        #             email=created_email or assistant.email,
+        #             phone=created_phone or assistant.phone,
+        #             whatsapp_sid=created_whatsapp or assistant.whatsapp_sid,
+        #         )
 
-        except Exception as infra_error:
-            # Rollback infrastructure in reverse order
-            rollback_errors = []
+        # except Exception as infra_error:
+        #     # Rollback infrastructure in reverse order
+        #     rollback_errors = []
 
-            if started_job:
-                try:
-                    stop_cloud_run_job(str(assistant_id))
-                except Exception as e:
-                    rollback_errors.append(f"Failed to stop job: {str(e)}")
+        #     if started_job:
+        #         try:
+        #             stop_cloud_run_job(str(assistant_id))
+        #         except Exception as e:
+        #             rollback_errors.append(f"Failed to stop job: {str(e)}")
 
-            if created_job:
-                try:
-                    delete_cloud_run_job(str(assistant_id))
-                except Exception as e:
-                    rollback_errors.append(f"Failed to delete job: {str(e)}")
+        #     if created_job:
+        #         try:
+        #             delete_cloud_run_job(str(assistant_id))
+        #         except Exception as e:
+        #             rollback_errors.append(f"Failed to delete job: {str(e)}")
 
-            if created_pubsub:
-                try:
-                    delete_pubsub_topic(str(assistant_id))
-                except Exception as e:
-                    rollback_errors.append(f"Failed to delete pubsub topic: {str(e)}")
+        #     if created_pubsub:
+        #         try:
+        #             delete_pubsub_topic(str(assistant_id))
+        #         except Exception as e:
+        #             rollback_errors.append(f"Failed to delete pubsub topic: {str(e)}")
 
-            if created_phone and not assistant_in.phone:
-                try:
-                    delete_phone_number(created_phone)
-                except Exception as e:
-                    rollback_errors.append(f"Failed to delete phone: {str(e)}")
+        #     if created_phone and not assistant_in.phone:
+        #         try:
+        #             delete_phone_number(created_phone)
+        #         except Exception as e:
+        #             rollback_errors.append(f"Failed to delete phone: {str(e)}")
 
-            if created_email and "@" not in (assistant_in.email or ""):
-                try:
-                    delete_email(created_email)
-                except Exception as e:
-                    rollback_errors.append(f"Failed to delete email: {str(e)}")
+        #     if created_email and "@" not in (assistant_in.email or ""):
+        #         try:
+        #             delete_email(created_email)
+        #         except Exception as e:
+        #             rollback_errors.append(f"Failed to delete email: {str(e)}")
 
-            # Delete the assistant record since infrastructure failed
-            try:
-                assistant_dao.delete_assistant(user_id=user_id, agent_id=assistant_id)
-            except Exception as e:
-                rollback_errors.append(f"Failed to delete assistant: {str(e)}")
+        #     # Delete the assistant record since infrastructure failed
+        #     try:
+        #         assistant_dao.delete_assistant(user_id=user_id, agent_id=assistant_id)
+        #     except Exception as e:
+        #         rollback_errors.append(f"Failed to delete assistant: {str(e)}")
 
-            error_msg = f"Infrastructure setup failed: {str(infra_error)}"
-            if rollback_errors:
-                error_msg += f" Rollback issues: {'; '.join(rollback_errors)}"
+        #     error_msg = f"Infrastructure setup failed: {str(infra_error)}"
+        #     if rollback_errors:
+        #         error_msg += f" Rollback issues: {'; '.join(rollback_errors)}"
 
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=error_msg,
-            )
+        #     raise HTTPException(
+        #         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        #         detail=error_msg,
+        #     )
 
     except HTTPException:
         raise
