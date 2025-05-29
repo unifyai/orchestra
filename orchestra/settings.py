@@ -151,13 +151,11 @@ class Settings(BaseSettings):
     )
 
     # Variables for email sending
-    smtp_hostname: str = "smtp.gmail.com"
-    smtp_port: int = 465
-    smtp_username: Optional[str] = os.getenv("ONBOARDING_EMAIL")
-    smtp_password: Optional[str] = os.getenv("ONBOARDING_PASSWORD")
-    smtp_sender_email: Optional[str] = os.getenv("ONBOARDING_EMAIL")
-    smtp_use_starttls: bool = False
-    smtp_use_ssl: bool = True
+    google_service_sender_email: Optional[str] = os.environ.get("ONBOARDING_EMAIL")
+    google_service_account_key_path: Optional[str] = os.environ.get(
+        "MAIL_SENDER_SERVICE_ACCOUNT_KEY",
+        "/secrets/mail_sender_service_account_key.json",
+    )
 
     @property
     def db_url(self) -> URL:
