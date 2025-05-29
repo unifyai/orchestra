@@ -154,7 +154,7 @@ class Settings(BaseSettings):
     google_service_sender_email: Optional[str] = os.environ.get("ONBOARDING_EMAIL")
     google_service_account_key_path: Optional[str] = os.environ.get(
         "MAIL_SENDER_SERVICE_ACCOUNT_KEY",
-        "/secrets/mail_sender_service_account_key.json",
+        "/secrets/gcp/mail_sender_service_account_key.json",
     )
 
     @property
