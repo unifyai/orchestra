@@ -565,7 +565,10 @@ async def set_user_assistant_hiring_status(
     user_instance = user[0]
     if auth_user_dao.set_assistant_hiring_approval(target_user_id, status):
         session.commit()
-        if status == "approved":
+        if (
+            status == "approved"
+            and user_instance.assistant_hiring_approval != "approved"
+        ):
             try:
                 email_recipient = user_instance.name or "there"
                 to_email = user_instance.email
