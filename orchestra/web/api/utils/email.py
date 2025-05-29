@@ -1,66 +1,87 @@
 import logging
-import aiosmtplib
+import base64
 from email.mime.text import MIMEText
-from email.header import Header
+
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
 from orchestra.settings import settings
 
 logger = logging.getLogger(__name__)
 
-# --- SMTP Configuration ---
-SMTP_HOSTNAME = settings.smtp_hostname
-SMTP_PORT = settings.smtp_port
-SMTP_USERNAME = settings.smtp_username
-SMTP_PASSWORD = settings.smtp_password
-SMTP_SENDER_EMAIL = settings.smtp_sender_email
-SMTP_USE_STARTTLS = settings.smtp_use_starttls
-SMTP_USE_SSL = settings.smtp_use_ssl
+# --- Gmail API Configuration with Service Account ---
+SERVICE_ACCOUNT_FILE = (
+    settings.google_service_account_key_path
+)  # Path to the service account JSON key file.
+DELEGATED_USER_EMAIL = (
+    settings.google_service_sender_email
+)  # The email address of the Google Workspace user the service account will impersonate.
+
+# Scopes required for sending email via Gmail API
+SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 
 
-async def send_email_async(to_email: str, email_subject: str, email_body: str):
+async def send_email_async(to_email: str, email_subject: str, email_body: str) -> bool:
     """
-    Sends an email to a user using HTML content.
+    Sends an email using Gmail API with OAuth 2.0 (Service Account with Domain-Wide Delegation).
     """
-    if not all([SMTP_HOSTNAME, SMTP_PORT, SMTP_SENDER_EMAIL]):
+    if not SERVICE_ACCOUNT_FILE or not os.path.exists(SERVICE_ACCOUNT_FILE):
         logger.error(
-            "SMTP settings (HOSTNAME, PORT, SENDER_EMAIL) are not fully configured. "
-            "Cannot send actual email. Check your environment variables."
+            "Google Service Account Key Path not configured. Cannot send email via OAuth."
         )
-        return
-
-    msg = MIMEText(email_body, "html", "utf-8")
-    msg["Subject"] = Header(email_subject, "utf-8")
-    msg["From"] = SMTP_SENDER_EMAIL
-    msg["To"] = to_email
+        return False
+    if not DELEGATED_USER_EMAIL:
+        logger.error(
+            "Delegated user email (sender email) not configured. Cannot send email via OAuth."
+        )
+        return False
 
     try:
-        smtp_client = aiosmtplib.SMTP(
-            hostname=SMTP_HOSTNAME,
-            port=SMTP_PORT,
-            use_tls=SMTP_USE_SSL,  # If True, connects with SSL from the start
+        # Create credentials from the service account file, impersonating the user
+        creds = Credentials.from_service_account_file(
+            SERVICE_ACCOUNT_FILE,
+            scopes=SCOPES,
+            subject=DELEGATED_USER_EMAIL,  # Impersonate this user
         )
 
-        async with smtp_client:
-            # If not using direct SSL from the start, and STARTTLS is enabled, upgrade connection
-            if not SMTP_USE_SSL and SMTP_USE_STARTTLS:
-                await smtp_client.starttls()
+        # Build the Gmail service
+        service = build(
+            "gmail", "v1", credentials=creds, cache_discovery=False
+        )  # Added cache_discovery=False
 
-            # Login if credentials are provided
-            if SMTP_USERNAME and SMTP_PASSWORD:
-                await smtp_client.login(SMTP_USERNAME, SMTP_PASSWORD)
+        # Create the email message
+        message = MIMEText(email_body, "html")
+        message["to"] = to_email
+        message["from"] = DELEGATED_USER_EMAIL
+        message["subject"] = email_subject
 
-            await smtp_client.send_message(msg)
-            logger.info(f"Email successfully sent to {to_email} via SMTP.")
+        # Encode the message in base64url format
+        encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
+        create_message_body = {"raw": encoded_message}
 
-    except aiosmtplib.SMTPException as e:
-        logger.error(
-            f"SMTP error sending email to {to_email}: {e.__class__.__name__} - {e}"
+        # Send the message using the Gmail API
+        # 'me' refers to the authenticated user (which is DELEGATED_USER_EMAIL due to impersonation)
+        send_message = (
+            service.users()
+            .messages()
+            .send(userId="me", body=create_message_body)
+            .execute()
         )
-    except ConnectionRefusedError:
-        logger.error(
-            f"Connection refused when trying to send email to {to_email} via {SMTP_HOSTNAME}:{SMTP_PORT}."
+        logger.info(
+            f"Email successfully sent to {to_email} via Gmail API. Message ID: {send_message.get('id')}"
         )
-    except Exception as e:
+        return True
+
+    except HttpError as error:
         logger.error(
-            f"An unexpected error occurred sending email to {to_email} via SMTP: {e.__class__.__name__} - {e}",
+            f"An HTTP error occurred sending email to {to_email} via Gmail API: {error}",
             exc_info=True,
         )
+        return False
+    except Exception as e:
+        logger.error(
+            f"An unexpected error occurred sending email to {to_email} via Gmail API: {e}",
+            exc_info=True,
+        )
+        return False
