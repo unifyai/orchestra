@@ -5,35 +5,36 @@ from typing import Optional, List
 import asyncio
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.account_dao import AccountDAO
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
+from orchestra.db.dao.assistant_hiring_one_time_approval_link_dao import (
+    AssistantHiringOneTimeApprovalLinkDAO,
+)
 from orchestra.db.dao.auth_user_dao import (
+    ASSISTANT_HIRING_APPROVAL_STATUSES,
     AuthUser,
     AuthUserDAO,
-    ASSISTANT_HIRING_APPROVAL_STATUSES,
 )
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.db.dao.assistant_hiring_one_time_approval_link_dao import (
-    AssistantHiringOneTimeApprovalLinkDAO,
-)
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
+from orchestra.web.api.assistant.views import ASSISTANT_CREATION_COST
 from orchestra.web.api.users.schema import (
     AccountRequest,
+    AssistantHiringApprovalCreateLinkRequest,
+    AssistantHiringApprovalResponse,
+    AssistantHiringApprovalUserStatus,
+    AssistantHiringOneTimeLinkClaimTokenRequest,
+    AssistantHiringOneTimeLinkResponse,
     FreezeAccountRequest,
     QueryLoggingStatus,
     UpdateQueryLoggingRequest,
     UserRequest,
-    AssistantHiringApprovalCreateLinkRequest,
-    AssistantHiringApprovalResponse,
-    AssistantHiringApprovalUserStatus,
-    AssistantHiringOneTimeLinkResponse,
-    AssistantHiringOneTimeLinkClaimTokenRequest,
 )
 from orchestra.web.api.utils.http_responses import not_found
 from orchestra.web.api.assistant.views import ASSISTANT_CREATION_COST
@@ -708,15 +709,17 @@ async def claim_assistant_hiring_one_time_link(
         was_re_activated = False
         if original_approval_status in ["revoked", "rejected", None, "pending"]:
             if not auth_user_dao.set_assistant_hiring_approval(
-                user_instance.id, "approved"
+                user_instance.id,
+                "approved",
             ):
                 session.rollback()
                 raise HTTPException(
-                    status_code=500, detail="Failed to re-activate approval status."
+                    status_code=500,
+                    detail="Failed to re-activate approval status.",
                 )
             session.commit()
             session.refresh(
-                user_instance
+                user_instance,
             )  # Refresh to get the latest state for user_instance
             updated_approval_status = "approved"
             was_re_activated = True  # Mark that re-activation happened
@@ -759,17 +762,20 @@ async def claim_assistant_hiring_one_time_link(
             )
 
         if not auth_user_dao.set_assistant_hiring_approval(
-            user_instance.id, "approved"
+            user_instance.id,
+            "approved",
         ):
             session.rollback()
             raise HTTPException(
-                status_code=500, detail="Failed to set approval status."
+                status_code=500,
+                detail="Failed to set approval status.",
             )
 
         auth_user_dao.update(id=user_instance.id, has_claimed_approval_link=True)
 
         users_dao.recharge_credit(
-            user_id=user_instance.id, quantity=float(ASSISTANT_CREATION_COST)
+            user_id=user_instance.id,
+            quantity=float(ASSISTANT_CREATION_COST),
         )
 
         session.commit()
@@ -802,7 +808,7 @@ async def create_assistant_hiring_one_time_link(
         raise HTTPException(status_code=500, detail="Expiration days must be positive.")
 
     expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(
-        days=payload.expires_in_days
+        days=payload.expires_in_days,
     )
     link = token_dao.create(expires_at=expires_at)
     session.commit()
