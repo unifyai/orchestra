@@ -587,8 +587,23 @@ async def set_user_assistant_hiring_status(
                 </body>
                 </html>
                 """
-                email_task = send_email_async(to_email, email_subject, email_body)
-                asyncio.create_task(email_task)
+                email_coroutine = send_email_async(to_email, email_subject, email_body)
+                email_sending_task = asyncio.create_task(email_coroutine)
+
+                def _log_email_task_exception(task: asyncio.Task) -> None:
+                    try:
+                        task.result()
+                        logger.info(
+                            f"Email sending task for user {target_user_id} completed (status: {task.done()})."
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"Background email sending task for user {target_user_id} encountered an error: {e}",
+                            exc_info=True,
+                        )
+
+                email_sending_task.add_done_callback(_log_email_task_exception)
+                logger.info(f"Scheduled approval email for user {target_user_id}.")
             except Exception as e:
                 logger.error(
                     f"Failed to schedule email for user {target_user_id} approval: {e}"
