@@ -394,7 +394,10 @@ class AuthUser(Base):
     evaluations_enabled = Column(Boolean, nullable=False, server_default="true")
     # Toggle for handling assistant hiring approval
     assistant_hiring_approval = Column(
-        String, nullable=True, index=True, server_default=None
+        String,
+        nullable=True,
+        index=True,
+        server_default=None,
     )
     has_claimed_approval_link = Column(Boolean, nullable=False, server_default="false")
     created_at = Column(TIMESTAMP, server_default=func.now())
