@@ -26,7 +26,7 @@ async def send_email_async(to_email: str, email_subject: str, email_body: str) -
     """
     Sends an email using Gmail API with OAuth 2.0 (Service Account with Domain-Wide Delegation).
     """
-    if not SERVICE_ACCOUNT_FILE or not os.path.exists(SERVICE_ACCOUNT_FILE):
+    if not SERVICE_ACCOUNT_FILE:
         logger.error(
             "Google Service Account Key Path not configured. Cannot send email via OAuth."
         )
