@@ -1,3 +1,4 @@
+import logging
 import time
 from decimal import Decimal
 from typing import List, Optional
@@ -159,6 +160,10 @@ def create_assistant(
             voice_id=assistant_in.voice_id,
         )
 
+        # Commit the assistant creation before infrastructure setup
+        # This ensures the assistant persists even if we refresh the session later
+        session.commit()
+
         assistant_id = assistant.agent_id
         # Infrastructure creation with rollback on failure
         created_email = None
@@ -251,8 +256,16 @@ def create_assistant(
             started_job = True
             print(f"JOB STARTED: {assistant_id}")
 
+            # Refresh database session after long infrastructure operations
+            logging.info(
+                f"Refreshing database session after infrastructure setup for assistant {assistant_id}",
+            )
+            session.close()
+            session = next(get_db_session(request))
+            assistant_dao = AssistantDAO(session)
+
             # Update assistant with created infrastructure details
-            assistant = assistant_dao.update_assistant(
+            assistant_dao.update_assistant(
                 user_id=user_id,
                 agent_id=assistant_id,
                 email=created_email,
@@ -260,11 +273,27 @@ def create_assistant(
                 user_phone=assistant_in.user_phone,
                 whatsapp_sid=created_whatsapp,
             )
+            # Commit the infrastructure updates
+            session.commit()
             print(f"ASSISTANT UPDATED: {assistant_id}")
+
+            # Retrieve the updated assistant for the final response
+            assistant = assistant_dao.get_assistant_by_id(
+                user_id=user_id,
+                agent_id=assistant_id,
+            )
 
         except Exception as infra_error:
             # can't rollback infra if the setup isn't complete so need to wait
             time.sleep(10)
+
+            # Refresh database session to avoid stale connections during rollback
+            logging.warning(
+                f"Infrastructure setup failed for assistant {assistant_id}, refreshing session for rollback",
+            )
+            session.close()
+            session = next(get_db_session(request))
+            assistant_dao = AssistantDAO(session)
 
             # Rollback infrastructure in reverse order
             rollback_errors = []
@@ -307,6 +336,8 @@ def create_assistant(
             # Delete the assistant record since infrastructure failed
             try:
                 assistant_dao.delete_assistant(user_id=user_id, agent_id=assistant_id)
+                # Commit the assistant deletion
+                session.commit()
             except Exception as e:
                 rollback_errors.append(f"Failed to delete assistant: {str(e)}")
             print(f"ASSISTANT DELETED: {assistant_id}")
@@ -323,6 +354,7 @@ def create_assistant(
     except HTTPException:
         raise
     except Exception as e_prepare:
+        print(f"FAILED TO CREATE ASSISTANT: {str(e_prepare)}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Failed to create assistant: {str(e_prepare)}",
@@ -332,6 +364,11 @@ def create_assistant(
     # both the assistant and the credit change atomically.
     if not settings.is_staging:
         try:
+            # Refresh session before credit operation to ensure connection is valid
+            session.close()
+            session = next(get_db_session(request))
+            users_dao = UsersDAO(session)
+
             users_dao.recharge_credit(
                 user_id=user_id,
                 quantity=-float(ASSISTANT_CREATION_COST),
