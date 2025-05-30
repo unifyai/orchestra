@@ -116,15 +116,27 @@ def upgrade() -> None:
     # Ensure no conflicting old status column exists
     op.execute("ALTER TABLE recharge DROP COLUMN IF EXISTS status")
 
-    # Use VARCHAR with CHECK constraint instead of enum
+    # Add status column as nullable first
     op.add_column(
         "recharge",
         sa.Column(
             "status",
             sa.String(),
-            nullable=False,
-            server_default="PENDING_INVOICE",
+            nullable=True,  # Start as nullable
         ),
+    )
+
+    # Update ALL existing recharge records to PAID status
+    # This prevents double billing - better safe than sorry!
+    op.execute("UPDATE recharge SET status = 'PAID' WHERE status IS NULL")
+
+    # Now make the column NOT NULL with default for new records
+    op.alter_column(
+        "recharge",
+        "status",
+        existing_type=sa.String(),
+        nullable=False,
+        server_default="PENDING_INVOICE",  # Default for new records
     )
 
     # Add CHECK constraint to enforce valid status values
