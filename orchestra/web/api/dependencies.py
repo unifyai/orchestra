@@ -132,17 +132,27 @@ def check_account_not_suspended(request: Request):
     This should be called after authentication to prevent suspended users
     from accessing any endpoints.
     """
+    from fastapi import HTTPException
+
     user_id = getattr(request.state, "user_id", None)
     if user_id:
         try:
             with _ro_session() as session:
                 users_dao = UsersDAO(session)
                 user = users_dao.get_user_with_id(user_id)
+                # If user doesn't exist in users table, they can't be suspended
+                # (they don't have billing setup yet)
                 if user and user.billing_state == "SUSPENDED":
                     raise account_suspended
-        except Exception as e:
-            # Re-raise HTTP exceptions (like account_suspended)
-            if hasattr(e, "status_code"):
+        except HTTPException as e:
+            # If it's a 404 "User ID not found", allow the request to proceed
+            # since users without billing setup can't be suspended
+            if e.status_code == 404:
+                pass
+            else:
+                # Re-raise other HTTP exceptions (like account_suspended)
                 raise
-            # If there's any other error checking billing state, allow the request
-            # to proceed rather than blocking legitimate users
+        except Exception:
+            # If there's any other error, allow the request to proceed
+            # rather than blocking legitimate users
+            pass
