@@ -25,7 +25,10 @@ from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
 from orchestra.db.models.orchestra_models import Users as User
 from orchestra.db.models.orchestra_models import WebhookLog
 from orchestra.lib.billing import get_appropriate_stripe_key
-from orchestra.observability.metrics import invoice_failed_total, invoice_paid_total
+from orchestra.web.api.utils.prometheus_middleware import (
+    INVOICE_FAILED_TOTAL,
+    INVOICE_PAID_TOTAL,
+)
 from orchestra.web.lifetime import get_engine
 
 logger = logging.getLogger(__name__)
@@ -80,7 +83,7 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
         )
         session.commit()
         if user_id:
-            invoice_paid_total.labels(user_id=user_id).inc()
+            INVOICE_PAID_TOTAL.labels(user_id=user_id).inc()
         logger.info("Invoice %s marked PAID", invoice_id)
         return Response(status_code=200)
 
@@ -100,7 +103,7 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
             )
         session.commit()
         if user_id:
-            invoice_failed_total.labels(user_id=user_id).inc()
+            INVOICE_FAILED_TOTAL.labels(user_id=user_id).inc()
         logger.info("Invoice %s marked FAILED", invoice_id)
         return Response(status_code=200)
 

@@ -22,7 +22,7 @@ from sqlalchemy.orm import sessionmaker
 from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
 from orchestra.lib.billing import get_appropriate_stripe_key
 from orchestra.lib.time import month_end_utc  # helper already exists
-from orchestra.observability.metrics import invoice_created_total
+from orchestra.web.api.utils.prometheus_middleware import INVOICE_CREATED_TOTAL
 from orchestra.web.lifetime import get_engine
 
 
@@ -120,6 +120,6 @@ def invoice_month(  # Celery entry-point
                 r.status = RechargeStatus.INVOICE_CREATED
                 r.stripe_invoice_id = invoice.id
 
-            invoice_created_total.labels(user_id=user_id).inc()  # ← metric
+            INVOICE_CREATED_TOTAL.labels(user_id=user_id).inc()  # ← metric
 
         session.commit()

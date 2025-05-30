@@ -39,51 +39,7 @@ depends_on = None
 
 def upgrade() -> None:
     # 1 ───────────── USERS wallet / settings  ────────────────────────────────
-    # NOTE: credits column already exists from earlier migration 0642c18bdb15
-    # op.add_column(
-    #     "users",
-    #     sa.Column("credits", sa.Numeric(), nullable=False, server_default="0"),
-    # )
-
-    # NOTE: autorecharge columns already exist from migration 2e5aa4cdd7a4
-    # op.add_column(
-    #     "users",
-    #     sa.Column(
-    #         "autorecharge",
-    #         sa.Boolean(),
-    #         nullable=False,
-    #         server_default=sa.text("false"),
-    #     ),
-    # )
-    # op.add_column(
-    #     "users",
-    #     sa.Column(
-    #         "autorecharge_threshold",
-    #         sa.Numeric(),
-    #         nullable=False,
-    #         server_default="0",
-    #     ),
-    # )
-    # op.add_column(
-    #     "users",
-    #     sa.Column(
-    #         "autorecharge_qty",
-    #         sa.Numeric(),
-    #         nullable=False,
-    #         server_default="0",
-    #     ),
-    # )
-
-    # NOTE: store_prompts column already exists from migration b7218594ae58
-    # op.add_column(
-    #     "users",
-    #     sa.Column(
-    #         "store_prompts",
-    #         sa.Boolean(),
-    #         nullable=False,
-    #         server_default=sa.text("true"),
-    #     ),
-    # )
+    # NOTE: credits, autorecharge, and store_prompts columns already exist from earlier migrations
 
     # 2 ───────────── Extra tweaks to USERS  ──────────────────────────────────
     op.add_column("users", sa.Column("credit_balance", sa.BigInteger()))
@@ -178,10 +134,3 @@ def downgrade() -> None:
     # 2 ← undo USERS tweaks ---------------------------------------------------
     op.drop_column("users", "billing_state")
     op.drop_column("users", "credit_balance")
-
-    # 1 ← drop USERS wallet columns ------------------------------------------
-    # op.drop_column("users", "store_prompts")
-    # op.drop_column("users", "autorecharge_qty")
-    # op.drop_column("users", "autorecharge_threshold")
-    # op.drop_column("users", "autorecharge")
-    # op.drop_column("users", "credits")

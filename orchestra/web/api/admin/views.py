@@ -1398,8 +1398,8 @@ def trigger_billing_guard(
         # Import here to avoid circular imports
         from orchestra.routines.billing_guard import suspend_past_due_users
 
-        # Call directly - the function manages its own session
-        suspend_past_due_users()
+        # Pass the session directly instead of letting the function manage its own
+        suspend_past_due_users(session=session)
 
         return {
             "status": "success",

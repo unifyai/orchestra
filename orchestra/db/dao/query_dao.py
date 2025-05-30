@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session, aliased
 
 from orchestra.db.models.orchestra_models import Query, QueryTagAssociation, Tag
 from orchestra.db.models.orchestra_models import Users as User
-from orchestra.web.api.utils.http_responses import OutOfCreditError
 
 
 class QueryDAO:
@@ -44,7 +43,7 @@ class QueryDAO:
         """
 
         # ------------------------------------------------------------------ #
-        # Guard – account suspended for non-payment                         #
+        # Debit the wallet ─ we now support decimal credits                  #
         # ------------------------------------------------------------------ #
         user = (
             self.session.query(User)
@@ -53,15 +52,6 @@ class QueryDAO:
             .one()
         )
 
-        if user.billing_state == "SUSPENDED":
-            raise OutOfCreditError(
-                "Account suspended due to unpaid invoice. "
-                "Please update your payment method to resume usage.",
-            )
-
-        # ------------------------------------------------------------------ #
-        # Debit the wallet ─ we now support decimal credits                  #
-        # ------------------------------------------------------------------ #
         user.credits -= Decimal(str(credits))
 
         new_query = Query(

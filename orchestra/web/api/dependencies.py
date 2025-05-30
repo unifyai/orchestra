@@ -11,6 +11,7 @@ from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.models.orchestra_models import AdminUser
 from orchestra.web.api.utils.http_responses import (
     account_frozen,
+    account_suspended,
     admin_not_authorized,
     invalid_api_key,
 )
@@ -122,3 +123,26 @@ def check_account_not_frozen(request: Request):
                 raise account_frozen
             else:
                 pass
+
+
+def check_account_not_suspended(request: Request):
+    """
+    Check if the user's account is suspended due to unpaid invoices.
+
+    This should be called after authentication to prevent suspended users
+    from accessing any endpoints.
+    """
+    user_id = getattr(request.state, "user_id", None)
+    if user_id:
+        try:
+            with _ro_session() as session:
+                users_dao = UsersDAO(session)
+                user = users_dao.get_user_with_id(user_id)
+                if user and user.billing_state == "SUSPENDED":
+                    raise account_suspended
+        except Exception as e:
+            # Re-raise HTTP exceptions (like account_suspended)
+            if hasattr(e, "status_code"):
+                raise
+            # If there's any other error checking billing state, allow the request
+            # to proceed rather than blocking legitimate users
