@@ -150,6 +150,13 @@ class Settings(BaseSettings):
         else "europe-west1"
     )
 
+    # Variables for email sending
+    google_service_sender_email: Optional[str] = os.environ.get("ONBOARDING_EMAIL")
+    google_service_account_key_path: Optional[str] = os.environ.get(
+        "MAIL_SENDER_SERVICE_ACCOUNT_KEY",
+        "/secrets/gcp/mail_sender_service_account_key.json",
+    )
+
     @property
     def db_url(self) -> URL:
         """

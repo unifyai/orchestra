@@ -2,42 +2,48 @@ import base64
 import datetime
 import secrets
 from typing import Optional, List
+import asyncio
+import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.account_dao import AccountDAO
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
+from orchestra.db.dao.assistant_hiring_one_time_approval_link_dao import (
+    AssistantHiringOneTimeApprovalLinkDAO,
+)
 from orchestra.db.dao.auth_user_dao import (
+    ASSISTANT_HIRING_APPROVAL_STATUSES,
     AuthUser,
     AuthUserDAO,
-    ASSISTANT_HIRING_APPROVAL_STATUSES,
 )
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.db.dao.assistant_hiring_one_time_approval_link_dao import (
-    AssistantHiringOneTimeApprovalLinkDAO,
-)
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
+from orchestra.web.api.assistant.views import ASSISTANT_CREATION_COST
 from orchestra.web.api.users.schema import (
     AccountRequest,
+    AssistantHiringApprovalCreateLinkRequest,
+    AssistantHiringApprovalResponse,
+    AssistantHiringApprovalUserStatus,
+    AssistantHiringOneTimeLinkClaimTokenRequest,
+    AssistantHiringOneTimeLinkResponse,
     FreezeAccountRequest,
     QueryLoggingStatus,
     UpdateQueryLoggingRequest,
     UserRequest,
-    AssistantHiringApprovalCreateLinkRequest,
-    AssistantHiringApprovalResponse,
-    AssistantHiringApprovalUserStatus,
-    AssistantHiringOneTimeLinkResponse,
-    AssistantHiringOneTimeLinkClaimTokenRequest,
 )
 from orchestra.web.api.utils.http_responses import not_found
 from orchestra.web.api.assistant.views import ASSISTANT_CREATION_COST
+from orchestra.web.api.utils.email import send_email_async
 
 admin_router = APIRouter()
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
 # TODO: Move exceptions to exceptions file
 # TODO: Fetch organization if it exists when reading user info
 # TODO: Return tier in user info endpoints + double check rest of the information
@@ -556,8 +562,50 @@ async def set_user_assistant_hiring_status(
     if not user:
         raise not_found(f"User ID: {target_user_id}")
 
+    user_instance = user[0]
     if auth_user_dao.set_assistant_hiring_approval(target_user_id, status):
         session.commit()
+        if status == "approved":
+            try:
+                email_recipient = user_instance.name or "there"
+                to_email = user_instance.email
+                email_subject = "Hire your first assistant"
+                email_body = f"""
+                <html>
+                <body>
+                    <p>Hey {email_recipient}, Dan from Unify here,</p>
+                    <br/>
+                    <p>Just wanted to let you know that your request has been approved.</p>
+                    <p>You can now <a href="https://console.unify.ai/team">hire your first AI assistant</a>! 🤖</p>
+                    <br/>
+                    <p>Let me know if there's anything I can help with as you get started :)</p>
+                    <br/>
+                    <p>My inbox is always open,<br>
+                    Dan</p>
+                </body>
+                </html>
+                """
+                email_coroutine = send_email_async(to_email, email_subject, email_body)
+                email_sending_task = asyncio.create_task(email_coroutine)
+
+                def _log_email_task_exception(task: asyncio.Task) -> None:
+                    try:
+                        task.result()
+                        logger.info(
+                            f"Email sending task for user {target_user_id} completed (status: {task.done()})."
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"Background email sending task for user {target_user_id} encountered an error: {e}",
+                            exc_info=True,
+                        )
+
+                email_sending_task.add_done_callback(_log_email_task_exception)
+                logger.info(f"Scheduled approval email for user {target_user_id}.")
+            except Exception as e:
+                logger.error(
+                    f"Failed to schedule email for user {target_user_id} approval: {e}"
+                )
         return AssistantHiringApprovalResponse(
             message=f"User {target_user_id} assistant hiring approval status set to '{status}'.",
             assistant_hiring_approval=status,
@@ -579,6 +627,8 @@ async def list_users_by_assistant_hiring_approval(
         None,
         description=f"Filter by status: {', '.join(s for s in ASSISTANT_HIRING_APPROVAL_STATUSES if s is not None)}, 'none', or 'all'",
     ),
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
     session: Session = Depends(get_db_session),
 ):
     auth_user_dao = AuthUserDAO(session)
@@ -586,11 +636,13 @@ async def list_users_by_assistant_hiring_approval(
     users_to_return: List[AuthUser] = []  # This will hold AuthUser ORM instances
 
     if not status_filter or status_filter.lower() == "all":
-        user_rows = auth_user_dao.filter()  # No approval filter (uses sentinel default)
+        user_rows = auth_user_dao.filter(
+            limit=limit, offset=offset
+        )  # No approval filter (uses sentinel default)
         users_to_return = [row[0] for row in user_rows if row]
     elif status_filter.lower() == "none":
         user_rows = auth_user_dao.filter(
-            assistant_hiring_approval=None
+            assistant_hiring_approval=None, limit=limit, offset=offset
         )  # Explicitly filter for None
         users_to_return = [row[0] for row in user_rows if row]
     else:
@@ -605,7 +657,7 @@ async def list_users_by_assistant_hiring_approval(
             )
         # get_users_by_assistant_hiring_approval already returns List[AuthUser] (ORM instances)
         users_to_return = auth_user_dao.get_users_by_assistant_hiring_approval(
-            status_filter
+            status_filter, limit=limit, offset=offset
         )
 
     return [
@@ -654,15 +706,17 @@ async def claim_assistant_hiring_one_time_link(
         was_re_activated = False
         if original_approval_status in ["revoked", "rejected", None, "pending"]:
             if not auth_user_dao.set_assistant_hiring_approval(
-                user_instance.id, "approved"
+                user_instance.id,
+                "approved",
             ):
                 session.rollback()
                 raise HTTPException(
-                    status_code=500, detail="Failed to re-activate approval status."
+                    status_code=500,
+                    detail="Failed to re-activate approval status.",
                 )
             session.commit()
             session.refresh(
-                user_instance
+                user_instance,
             )  # Refresh to get the latest state for user_instance
             updated_approval_status = "approved"
             was_re_activated = True  # Mark that re-activation happened
@@ -705,17 +759,20 @@ async def claim_assistant_hiring_one_time_link(
             )
 
         if not auth_user_dao.set_assistant_hiring_approval(
-            user_instance.id, "approved"
+            user_instance.id,
+            "approved",
         ):
             session.rollback()
             raise HTTPException(
-                status_code=500, detail="Failed to set approval status."
+                status_code=500,
+                detail="Failed to set approval status.",
             )
 
         auth_user_dao.update(id=user_instance.id, has_claimed_approval_link=True)
 
         users_dao.recharge_credit(
-            user_id=user_instance.id, quantity=float(ASSISTANT_CREATION_COST)
+            user_id=user_instance.id,
+            quantity=float(ASSISTANT_CREATION_COST),
         )
 
         session.commit()
@@ -724,6 +781,7 @@ async def claim_assistant_hiring_one_time_link(
             assistant_hiring_approval="approved",
         )
     except HTTPException:
+        session.rollback()
         raise
     except Exception as e:
         session.rollback()
@@ -747,7 +805,7 @@ async def create_assistant_hiring_one_time_link(
         raise HTTPException(status_code=500, detail="Expiration days must be positive.")
 
     expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(
-        days=payload.expires_in_days
+        days=payload.expires_in_days,
     )
     link = token_dao.create(expires_at=expires_at)
     session.commit()
