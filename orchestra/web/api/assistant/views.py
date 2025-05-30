@@ -34,7 +34,6 @@ from orchestra.web.api.utils.assistant_infra import (
     delete_email,
     delete_phone_number,
     delete_pubsub_topic,
-    start_cloud_run_job,
     stop_cloud_run_job,
     watch_email,
 )
@@ -248,13 +247,13 @@ def create_assistant(
             print(f"JOB CREATED: {assistant_id}")
 
             # Step 7: start cloud run job
-            start_response = start_cloud_run_job(str(assistant_id))
-            if "detail" in start_response:
-                raise Exception(
-                    f"Cloud Run job start failed: {start_response['detail']}",
-                )
-            started_job = True
-            print(f"JOB STARTED: {assistant_id}")
+            # start_response = start_cloud_run_job(str(assistant_id))
+            # if "detail" in start_response:
+            #     raise Exception(
+            #         f"Cloud Run job start failed: {start_response['detail']}",
+            #     )
+            # started_job = True
+            # print(f"JOB STARTED: {assistant_id}")
 
             # Refresh database session after long infrastructure operations
             logging.info(
