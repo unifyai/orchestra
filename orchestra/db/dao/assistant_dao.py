@@ -28,6 +28,7 @@ class AssistantDAO:
         weekly_limit: Decimal,
         max_parallel: int,
         phone: Optional[str] = None,
+        user_phone: Optional[str] = None,
         email: Optional[str] = None,
         whatsapp_sid: Optional[str] = None,
         voice_id: Optional[str] = None,
@@ -46,6 +47,7 @@ class AssistantDAO:
             weekly_limit=weekly_limit,
             max_parallel=max_parallel,
             phone=phone,
+            user_phone=user_phone,
             email=email,
             whatsapp_sid=whatsapp_sid,
             voice_id=voice_id,
@@ -103,6 +105,7 @@ class AssistantDAO:
         max_parallel: Optional[int] = None,
         about: Optional[str] = None,
         phone: Optional[str] = None,
+        user_phone: Optional[str] = None,
         email: Optional[str] = None,
         whatsapp_sid: Optional[str] = None,
         voice_id: Optional[str] = None,
@@ -121,6 +124,8 @@ class AssistantDAO:
             assistant.about = about
         if phone is not None:
             assistant.phone = phone
+        if user_phone is not None:
+            assistant.user_phone = user_phone
         if email is not None:
             assistant.email = email
         if whatsapp_sid is not None:
@@ -133,6 +138,7 @@ class AssistantDAO:
     def list_all_assistants(
         self,
         phone: Optional[str] = None,
+        user_phone: Optional[str] = None,
         email: Optional[str] = None,
     ) -> List[Assistant]:
         """
@@ -141,6 +147,8 @@ class AssistantDAO:
         stmt = select(Assistant)
         if phone is not None:
             stmt = stmt.where(Assistant.phone == phone)
+        if user_phone is not None:
+            stmt = stmt.where(Assistant.user_phone == user_phone)
         if email is not None:
             stmt = stmt.where(Assistant.email == email)
         result = self.session.execute(stmt).scalars().all()
