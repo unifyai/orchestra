@@ -24,6 +24,7 @@ from orchestra.db.dao.webhook_log_dao import WebhookLogDAO
 from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
 from orchestra.db.models.orchestra_models import Users as User
 from orchestra.db.models.orchestra_models import WebhookLog
+from orchestra.lib.billing import get_appropriate_stripe_key
 from orchestra.observability.metrics import invoice_failed_total, invoice_paid_total
 from orchestra.web.lifetime import get_engine
 
@@ -58,6 +59,13 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
         .scalar_subquery()
     )
 
+    # Get user_id for metrics (take first one since all recharges for same invoice have same user)
+    user_id = session.execute(
+        select(Recharge.user_id)
+        .where(Recharge.stripe_invoice_id == invoice_id)
+        .limit(1),
+    ).scalar()
+
     # success ---------------------------------------------------------------
     if event["type"] == "invoice.payment_succeeded":
         (
@@ -71,7 +79,8 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
             .update({"billing_state": "OK"}, synchronize_session=False)
         )
         session.commit()
-        invoice_paid_total.inc()
+        if user_id:
+            invoice_paid_total.labels(user_id=user_id).inc()
         logger.info("Invoice %s marked PAID", invoice_id)
         return Response(status_code=200)
 
@@ -90,7 +99,8 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
                 .update({"billing_state": "PAST_DUE"}, synchronize_session=False)
             )
         session.commit()
-        invoice_failed_total.inc()
+        if user_id:
+            invoice_failed_total.labels(user_id=user_id).inc()
         logger.info("Invoice %s marked FAILED", invoice_id)
         return Response(status_code=200)
 
@@ -117,8 +127,7 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
     if event_type in ("charge.refunded", "charge.refund.updated"):
         # Dispute -> PaymentIntent (metadata) -> User
         payment_intent_id = data_object.get("payment_intent")
-        # Use getattr to avoid linter errors with dynamic stripe module
-        payment_intent = getattr(stripe, "PaymentIntent").retrieve(payment_intent_id)
+        payment_intent = stripe.PaymentIntent.retrieve(payment_intent_id)
         user_id = payment_intent.get("metadata", {}).get("user_id")
         try:
             credits_original = float(
@@ -152,8 +161,7 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
     elif event_type in ("charge.dispute.created", "charge.dispute.funds_withdrawn"):
         # Charge -> PaymentIntent (metadata) -> User
         payment_intent_id = data_object.get("payment_intent")
-        # Use getattr to avoid linter errors with dynamic stripe module
-        payment_intent = getattr(stripe, "PaymentIntent").retrieve(payment_intent_id)
+        payment_intent = stripe.PaymentIntent.retrieve(payment_intent_id)
         user_id = payment_intent.get("metadata", {}).get("user_id")
         try:
             credits_original = float(
@@ -187,7 +195,6 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
 def handle_event_core(event: Dict, session: Session) -> Response:  # noqa: D401
     """Main dispatcher for all Stripe webhook events."""
     event_type = event.get("type", "")
-
     if event_type.startswith("invoice."):
         return process_invoice_event(event, session)
     elif event_type.startswith("charge."):
@@ -215,7 +222,14 @@ async def handle_stripe_webhook(request: Request):
     """Handle Stripe webhook events to update user credits based on payment outcomes."""
     payload = await request.body()
     sig_header = request.headers.get("Stripe-Signature")
-    stripe.api_key = os.environ.get("STRIPE_SECRET_KEY_LIVE")
+
+    # Use intelligent key selection - prefer test keys in test environments
+    stripe_key = get_appropriate_stripe_key()
+    if not stripe_key:
+        logger.error("No valid Stripe API key found")
+        raise HTTPException(status_code=500, detail="Stripe configuration error")
+
+    stripe.api_key = stripe_key
     STRIPE_WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET")
 
     # For local development, allow skipping signature verification
@@ -234,8 +248,7 @@ async def handle_stripe_webhook(request: Request):
     else:
         # Production mode - verify signature
         try:
-            # Use getattr to avoid linter errors with dynamic stripe module
-            event = getattr(stripe, "Webhook").construct_event(
+            event = stripe.Webhook.construct_event(
                 payload=payload,
                 sig_header=sig_header,
                 secret=STRIPE_WEBHOOK_SECRET,
@@ -244,7 +257,7 @@ async def handle_stripe_webhook(request: Request):
         except ValueError as e:
             logger.error(f"Invalid payload: {e}")
             raise HTTPException(status_code=400, detail="Invalid payload")
-        except getattr(stripe, "error").SignatureVerificationError as e:
+        except stripe.error.SignatureVerificationError as e:
             logger.error(f"Signature verification failed: {e}")
             raise HTTPException(status_code=400, detail="Invalid signature")
 

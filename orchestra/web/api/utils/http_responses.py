@@ -4,6 +4,11 @@ from typing import List
 from fastapi import HTTPException
 from starlette import status
 
+
+class OutOfCreditError(RuntimeError):
+    """Raised when a user runs out of credits."""
+
+
 router_already_deployed = HTTPException(
     status_code=status.HTTP_400_BAD_REQUEST,
     detail="This router is already deployed!",
@@ -121,11 +126,6 @@ insufficient_credits_error = HTTPException(
         "To get a recharge, visit https://console.unify.ai/"
     ),
 )
-
-
-class OutOfCreditError(RuntimeError):
-    """Raised when a suspended / over-drawn account attempts a paid action."""
-
 
 admin_not_authorized = HTTPException(
     status_code=status.HTTP_403_FORBIDDEN,

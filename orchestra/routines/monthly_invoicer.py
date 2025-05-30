@@ -20,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 
 from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
+from orchestra.lib.billing import get_appropriate_stripe_key
 from orchestra.lib.time import month_end_utc  # helper already exists
 from orchestra.observability.metrics import invoice_created_total
 from orchestra.web.lifetime import get_engine
@@ -35,6 +36,13 @@ def invoice_month(  # Celery entry-point
     """
     Invoice the given period; defaults to the *previous* month if omitted.
     """
+    # Configure Stripe API key - prefer test keys in test environments
+    stripe_key = get_appropriate_stripe_key()
+    if not stripe_key:
+        raise ValueError("No valid Stripe API key found")
+
+    stripe.api_key = stripe_key
+
     # Use UTC so "previous month" is calculated consistently on any host
     today = _dt.datetime.now(_dt.timezone.utc).date()
     if year is None or month is None:
@@ -112,6 +120,6 @@ def invoice_month(  # Celery entry-point
                 r.status = RechargeStatus.INVOICE_CREATED
                 r.stripe_invoice_id = invoice.id
 
-            invoice_created_total.inc()  # ← metric
+            invoice_created_total.labels(user_id=user_id).inc()  # ← metric
 
         session.commit()

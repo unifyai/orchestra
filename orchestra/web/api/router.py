@@ -207,7 +207,4 @@ api_router.include_router(
 
 api_router.include_router(monitoring.router)
 api_router.include_router(docs.router)
-api_router.include_router(
-    stripe_webhooks.router,
-    tags=["Stripe Webhooks"],
-)
+api_router.include_router(stripe_webhooks.router)

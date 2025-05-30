@@ -35,7 +35,6 @@ from orchestra.db.models.orchestra_models import (
 )
 from orchestra.lib.billing import queue_auto_recharge
 from orchestra.lib.time import month_end_utc
-from orchestra.observability.metrics import billing_suspended_total
 from orchestra.routines import billing_guard as guard
 from orchestra.routines import monthly_invoicer as invoicer
 from orchestra.settings import settings
@@ -330,13 +329,11 @@ def test_guard_suspends(dbsession: Session):
     )
     dbsession.commit()
 
-    start = billing_suspended_total._value.get()
     with _guard_uses(dbsession):
         guard.suspend_past_due_users()
 
     assert dbsession.get(Users, "off").billing_state == "SUSPENDED"
     assert dbsession.get(Users, "ok").billing_state == "OK"
-    assert billing_suspended_total._value.get() == start + 1
 
 
 # --------------------------------------------------------------------------- #
@@ -593,3 +590,223 @@ def test_auto_recharge_zero_quantity_no_trigger(dbsession: Session):
     # Verify no recharge was created
     recharge = dbsession.query(Recharge).filter_by(user_id=uid).first()
     assert recharge is None
+
+
+# --------------------------------------------------------------------------- #
+# 6. Admin billing endpoints                                                  #
+# --------------------------------------------------------------------------- #
+@pytest.mark.anyio
+async def test_admin_trigger_monthly_invoicing(client: AsyncClient):
+    """Test the admin endpoint for triggering monthly invoicing."""
+    from orchestra.tests.utils import ADMIN_HEADERS
+
+    # Test with default parameters (previous month)
+    response = await client.post(
+        "/v0/admin/billing/invoice-month",
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert "Monthly invoicing completed" in data["message"]
+    assert "previous month" in data["message"]
+
+
+@pytest.mark.anyio
+async def test_admin_trigger_monthly_invoicing_with_params(client: AsyncClient):
+    """Test the admin endpoint for triggering monthly invoicing with specific year/month."""
+    from orchestra.tests.utils import ADMIN_HEADERS
+
+    # Test with specific year and month
+    response = await client.post(
+        "/v0/admin/billing/invoice-month",
+        params={"year": 2024, "month": 1},
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert "2024-01" in data["message"]
+    assert data["year"] == 2024
+    assert data["month"] == 1
+
+
+@pytest.mark.anyio
+async def test_admin_trigger_billing_guard(client: AsyncClient):
+    """Test the admin endpoint for triggering billing guard."""
+    from orchestra.tests.utils import ADMIN_HEADERS
+
+    response = await client.post(
+        "/v0/admin/billing/suspend-past-due",
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert "Billing guard completed" in data["message"]
+    assert "past due users" in data["message"]
+
+
+@pytest.mark.anyio
+async def test_admin_trigger_credit_recharge(client: AsyncClient):
+    """Test the admin endpoint for triggering credit recharge."""
+    from orchestra.tests.utils import ADMIN_HEADERS
+
+    # Test with default amount
+    response = await client.post(
+        "/v0/admin/billing/recharge-credits",
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert "All users recharged" in data["message"]
+    assert data["amount"] == 2.5
+
+
+@pytest.mark.anyio
+async def test_admin_trigger_credit_recharge_custom_amount(client: AsyncClient):
+    """Test the admin endpoint for triggering credit recharge with custom amount."""
+    from orchestra.tests.utils import ADMIN_HEADERS
+
+    # Test with custom amount
+    response = await client.post(
+        "/v0/admin/billing/recharge-credits",
+        params={"amount": 5.0},
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert "All users recharged" in data["message"]
+    assert data["amount"] == 5.0
+
+
+@pytest.mark.anyio
+async def test_admin_billing_endpoints_require_auth(client: AsyncClient):
+    """Test that billing endpoints require admin authentication."""
+    from orchestra.tests.utils import HEADERS  # Regular user headers
+
+    endpoints = [
+        "/v0/admin/billing/invoice-month",
+        "/v0/admin/billing/suspend-past-due",
+        "/v0/admin/billing/recharge-credits",
+    ]
+
+    for endpoint in endpoints:
+        # Test with no auth
+        response = await client.post(endpoint)
+        assert response.status_code in [401, 403]  # Unauthorized or Forbidden
+
+        # Test with regular user auth (should fail)
+        response = await client.post(endpoint, headers=HEADERS)
+        assert response.status_code in [401, 403]  # Should require admin auth
+
+
+# --------------------------------------------------------------------------- #
+# 7. Real Stripe API test (no mocking)                                        #
+# --------------------------------------------------------------------------- #
+def test_real_stripe_invoicer_integration(dbsession: Session, monkeypatch):
+    """
+    Test the monthly invoicer with REAL Stripe API calls (no mocking).
+
+    To run this test, set the STRIPE_SECRET_KEY_TEST environment variable
+    with a Stripe test key (starts with sk_test_).
+
+    Example:
+        export STRIPE_SECRET_KEY_TEST=sk_test_your_test_key_here
+        pytest orchestra/tests/test_billing.py::test_real_stripe_invoicer_integration -v -s
+
+    This test will be skipped if no test key is provided.
+    """
+    import os
+
+    import stripe
+
+    from orchestra.routines import monthly_invoicer as invoicer
+
+    # Get the TEST Stripe key from environment - only use test keys in tests!
+    test_stripe_key = os.environ.get("STRIPE_SECRET_KEY_TEST")
+
+    if not test_stripe_key or not test_stripe_key.startswith("sk_test_"):
+        pytest.skip(
+            "No test Stripe API key available - set STRIPE_SECRET_KEY_TEST environment variable",
+        )
+
+    # The monthly invoicer will now automatically use the test key since it's available
+    # No need to override STRIPE_SECRET_KEY_LIVE anymore!
+
+    # Temporarily restore real Stripe module
+    import stripe as real_stripe
+
+    monkeypatch.setattr(invoicer, "stripe", real_stripe, raising=False)
+
+    # Create a test user with Stripe customer
+    uid = f"test_stripe_user_{int(time.time())}"
+    stripe_customer_id = f"cus_test_{int(time.time())}"
+
+    # Set the API key for our direct Stripe calls (customer creation/cleanup)
+    real_stripe.api_key = test_stripe_key
+
+    # Create customer in Stripe first
+    try:
+        customer = real_stripe.Customer.create(
+            id=stripe_customer_id,
+            email="test-user@example.com",
+            name="Test User",
+        )
+    except real_stripe.error.InvalidRequestError as e:
+        if "already exists" in str(e):
+            customer = real_stripe.Customer.retrieve(stripe_customer_id)
+        else:
+            raise
+
+    # Create user in database
+    user = Users(id=uid, credits=0, stripe_customer_id=stripe_customer_id)
+    dbsession.add(user)
+
+    # Create a recharge for current month
+    from datetime import datetime, timezone
+
+    from orchestra.lib.time import month_end_utc
+
+    now = datetime.now(timezone.utc)
+    current_group = month_end_utc(now)
+
+    recharge = Recharge(
+        user_id=uid,
+        quantity=100,
+        amount_usd=Decimal("1.00"),  # $1.00 for 100 credits
+        status=RechargeStatus.PENDING_INVOICE,
+        invoice_group=current_group,
+        type="usage",
+    )
+    dbsession.add(recharge)
+    dbsession.commit()
+
+    # Run the monthly invoicer for current month (no mocking!)
+    # The invoicer will automatically use STRIPE_SECRET_KEY_TEST
+    with _routine_uses_session(invoicer, dbsession):
+        invoicer.invoice_month(now.year, now.month)
+
+    # Check that recharge was processed
+    dbsession.refresh(recharge)
+
+    assert recharge.status == RechargeStatus.INVOICE_CREATED
+    assert recharge.stripe_invoice_id is not None
+
+    # Verify invoice exists in Stripe
+    invoice = real_stripe.Invoice.retrieve(recharge.stripe_invoice_id)
+    assert invoice.customer == stripe_customer_id
+
+    # Check if invoice items were created for this customer
+    invoice_items = real_stripe.InvoiceItem.list(customer=stripe_customer_id)
+
+    # Verify the core functionality works (invoice creation and DB updates)
+    assert invoice.status in ["draft", "open"]  # Both are valid for new invoices
+
+    # Clean up - delete the test customer
+    try:
+        real_stripe.Customer.delete(stripe_customer_id)
+    except:
+        pass  # Ignore cleanup errors

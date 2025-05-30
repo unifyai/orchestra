@@ -1,13 +1,13 @@
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from sqlalchemy import create_engine
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.orm import sessionmaker
 
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.db.models.orchestra_models import Users as User
-from orchestra.lib.billing import credits_to_usd, queue_auto_recharge
+from orchestra.lib.billing import credits_to_usd
+from orchestra.lib.time import month_end_utc
 from orchestra.settings import settings
 from orchestra.web.api.admin.views import get_all_users_models
 
@@ -40,8 +40,7 @@ def recharge_credits(worker_id=None, amount=2.5, session=None):  # noqa: D103, W
             at = datetime.now(timezone.utc)
             amount_usd = credits_to_usd(int(recharge_quantity))
             # Use month-end date for invoice grouping
-            first_next_month = (at.replace(day=1) + timedelta(days=32)).replace(day=1)
-            invoice_group = (first_next_month - timedelta(microseconds=1)).date()
+            invoice_group = month_end_utc(at)
 
             recharge_dao.create_recharge(
                 user_id=user.id,
@@ -81,10 +80,7 @@ def recharge_credits(worker_id=None, amount=2.5, session=None):  # noqa: D103, W
                 at = datetime.now(timezone.utc)
                 amount_usd = credits_to_usd(int(recharge_quantity))
                 # Use month-end date for invoice grouping
-                first_next_month = (at.replace(day=1) + timedelta(days=32)).replace(
-                    day=1,
-                )
-                invoice_group = (first_next_month - timedelta(microseconds=1)).date()
+                invoice_group = month_end_utc(at)
 
                 recharge_dao.create_recharge(
                     user_id=user.id,
@@ -104,23 +100,3 @@ def recharge_credits(worker_id=None, amount=2.5, session=None):  # noqa: D103, W
 if __name__ == "__main__":
     logger.info("Recharging user credits...")
     recharge_credits()
-
-# helper ----------------------------------------------------------------------
-def _month_end_utc(ts: datetime | None = None) -> datetime:
-    """Return the 23:59:59.999 of the month that `ts` falls in (UTC)."""
-    if ts is None:
-        ts = datetime.now(timezone.utc)
-
-    first_next_month = (ts.replace(day=1) + timedelta(days=32)).replace(day=1)
-    return first_next_month - timedelta(microseconds=1)
-
-
-def _queue_recharge(session: Session, user: User, credits: int) -> None:
-    """
-    NEW behaviour – just record a recharge row.
-
-    Stripe is invoiced in bulk by the monthly-invoicing cron so we
-    do **not** call Stripe here.
-    """
-    # Use the shared billing utility
-    queue_auto_recharge(session, user, credits)

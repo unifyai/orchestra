@@ -1349,3 +1349,89 @@ def delete_file_or_folder(
             status_code=500,
             detail=f"Failed to delete file or folder: {str(e)}",
         )
+
+
+@router.post("/billing/invoice-month")
+def trigger_monthly_invoicing(
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Trigger monthly invoicing for the specified period.
+    Defaults to previous month if not specified.
+
+    This endpoint is designed to be called by Cloud Scheduler.
+    """
+    try:
+        # Import here to avoid circular imports
+        from orchestra.routines.monthly_invoicer import invoice_month
+
+        # Call directly - the function manages its own session
+        invoice_month(year, month)
+
+        period = f"{year}-{month:02d}" if year and month else "previous month"
+        return {
+            "status": "success",
+            "message": f"Monthly invoicing completed for {period}",
+            "year": year,
+            "month": month,
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Monthly invoicing failed: {str(e)}",
+        )
+
+
+@router.post("/billing/suspend-past-due")
+def trigger_billing_guard(
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Trigger billing guard to suspend past-due users with zero credits.
+
+    This endpoint is designed to be called by Cloud Scheduler.
+    """
+    try:
+        # Import here to avoid circular imports
+        from orchestra.routines.billing_guard import suspend_past_due_users
+
+        # Call directly - the function manages its own session
+        suspend_past_due_users()
+
+        return {
+            "status": "success",
+            "message": "Billing guard completed - past due users with zero credits suspended",
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Billing guard failed: {str(e)}")
+
+
+@router.post("/billing/recharge-credits")
+def trigger_credit_recharge(
+    amount: float = 2.5,
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Trigger bulk credit recharge for all users.
+
+    This endpoint is designed to be called by Cloud Scheduler for promotional credits.
+    """
+    try:
+        # Import here to avoid circular imports
+        from orchestra.routines.recharging import recharge_credits
+
+        # Use the session parameter that recharge_credits already supports
+        recharge_credits(amount=amount, session=session)
+
+        return {
+            "status": "success",
+            "message": f"All users recharged with {amount} credits",
+            "amount": amount,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Credit recharge failed: {str(e)}")

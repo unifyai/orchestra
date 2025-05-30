@@ -1,7 +1,8 @@
 """Shared billing utilities for Orchestra."""
 
 import logging
-from datetime import datetime, timedelta, timezone
+import os
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from sqlalchemy.orm import Session
@@ -12,29 +13,38 @@ from orchestra.db.models.orchestra_models import (
     RechargeStatus,
 )
 from orchestra.db.models.orchestra_models import Users as User
+from orchestra.lib.time import month_end_utc
 
 logger = logging.getLogger(__name__)
 
 
 def credits_to_usd(credits: int) -> Decimal:
-    """Convert credits to USD amount.
-
-    Args:
-        credits: Number of credits to convert
-
-    Returns:
-        USD amount as Decimal (rate: $0.01 per credit)
-    """
+    """Convert credits to USD amount."""
     return Decimal(credits) * Decimal("0.01")
 
 
-def _month_end_utc(ts: datetime | None = None) -> datetime:
-    """Return the 23:59:59.999 of the month that `ts` falls in (UTC)."""
-    if ts is None:
-        ts = datetime.now(timezone.utc)
+def get_appropriate_stripe_key() -> str | None:
+    """
+    Get the appropriate Stripe API key based on environment.
 
-    first_next_month = (ts.replace(day=1) + timedelta(days=32)).replace(day=1)
-    return first_next_month - timedelta(days=1)
+    Priority order:
+    1. STRIPE_SECRET_KEY_TEST (for testing environments)
+    2. STRIPE_SECRET_KEY_LIVE (for production)
+
+    Returns:
+        The appropriate Stripe API key, or None if no valid key is found.
+    """
+    # Check for test key first (safer for development/testing)
+    test_key = os.environ.get("STRIPE_SECRET_KEY_TEST")
+    if test_key and test_key.startswith("sk_test_"):
+        return test_key
+
+    # Fall back to live key for production
+    live_key = os.environ.get("STRIPE_SECRET_KEY_LIVE")
+    if live_key and live_key.startswith("sk_"):
+        return live_key
+
+    return None
 
 
 def queue_auto_recharge(session: Session, user: User, credits: int) -> None:
@@ -56,7 +66,7 @@ def queue_auto_recharge(session: Session, user: User, credits: int) -> None:
         type=RECHARGE_TYPE_AUTO,
         quantity=Decimal(credits),
         amount_usd=credits_to_usd(credits),
-        invoice_group=_month_end_utc().date(),
+        invoice_group=month_end_utc(datetime.now(timezone.utc)),
         status=RechargeStatus.PENDING_INVOICE,
     )
 
