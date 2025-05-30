@@ -14,14 +14,13 @@ def create_phone_number():
     Returns:
         JSON response from the phone creation endpoint
     """
-    response = requests.post(
+    return requests.post(
         f"{COMMS_URL}/phone/create",
         json={
             "voice_url": "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/twilio-call-webhook",
             "sms_url": "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/twilio-msg-webhook",
         },
-    )
-    return response.json()
+    ).json()
 
 
 def create_whatsapp_sender(phone_number: str, first_name: str, last_name: str):
@@ -36,16 +35,18 @@ def create_whatsapp_sender(phone_number: str, first_name: str, last_name: str):
     Returns:
         JSON response from the WhatsApp creation endpoint
     """
-    response = requests.post(
+    return requests.post(
         f"{COMMS_URL}/whatsapp/create",
         json={
             "phone_number": phone_number,
             "first_name": first_name,
             "last_name": last_name,
-            "callback_url": "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/twilio-whatsapp-webhook",
+            "callback_url": (
+                "https://us-central1-responsive-city-458413-a2"
+                ".cloudfunctions.net/twilio-whatsapp-webhook"
+            ),
         },
-    )
-    return response.json()
+    ).json()
 
 
 def delete_phone_number(phone_number: str):
@@ -58,10 +59,10 @@ def delete_phone_number(phone_number: str):
     Returns:
         JSON response from the phone deletion endpoint
     """
-    url = f"{COMMS_URL}/phone/delete"
-    payload = {"PhoneNumber": phone_number}
-    response = requests.delete(url, json=payload)
-    return response.json()
+    return requests.delete(
+        f"{COMMS_URL}/phone/delete",
+        json={"PhoneNumber": phone_number},
+    ).json()
 
 
 def create_email(local: str, first_name: str, last_name: str):
@@ -76,14 +77,14 @@ def create_email(local: str, first_name: str, last_name: str):
     Returns:
         Response from the email creation endpoint
     """
-    url = f"{COMMS_URL}/email/create"
-    payload = {
-        "local": local,
-        "first_name": first_name,
-        "last_name": last_name,
-    }
-    response = requests.post(url, json=payload)
-    return response.json()
+    return requests.post(
+        f"{COMMS_URL}/email/create",
+        json={
+            "local": local,
+            "first_name": first_name,
+            "last_name": last_name,
+        },
+    ).json()
 
 
 def delete_email(email: str):
@@ -96,12 +97,10 @@ def delete_email(email: str):
     Returns:
         JSON response from the email deletion endpoint
     """
-    url = f"{COMMS_URL}/email/delete"
-    payload = {
-        "primary_email": email,
-    }
-    response = requests.delete(url, json=payload)
-    return response.json()
+    return requests.delete(
+        f"{COMMS_URL}/email/delete",
+        json={"primary_email": email},
+    ).json()
 
 
 def watch_email(email: str):
@@ -114,12 +113,11 @@ def watch_email(email: str):
     Returns:
         JSON response from the email watch endpoint
     """
-    url = f"{COMMS_URL}/email/watch"
-    payload = {
-        "primary_email": email,
-    }
-    response = requests.post(url, json=payload)
-    return response.json()
+    print(f"Watching email: {email}")
+    return requests.post(
+        f"{COMMS_URL}/email/watch",
+        json={"primary_email": email},
+    ).json()
 
 
 def create_pubsub_topic(assistant_id: str):
@@ -132,12 +130,10 @@ def create_pubsub_topic(assistant_id: str):
     Returns:
         JSON response from the pubsub topic creation endpoint
     """
-    url = f"{COMMS_URL}/infra/pubsub/topic"
-    payload = {
-        "assistant_id": assistant_id,
-    }
-    response = requests.post(url, data=payload)
-    return response.json()
+    return requests.post(
+        f"{COMMS_URL}/infra/pubsub/topic",
+        data={"assistant_id": assistant_id},
+    ).json()
 
 
 def delete_pubsub_topic(assistant_id: str):
@@ -154,8 +150,10 @@ def delete_pubsub_topic(assistant_id: str):
     payload = {
         "assistant_id": assistant_id,
     }
-    response = requests.delete(url, data=payload)
-    return response.json()
+    return requests.delete(
+        f"{COMMS_URL}/infra/pubsub/topic",
+        data={"assistant_id": assistant_id},
+    ).json()
 
 
 def create_cloud_run_job(
@@ -176,15 +174,15 @@ def create_cloud_run_job(
     Returns:
         JSON response from the Cloud Run job creation endpoint
     """
-    url = f"{COMMS_URL}/infra/job/create"
-    payload = {
-        "assistant_id": assistant_id,
-        "user_name": user_name,
-        "assistant_number": assistant_number,
-        "user_number": user_number,
-    }
-    response = requests.post(url, data=payload)
-    return response.json()
+    return requests.post(
+        f"{COMMS_URL}/infra/job/create",
+        data={
+            "assistant_id": assistant_id,
+            "user_name": user_name,
+            "assistant_number": assistant_number,
+            "user_number": user_number,
+        },
+    ).json()
 
 
 def delete_cloud_run_job(assistant_id: str):
@@ -197,12 +195,10 @@ def delete_cloud_run_job(assistant_id: str):
     Returns:
         JSON response from the Cloud Run job deletion endpoint
     """
-    url = f"{COMMS_URL}/infra/job/delete"
-    payload = {
-        "assistant_id": assistant_id,
-    }
-    response = requests.delete(url, data=payload)
-    return response.json()
+    return requests.delete(
+        f"{COMMS_URL}/infra/job/delete",
+        data={"assistant_id": assistant_id},
+    ).json()
 
 
 def start_cloud_run_job(assistant_id: str):
@@ -215,13 +211,13 @@ def start_cloud_run_job(assistant_id: str):
     Returns:
         JSON response from the Cloud Run job start endpoint
     """
-    url = f"{COMMS_URL}/infra/job/control"
-    payload = {
-        "assistant_id": assistant_id,
-        "action": "start",
-    }
-    response = requests.post(url, data=payload)
-    return response.json()
+    return requests.post(
+        f"{COMMS_URL}/infra/job/control",
+        data={
+            "assistant_id": assistant_id,
+            "action": "start",
+        },
+    ).json()
 
 
 def stop_cloud_run_job(assistant_id: str):
@@ -234,13 +230,13 @@ def stop_cloud_run_job(assistant_id: str):
     Returns:
         JSON response from the Cloud Run job stop endpoint
     """
-    url = f"{COMMS_URL}/infra/job/control"
-    payload = {
-        "assistant_id": assistant_id,
-        "action": "stop",
-    }
-    response = requests.post(url, data=payload)
-    return response.json()
+    return requests.post(
+        f"{COMMS_URL}/infra/job/control",
+        data={
+            "assistant_id": assistant_id,
+            "action": "stop",
+        },
+    ).json()
 
 
 def get_cloud_run_job_status(assistant_id: str):
@@ -253,11 +249,7 @@ def get_cloud_run_job_status(assistant_id: str):
     Returns:
         JSON response containing the Cloud Run job status
     """
-    url = f"{COMMS_URL}/infra/job/status"
-    response = requests.get(
-        url,
-        params={
-            "assistant_id": assistant_id,
-        },
-    )
-    return response.json()
+    return requests.get(
+        f"{COMMS_URL}/infra/job/status",
+        params={"assistant_id": assistant_id},
+    ).json()
