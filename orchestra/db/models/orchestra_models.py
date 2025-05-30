@@ -394,7 +394,10 @@ class AuthUser(Base):
     evaluations_enabled = Column(Boolean, nullable=False, server_default="true")
     # Toggle for handling assistant hiring approval
     assistant_hiring_approval = Column(
-        String, nullable=True, index=True, server_default=None
+        String,
+        nullable=True,
+        index=True,
+        server_default=None,
     )
     has_claimed_approval_link = Column(Boolean, nullable=False, server_default="false")
     created_at = Column(TIMESTAMP, server_default=func.now())
@@ -1035,8 +1038,9 @@ class Assistant(Base):
     about = Column(String, nullable=True)
     weekly_limit = Column(Numeric, nullable=True)
     max_parallel = Column(Integer, nullable=True)
-    phone = Column(String, nullable=True)
     email = Column(String, nullable=True)
+    phone = Column(String, nullable=True)
+    user_phone = Column(String, nullable=True)
     whatsapp_sid = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
