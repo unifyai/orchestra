@@ -158,7 +158,7 @@ class Settings(BaseSettings):
     )
 
     # Variables for Cartesia voice management
-    cartesia_api_key: str = os.environ.get("CARTESIA_API_KEY")
+    cartesia_api_key: Optional[str] = os.environ.get("CARTESIA_API_KEY")
     cartesia_api_version: Optional[str] = os.environ.get("CARTESIA_API_VERSION")
 
     @property
