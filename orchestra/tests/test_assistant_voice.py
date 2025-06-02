@@ -1,7 +1,6 @@
 import pytest
 from httpx import AsyncClient
 from unittest.mock import MagicMock, patch
-import io
 
 from orchestra.db.models.orchestra_models import (
     Voice as VoiceModel,
@@ -25,13 +24,12 @@ def mock_cartesia_service_factory(
     """
     Provides a mock CartesiaService instance and overrides the dependency for FastAPI.
     Yields the mock instance for tests to customize.
-    Also patches send_pubsub_msg to prevent TypeError during logging of MagicMock.
+    Also patches send_pubsub_msg from where it's called by the middleware.
     """
-    from orchestra.web.api.utils.production_traffic_middleware import send_pubsub_msg as original_send_pubsub_msg # Not strictly needed for patch target but good for clarity
     
-    mock_instance = MagicMock(spec=OriginalCartesiaService)
+    cartesia_mock_instance = MagicMock(spec=OriginalCartesiaService)
 
-    mock_instance.clone_voice = MagicMock(
+    cartesia_mock_instance.clone_voice = MagicMock(
         return_value={
             "id": "mock-cloned-cartesia-id",
             "name": "Mock Cloned Voice",
@@ -40,7 +38,7 @@ def mock_cartesia_service_factory(
             "language": "en",
         }
     )
-    mock_instance.localize_voice = MagicMock(
+    cartesia_mock_instance.localize_voice = MagicMock(
         return_value={
             "id": "mock-localized-cartesia-id",
             "name": "Mock Localized Voice",
@@ -49,12 +47,15 @@ def mock_cartesia_service_factory(
             "language": "es",
         }
     )
-    mock_instance.delete_voice = MagicMock(return_value={"status": "success"})
+    cartesia_mock_instance.delete_voice = MagicMock(return_value={"status": "success"})
 
-    # Patch send_pubsub_msg where it's looked up by the middleware
+    # Patch send_pubsub_msg where it's looked up by the middleware's log_production_traffic function.
+    # The log_production_traffic function is in the same module as ProductionTrafficMiddleware,
+    # and it calls send_pubsub_msg directly.
     with patch("orchestra.web.api.utils.production_traffic_middleware.send_pubsub_msg") as mock_send_pubsub:
-        fastapi_app.dependency_overrides[OriginalCartesiaService] = lambda: mock_instance
-        yield mock_instance 
+        
+        fastapi_app.dependency_overrides[OriginalCartesiaService] = lambda: cartesia_mock_instance
+        yield cartesia_mock_instance # Yield the CartesiaService mock
         fastapi_app.dependency_overrides.pop(OriginalCartesiaService, None)
 
 
@@ -251,9 +252,7 @@ async def test_clone_voice(client: AsyncClient, dbsession, mock_cartesia_service
             "/v0/assistant/voice/clone", files=files, data=data, headers=HEADERS
         )
     
-    if resp.status_code != 201:
-        print("test_clone_voice 422 response:", resp.json())
-    assert resp.status_code == 201
+    assert resp.status_code == 201, f"Actual response: {resp.status_code} {resp.text}"
     cloned_voice_data = resp.json()["info"]
     assert cloned_voice_data["voice_id"] == "mock-cloned-cartesia-id"
     assert cloned_voice_data["name"] == "Mock Cloned Voice"
@@ -277,7 +276,6 @@ async def test_clone_voice_db_integrity_error_rolls_back_cartesia(
     user_id = await get_user_id_from_request_state(client)
     sample_audio_bytes = _get_sample_wav_bytes()
     files = {"file": ("sample.wav", sample_audio_bytes, "audio/wav")}
-    # Provide all optional fields too, even if None, to ensure form data consistency
     data = {"name": "DB Fail Clone Test", "language": "en", "description": None}
 
 
@@ -297,9 +295,7 @@ async def test_clone_voice_db_integrity_error_rolls_back_cartesia(
                 "/v0/assistant/voice/clone", files=files, data=data, headers=HEADERS
             )
 
-    if resp.status_code != 500 and resp.status_code != 409:
-         print("test_clone_voice_db_integrity_error_rolls_back_cartesia unexpected response:", resp.json())
-    assert resp.status_code == 500
+    assert resp.status_code == 500, f"Actual response: {resp.status_code} {resp.text}"
     assert "Failed to clone and save voice" in resp.json()["detail"]
     mock_cartesia_service_factory.delete_voice.assert_called_once_with(
         "cartesia-id-to-rollback"
