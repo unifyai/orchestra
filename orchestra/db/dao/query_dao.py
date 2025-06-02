@@ -7,7 +7,6 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
 from orchestra.db.models.orchestra_models import Query, QueryTagAssociation, Tag
-from orchestra.db.models.orchestra_models import Users as User
 
 
 class QueryDAO:
@@ -41,18 +40,6 @@ class QueryDAO:
         :param endpoint_id: endpoint_id of a query.
         :param credits: credits of a query (whole-credit units, Decimal OK).
         """
-
-        # ------------------------------------------------------------------ #
-        # Debit the wallet ─ we now support decimal credits                  #
-        # ------------------------------------------------------------------ #
-        user = (
-            self.session.query(User)
-            .filter_by(id=user_id)
-            .with_for_update()  # lock to avoid race on credit updates
-            .one()
-        )
-
-        user.credits -= Decimal(str(credits))
 
         new_query = Query(
             user_id=user_id,
@@ -96,9 +83,7 @@ class QueryDAO:
                 except IntegrityError:
                     self.session.rollback()
 
-        # --------------------------------------------------------------- #
-        # All done – persist debit + query + tags in one atomic commit    #
-        # --------------------------------------------------------------- #
+        # Commit the query and tags (credit deduction handled elsewhere)
         self.session.commit()
 
     def get_all_queries(self, limit: int, offset: int) -> List[Query]:

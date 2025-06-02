@@ -1367,8 +1367,8 @@ def trigger_monthly_invoicing(
         # Import here to avoid circular imports
         from orchestra.routines.monthly_invoicer import invoice_month
 
-        # Call directly - the function manages its own session
-        invoice_month(year, month)
+        # Pass the session to avoid creating a new one
+        invoice_month(year, month, session=session)
 
         period = f"{year}-{month:02d}" if year and month else "previous month"
         return {
