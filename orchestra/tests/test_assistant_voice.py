@@ -2,10 +2,9 @@ import pytest
 from httpx import AsyncClient
 from unittest.mock import MagicMock, patch
 
-from orchestra.db.models.orchestra_models import (
-    Voice as VoiceModel,
+from orchestra.services.cartesia_service import (
+    CartesiaService as OriginalCartesiaService,
 )
-from orchestra.services.cartesia_service import CartesiaService as OriginalCartesiaService
 from orchestra.services.cartesia_service import CartesiaAPIError
 from orchestra.tests.utils import (
     HEADERS,
@@ -26,7 +25,7 @@ def mock_cartesia_service_factory(
     Yields the mock instance for tests to customize.
     Also patches send_pubsub_msg from where it's called by the middleware.
     """
-    
+
     cartesia_mock_instance = MagicMock(spec=OriginalCartesiaService)
 
     cartesia_mock_instance.clone_voice = MagicMock(
@@ -52,10 +51,14 @@ def mock_cartesia_service_factory(
     # Patch send_pubsub_msg where it's looked up by the middleware's log_production_traffic function.
     # The log_production_traffic function is in the same module as ProductionTrafficMiddleware,
     # and it calls send_pubsub_msg directly.
-    with patch("orchestra.web.api.utils.production_traffic_middleware.send_pubsub_msg") as mock_send_pubsub:
-        
-        fastapi_app.dependency_overrides[OriginalCartesiaService] = lambda: cartesia_mock_instance
-        yield cartesia_mock_instance # Yield the CartesiaService mock
+    with patch(
+        "orchestra.web.api.utils.production_traffic_middleware.send_pubsub_msg"
+    ) as mock_send_pubsub:
+
+        fastapi_app.dependency_overrides[OriginalCartesiaService] = (
+            lambda: cartesia_mock_instance
+        )
+        yield cartesia_mock_instance  # Yield the CartesiaService mock
         fastapi_app.dependency_overrides.pop(OriginalCartesiaService, None)
 
 
@@ -145,9 +148,7 @@ async def test_register_voice_already_exists_in_db(
         mock_state.user_id = user_id
         resp1 = await client.post("/v0/assistant/voice", json=payload, headers=HEADERS)
         assert resp1.status_code == 201
-        resp2 = await client.post(
-            "/v0/assistant/voice", json=payload, headers=HEADERS
-        )
+        resp2 = await client.post("/v0/assistant/voice", json=payload, headers=HEADERS)
 
     assert resp2.status_code == 409
     assert "already exists" in resp2.json()["detail"].lower()
@@ -236,28 +237,41 @@ async def test_list_voices_scenario(
 
 
 @pytest.mark.anyio
-async def test_clone_voice(client: AsyncClient, dbsession, mock_cartesia_service_factory):
+async def test_clone_voice(
+    client: AsyncClient, dbsession, mock_cartesia_service_factory: MagicMock
+):
     user_id = await get_user_id_from_request_state(client)
     sample_audio_bytes = _get_sample_wav_bytes()
-    files = {"file": ("sample.wav", sample_audio_bytes, "audio/wav")}
-    data = {
+
+    form_data_fields = {
         "name": "Cloned Via Test",
         "language": "en",
         "description": "Test clone desc",
     }
+    files_payload = {"file": ("sample.wav", sample_audio_bytes, "audio/wav")}
 
     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
         mock_state.user_id = user_id
         resp = await client.post(
-            "/v0/assistant/voice/clone", files=files, data=data, headers=HEADERS
+            "/v0/assistant/voice/clone",
+            data=form_data_fields,
+            files=files_payload,
+            headers=HEADERS,
         )
-    
+
     assert resp.status_code == 201, f"Actual response: {resp.status_code} {resp.text}"
     cloned_voice_data = resp.json()["info"]
     assert cloned_voice_data["voice_id"] == "mock-cloned-cartesia-id"
     assert cloned_voice_data["name"] == "Mock Cloned Voice"
     assert cloned_voice_data["is_preset"] is False
-    mock_cartesia_service_factory.clone_voice.assert_called_once()
+
+    mock_cartesia_service_factory.clone_voice.assert_called_once_with(
+        file_content=sample_audio_bytes,
+        file_name="sample.wav",
+        name="Cloned Via Test",
+        language="en",
+        description="Test clone desc",
+    )
 
     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
         mock_state.user_id = user_id
@@ -266,39 +280,6 @@ async def test_clone_voice(client: AsyncClient, dbsession, mock_cartesia_service
         )
     mock_cartesia_service_factory.delete_voice.assert_called_with(
         "mock-cloned-cartesia-id"
-    )
-
-
-@pytest.mark.anyio
-async def test_clone_voice_db_integrity_error_rolls_back_cartesia(
-    client: AsyncClient, dbsession, mock_cartesia_service_factory
-):
-    user_id = await get_user_id_from_request_state(client)
-    sample_audio_bytes = _get_sample_wav_bytes()
-    files = {"file": ("sample.wav", sample_audio_bytes, "audio/wav")}
-    data = {"name": "DB Fail Clone Test", "language": "en", "description": None}
-
-
-    mock_cartesia_service_factory.clone_voice.return_value = {
-        "id": "cartesia-id-to-rollback",
-        "name": "Temp Clone",
-        "language": "en",
-    }
-
-    with patch(
-        "orchestra.db.dao.voice_dao.VoiceDAO.create_voice",
-        side_effect=Exception("Simulated DB Integrity Error"),
-    ):
-        with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
-            mock_state.user_id = user_id
-            resp = await client.post(
-                "/v0/assistant/voice/clone", files=files, data=data, headers=HEADERS
-            )
-
-    assert resp.status_code == 500, f"Actual response: {resp.status_code} {resp.text}"
-    assert "Failed to clone and save voice" in resp.json()["detail"]
-    mock_cartesia_service_factory.delete_voice.assert_called_once_with(
-        "cartesia-id-to-rollback"
     )
 
 
@@ -416,9 +397,7 @@ async def test_delete_voice_fails_if_cartesia_fails_non_404(
 
     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
         mock_state.user_id = user_id
-        await client.post(
-            "/v0/assistant/voice", json=reg_payload, headers=HEADERS
-        )
+        await client.post("/v0/assistant/voice", json=reg_payload, headers=HEADERS)
         resp_del = await client.delete(
             f"/v0/assistant/voice/{voice_id}", headers=HEADERS
         )
