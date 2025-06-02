@@ -807,7 +807,8 @@ def create_logs_internal(
                 )
             elif entered_type != expected_type and entered_type != "NoneType":
                 batch_info = (
-                    f" (in batch entry {batch_index})"
+                    f" (in batch entry {batch_index}
+                )"
                     if batch_index is not None
                     else ""
                 )

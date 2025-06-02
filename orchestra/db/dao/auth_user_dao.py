@@ -157,7 +157,10 @@ class AuthUserDAO:
         return None
 
     def get_users_by_assistant_hiring_approval(
-        self, status: str, limit: Optional[int] = None, offset: Optional[int] = None
+        self,
+        status: str,
+        limit: Optional[int] = None,
+        offset: Optional[int] = None,
     ) -> List[AuthUser]:
         """Returns users matching a specific hiring status (e.g., "pending")."""
         if status not in ASSISTANT_HIRING_APPROVAL_STATUSES or status is None:
