@@ -2,8 +2,12 @@ import inspect
 import json
 import logging
 import os
+import uuid
+from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from decimal import Decimal
+from enum import Enum
+from pathlib import Path
 
 import litellm
 import numpy as np
@@ -191,6 +195,8 @@ class CustomEncoder(json.JSONEncoder):
             return float(obj)
         elif isinstance(obj, np.ndarray):
             return obj.tolist()
+        elif isinstance(obj, np.generic):
+            return obj.item()
         elif isinstance(obj, time):
             return obj.strftime("%H:%M:%S.%f")
         elif isinstance(obj, date):
@@ -234,4 +240,17 @@ class CustomEncoder(json.JSONEncoder):
                 duration = "PT0S"
 
             return duration
+        elif isinstance(obj, uuid.UUID):
+            return str(obj)
+        elif isinstance(obj, Path):
+            return str(obj)
+        elif isinstance(obj, (set, frozenset)):
+            return list(obj)
+        elif isinstance(obj, (bytes, bytearray)):
+            return obj.decode("utf-8", errors="replace")
+        elif isinstance(obj, Enum):
+            return obj.value
+        elif is_dataclass(obj):
+            return asdict(obj)
+
         return super().default(obj)
