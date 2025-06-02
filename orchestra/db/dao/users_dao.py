@@ -81,9 +81,9 @@ class UsersDAO:
         :return: total spending in credits (equivalent to dollars since 1 credit = $0.01)
         """
         result = self.session.execute(
-            select(func.sum(Query.credits))
-            .where(Query.user_id == user_id)
-            .where(Query.status_code == 200),  # Only count successful queries
+            select(func.sum(Query.credits)).where(
+                Query.user_id == user_id,
+            ),  # Count all queries since providers charge for failed requests too
         ).scalar()
 
         return float(result) if result else 0.0

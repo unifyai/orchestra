@@ -1422,33 +1422,6 @@ def trigger_billing_guard(
         raise HTTPException(status_code=500, detail=f"Billing guard failed: {str(e)}")
 
 
-@router.post("/billing/recharge-credits")
-def trigger_credit_recharge(
-    amount: float = 2.5,
-    session=Depends(get_db_session),
-) -> dict:
-    """
-    Trigger bulk credit recharge for all users.
-
-    This endpoint is designed to be called by Cloud Scheduler for promotional credits.
-    """
-    try:
-        # Import here to avoid circular imports
-        from orchestra.routines.recharging import recharge_credits
-
-        # Use the session parameter that recharge_credits already supports
-        recharge_credits(amount=amount, session=session)
-
-        return {
-            "status": "success",
-            "message": f"All users recharged with {amount} credits",
-            "amount": amount,
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Credit recharge failed: {str(e)}")
-
-
 @router.get("/user_billing_eligibility")
 def get_user_billing_eligibility(
     user_id: str,

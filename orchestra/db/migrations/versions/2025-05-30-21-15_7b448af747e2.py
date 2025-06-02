@@ -1,7 +1,7 @@
 """Add billing infrastructure
 
 Revision ID: 7b448af747e2
-Revises: 000958ab98b9
+Revises: 2c12988f18c9
 Create Date: 2025-05-30 21:15:28.539556
 
 """
@@ -11,7 +11,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision = "7b448af747e2"
-down_revision = "000958ab98b9"
+down_revision = "2c12988f18c9"
 branch_labels = None
 depends_on = None
 

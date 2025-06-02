@@ -648,41 +648,6 @@ async def test_admin_trigger_billing_guard(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_admin_trigger_credit_recharge(client: AsyncClient):
-    """Test the admin endpoint for triggering credit recharge."""
-    from orchestra.tests.utils import ADMIN_HEADERS
-
-    # Test with default amount
-    response = await client.post(
-        "/v0/admin/billing/recharge-credits",
-        headers=ADMIN_HEADERS,
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "success"
-    assert "All users recharged" in data["message"]
-    assert data["amount"] == 2.5
-
-
-@pytest.mark.anyio
-async def test_admin_trigger_credit_recharge_custom_amount(client: AsyncClient):
-    """Test the admin endpoint for triggering credit recharge with custom amount."""
-    from orchestra.tests.utils import ADMIN_HEADERS
-
-    # Test with custom amount
-    response = await client.post(
-        "/v0/admin/billing/recharge-credits",
-        params={"amount": 5.0},
-        headers=ADMIN_HEADERS,
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert data["status"] == "success"
-    assert "All users recharged" in data["message"]
-    assert data["amount"] == 5.0
-
-
-@pytest.mark.anyio
 async def test_admin_billing_endpoints_require_auth(client: AsyncClient):
     """Test that billing endpoints require admin authentication."""
     from orchestra.tests.utils import HEADERS  # Regular user headers
@@ -690,7 +655,6 @@ async def test_admin_billing_endpoints_require_auth(client: AsyncClient):
     endpoints = [
         "/v0/admin/billing/invoice-month",
         "/v0/admin/billing/suspend-past-due",
-        "/v0/admin/billing/recharge-credits",
     ]
 
     for endpoint in endpoints:
@@ -918,8 +882,8 @@ def test_minimum_autorecharge_amount(dbsession: Session):
     assert user.autorecharge_qty == 50.0
 
 
-def test_spending_calculation_only_successful_queries(dbsession: Session):
-    """Test that spending calculation only includes successful queries (status_code=200)."""
+def test_spending_calculation_includes_all_queries(dbsession: Session):
+    """Test that spending calculation includes all queries since providers charge for failed requests too."""
     from orchestra.db.dao.query_dao import QueryDAO
     from orchestra.db.dao.users_dao import UsersDAO
 
@@ -961,8 +925,8 @@ def test_spending_calculation_only_successful_queries(dbsession: Session):
         status_code=500,  # Failed
     )
 
-    # Only successful query should count towards spending
-    assert users_dao.get_total_spending(uid) == 50.0
+    # Both successful and failed queries should count towards spending
+    assert users_dao.get_total_spending(uid) == 80.0
 
 
 @pytest.mark.anyio
@@ -1165,8 +1129,8 @@ def test_existing_customer_with_monthly_billing_unaffected(dbsession: Session):
         assert "must spend at least $100.00" in str(e)
 
 
-def test_failed_queries_dont_count_toward_spending(dbsession: Session):
-    """Test that only successful queries count toward the $100 spending requirement."""
+def test_all_queries_count_toward_spending(dbsession: Session):
+    """Test that all queries (both successful and failed) count toward the $100 spending requirement since providers charge for failed requests too."""
     from orchestra.db.dao.query_dao import QueryDAO
     from orchestra.db.dao.users_dao import UsersDAO
 
@@ -1195,11 +1159,11 @@ def test_failed_queries_dont_count_toward_spending(dbsession: Session):
             status_code=429,  # Failed query
         )
 
-    # Should have $0 spending since all queries failed
-    assert users_dao.get_total_spending(uid) == 0.0
-    assert not users_dao.can_enable_monthly_billing(uid)
+    # Should have $200 spending since all queries count (even failed ones)
+    assert users_dao.get_total_spending(uid) == 200.0
+    assert users_dao.can_enable_monthly_billing(uid)  # Should be eligible now
 
-    # Add just $100 worth of successful queries
+    # Add $100 worth of successful queries
     for i in range(2):
         query_dao.create_query(
             user_id=uid,
@@ -1214,8 +1178,8 @@ def test_failed_queries_dont_count_toward_spending(dbsession: Session):
             status_code=200,  # Successful query
         )
 
-    # Now should be eligible
-    assert users_dao.get_total_spending(uid) == 100.0
+    # Now should have $300 total spending
+    assert users_dao.get_total_spending(uid) == 300.0
     assert users_dao.can_enable_monthly_billing(uid)
 
 
@@ -1430,9 +1394,9 @@ def test_retroactive_spending_calculation(dbsession: Session):
             status_code=status_code,
         )
 
-    # Calculate spending - should only count successful queries
+    # Calculate spending - should count ALL queries since providers charge for failed requests too
     total_spending = users_dao.get_total_spending(uid)
-    expected_spending = 75.0 + 25.0 + 50.0  # Only successful queries
+    expected_spending = 75.0 + 30.0 + 25.0 + 40.0 + 50.0  # All queries count
     assert total_spending == expected_spending
 
     # User should now be eligible for monthly billing
@@ -1644,15 +1608,15 @@ def test_spending_calculation_edge_cases(dbsession: Session):
     # Test with various status codes
     status_code_tests = [
         (50.0, 200, True),  # Success - should count
-        (30.0, 201, False),  # Created - should not count
-        (25.0, 400, False),  # Bad request - should not count
-        (40.0, 401, False),  # Unauthorized - should not count
-        (35.0, 403, False),  # Forbidden - should not count
-        (45.0, 404, False),  # Not found - should not count
-        (20.0, 429, False),  # Rate limit - should not count
-        (60.0, 500, False),  # Server error - should not count
-        (55.0, 502, False),  # Bad gateway - should not count
-        (30.0, 503, False),  # Service unavailable - should not count
+        (30.0, 201, True),  # Created - should count (all queries count)
+        (25.0, 400, True),  # Bad request - should count (all queries count)
+        (40.0, 401, True),  # Unauthorized - should count (all queries count)
+        (35.0, 403, True),  # Forbidden - should count (all queries count)
+        (45.0, 404, True),  # Not found - should count (all queries count)
+        (20.0, 429, True),  # Rate limit - should count (all queries count)
+        (60.0, 500, True),  # Server error - should count (all queries count)
+        (55.0, 502, True),  # Bad gateway - should count (all queries count)
+        (30.0, 503, True),  # Service unavailable - should count (all queries count)
     ]
 
     expected_total = 0.0
@@ -1667,7 +1631,7 @@ def test_spending_calculation_edge_cases(dbsession: Session):
             credits=credits,
             query_body='{"messages": [{"role": "user", "content": "test"}]}',
             response_body='{"choices": [{"message": {"content": "response"}}]}'
-            if should_count
+            if status_code == 200
             else '{"error": "failed"}',
             status_code=status_code,
         )
@@ -1675,9 +1639,9 @@ def test_spending_calculation_edge_cases(dbsession: Session):
         if should_count:
             expected_total += credits
 
-    # Only the 200 status code query should count
+    # All queries should count since providers charge for failed requests too
     assert users_dao.get_total_spending(uid) == expected_total
-    assert users_dao.get_total_spending(uid) == 50.0
+    assert users_dao.get_total_spending(uid) == 390.0  # Sum of all credits
 
 
 def test_decimal_precision_in_spending_calculation(dbsession: Session):
