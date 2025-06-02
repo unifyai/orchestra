@@ -178,6 +178,8 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
 
         if not os.environ.get("ON_PREM") and status_code == 200:
             users_dao.recharge_credit(user_id, -cost)
+            session.commit()  # Ensure credit deduction is committed
+
             if (
                 user.autorecharge
                 and user.credits <= user.autorecharge_threshold
