@@ -810,3 +810,1149 @@ def test_real_stripe_invoicer_integration(dbsession: Session, monkeypatch):
         real_stripe.Customer.delete(stripe_customer_id)
     except:
         pass  # Ignore cleanup errors
+
+
+# --------------------------------------------------------------------------- #
+# 8. New billing requirements tests                                           #
+# --------------------------------------------------------------------------- #
+def test_minimum_spend_for_monthly_billing(dbsession: Session):
+    """Test that users must spend $100 before enabling monthly billing."""
+    from orchestra.db.dao.query_dao import QueryDAO
+    from orchestra.db.dao.users_dao import UsersDAO
+
+    uid = "spend_test_user"
+    user = Users(id=uid, credits=1000, stripe_customer_id="cus_spend_test")
+    dbsession.add(user)
+    dbsession.commit()
+
+    users_dao = UsersDAO(dbsession)
+    query_dao = QueryDAO(dbsession)
+
+    # Initially, user should not be able to enable monthly billing
+    assert not users_dao.can_enable_monthly_billing(uid)
+    assert users_dao.get_total_spending(uid) == 0.0
+
+    # Try to enable autorecharge - should fail
+    try:
+        users_dao.enable_autorecharge(uid, True)
+        assert False, "Should have raised ValueError"
+    except ValueError as e:
+        assert "must spend at least $100.00" in str(e)
+
+    # Add some spending (but less than $100)
+    import datetime
+
+    query_dao.create_query(
+        user_id=uid,
+        at=datetime.datetime.now(),
+        model_provider_str="test-model@test-provider",
+        endpoint_id=None,
+        custom_endpoint_id=None,
+        local_endpoint_id=None,
+        credits=50.0,  # $50 worth
+        query_body="test query",
+        response_body="test response",
+        status_code=200,
+    )
+
+    # Still should not be able to enable monthly billing
+    assert not users_dao.can_enable_monthly_billing(uid)
+    assert users_dao.get_total_spending(uid) == 50.0
+
+    # Add more spending to reach $100
+    query_dao.create_query(
+        user_id=uid,
+        at=datetime.datetime.now(),
+        model_provider_str="test-model@test-provider",
+        endpoint_id=None,
+        custom_endpoint_id=None,
+        local_endpoint_id=None,
+        credits=50.0,  # Another $50 worth
+        query_body="test query 2",
+        response_body="test response 2",
+        status_code=200,
+    )
+
+    # Now should be able to enable monthly billing
+    assert users_dao.can_enable_monthly_billing(uid)
+    assert users_dao.get_total_spending(uid) == 100.0
+
+    # Should be able to enable autorecharge now
+    users_dao.enable_autorecharge(uid, True)
+    dbsession.commit()
+
+    user = users_dao.get_user_with_id(uid)
+    assert user.autorecharge is True
+
+
+def test_minimum_autorecharge_amount(dbsession: Session):
+    """Test that auto-recharge amount must be at least $25."""
+    from orchestra.db.dao.users_dao import UsersDAO
+
+    uid = "autorecharge_test_user"
+    user = Users(id=uid, credits=1000, stripe_customer_id="cus_autorecharge_test")
+    dbsession.add(user)
+    dbsession.commit()
+
+    users_dao = UsersDAO(dbsession)
+
+    # Try to set auto-recharge amount below minimum - should fail
+    try:
+        users_dao.set_autorecharge_qty(uid, 10.0)  # $10, below minimum
+        assert False, "Should have raised ValueError"
+    except ValueError as e:
+        assert "Minimum auto-recharge amount is $25.00" in str(e)
+
+    # Try to set auto-recharge amount at minimum - should succeed
+    users_dao.set_autorecharge_qty(uid, 25.0)  # $25, at minimum
+    dbsession.commit()
+
+    user = users_dao.get_user_with_id(uid)
+    assert user.autorecharge_qty == 25.0
+
+    # Try to set auto-recharge amount above minimum - should succeed
+    users_dao.set_autorecharge_qty(uid, 50.0)  # $50, above minimum
+    dbsession.commit()
+
+    user = users_dao.get_user_with_id(uid)
+    assert user.autorecharge_qty == 50.0
+
+
+def test_spending_calculation_only_successful_queries(dbsession: Session):
+    """Test that spending calculation only includes successful queries (status_code=200)."""
+    from orchestra.db.dao.query_dao import QueryDAO
+    from orchestra.db.dao.users_dao import UsersDAO
+
+    uid = "status_test_user"
+    user = Users(id=uid, credits=1000, stripe_customer_id="cus_status_test")
+    dbsession.add(user)
+    dbsession.commit()
+
+    users_dao = UsersDAO(dbsession)
+    query_dao = QueryDAO(dbsession)
+
+    import datetime
+
+    # Add successful query
+    query_dao.create_query(
+        user_id=uid,
+        at=datetime.datetime.now(),
+        model_provider_str="test-model@test-provider",
+        endpoint_id=None,
+        custom_endpoint_id=None,
+        local_endpoint_id=None,
+        credits=50.0,
+        query_body="successful query",
+        response_body="successful response",
+        status_code=200,  # Successful
+    )
+
+    # Add failed query
+    query_dao.create_query(
+        user_id=uid,
+        at=datetime.datetime.now(),
+        model_provider_str="test-model@test-provider",
+        endpoint_id=None,
+        custom_endpoint_id=None,
+        local_endpoint_id=None,
+        credits=30.0,
+        query_body="failed query",
+        response_body="error response",
+        status_code=500,  # Failed
+    )
+
+    # Only successful query should count towards spending
+    assert users_dao.get_total_spending(uid) == 50.0
+
+
+@pytest.mark.anyio
+async def test_admin_billing_eligibility_endpoint(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Test the admin endpoint for checking billing eligibility."""
+    from orchestra.db.dao.query_dao import QueryDAO
+    from orchestra.tests.utils import ADMIN_HEADERS
+
+    uid = "eligibility_test_user"
+    user = Users(id=uid, credits=1000, stripe_customer_id="cus_eligibility_test")
+    dbsession.add(user)
+    dbsession.commit()
+
+    # Test with no spending
+    response = await client.get(
+        f"/v0/admin/user_billing_eligibility?user_id={uid}",
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["user_id"] == uid
+    assert data["total_spending"] == 0.0
+    assert data["can_enable_monthly_billing"] is False
+    assert data["minimum_spend_required"] == 100.0
+    assert data["remaining_spend_needed"] == 100.0
+
+    # Add some spending
+    query_dao = QueryDAO(dbsession)
+    import datetime
+
+    query_dao.create_query(
+        user_id=uid,
+        at=datetime.datetime.now(),
+        model_provider_str="test-model@test-provider",
+        endpoint_id=None,
+        custom_endpoint_id=None,
+        local_endpoint_id=None,
+        credits=75.0,
+        query_body="test query",
+        response_body="test response",
+        status_code=200,
+    )
+
+    # Test with partial spending
+    response = await client.get(
+        f"/v0/admin/user_billing_eligibility?user_id={uid}",
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_spending"] == 75.0
+    assert data["can_enable_monthly_billing"] is False
+    assert data["remaining_spend_needed"] == 25.0
+
+
+# --------------------------------------------------------------------------- #
+# 9. Comprehensive user workflow tests for new billing requirements          #
+# --------------------------------------------------------------------------- #
+
+
+def test_new_user_cannot_enable_monthly_billing(dbsession: Session):
+    """Test that a brand new user cannot enable monthly billing without $100 spending."""
+    from orchestra.db.dao.users_dao import UsersDAO
+
+    uid = "new_user_test"
+    user = Users(id=uid, credits=1000, stripe_customer_id="cus_new_user")
+    dbsession.add(user)
+    dbsession.commit()
+
+    users_dao = UsersDAO(dbsession)
+
+    # New user should not be eligible
+    assert not users_dao.can_enable_monthly_billing(uid)
+    assert users_dao.get_total_spending(uid) == 0.0
+
+    # Attempting to enable should fail with clear error
+    try:
+        users_dao.enable_autorecharge(uid, True)
+        assert False, "Should have raised ValueError"
+    except ValueError as e:
+        assert "must spend at least $100.00" in str(e)
+        assert "Current spending: $0.00" in str(e)
+
+
+def test_user_reaches_100_dollar_threshold(dbsession: Session):
+    """Test user progression from $0 to $100+ spending and enabling monthly billing."""
+    from orchestra.db.dao.query_dao import QueryDAO
+    from orchestra.db.dao.users_dao import UsersDAO
+
+    uid = "threshold_user"
+    user = Users(id=uid, credits=10000, stripe_customer_id="cus_threshold")
+    dbsession.add(user)
+    dbsession.commit()
+
+    users_dao = UsersDAO(dbsession)
+    query_dao = QueryDAO(dbsession)
+
+    import datetime
+
+    # Start with $0 spending - cannot enable
+    assert not users_dao.can_enable_monthly_billing(uid)
+
+    # Add $50 spending - still cannot enable
+    query_dao.create_query(
+        user_id=uid,
+        at=datetime.datetime.now(),
+        model_provider_str="gpt-4@openai",
+        endpoint_id=None,
+        custom_endpoint_id=None,
+        local_endpoint_id=None,
+        credits=50.0,
+        query_body='{"messages": [{"role": "user", "content": "test"}]}',
+        response_body='{"choices": [{"message": {"content": "response"}}]}',
+        status_code=200,
+    )
+
+    assert users_dao.get_total_spending(uid) == 50.0
+    assert not users_dao.can_enable_monthly_billing(uid)
+
+    # Try to enable - should still fail
+    try:
+        users_dao.enable_autorecharge(uid, True)
+        assert False, "Should have raised ValueError"
+    except ValueError as e:
+        assert "Current spending: $50.00" in str(e)
+
+    # Add another $50 to reach exactly $100
+    query_dao.create_query(
+        user_id=uid,
+        at=datetime.datetime.now(),
+        model_provider_str="claude-3-haiku@anthropic",
+        endpoint_id=None,
+        custom_endpoint_id=None,
+        local_endpoint_id=None,
+        credits=50.0,
+        query_body='{"messages": [{"role": "user", "content": "test2"}]}',
+        response_body='{"content": [{"text": "response2"}]}',
+        status_code=200,
+    )
+
+    # Now should be able to enable
+    assert users_dao.get_total_spending(uid) == 100.0
+    assert users_dao.can_enable_monthly_billing(uid)
+
+    # Should successfully enable autorecharge
+    users_dao.enable_autorecharge(uid, True)
+    users_dao.set_autorecharge_qty(uid, 25.0)  # Minimum amount
+    users_dao.set_autorecharge_threshold(uid, 10.0)
+    dbsession.commit()
+
+    user = users_dao.get_user_with_id(uid)
+    assert user.autorecharge is True
+    assert user.autorecharge_qty == 25.0
+
+
+def test_existing_customer_with_monthly_billing_unaffected(dbsession: Session):
+    """Test that existing customers with monthly billing continue to work normally."""
+    from orchestra.db.dao.users_dao import UsersDAO
+
+    uid = "existing_customer"
+    # Existing customer with autorecharge already enabled
+    user = Users(
+        id=uid,
+        credits=500,
+        stripe_customer_id="cus_existing",
+        autorecharge=True,
+        autorecharge_qty=50.0,
+        autorecharge_threshold=100.0,
+    )
+    dbsession.add(user)
+    dbsession.commit()
+
+    users_dao = UsersDAO(dbsession)
+
+    # Existing customer can modify their settings without spending validation
+    users_dao.set_autorecharge_qty(uid, 100.0)  # Increase recharge amount
+    users_dao.set_autorecharge_threshold(uid, 50.0)  # Change threshold
+    dbsession.commit()
+
+    user = users_dao.get_user_with_id(uid)
+    assert user.autorecharge is True  # Still enabled
+    assert user.autorecharge_qty == 100.0
+    assert user.autorecharge_threshold == 50.0
+
+    # Can disable and re-enable (but re-enable will check spending)
+    users_dao.enable_autorecharge(uid, False)
+    dbsession.commit()
+
+    user = users_dao.get_user_with_id(uid)
+    assert user.autorecharge is False
+
+    # Re-enabling will now require $100 spending
+    try:
+        users_dao.enable_autorecharge(uid, True)
+        assert False, "Should require $100 spending to re-enable"
+    except ValueError as e:
+        assert "must spend at least $100.00" in str(e)
+
+
+def test_failed_queries_dont_count_toward_spending(dbsession: Session):
+    """Test that only successful queries count toward the $100 spending requirement."""
+    from orchestra.db.dao.query_dao import QueryDAO
+    from orchestra.db.dao.users_dao import UsersDAO
+
+    uid = "failed_query_user"
+    user = Users(id=uid, credits=1000, stripe_customer_id="cus_failed")
+    dbsession.add(user)
+    dbsession.commit()
+
+    users_dao = UsersDAO(dbsession)
+    query_dao = QueryDAO(dbsession)
+
+    import datetime
+
+    # Add $200 worth of failed queries
+    for i in range(4):
+        query_dao.create_query(
+            user_id=uid,
+            at=datetime.datetime.now(),
+            model_provider_str="gpt-4@openai",
+            endpoint_id=None,
+            custom_endpoint_id=None,
+            local_endpoint_id=None,
+            credits=50.0,
+            query_body='{"messages": [{"role": "user", "content": "test"}]}',
+            response_body='{"error": "rate limit exceeded"}',
+            status_code=429,  # Failed query
+        )
+
+    # Should have $0 spending since all queries failed
+    assert users_dao.get_total_spending(uid) == 0.0
+    assert not users_dao.can_enable_monthly_billing(uid)
+
+    # Add just $100 worth of successful queries
+    for i in range(2):
+        query_dao.create_query(
+            user_id=uid,
+            at=datetime.datetime.now(),
+            model_provider_str="gpt-4@openai",
+            endpoint_id=None,
+            custom_endpoint_id=None,
+            local_endpoint_id=None,
+            credits=50.0,
+            query_body='{"messages": [{"role": "user", "content": "test"}]}',
+            response_body='{"choices": [{"message": {"content": "response"}}]}',
+            status_code=200,  # Successful query
+        )
+
+    # Now should be eligible
+    assert users_dao.get_total_spending(uid) == 100.0
+    assert users_dao.can_enable_monthly_billing(uid)
+
+
+def test_autorecharge_amount_validation_edge_cases(dbsession: Session):
+    """Test edge cases around the $25 minimum auto-recharge amount."""
+    from orchestra.db.dao.users_dao import UsersDAO
+
+    uid = "autorecharge_validation_user"
+    user = Users(id=uid, credits=1000, stripe_customer_id="cus_validation")
+    dbsession.add(user)
+    dbsession.commit()
+
+    users_dao = UsersDAO(dbsession)
+
+    # Test exact boundary values
+    test_cases = [
+        (24.99, False, "below minimum"),
+        (25.00, True, "exact minimum"),
+        (25.01, True, "above minimum"),
+        (0.01, False, "very small amount"),
+        (1000.00, True, "large amount"),
+    ]
+
+    for amount, should_succeed, description in test_cases:
+        if should_succeed:
+            # Should succeed
+            users_dao.set_autorecharge_qty(uid, amount)
+            dbsession.commit()
+
+            user = users_dao.get_user_with_id(uid)
+            assert user.autorecharge_qty == amount, f"Failed for {description}"
+        else:
+            # Should fail
+            try:
+                users_dao.set_autorecharge_qty(uid, amount)
+                assert False, f"Should have failed for {description} (${amount})"
+            except ValueError as e:
+                assert "Minimum auto-recharge amount is $25.00" in str(e)
+
+
+@pytest.mark.anyio
+async def test_api_error_responses_for_billing_validation(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Test that API endpoints return proper error responses for billing validation failures."""
+    from orchestra.db.dao.query_dao import QueryDAO
+    from orchestra.tests.utils import ADMIN_HEADERS
+
+    uid = "api_error_user"
+    user = Users(id=uid, credits=1000, stripe_customer_id="cus_api_error")
+    dbsession.add(user)
+    dbsession.commit()
+
+    # Test enable_autorecharge endpoint with insufficient spending
+    response = await client.put(
+        "/v0/admin/enable_autorecharge",
+        params={"id": uid, "enable": True},
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 400
+    error_data = response.json()
+    assert "must spend at least $100.00" in error_data["detail"]
+    assert "Current spending: $0.00" in error_data["detail"]
+
+    # Test autorecharge_qty endpoint with amount below minimum
+    response = await client.put(
+        "/v0/admin/autorecharge_qty",
+        params={"id": uid, "qty": 10.0},
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 400
+    error_data = response.json()
+    assert "Minimum auto-recharge amount is $25.00" in error_data["detail"]
+
+    # Add sufficient spending and test successful case
+    query_dao = QueryDAO(dbsession)
+    import datetime
+
+    query_dao.create_query(
+        user_id=uid,
+        at=datetime.datetime.now(),
+        model_provider_str="gpt-4@openai",
+        endpoint_id=None,
+        custom_endpoint_id=None,
+        local_endpoint_id=None,
+        credits=100.0,
+        query_body='{"messages": [{"role": "user", "content": "test"}]}',
+        response_body='{"choices": [{"message": {"content": "response"}}]}',
+        status_code=200,
+    )
+
+    # Now should succeed
+    response = await client.put(
+        "/v0/admin/enable_autorecharge",
+        params={"id": uid, "enable": True},
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 200
+
+    # And valid autorecharge amount should succeed
+    response = await client.put(
+        "/v0/admin/autorecharge_qty",
+        params={"id": uid, "qty": 50.0},
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_billing_eligibility_endpoint_comprehensive(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Test the billing eligibility endpoint with various spending levels."""
+    from orchestra.db.dao.query_dao import QueryDAO
+    from orchestra.tests.utils import ADMIN_HEADERS
+
+    uid = "eligibility_comprehensive_user"
+    user = Users(id=uid, credits=1000, stripe_customer_id="cus_eligibility_comp")
+    dbsession.add(user)
+    dbsession.commit()
+
+    query_dao = QueryDAO(dbsession)
+    import datetime
+
+    # Test progression through different spending levels
+    spending_tests = [
+        (0, False, 100.0),  # $0 - not eligible, need $100
+        (25, False, 75.0),  # $25 - not eligible, need $75
+        (50, False, 50.0),  # $50 - not eligible, need $50
+        (75, False, 25.0),  # $75 - not eligible, need $25
+        (100, True, 0.0),  # $100 - eligible, need $0
+        (150, True, 0.0),  # $150 - eligible, need $0
+    ]
+
+    for spending_amount, should_be_eligible, remaining_needed in spending_tests:
+        # Add spending to reach target amount
+        if spending_amount > 0:
+            query_dao.create_query(
+                user_id=uid,
+                at=datetime.datetime.now(),
+                model_provider_str="gpt-4@openai",
+                endpoint_id=None,
+                custom_endpoint_id=None,
+                local_endpoint_id=None,
+                credits=spending_amount,  # Add the full amount in one query for simplicity
+                query_body='{"messages": [{"role": "user", "content": "test"}]}',
+                response_body='{"choices": [{"message": {"content": "response"}}]}',
+                status_code=200,
+            )
+
+            # Clear previous queries and add a single query with the target amount
+            dbsession.query(Query).filter(Query.user_id == uid).delete()
+            query_dao.create_query(
+                user_id=uid,
+                at=datetime.datetime.now(),
+                model_provider_str="gpt-4@openai",
+                endpoint_id=None,
+                custom_endpoint_id=None,
+                local_endpoint_id=None,
+                credits=spending_amount,
+                query_body='{"messages": [{"role": "user", "content": "test"}]}',
+                response_body='{"choices": [{"message": {"content": "response"}}]}',
+                status_code=200,
+            )
+
+        # Test the API endpoint
+        response = await client.get(
+            f"/v0/admin/user_billing_eligibility?user_id={uid}",
+            headers=ADMIN_HEADERS,
+        )
+        assert response.status_code == 200
+        data = response.json()
+
+        assert data["user_id"] == uid
+        assert data["total_spending"] == spending_amount
+        assert data["can_enable_monthly_billing"] == should_be_eligible
+        assert data["minimum_spend_required"] == 100.0
+        assert data["remaining_spend_needed"] == remaining_needed
+
+
+def test_retroactive_spending_calculation(dbsession: Session):
+    """Test that spending calculation works retroactively for existing customers."""
+    from orchestra.db.dao.query_dao import QueryDAO
+    from orchestra.db.dao.users_dao import UsersDAO
+
+    uid = "retroactive_user"
+    # Create user with existing queries in database (simulating historical data)
+    user = Users(id=uid, credits=1000, stripe_customer_id="cus_retroactive")
+    dbsession.add(user)
+    dbsession.commit()
+
+    query_dao = QueryDAO(dbsession)
+    users_dao = UsersDAO(dbsession)
+
+    import datetime
+
+    # Add historical queries (simulating existing customer with past usage)
+    historical_queries = [
+        (75.0, 200, "2024-01-15"),  # $75 successful
+        (30.0, 429, "2024-01-20"),  # $30 failed (rate limit)
+        (25.0, 200, "2024-02-01"),  # $25 successful
+        (40.0, 500, "2024-02-15"),  # $40 failed (server error)
+        (50.0, 200, "2024-03-01"),  # $50 successful
+    ]
+
+    for credits, status_code, date_str in historical_queries:
+        query_dao.create_query(
+            user_id=uid,
+            at=datetime.datetime.strptime(date_str, "%Y-%m-%d"),
+            model_provider_str="gpt-4@openai",
+            endpoint_id=None,
+            custom_endpoint_id=None,
+            local_endpoint_id=None,
+            credits=credits,
+            query_body='{"messages": [{"role": "user", "content": "historical"}]}',
+            response_body='{"choices": [{"message": {"content": "response"}}]}'
+            if status_code == 200
+            else '{"error": "failed"}',
+            status_code=status_code,
+        )
+
+    # Calculate spending - should only count successful queries
+    total_spending = users_dao.get_total_spending(uid)
+    expected_spending = 75.0 + 25.0 + 50.0  # Only successful queries
+    assert total_spending == expected_spending
+
+    # User should now be eligible for monthly billing
+    assert users_dao.can_enable_monthly_billing(uid)
+
+    # Should be able to enable autorecharge
+    users_dao.enable_autorecharge(uid, True)
+    users_dao.set_autorecharge_qty(uid, 25.0)
+    dbsession.commit()
+
+    user = users_dao.get_user_with_id(uid)
+    assert user.autorecharge is True
+
+
+def test_user_workflow_complete_journey(dbsession: Session):
+    """Test complete user journey from new user to monthly billing customer."""
+    from orchestra.db.dao.query_dao import QueryDAO
+    from orchestra.db.dao.users_dao import UsersDAO
+
+    uid = "journey_user"
+    user = Users(id=uid, credits=10000, stripe_customer_id="cus_journey")
+    dbsession.add(user)
+    dbsession.commit()
+
+    users_dao = UsersDAO(dbsession)
+    query_dao = QueryDAO(dbsession)
+
+    import datetime
+
+    # Step 1: New user tries to enable monthly billing - should fail
+    assert not users_dao.can_enable_monthly_billing(uid)
+    try:
+        users_dao.enable_autorecharge(uid, True)
+        assert False, "Should fail for new user"
+    except ValueError:
+        pass  # Expected
+
+    # Step 2: User makes some API calls (not enough for $100)
+    for i in range(5):
+        query_dao.create_query(
+            user_id=uid,
+            at=datetime.datetime.now(),
+            model_provider_str="gpt-3.5-turbo@openai",
+            endpoint_id=None,
+            custom_endpoint_id=None,
+            local_endpoint_id=None,
+            credits=15.0,  # $15 per query
+            query_body='{"messages": [{"role": "user", "content": "query"}]}',
+            response_body='{"choices": [{"message": {"content": "response"}}]}',
+            status_code=200,
+        )
+
+    # Should have $75, still not eligible
+    assert users_dao.get_total_spending(uid) == 75.0
+    assert not users_dao.can_enable_monthly_billing(uid)
+
+    # Step 3: User makes more API calls to cross $100 threshold
+    for i in range(2):
+        query_dao.create_query(
+            user_id=uid,
+            at=datetime.datetime.now(),
+            model_provider_str="gpt-4@openai",
+            endpoint_id=None,
+            custom_endpoint_id=None,
+            local_endpoint_id=None,
+            credits=20.0,  # $20 per query
+            query_body='{"messages": [{"role": "user", "content": "bigger query"}]}',
+            response_body='{"choices": [{"message": {"content": "detailed response"}}]}',
+            status_code=200,
+        )
+
+    # Should now have $115 and be eligible
+    assert users_dao.get_total_spending(uid) == 115.0
+    assert users_dao.can_enable_monthly_billing(uid)
+
+    # Step 4: User tries to set invalid auto-recharge amount - should fail
+    try:
+        users_dao.set_autorecharge_qty(uid, 20.0)  # Below $25 minimum
+        assert False, "Should fail for amount below minimum"
+    except ValueError:
+        pass  # Expected
+
+    # Step 5: User successfully enables monthly billing with valid settings
+    users_dao.enable_autorecharge(uid, True)
+    users_dao.set_autorecharge_qty(uid, 50.0)  # Valid amount
+    users_dao.set_autorecharge_threshold(uid, 100.0)
+    dbsession.commit()
+
+    # Verify final state
+    user = users_dao.get_user_with_id(uid)
+    assert user.autorecharge is True
+    assert user.autorecharge_qty == 50.0
+    assert user.autorecharge_threshold == 100.0
+
+    # Step 6: User can modify settings freely now
+    users_dao.set_autorecharge_qty(uid, 100.0)  # Increase amount
+    users_dao.set_autorecharge_threshold(uid, 50.0)  # Change threshold
+    dbsession.commit()
+
+    user = users_dao.get_user_with_id(uid)
+    assert user.autorecharge_qty == 100.0
+    assert user.autorecharge_threshold == 50.0
+
+
+# --------------------------------------------------------------------------- #
+# 10. Frontend integration and edge case tests                               #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.anyio
+async def test_frontend_billing_eligibility_workflow(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Test the complete frontend workflow for checking billing eligibility."""
+    from orchestra.db.dao.query_dao import QueryDAO
+    from orchestra.tests.utils import ADMIN_HEADERS
+
+    uid = "frontend_user"
+    user = Users(id=uid, credits=1000, stripe_customer_id="cus_frontend")
+    dbsession.add(user)
+    dbsession.commit()
+
+    # Step 1: Frontend checks eligibility for new user
+    response = await client.get(
+        f"/v0/admin/user_billing_eligibility?user_id={uid}",
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["can_enable_monthly_billing"] is False
+    assert data["remaining_spend_needed"] == 100.0
+
+    # Step 2: Frontend should hide monthly billing UI components
+    # (This would be handled in the frontend code based on the API response)
+
+    # Step 3: User makes some API calls
+    query_dao = QueryDAO(dbsession)
+    import datetime
+
+    # Add $60 worth of spending
+    for i in range(3):
+        query_dao.create_query(
+            user_id=uid,
+            at=datetime.datetime.now(),
+            model_provider_str="gpt-4@openai",
+            endpoint_id=None,
+            custom_endpoint_id=None,
+            local_endpoint_id=None,
+            credits=20.0,
+            query_body='{"messages": [{"role": "user", "content": "test"}]}',
+            response_body='{"choices": [{"message": {"content": "response"}}]}',
+            status_code=200,
+        )
+
+    # Step 4: Frontend checks eligibility again
+    response = await client.get(
+        f"/v0/admin/user_billing_eligibility?user_id={uid}",
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["can_enable_monthly_billing"] is False
+    assert data["total_spending"] == 60.0
+    assert data["remaining_spend_needed"] == 40.0
+
+    # Step 5: User reaches $100 threshold
+    for i in range(2):
+        query_dao.create_query(
+            user_id=uid,
+            at=datetime.datetime.now(),
+            model_provider_str="gpt-4@openai",
+            endpoint_id=None,
+            custom_endpoint_id=None,
+            local_endpoint_id=None,
+            credits=20.0,
+            query_body='{"messages": [{"role": "user", "content": "test"}]}',
+            response_body='{"choices": [{"message": {"content": "response"}}]}',
+            status_code=200,
+        )
+
+    # Step 6: Frontend checks eligibility and can now show UI
+    response = await client.get(
+        f"/v0/admin/user_billing_eligibility?user_id={uid}",
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["can_enable_monthly_billing"] is True
+    assert data["total_spending"] == 100.0
+    assert data["remaining_spend_needed"] == 0.0
+
+
+def test_spending_calculation_edge_cases(dbsession: Session):
+    """Test edge cases in spending calculation."""
+    from orchestra.db.dao.query_dao import QueryDAO
+    from orchestra.db.dao.users_dao import UsersDAO
+
+    uid = "edge_case_user"
+    user = Users(id=uid, credits=1000, stripe_customer_id="cus_edge")
+    dbsession.add(user)
+    dbsession.commit()
+
+    users_dao = UsersDAO(dbsession)
+    query_dao = QueryDAO(dbsession)
+
+    import datetime
+
+    # Test with various status codes
+    status_code_tests = [
+        (50.0, 200, True),  # Success - should count
+        (30.0, 201, False),  # Created - should not count
+        (25.0, 400, False),  # Bad request - should not count
+        (40.0, 401, False),  # Unauthorized - should not count
+        (35.0, 403, False),  # Forbidden - should not count
+        (45.0, 404, False),  # Not found - should not count
+        (20.0, 429, False),  # Rate limit - should not count
+        (60.0, 500, False),  # Server error - should not count
+        (55.0, 502, False),  # Bad gateway - should not count
+        (30.0, 503, False),  # Service unavailable - should not count
+    ]
+
+    expected_total = 0.0
+    for credits, status_code, should_count in status_code_tests:
+        query_dao.create_query(
+            user_id=uid,
+            at=datetime.datetime.now(),
+            model_provider_str="gpt-4@openai",
+            endpoint_id=None,
+            custom_endpoint_id=None,
+            local_endpoint_id=None,
+            credits=credits,
+            query_body='{"messages": [{"role": "user", "content": "test"}]}',
+            response_body='{"choices": [{"message": {"content": "response"}}]}'
+            if should_count
+            else '{"error": "failed"}',
+            status_code=status_code,
+        )
+
+        if should_count:
+            expected_total += credits
+
+    # Only the 200 status code query should count
+    assert users_dao.get_total_spending(uid) == expected_total
+    assert users_dao.get_total_spending(uid) == 50.0
+
+
+def test_decimal_precision_in_spending_calculation(dbsession: Session):
+    """Test that spending calculation handles decimal precision correctly."""
+    from orchestra.db.dao.query_dao import QueryDAO
+    from orchestra.db.dao.users_dao import UsersDAO
+
+    uid = "decimal_user"
+    user = Users(id=uid, credits=1000, stripe_customer_id="cus_decimal")
+    dbsession.add(user)
+    dbsession.commit()
+
+    users_dao = UsersDAO(dbsession)
+    query_dao = QueryDAO(dbsession)
+
+    import datetime
+    from decimal import Decimal
+
+    # Add queries with precise decimal amounts
+    precise_amounts = [
+        Decimal("33.33"),
+        Decimal("33.33"),
+        Decimal("33.34"),  # Total should be exactly 100.00
+    ]
+
+    for amount in precise_amounts:
+        query_dao.create_query(
+            user_id=uid,
+            at=datetime.datetime.now(),
+            model_provider_str="gpt-4@openai",
+            endpoint_id=None,
+            custom_endpoint_id=None,
+            local_endpoint_id=None,
+            credits=amount,
+            query_body='{"messages": [{"role": "user", "content": "test"}]}',
+            response_body='{"choices": [{"message": {"content": "response"}}]}',
+            status_code=200,
+        )
+
+    # Should be exactly $100.00
+    total_spending = users_dao.get_total_spending(uid)
+    assert abs(total_spending - 100.0) < 0.01  # Allow for floating point precision
+    assert users_dao.can_enable_monthly_billing(uid)
+
+
+def test_concurrent_user_scenarios(dbsession: Session):
+    """Test scenarios where multiple users have different spending levels."""
+    from orchestra.db.dao.query_dao import QueryDAO
+    from orchestra.db.dao.users_dao import UsersDAO
+
+    # Create multiple users with different spending patterns
+    users_data = [
+        ("user_0", 0.0, False),  # No spending
+        ("user_50", 50.0, False),  # Half way to threshold
+        ("user_99", 99.99, False),  # Just below threshold
+        ("user_100", 100.0, True),  # Exactly at threshold
+        ("user_150", 150.0, True),  # Above threshold
+    ]
+
+    users_dao = UsersDAO(dbsession)
+    query_dao = QueryDAO(dbsession)
+
+    import datetime
+
+    for uid, spending_amount, should_be_eligible in users_data:
+        # Create user
+        user = Users(id=uid, credits=1000, stripe_customer_id=f"cus_{uid}")
+        dbsession.add(user)
+
+        # Add spending if needed
+        if spending_amount > 0:
+            query_dao.create_query(
+                user_id=uid,
+                at=datetime.datetime.now(),
+                model_provider_str="gpt-4@openai",
+                endpoint_id=None,
+                custom_endpoint_id=None,
+                local_endpoint_id=None,
+                credits=spending_amount,
+                query_body='{"messages": [{"role": "user", "content": "test"}]}',
+                response_body='{"choices": [{"message": {"content": "response"}}]}',
+                status_code=200,
+            )
+
+    dbsession.commit()
+
+    # Test each user's eligibility
+    for uid, spending_amount, should_be_eligible in users_data:
+        total_spending = users_dao.get_total_spending(uid)
+        can_enable = users_dao.can_enable_monthly_billing(uid)
+
+        assert (
+            abs(total_spending - spending_amount) < 0.01
+        ), f"User {uid} spending mismatch"
+        assert can_enable == should_be_eligible, f"User {uid} eligibility mismatch"
+
+
+@pytest.mark.anyio
+async def test_api_validation_comprehensive_error_messages(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Test that API endpoints return comprehensive and user-friendly error messages."""
+    from orchestra.tests.utils import ADMIN_HEADERS
+
+    uid = "validation_user"
+    user = Users(id=uid, credits=1000, stripe_customer_id="cus_validation")
+    dbsession.add(user)
+    dbsession.commit()
+
+    # Test 1: Enable autorecharge with no spending
+    response = await client.put(
+        "/v0/admin/enable_autorecharge",
+        params={"id": uid, "enable": True},
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 400
+    error_data = response.json()
+    assert "User must spend at least $100.00" in error_data["detail"]
+    assert "Current spending: $0.00" in error_data["detail"]
+
+    # Test 2: Set autorecharge quantity below minimum
+    test_amounts = [0.01, 10.0, 24.99]
+    for amount in test_amounts:
+        response = await client.put(
+            "/v0/admin/autorecharge_qty",
+            params={"id": uid, "qty": amount},
+            headers=ADMIN_HEADERS,
+        )
+        assert response.status_code == 400
+        error_data = response.json()
+        assert "Minimum auto-recharge amount is $25.00" in error_data["detail"]
+        assert f"Provided: ${amount:.2f}" in error_data["detail"]
+
+    # Test 3: Valid autorecharge quantity should succeed
+    response = await client.put(
+        "/v0/admin/autorecharge_qty",
+        params={"id": uid, "qty": 25.0},
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 200
+
+
+def test_autorecharge_settings_persistence(dbsession: Session):
+    """Test that autorecharge settings persist correctly across sessions."""
+    from orchestra.db.dao.query_dao import QueryDAO
+    from orchestra.db.dao.users_dao import UsersDAO
+
+    uid = "persistence_user"
+    user = Users(id=uid, credits=1000, stripe_customer_id="cus_persistence")
+    dbsession.add(user)
+    dbsession.commit()
+
+    users_dao = UsersDAO(dbsession)
+    query_dao = QueryDAO(dbsession)
+
+    import datetime
+
+    # Add sufficient spending
+    query_dao.create_query(
+        user_id=uid,
+        at=datetime.datetime.now(),
+        model_provider_str="gpt-4@openai",
+        endpoint_id=None,
+        custom_endpoint_id=None,
+        local_endpoint_id=None,
+        credits=100.0,
+        query_body='{"messages": [{"role": "user", "content": "test"}]}',
+        response_body='{"choices": [{"message": {"content": "response"}}]}',
+        status_code=200,
+    )
+
+    # Enable autorecharge with specific settings
+    users_dao.enable_autorecharge(uid, True)
+    users_dao.set_autorecharge_qty(uid, 75.0)
+    users_dao.set_autorecharge_threshold(uid, 50.0)
+    dbsession.commit()
+
+    # Verify settings are saved
+    user = users_dao.get_user_with_id(uid)
+    assert user.autorecharge is True
+    assert user.autorecharge_qty == 75.0
+    assert user.autorecharge_threshold == 50.0
+
+    # Simulate new session by creating new DAO
+    users_dao_new = UsersDAO(dbsession)
+    user_reloaded = users_dao_new.get_user_with_id(uid)
+
+    # Settings should persist
+    assert user_reloaded.autorecharge is True
+    assert user_reloaded.autorecharge_qty == 75.0
+    assert user_reloaded.autorecharge_threshold == 50.0
+
+    # Modify settings
+    users_dao_new.set_autorecharge_qty(uid, 100.0)
+    users_dao_new.set_autorecharge_threshold(uid, 25.0)
+    dbsession.commit()
+
+    # Verify modifications persist
+    user_modified = users_dao_new.get_user_with_id(uid)
+    assert user_modified.autorecharge_qty == 100.0
+    assert user_modified.autorecharge_threshold == 25.0
+
+
+def test_billing_requirements_constants(dbsession: Session):
+    """Test that billing requirement constants are correctly defined and used."""
+    from orchestra.db.dao.users_dao import (
+        MIN_AUTORECHARGE_AMOUNT,
+        MIN_SPEND_FOR_MONTHLY_BILLING,
+        UsersDAO,
+    )
+
+    # Verify constants are set correctly
+    assert MIN_SPEND_FOR_MONTHLY_BILLING == 100.0
+    assert MIN_AUTORECHARGE_AMOUNT == 25.0
+
+    uid = "constants_user"
+    user = Users(id=uid, credits=1000, stripe_customer_id="cus_constants")
+    dbsession.add(user)
+    dbsession.commit()
+
+    users_dao = UsersDAO(dbsession)
+
+    # Test that the constants are used in validation
+    try:
+        users_dao.set_autorecharge_qty(uid, MIN_AUTORECHARGE_AMOUNT - 0.01)
+        assert False, "Should have failed"
+    except ValueError as e:
+        assert f"${MIN_AUTORECHARGE_AMOUNT:.2f}" in str(e)
+
+    # Should succeed at exact minimum
+    users_dao.set_autorecharge_qty(uid, MIN_AUTORECHARGE_AMOUNT)
+    dbsession.commit()
+
+    user = users_dao.get_user_with_id(uid)
+    assert user.autorecharge_qty == MIN_AUTORECHARGE_AMOUNT
+
+
+@pytest.mark.anyio
+async def test_user_not_found_error_handling(client: AsyncClient, dbsession: Session):
+    """Test error handling when user is not found."""
+    from orchestra.tests.utils import ADMIN_HEADERS
+
+    non_existent_uid = "non_existent_user"
+
+    # Test billing eligibility endpoint with non-existent user
+    response = await client.get(
+        f"/v0/admin/user_billing_eligibility?user_id={non_existent_uid}",
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 404
+    error_data = response.json()
+    assert "User not found" in error_data["detail"]
+
+    # Test enable autorecharge with non-existent user
+    response = await client.put(
+        "/v0/admin/enable_autorecharge",
+        params={"id": non_existent_uid, "enable": True},
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 404  # Should be handled by the DAO
+
+    # Test set autorecharge qty with non-existent user
+    response = await client.put(
+        "/v0/admin/autorecharge_qty",
+        params={"id": non_existent_uid, "qty": 50.0},
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 404  # Should be handled by the DAO

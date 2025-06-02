@@ -827,8 +827,11 @@ def update_user_autorecharge(  # noqa: WPS211
     :param users_dao: DAO for users models.
     """
     users_dao = UsersDAO(session)
-    users_dao.enable_autorecharge(user_id=id, enable=enable)
-    users_dao.session.commit()
+    try:
+        users_dao.enable_autorecharge(user_id=id, enable=enable)
+        users_dao.session.commit()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.put("/autorecharge_threshold")
@@ -863,8 +866,11 @@ def update_user_autorecharge_qty(  # noqa: WPS211
     :param users_dao: DAO for users models.
     """
     users_dao = UsersDAO(session)
-    users_dao.set_autorecharge_qty(user_id=id, qty=qty)
-    users_dao.session.commit()
+    try:
+        users_dao.set_autorecharge_qty(user_id=id, qty=qty)
+        users_dao.session.commit()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.put("/create_custom_router")
@@ -1435,3 +1441,30 @@ def trigger_credit_recharge(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Credit recharge failed: {str(e)}")
+
+
+@router.get("/user_billing_eligibility")
+def get_user_billing_eligibility(
+    user_id: str,
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Check if a user is eligible for monthly billing based on spending.
+
+    :param user_id: id of the user to check.
+    :return: dict with eligibility status and spending information.
+    """
+    users_dao = UsersDAO(session)
+    try:
+        total_spending = users_dao.get_total_spending(user_id)
+        can_enable_monthly = users_dao.can_enable_monthly_billing(user_id)
+
+        return {
+            "user_id": user_id,
+            "total_spending": total_spending,
+            "can_enable_monthly_billing": can_enable_monthly,
+            "minimum_spend_required": 100.0,
+            "remaining_spend_needed": max(0, 100.0 - total_spending),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"User not found: {str(e)}")
