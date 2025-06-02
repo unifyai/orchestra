@@ -19,11 +19,11 @@ class CartesiaService:
 
     def __init__(self):
         self.base_url = "https://api.cartesia.ai"
-        if not settings.CARTESIA_API_KEY:
-            raise ValueError("CARTESIA_API_KEY is not set in settings.")
+        if not settings.cartesia_api_key:
+            raise ValueError("cartesia_api_key is not set in settings.")
         self.headers = {
-            "Cartesia-Version": settings.CARTESIA_API_VERSION or "2025-04-16",
-            "Authorization": f"Bearer {settings.CARTESIA_API_KEY}",
+            "Cartesia-Version": settings.cartesia_api_version or "2025-04-16",
+            "Authorization": f"Bearer {settings.cartesia_api_key}",
         }
 
     def _handle_response(self, response: httpx.Response) -> Dict[str, Any]:

@@ -158,8 +158,8 @@ class Settings(BaseSettings):
     )
 
     # Variables for Cartesia voice management
-    CARTESIA_API_KEY = os.environ.get("CARTESIA_API_KEY")
-    CARTESIA_API_VERSION = os.environ.get("CARTESIA_API_VERSION")
+    cartesia_api_key: str = os.environ.get("CARTESIA_API_KEY")
+    cartesia_api_version: Optional[str] = os.environ.get("CARTESIA_API_VERSION")
 
     @property
     def db_url(self) -> URL:

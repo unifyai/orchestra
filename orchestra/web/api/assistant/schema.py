@@ -297,8 +297,6 @@ class VoiceRead(VoiceCreate):
     Schema for reading voice data from the DB.
     """
 
-    is_preset: bool  # Make non-optional for reading
-
     class Config:
         orm_mode = True
         schema_extra = {
