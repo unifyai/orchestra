@@ -1,5 +1,5 @@
-import logging
 import base64
+import logging
 from email.mime.text import MIMEText
 
 from google.oauth2.service_account import Credentials
@@ -28,12 +28,12 @@ async def send_email_async(to_email: str, email_subject: str, email_body: str) -
     """
     if not SERVICE_ACCOUNT_FILE:
         logger.error(
-            "Google Service Account Key Path not configured. Cannot send email via OAuth."
+            "Google Service Account Key Path not configured. Cannot send email via OAuth.",
         )
         return False
     if not DELEGATED_USER_EMAIL:
         logger.error(
-            "Delegated user email (sender email) not configured. Cannot send email via OAuth."
+            "Delegated user email (sender email) not configured. Cannot send email via OAuth.",
         )
         return False
 
@@ -47,7 +47,10 @@ async def send_email_async(to_email: str, email_subject: str, email_body: str) -
 
         # Build the Gmail service
         service = build(
-            "gmail", "v1", credentials=creds, cache_discovery=False
+            "gmail",
+            "v1",
+            credentials=creds,
+            cache_discovery=False,
         )  # Added cache_discovery=False
 
         # Create the email message
@@ -69,7 +72,7 @@ async def send_email_async(to_email: str, email_subject: str, email_body: str) -
             .execute()
         )
         logger.info(
-            f"Email successfully sent to {to_email} via Gmail API. Message ID: {send_message.get('id')}"
+            f"Email successfully sent to {to_email} via Gmail API. Message ID: {send_message.get('id')}",
         )
         return True
 
