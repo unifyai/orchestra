@@ -250,13 +250,19 @@ async def test_clone_voice(
     }
     files_payload = {"file": ("sample.wav", sample_audio_bytes, "audio/wav")}
 
+    # Ensure HEADERS does not force a Content-Type that would prevent multipart handling.
+    # httpx will set the correct Content-Type for multipart when 'files' is provided.
+    request_headers = HEADERS.copy()
+    if 'Content-Type' in request_headers:
+        del request_headers['Content-Type']
+
     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
         mock_state.user_id = user_id
         resp = await client.post(
             "/v0/assistant/voice/clone",
             data=form_data_fields,
             files=files_payload,
-            headers=HEADERS,
+            headers=request_headers, # Use the potentially modified headers
         )
 
     assert resp.status_code == 201, f"Actual response: {resp.status_code} {resp.text}"
