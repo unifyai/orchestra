@@ -1353,23 +1353,14 @@ async def test_billing_eligibility_endpoint_comprehensive(
     ]
 
     for spending_amount, should_be_eligible, remaining_needed in spending_tests:
+        # Clear any existing queries for this user first
+        from orchestra.db.models.orchestra_models import Query
+
+        dbsession.query(Query).filter(Query.user_id == uid).delete()
+        dbsession.commit()
+
         # Add spending to reach target amount
         if spending_amount > 0:
-            query_dao.create_query(
-                user_id=uid,
-                at=datetime.datetime.now(),
-                model_provider_str="gpt-4@openai",
-                endpoint_id=None,
-                custom_endpoint_id=None,
-                local_endpoint_id=None,
-                credits=spending_amount,  # Add the full amount in one query for simplicity
-                query_body='{"messages": [{"role": "user", "content": "test"}]}',
-                response_body='{"choices": [{"message": {"content": "response"}}]}',
-                status_code=200,
-            )
-
-            # Clear previous queries and add a single query with the target amount
-            dbsession.query(Query).filter(Query.user_id == uid).delete()
             query_dao.create_query(
                 user_id=uid,
                 at=datetime.datetime.now(),
@@ -1756,6 +1747,10 @@ def test_concurrent_user_scenarios(dbsession: Session):
         user = Users(id=uid, credits=1000, stripe_customer_id=f"cus_{uid}")
         dbsession.add(user)
 
+    # Commit all users first to avoid foreign key violations
+    dbsession.commit()
+
+    for uid, spending_amount, should_be_eligible in users_data:
         # Add spending if needed
         if spending_amount > 0:
             query_dao.create_query(
@@ -1770,8 +1765,6 @@ def test_concurrent_user_scenarios(dbsession: Session):
                 response_body='{"choices": [{"message": {"content": "response"}}]}',
                 status_code=200,
             )
-
-    dbsession.commit()
 
     # Test each user's eligibility
     for uid, spending_amount, should_be_eligible in users_data:
@@ -1939,7 +1932,7 @@ async def test_user_not_found_error_handling(client: AsyncClient, dbsession: Ses
     )
     assert response.status_code == 404
     error_data = response.json()
-    assert "User not found" in error_data["detail"]
+    assert "User ID not found" in error_data["detail"]
 
     # Test enable autorecharge with non-existent user
     response = await client.put(

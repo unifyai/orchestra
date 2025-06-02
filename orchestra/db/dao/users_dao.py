@@ -177,6 +177,9 @@ class UsersDAO:
         :param enable: whether to enable (true) or disable (false) autorecharge.
         :raises ValueError: if trying to enable autorecharge without sufficient spending
         """
+        # First check if user exists - this will raise HTTPException if not found
+        user = self.get_user_with_id(user_id)
+
         if enable and not self.can_enable_monthly_billing(user_id):
             total_spending = self.get_total_spending(user_id)
             raise ValueError(
@@ -184,7 +187,6 @@ class UsersDAO:
                 f"Current spending: ${total_spending:.2f}",
             )
 
-        user = self.get_user_with_id(user_id)
         if user is not None:
             setattr(user, "autorecharge", enable)  # noqa: B010
 

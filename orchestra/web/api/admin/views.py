@@ -832,6 +832,9 @@ def update_user_autorecharge(  # noqa: WPS211
         users_dao.session.commit()
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException as e:
+        # Re-raise HTTPExceptions (like 404 for user not found)
+        raise e
 
 
 @router.put("/autorecharge_threshold")
@@ -871,6 +874,9 @@ def update_user_autorecharge_qty(  # noqa: WPS211
         users_dao.session.commit()
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException as e:
+        # Re-raise HTTPExceptions (like 404 for user not found)
+        raise e
 
 
 @router.put("/create_custom_router")
@@ -1456,6 +1462,9 @@ def get_user_billing_eligibility(
     """
     users_dao = UsersDAO(session)
     try:
+        # First check if user exists - this will raise HTTPException if not found
+        user = users_dao.get_user_with_id(user_id)
+
         total_spending = users_dao.get_total_spending(user_id)
         can_enable_monthly = users_dao.can_enable_monthly_billing(user_id)
 
@@ -1466,5 +1475,8 @@ def get_user_billing_eligibility(
             "minimum_spend_required": 100.0,
             "remaining_spend_needed": max(0, 100.0 - total_spending),
         }
+    except HTTPException as e:
+        # Re-raise HTTPExceptions (like 404 for user not found)
+        raise e
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"User not found: {str(e)}")

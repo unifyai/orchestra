@@ -99,6 +99,38 @@ async def test_stripe_customer_id(  # noqa: WPS218, E501
     assert post == "stripe_id_1234"
 
 
+def add_spending_history_for_user(
+    dbsession,
+    user_id: str,
+    total_spending: float = 150.0,
+):
+    """Add spending history for a user to meet billing requirements."""
+    # Create some successful queries to generate spending
+    num_queries = int(total_spending / 10)  # $10 per query
+    remaining = total_spending - (num_queries * 10)
+
+    for i in range(num_queries):
+        query_insert = text(
+            """
+            INSERT INTO query (user_id, at, model_provider_str, endpoint_id, credits, query_body, response_body, status_code)
+            VALUES (:user_id, NOW(), 'test_provider', 15, 10.0, '{}', '{}', 200)
+        """,
+        )
+        dbsession.execute(query_insert, {"user_id": user_id})
+
+    # Add remaining amount if any
+    if remaining > 0:
+        query_insert = text(
+            """
+            INSERT INTO query (user_id, at, model_provider_str, endpoint_id, credits, query_body, response_body, status_code)
+            VALUES (:user_id, NOW(), 'test_provider', 15, :credits, '{}', '{}', 200)
+        """,
+        )
+        dbsession.execute(query_insert, {"user_id": user_id, "credits": remaining})
+
+    dbsession.commit()
+
+
 @pytest.mark.anyio
 async def test_enable_autorecharge(  # noqa: WPS218, E501
     client: AsyncClient,
@@ -106,6 +138,9 @@ async def test_enable_autorecharge(  # noqa: WPS218, E501
     dbsession,
 ) -> None:
     """Checks the enable autorecharge endpoint."""
+    # Add spending history to meet billing requirements
+    add_spending_history_for_user(dbsession, "stripe_autorecharge")
+
     url = fastapi_app.url_path_for("update_user_autorecharge")
     query = text("SELECT * FROM users WHERE users.id = 'stripe_autorecharge';")
     payload_true = {
@@ -158,11 +193,14 @@ async def test_autorecharge_qty(  # noqa: WPS218, E501
     dbsession,
 ) -> None:
     """Checks the autorecharge qty endpoint."""
+    # Add spending history to meet billing requirements
+    add_spending_history_for_user(dbsession, "stripe_autorecharge")
+
     url = fastapi_app.url_path_for("update_user_autorecharge_qty")
     query = text("SELECT * FROM users WHERE users.id = 'stripe_autorecharge';")
     payload = {
         "id": "stripe_autorecharge",
-        "qty": "10",
+        "qty": "30",  # Changed to meet minimum $25 requirement
     }
 
     pre = dbsession.execute(query).all()[0][5]
@@ -170,7 +208,7 @@ async def test_autorecharge_qty(  # noqa: WPS218, E501
     response = await client.put(url, headers=ADMIN_HEADERS, params=payload)
     assert response.status_code == status.HTTP_200_OK
     post = dbsession.execute(query).all()[0][5]
-    assert post == 10
+    assert post == 30  # Updated expected value
 
 
 # TODO: amount has to be stored in the user
