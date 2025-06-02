@@ -6,6 +6,7 @@ import io
 from orchestra.db.models.orchestra_models import (
     Voice as VoiceModel,
 )  # For direct DB checks if needed
+from orchestra.services.cartesia_service import CartesiaService as OriginalCartesiaService
 from orchestra.services.cartesia_service import CartesiaAPIError
 from orchestra.tests.utils import (
     HEADERS,
@@ -17,39 +18,43 @@ from orchestra.tests.test_assistants import (
 
 @pytest.fixture
 def mock_cartesia_service_factory(
-    autouse=True,
+    fastapi_app,
 ):  # autouse to apply to all tests in this file
     """
-    Patches the CartesiaService where it's used in views.py.
+    Provides a mock CartesiaService instance and overrides the dependency for FastAPI.
     Yields the mock instance for tests to customize.
     """
-    with patch(
-        "orchestra.web.api.assistant.views.CartesiaService", autospec=True
-    ) as mock_service_class:
-        mock_instance = mock_service_class.return_value
+    mock_instance = MagicMock(spec=OriginalCartesiaService)
 
-        # Default successful mock behaviors - can be overridden in tests
-        mock_instance.clone_voice = MagicMock(
-            return_value={
-                "id": "mock-cloned-cartesia-id",
-                "name": "Mock Cloned Voice",
-                "description": "Description of mock cloned voice",
-                "gender": "female",  # Cartesia clone actually doesn't return gender
-                "language": "en",
-            }
-        )
-        mock_instance.localize_voice = MagicMock(
-            return_value={
-                "id": "mock-localized-cartesia-id",
-                "name": "Mock Localized Voice",
-                "description": "Description of mock localized voice",
-                "gender": "male",  # Gender is provided in request for localize
-                "language": "es",
-            }
-        )
-        mock_instance.delete_voice = MagicMock(return_value={"status": "success"})
-        yield mock_instance
+    # Default successful mock behaviors - can be overridden in tests
+    mock_instance.clone_voice = MagicMock(
+        return_value={
+            "id": "mock-cloned-cartesia-id",
+            "name": "Mock Cloned Voice",
+            "description": "Description of mock cloned voice",
+            "gender": "female",  # Cartesia clone actually doesn't return gender
+            "language": "en",
+        }
+    )
+    mock_instance.localize_voice = MagicMock(
+        return_value={
+            "id": "mock-localized-cartesia-id",
+            "name": "Mock Localized Voice",
+            "description": "Description of mock localized voice",
+            "gender": "male",  # Gender is provided in request for localize
+            "language": "es",
+        }
+    )
+    mock_instance.delete_voice = MagicMock(return_value={"status": "success"})
 
+    # Override the dependency in the FastAPI application
+    # The key is the original class used in Depends()
+    fastapi_app.dependency_overrides[OriginalCartesiaService] = lambda: mock_instance
+
+    yield mock_instance
+
+    # Clean up the override
+    fastapi_app.dependency_overrides.pop(OriginalCartesiaService, None)
 
 async def get_user_id_from_request_state(
     client: AsyncClient, path: str = "/v0/assistant/voice"
@@ -62,13 +67,12 @@ async def get_user_id_from_request_state(
     # Let's assume a fixed test user ID for clarity in tests when patching.
     return "test-user-id-default"
 
-
 # --- Test Cases ---
 
 
 @pytest.mark.anyio
 async def test_register_preset_voice(
-    client: AsyncClient, session, mock_cartesia_service_factory
+    client: AsyncClient, dbsession, mock_cartesia_service_factory
 ):
     user_id = await get_user_id_from_request_state(client)
     payload = {
@@ -94,7 +98,7 @@ async def test_register_preset_voice(
         mock_state.user_id = user_id
         await client.delete(
             f"/v0/assistant/voice/{payload['voice_id']}", headers=HEADERS
-        )
+         )
 
 
 @pytest.mark.anyio
@@ -129,7 +133,7 @@ async def test_register_non_preset_voice(
 
 @pytest.mark.anyio
 async def test_register_voice_already_exists_in_db(
-    client: AsyncClient, session, mock_cartesia_service_factory
+    client: AsyncClient, dbsession, mock_cartesia_service_factory
 ):
     user_id = await get_user_id_from_request_state(client)
     payload = {
@@ -161,7 +165,7 @@ async def test_register_voice_already_exists_in_db(
 
 @pytest.mark.anyio
 async def test_list_voices_scenario(
-    client: AsyncClient, session, mock_cartesia_service_factory
+    client: AsyncClient, dbsession, mock_cartesia_service_factory
 ):
     user_id = await get_user_id_from_request_state(client)
 
@@ -245,7 +249,9 @@ async def test_list_voices_scenario(
 
 
 @pytest.mark.anyio
-async def test_clone_voice(client: AsyncClient, session, mock_cartesia_service_factory):
+async def test_clone_voice(
+    client: AsyncClient, dbsession, mock_cartesia_service_factory
+):
     user_id = await get_user_id_from_request_state(client)
     sample_audio_bytes = _get_sample_wav_bytes()
     files = {"file": ("sample.wav", sample_audio_bytes, "audio/wav")}
@@ -284,7 +290,7 @@ async def test_clone_voice(client: AsyncClient, session, mock_cartesia_service_f
 
 @pytest.mark.anyio
 async def test_clone_voice_db_integrity_error_rolls_back_cartesia(
-    client: AsyncClient, mock_cartesia_service_factory
+    client: AsyncClient, dbsession, mock_cartesia_service_factory
 ):
     user_id = await get_user_id_from_request_state(client)
     sample_audio_bytes = _get_sample_wav_bytes()
@@ -318,7 +324,7 @@ async def test_clone_voice_db_integrity_error_rolls_back_cartesia(
 
 @pytest.mark.anyio
 async def test_localize_voice(
-    client: AsyncClient, session, mock_cartesia_service_factory
+    client: AsyncClient, dbsession, mock_cartesia_service_factory
 ):
     user_id = await get_user_id_from_request_state(client)
     base_voice_id = (
@@ -358,7 +364,7 @@ async def test_localize_voice(
 
 @pytest.mark.anyio
 async def test_delete_non_preset_voice(
-    client: AsyncClient, session, mock_cartesia_service_factory
+    client: AsyncClient, dbsession, mock_cartesia_service_factory
 ):
     user_id = await get_user_id_from_request_state(client)
     voice_id_to_delete = "delete-non-preset-test"
@@ -387,7 +393,7 @@ async def test_delete_non_preset_voice(
 
 @pytest.mark.anyio
 async def test_delete_preset_voice_from_user_registration(
-    client: AsyncClient, session, mock_cartesia_service_factory
+    client: AsyncClient, dbsession, mock_cartesia_service_factory
 ):
     user_id = await get_user_id_from_request_state(client)
     voice_id_to_delete = "delete-preset-registration-test"
@@ -414,7 +420,7 @@ async def test_delete_preset_voice_from_user_registration(
 
 @pytest.mark.anyio
 async def test_delete_voice_fails_if_cartesia_fails_non_404(
-    client: AsyncClient, session, mock_cartesia_service_factory
+    client: AsyncClient, dbsession, mock_cartesia_service_factory
 ):
     user_id = await get_user_id_from_request_state(client)
     voice_id = "non-preset-cartesia-del-fail"
@@ -458,7 +464,7 @@ async def test_delete_voice_fails_if_cartesia_fails_non_404(
 
 @pytest.mark.anyio
 async def test_delete_voice_succeeds_if_cartesia_404(
-    client: AsyncClient, session, mock_cartesia_service_factory
+    client: AsyncClient, dbsession, mock_cartesia_service_factory
 ):
     user_id = await get_user_id_from_request_state(client)
     voice_id = "non-preset-cartesia-404"
