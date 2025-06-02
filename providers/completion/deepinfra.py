@@ -34,9 +34,9 @@ supported_models = {
         "cost": {"prompt": 0.3, "completion": 0.88},
     },
     "deepseek-r1": {
-        "endpoint": "deepinfra/deepseek-ai/DeepSeek-R1",
+        "endpoint": "deepinfra/deepseek-ai/DeepSeek-R1-0528",
         "context_window": 160000,
-        "cost": {"prompt": 0.5, "completion": 2.18},
+        "cost": {"prompt": 0.5, "completion": 2.15},
     },
     "deepseek-v3": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3",
@@ -141,7 +141,7 @@ supported_models = {
     "mistral-nemo": {
         "endpoint": "deepinfra/mistralai/Mistral-Nemo-Instruct-2407",
         "context_window": 128000,
-        "cost": {"prompt": 0.025, "completion": 0.07},
+        "cost": {"prompt": 0.02, "completion": 0.07},
     },
     "qwen-3-235b-a22b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen3-235B-A22B",

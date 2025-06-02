@@ -34,13 +34,13 @@ supported_models = {
         "cost": {"prompt": 0.9, "completion": 0.9},
     },
     "deepseek-r1": {
-        "endpoint": "fireworks_ai/accounts/fireworks/models/deepseek-r1",
+        "endpoint": "fireworks_ai/accounts/fireworks/models/deepseek-r1-0528",
         "context_window": 160000,
         "cost": {"prompt": 3, "completion": 8},
     },
     "deepseek-v3": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/deepseek-v3",
-        "context_window": 128000,
+        "context_window": 131072,
         "cost": {"prompt": 0.9, "completion": 0.9},
     },
     "llama-4-maverick-instruct": {
@@ -80,17 +80,17 @@ supported_models = {
     },
     "qwen-3-235b-a22b-instruct": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/qwen3-235b-a22b",
-        "context_window": 125000,
+        "context_window": 128000,
         "cost": {"prompt": 0.22, "completion": 0.88},
     },
     "qwen-3-30b-a3b-instruct": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/qwen3-30b-a3b",
-        "context_window": 39000,
+        "context_window": 40000,
         "cost": {"prompt": 0.15, "completion": 0.6},
     },
     "qwen-qwq-32b": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/qwq-32b",
-        "context_window": 128000,
+        "context_window": 131072,
         "cost": {"prompt": 0.9, "completion": 0.9},
     },
     "qwen-2.5-72b-instruct": {
