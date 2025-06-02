@@ -1,9 +1,9 @@
+import asyncio
 import base64
 import datetime
-import secrets
-from typing import Optional, List
-import asyncio
 import logging
+import secrets
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
@@ -36,9 +36,8 @@ from orchestra.web.api.users.schema import (
     UpdateQueryLoggingRequest,
     UserRequest,
 )
-from orchestra.web.api.utils.http_responses import not_found
-from orchestra.web.api.assistant.views import ASSISTANT_CREATION_COST
 from orchestra.web.api.utils.email import send_email_async
+from orchestra.web.api.utils.http_responses import not_found
 
 admin_router = APIRouter()
 router = APIRouter()
@@ -592,7 +591,7 @@ async def set_user_assistant_hiring_status(
                     try:
                         task.result()
                         logger.info(
-                            f"Email sending task for user {target_user_id} completed (status: {task.done()})."
+                            f"Email sending task for user {target_user_id} completed (status: {task.done()}).",
                         )
                     except Exception as e:
                         logger.error(
@@ -604,7 +603,7 @@ async def set_user_assistant_hiring_status(
                 logger.info(f"Scheduled approval email for user {target_user_id}.")
             except Exception as e:
                 logger.error(
-                    f"Failed to schedule email for user {target_user_id} approval: {e}"
+                    f"Failed to schedule email for user {target_user_id} approval: {e}",
                 )
         return AssistantHiringApprovalResponse(
             message=f"User {target_user_id} assistant hiring approval status set to '{status}'.",
@@ -637,12 +636,15 @@ async def list_users_by_assistant_hiring_approval(
 
     if not status_filter or status_filter.lower() == "all":
         user_rows = auth_user_dao.filter(
-            limit=limit, offset=offset
+            limit=limit,
+            offset=offset,
         )  # No approval filter (uses sentinel default)
         users_to_return = [row[0] for row in user_rows if row]
     elif status_filter.lower() == "none":
         user_rows = auth_user_dao.filter(
-            assistant_hiring_approval=None, limit=limit, offset=offset
+            assistant_hiring_approval=None,
+            limit=limit,
+            offset=offset,
         )  # Explicitly filter for None
         users_to_return = [row[0] for row in user_rows if row]
     else:
@@ -657,7 +659,9 @@ async def list_users_by_assistant_hiring_approval(
             )
         # get_users_by_assistant_hiring_approval already returns List[AuthUser] (ORM instances)
         users_to_return = auth_user_dao.get_users_by_assistant_hiring_approval(
-            status_filter, limit=limit, offset=offset
+            status_filter,
+            limit=limit,
+            offset=offset,
         )
 
     return [

@@ -61,25 +61,20 @@ class AssistantCreate(BaseModel):
         description="Brief description about the assistant",
         example="Mathematician and writer known for work on Analytical Engine",
     )
-    phone: Optional[str] = Field(
-        None,
-        description="Contact phone number for the assistant",
-        example="+1-555-123-4567",
-    )
     email: Optional[str] = Field(
         None,
-        description="Email address for the assistant",
-        example="ada.lovelace@example.com",
-    )
-    whatsapp_sid: Optional[str] = Field(
-        None,
-        description="WhatsApp SID for Twilio integration",
-        example="whatsapp:+1234567890",
+        description="Email of the assistant",
+        example="ada.lovelace@unify.ai",
     )
     voice_id: Optional[str] = Field(  # This is Cartesia's voice ID
         None,
         description="Id of the voice (Cartesia ID) to use for the assistant",
         example="bf0a246a-8642-498a-9950-80c35e9276b5",
+    )
+    user_phone: Optional[str] = Field(
+        None,
+        description="Contact phone number of the user",
+        example="+15551234567",
     )
 
     class Config:
@@ -94,10 +89,9 @@ class AssistantCreate(BaseModel):
                 "region": "North America",
                 "profile_photo": "https://example.com/photos/ada.jpg",
                 "about": "Mathematician and writer known for work on Analytical Engine",
-                "phone": "+1-555-123-4567",
-                "email": "ada.lovelace@example.com",
-                "whatsapp_sid": "whatsapp:+1234567890",
-                "voice_id": "cartesia_generated_voice_id_123",
+                "email": "ada.lovelace@unify.ai",
+                "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
+                "user_phone": "+15551234567",
             },
         }
 
@@ -135,8 +129,9 @@ class AssistantRead(AssistantCreate):
                 "region": "North America",
                 "profile_photo": "https://example.com/photos/ada.jpg",
                 "about": "Mathematician and writer known for work on Analytical Engine",
-                "phone": "+1-555-123-4567",
-                "email": "ada.lovelace@example.com",
+                "email": "ada.lovelace@unify.ai",
+                "phone": "+15551234567",
+                "user_phone": "+15551234567",
                 "whatsapp_sid": "whatsapp:+1234567890",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "agent_id": "12345",
@@ -167,10 +162,15 @@ class AssistantUpdate(BaseModel):
         description="Brief description about the assistant",
         example="Award-winning mathematician specializing in algorithm development",
     )
+    user_phone: Optional[str] = Field(
+        None,
+        description="Contact phone number of the user",
+        example="+15551234567",
+    )
     phone: Optional[str] = Field(
         None,
         description="Contact phone number for the assistant",
-        example="+1-555-987-6543",
+        example="+15559876543",
     )
     email: Optional[str] = Field(
         None,
@@ -195,7 +195,8 @@ class AssistantUpdate(BaseModel):
                 "weekly_limit": 20.5,
                 "max_parallel": 3,
                 "about": "Award-winning mathematician specializing in algorithm development",
-                "phone": "+1-555-987-6543",
+                "user_phone": "+15551234567",
+                "phone": "+15559876543",
                 "email": "ada.lovelace@newdomain.com",
                 "whatsapp_sid": "whatsapp:+1234567890",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
