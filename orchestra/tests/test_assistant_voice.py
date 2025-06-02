@@ -6,7 +6,9 @@ import io
 from orchestra.db.models.orchestra_models import (
     Voice as VoiceModel,
 )  # For direct DB checks if needed
-from orchestra.services.cartesia_service import CartesiaService as OriginalCartesiaService
+from orchestra.services.cartesia_service import (
+    CartesiaService as OriginalCartesiaService,
+)
 from orchestra.services.cartesia_service import CartesiaAPIError
 from orchestra.tests.utils import (
     HEADERS,
@@ -16,14 +18,22 @@ from orchestra.tests.test_assistants import (
 )  # Re-use for sample audio
 
 
-@pytest.fixture
+@pytest.fixture(
+    autouse=True,
+)
 def mock_cartesia_service_factory(
-    fastapi_app,
-):  # autouse to apply to all tests in this file
+    fastapi_app,  # Add fastapi_app to use dependency_overrides
+):
     """
     Provides a mock CartesiaService instance and overrides the dependency for FastAPI.
     Yields the mock instance for tests to customize.
+    Also patches send_pubsub_msg to prevent TypeError during logging of MagicMock.
     """
+    # Import here to avoid circular dependency or issues with module loading order if OriginalCartesiaService is used at module level
+    from orchestra.web.api.utils.production_traffic_middleware import (
+        send_pubsub_msg as original_send_pubsub_msg,
+    )
+
     mock_instance = MagicMock(spec=OriginalCartesiaService)
 
     # Default successful mock behaviors - can be overridden in tests
@@ -47,14 +57,21 @@ def mock_cartesia_service_factory(
     )
     mock_instance.delete_voice = MagicMock(return_value={"status": "success"})
 
-    # Override the dependency in the FastAPI application
-    # The key is the original class used in Depends()
-    fastapi_app.dependency_overrides[OriginalCartesiaService] = lambda: mock_instance
+    # Patch send_pubsub_msg and override CartesiaService dependency
+    with patch(
+        "orchestra.web.api.utils.production_traffic_middleware.send_pubsub_msg"
+    ) as mock_send_pubsub:
+        # Override the dependency in the FastAPI application
+        # The key is the original class used in Depends()
+        fastapi_app.dependency_overrides[OriginalCartesiaService] = (
+            lambda: mock_instance
+        )
 
-    yield mock_instance
+        yield mock_instance  # Yield the CartesiaService mock
 
-    # Clean up the override
-    fastapi_app.dependency_overrides.pop(OriginalCartesiaService, None)
+        # Clean up the override
+        fastapi_app.dependency_overrides.pop(OriginalCartesiaService, None)
+
 
 async def get_user_id_from_request_state(
     client: AsyncClient, path: str = "/v0/assistant/voice"
@@ -66,6 +83,7 @@ async def get_user_id_from_request_state(
     # by making a dummy authenticated request if necessary, or by having a known test user ID.
     # Let's assume a fixed test user ID for clarity in tests when patching.
     return "test-user-id-default"
+
 
 # --- Test Cases ---
 
@@ -98,12 +116,12 @@ async def test_register_preset_voice(
         mock_state.user_id = user_id
         await client.delete(
             f"/v0/assistant/voice/{payload['voice_id']}", headers=HEADERS
-         )
+        )
 
 
 @pytest.mark.anyio
 async def test_register_non_preset_voice(
-    client: AsyncClient, session, mock_cartesia_service_factory
+    client: AsyncClient, dbsession, mock_cartesia_service_factory
 ):
     user_id = await get_user_id_from_request_state(client)
     payload = {
