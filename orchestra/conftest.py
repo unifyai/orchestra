@@ -23,6 +23,7 @@ from orchestra.db.utils import create_database, drop_database
 from orchestra.settings import settings
 from orchestra.web.application import get_app
 
+
 @pytest.fixture(scope="session")
 def anyio_backend() -> str:
     """
@@ -129,6 +130,7 @@ async def client(
     """
     async with AsyncClient(app=fastapi_app, base_url="http://test") as ac:
         yield ac
+
 
 ### PERF TESTS FIXTURES ###
 

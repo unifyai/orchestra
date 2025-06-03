@@ -341,12 +341,16 @@ def create_assistant(
             with request.app.state.db_session_factory() as rollback_db_session:
                 dao_for_rollback = AssistantDAO(rollback_db_session)
                 try:
-                    dao_for_rollback.delete_assistant(user_id=user_id, agent_id=assistant_id)
+                    dao_for_rollback.delete_assistant(
+                        user_id=user_id, agent_id=assistant_id
+                    )
                     rollback_db_session.commit()
                     print(f"ASSISTANT DELETED: {assistant_id}")
                 except Exception as e:
-                    rollback_errors.append(f"Failed to delete assistant from DB: {str(e)}")
-            
+                    rollback_errors.append(
+                        f"Failed to delete assistant from DB: {str(e)}"
+                    )
+
             error_msg = f"Infrastructure setup failed: {str(infra_error)}"
             if rollback_errors:
                 error_msg += f" Rollback issues: {'; '.join(rollback_errors)}"
@@ -376,9 +380,11 @@ def create_assistant(
                     quantity=-float(ASSISTANT_CREATION_COST),
                 )
         except Exception as e_commit:
-            logging.error(f"Payment failed for assistant {assistant_id} after creation: {e_commit}")
+            logging.error(
+                f"Payment failed for assistant {assistant_id} after creation: {e_commit}"
+            )
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, # Or 402 if preferred
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,  # Or 402 if preferred
                 detail=f"Payment processing failed. Assistant creation was successful but payment deduction failed. Details: {str(e_commit)}",
             )
 

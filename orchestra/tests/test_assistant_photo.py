@@ -5,16 +5,19 @@ import pytest
 from httpx import AsyncClient
 from orchestra.tests.utils import HEADERS
 
+
 async def get_user_id_from_request_state(
     client: AsyncClient,
     path: str = "/v0/assistant/photo",
 ) -> str:
     return "test-user-id-default"
 
+
 def _get_sample_png_bytes() -> bytes:
     return base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
     )
+
 
 def _get_sample_text_file_bytes() -> bytes:
     return b"This is not an image."
@@ -29,9 +32,7 @@ async def test_upload_assistant_photo_success(
     Mocks BucketService to avoid actual GCS upload.
     """
     user_id = await get_user_id_from_request_state(client)
-    mock_gcs_url = (
-        f"gs://test-bucket/assistant_photos/{user_id}/sample_photo.png"
-    )
+    mock_gcs_url = f"gs://test-bucket/assistant_photos/{user_id}/sample_photo.png"
 
     with patch("orchestra.web.api.assistant.views.BucketService") as MockBucketService:
         mock_bucket_instance = MockBucketService.return_value
@@ -218,12 +219,8 @@ async def test_delete_assistant_with_gcs_photo(
     that has a GCS photo URL. Mocks BucketService.delete_assistant_photo.
     """
     user_id = await get_user_id_from_request_state(client)
-    mock_gcs_photo_url = (
-        f"gs://my-assistant-photos/{user_id}/photo-to-delete.jpg"
-    )
-    unique_email_for_delete = (
-        f"delete.photo_{user_id}@unify.ai"
-    )
+    mock_gcs_photo_url = f"gs://my-assistant-photos/{user_id}/photo-to-delete.jpg"
+    unique_email_for_delete = f"delete.photo_{user_id}@unify.ai"
     create_payload = {
         "first_name": "ToDelete",
         "surname": "WithPhoto",
@@ -324,9 +321,7 @@ async def test_delete_assistant_with_non_gcs_photo(
     """
     user_id = await get_user_id_from_request_state(client)
     http_photo_url = "https://example.com/some_preset_image.jpg"
-    unique_email_for_preset = (
-        f"preset.photo_{user_id}@unify.ai"
-    )
+    unique_email_for_preset = f"preset.photo_{user_id}@unify.ai"
     create_payload = {
         "first_name": "PresetUser",
         "surname": "PhotoTest",
