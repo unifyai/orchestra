@@ -1,5 +1,5 @@
 import json
-from typing import Dict, List, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 from google.cloud import aiplatform, aiplatform_v1, pubsub_v1, storage
 from google.cloud.exceptions import NotFound
@@ -29,6 +29,20 @@ def send_pubsub_msg(topic: str, msg: Dict[str, str]) -> None:
 
 
 # Cloud Storage
+
+
+def parse_gcs_url(gcs_url: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Parses a GCS URL (gs://bucket-name/object-path) and returns (bucket_name, object_path).
+    Returns (None, None) if the URL is not a valid GCS URL.
+    """
+    if gcs_url and gcs_url.startswith("gs://"):
+        parts = gcs_url[5:].split("/", 1)
+        if len(parts) == 2:
+            return parts[0], parts[1]
+        elif len(parts) == 1:  # Bucket only, no path
+            return parts[0], ""
+    return None, None
 
 
 def blob_exists(bucket_name: str, blob_name: str) -> bool:
