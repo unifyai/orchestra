@@ -269,32 +269,27 @@ def create_assistant(
             # started_job = True
             # print(f"JOB STARTED: {assistant_id}")
 
-            # Refresh database session after long infrastructure operations
-            logging.info(
-                f"Refreshing database session after infrastructure setup for assistant {assistant_id}",
-            )
-            session.close()
-            session = next(get_db_session(request))
-            assistant_dao = AssistantDAO(session)
-
-            # Update assistant with created infrastructure details
-            assistant_dao.update_assistant(
-                user_id=user_id,
-                agent_id=assistant_id,
-                email=created_email,
-                phone=created_phone,
-                user_phone=assistant_in.user_phone,
-                whatsapp_sid=created_whatsapp,
-            )
-            # Commit the infrastructure updates
-            session.commit()
+            # Update assistant with infra details using a new session scope
+            with request.app.state.db_session_factory() as update_session:
+                dao_for_update = AssistantDAO(update_session)
+                dao_for_update.update_assistant(
+                    user_id=user_id,
+                    agent_id=assistant_id,
+                    email=created_email,
+                    phone=created_phone,
+                    user_phone=assistant_in.user_phone,
+                    whatsapp_sid=created_whatsapp,
+                )
+                update_session.commit()
             print(f"ASSISTANT UPDATED: {assistant_id}")
 
-            # Retrieve the updated assistant for the final response
-            assistant = assistant_dao.get_assistant_by_id(
-                user_id=user_id,
-                agent_id=assistant_id,
-            )
+            # Retrieve the fully updated assistant for the response using another new session
+            with request.app.state.db_session_factory() as fetch_session:
+                dao_for_fetch = AssistantDAO(fetch_session)
+                assistant = dao_for_fetch.get_assistant_by_id(
+                    user_id=user_id,
+                    agent_id=assistant_id,
+                )
 
         except Exception as infra_error:
             # can't rollback infra if the setup isn't complete so need to wait
@@ -304,13 +299,9 @@ def create_assistant(
             logging.warning(
                 f"Infrastructure setup failed for assistant {assistant_id}, refreshing session for rollback",
             )
-            session.close()
-            session = next(get_db_session(request))
-            assistant_dao = AssistantDAO(session)
-
-            # Rollback infrastructure in reverse order
             rollback_errors = []
 
+            # Rollback infrastructure in reverse order (these could be async)
             if started_job:
                 try:
                     stop_cloud_run_job(str(assistant_id))
@@ -346,19 +337,19 @@ def create_assistant(
                     rollback_errors.append(f"Failed to delete email: {str(e)}")
             print(f"EMAIL DELETED: {created_email}")
 
-            # Delete the assistant record since infrastructure failed
-            try:
-                assistant_dao.delete_assistant(user_id=user_id, agent_id=assistant_id)
-                # Commit the assistant deletion
-                session.commit()
-            except Exception as e:
-                rollback_errors.append(f"Failed to delete assistant: {str(e)}")
-            print(f"ASSISTANT DELETED: {assistant_id}")
-
+            # Delete the assistant record using a new session scope for atomicity
+            with request.app.state.db_session_factory() as rollback_db_session:
+                dao_for_rollback = AssistantDAO(rollback_db_session)
+                try:
+                    dao_for_rollback.delete_assistant(user_id=user_id, agent_id=assistant_id)
+                    rollback_db_session.commit()
+                    print(f"ASSISTANT DELETED: {assistant_id}")
+                except Exception as e:
+                    rollback_errors.append(f"Failed to delete assistant from DB: {str(e)}")
+            
             error_msg = f"Infrastructure setup failed: {str(infra_error)}"
             if rollback_errors:
                 error_msg += f" Rollback issues: {'; '.join(rollback_errors)}"
-
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=error_msg,
@@ -377,19 +368,18 @@ def create_assistant(
     # both the assistant and the credit change atomically.
     if not settings.is_staging:
         try:
-            # Refresh session before credit operation to ensure connection is valid
-            session.close()
-            session = next(get_db_session(request))
-            users_dao = UsersDAO(session)
-
-            users_dao.recharge_credit(
-                user_id=user_id,
-                quantity=-float(ASSISTANT_CREATION_COST),
-            )
+            # Use a new session for credit deduction for atomicity
+            with request.app.state.db_session_factory() as credit_session:
+                dao_for_credits = UsersDAO(credit_session)
+                dao_for_credits.recharge_credit(
+                    user_id=user_id,
+                    quantity=-float(ASSISTANT_CREATION_COST),
+                )
         except Exception as e_commit:
+            logging.error(f"Payment failed for assistant {assistant_id} after creation: {e_commit}")
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Payment processing failed. Assistant creation has been rolled back. Details: {str(e_commit)}",
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, # Or 402 if preferred
+                detail=f"Payment processing failed. Assistant creation was successful but payment deduction failed. Details: {str(e_commit)}",
             )
 
     if assistant is None:
