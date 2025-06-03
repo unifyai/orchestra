@@ -7,8 +7,13 @@ from orchestra.services.cartesia_service import CartesiaAPIError
 from orchestra.services.cartesia_service import (
     CartesiaService as OriginalCartesiaService,
 )
-from orchestra.tests.test_assistants import _get_sample_wav_bytes
 from orchestra.tests.utils import HEADERS
+from pathlib import Path
+
+
+def _get_sample_wav_bytes() -> bytes:
+    sample_path = Path(__file__).parent / "sample_datasets" / "sample_recording.wav"
+    return sample_path.read_bytes()
 
 
 @pytest.fixture(
@@ -52,9 +57,9 @@ def mock_cartesia_service_factory(
         "orchestra.web.api.utils.production_traffic_middleware.send_pubsub_msg",
     ) as mock_send_pubsub:
 
-        fastapi_app.dependency_overrides[
-            OriginalCartesiaService
-        ] = lambda: cartesia_mock_instance
+        fastapi_app.dependency_overrides[OriginalCartesiaService] = (
+            lambda: cartesia_mock_instance
+        )
         yield cartesia_mock_instance  # Yield the CartesiaService mock
         fastapi_app.dependency_overrides.pop(OriginalCartesiaService, None)
 
