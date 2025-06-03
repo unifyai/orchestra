@@ -259,7 +259,7 @@ class RecordingInfo(BaseModel):
 class VoiceCreate(BaseModel):
     """
     Schema for creating a new assistant voice entry in our DB.
-    The voice_id is provided by Cartesia after a successful clone/localize.
+    The voice_id is provided by Cartesia after a successful clone/localize, or is a known preset ID.
     """
 
     voice_id: str = Field(
@@ -287,6 +287,11 @@ class VoiceCreate(BaseModel):
         description="Language code of the voice",
         example="en",
     )
+    is_preset: Optional[bool] = Field(
+        False,
+        description="Whether this voice is a Cartesia preset or user-created.",
+        example=True,
+    )
 
     class Config:
         orm_mode = True
@@ -297,6 +302,7 @@ class VoiceCreate(BaseModel):
                 "description": "Calm and relaxting voice of an english-speaking woman",
                 "gender": "female",
                 "language": "en",
+                "is_preset": True,
             },
         }
 
@@ -315,5 +321,47 @@ class VoiceRead(VoiceCreate):
                 "description": "Calm and relaxting voice of an english-speaking woman",
                 "gender": "female",
                 "language": "en",
+                "is_preset": True,
             },
         }
+
+
+class VoiceCloneRequestData(BaseModel):
+    name: str = Field(..., description="Name for the new cloned voice")
+    language: str = Field(..., description="Language of the audio clip (e.g., 'en')")
+    description: Optional[str] = Field(
+        None,
+        description="Optional description for the voice",
+    )
+
+
+class VoiceLocalizeRequest(BaseModel):
+    base_cartesia_voice_id: str = Field(
+        ...,
+        description="Cartesia Voice ID of the voice to localize",
+    )
+    name: str = Field(..., description="Name for the new localized voice")
+    target_language: str = Field(
+        ...,
+        description="Target language for localization (e.g., 'es')",
+    )
+    original_speaker_gender: str = Field(
+        ...,
+        description="Gender of the original speaker ('female' or 'male')",
+    )
+    description: Optional[str] = Field(
+        None,
+        description="Optional description for the voice",
+    )
+    dialect: Optional[str] = Field(
+        None,
+        description="Optional dialect for localization",
+    )
+
+
+class AssistantPhotoUploadResponse(BaseModel):
+    gcs_url: str = Field(
+        ...,
+        description="GCS URL of the uploaded photo",
+        example="gs://your-bucket-name/user_id/image_uuid.jpg",
+    )
