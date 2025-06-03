@@ -234,25 +234,24 @@ def simple_comparison_strategy(draw) -> Tuple[str, str]:
     if use_is_operator:
         # Use 'is' or 'is not' for None comparison
         op = draw(st.sampled_from(NULL_COMPARISON_OPS))
-        return (
-            f"({col_name} {op} None)", "bool")
+        return (f"({col_name} {op} None)", "bool")
     else:
         # Get a literal of the same type from actual data
-                    literal_val, _ = draw(literal_from_column_strategy(column_type=col_type))
+        literal_val, _ = draw(literal_from_column_strategy(column_type=col_type))
 
-                    # Choose an appropriate comparison operator based on the type
-                    if col_type in ["int", "float", "timestamp", "date", "time", "timedelta"]:
+        # Choose an appropriate comparison operator based on the type
+        if col_type in ["int", "float", "timestamp", "date", "time", "timedelta"]:
             # These types support all comparison operators
-                        op = draw(st.sampled_from(COMPARISON_OPS))
+            op = draw(st.sampled_from(COMPARISON_OPS))
         else:
             # Other types only support equality operators
-                        op = draw(st.sampled_from(["==", "!="]))
+            op = draw(st.sampled_from(["==", "!="]))
 
-                    return (f"({col_name} {op} {literal_val})", "bool")
+        return (f"({col_name} {op} {literal_val})", "bool")
 
 
-            # Strategy for typed literals
-            @st.composite
+# Strategy for typed literals
+@st.composite
 def literal_strategy(draw, type_hint: Optional[str] = None) -> Tuple[str, str]:
     """
     Returns (literal_string, type_string).
@@ -266,55 +265,55 @@ def literal_strategy(draw, type_hint: Optional[str] = None) -> Tuple[str, str]:
     else:
         t = draw(st.sampled_from(list(COLUMN_TYPES.values())))
 
-                if t == "int":
+    if t == "int":
         # Generate integers similar to test data: -10, 0, 5
-                    val = draw(st.sampled_from([-15, -10, -5, -1, 0, 1, 3, 5, 10]))
+        val = draw(st.sampled_from([-15, -10, -5, -1, 0, 1, 3, 5, 10]))
         return (str(val), "int")
     elif t == "float":
         # Generate floats similar to test data: -1.23, 0.0, 3.14
-                    val = draw(st.sampled_from([-2.5, -1.23, -0.5, 0.0, 0.5, 1.5, 3.14, 4.0]))
+        val = draw(st.sampled_from([-2.5, -1.23, -0.5, 0.0, 0.5, 1.5, 3.14, 4.0]))
         return (f"{val:.2f}", "float")
     elif t == "str":
         # Generate strings similar to test data: "", "hello", "world"
-                    s = draw(st.sampled_from(["", "hello", "world", "test", "a", "b", "c"]))
+        s = draw(st.sampled_from(["", "hello", "world", "test", "a", "b", "c"]))
         return (f"'{s}'", "str")
     elif t == "bool":
         b = draw(st.booleans())
         return ("True", "bool") if b else ("False", "bool")
     elif t == "date":
         # Use dates from test data
-                    d = draw(st.sampled_from(["2025-03-21", "2025-03-22", "2025-03-23"]))
+        d = draw(st.sampled_from(["2025-03-21", "2025-03-22", "2025-03-23"]))
         return (f"'{d}'", "date")
     elif t == "timestamp":
         # Use timestamps from test data
-                    dt = draw(
-                        st.sampled_from(
-                            ["2025-03-21T12:30:45", "2025-03-22T10:00:00", "2025-03-23T23:59:59"],
-                        ),
-            )
+        dt = draw(
+            st.sampled_from(
+                ["2025-03-21T12:30:45", "2025-03-22T10:00:00", "2025-03-23T23:59:59"],
+            ),
+        )
         return (f"'{dt}'", "timestamp")
     elif t == "time":
         # Use times from test data
-                    tm = draw(st.sampled_from(["10:15:00", "12:30:45", "23:59:59"]))
+        tm = draw(st.sampled_from(["10:15:00", "12:30:45", "23:59:59"]))
         return (f"'{tm}'", "time")
     elif t == "timedelta":
         # Use timedeltas from test data
-                    td = draw(st.sampled_from(["P2D", "PT5H", "PT12H30M"]))
+        td = draw(st.sampled_from(["P2D", "PT5H", "PT12H30M"]))
         return (f"'{td}'", "timedelta")
     elif t == "list":
         # Generate lists similar to test data
-                    list_opt = draw(st.sampled_from([[1, 2, 3], [4, 5], []]))
+        list_opt = draw(st.sampled_from([[1, 2, 3], [4, 5], []]))
         return (f"{list_opt}", "list")
     elif t == "dict":
         # Generate dicts similar to test data
-                    dict_opt = draw(st.sampled_from([{"a": 1, "b": 2}, {"c": 3}, {}]))
+        dict_opt = draw(st.sampled_from([{"a": 1, "b": 2}, {"c": 3}, {}]))
         return (f"{dict_opt}", "dict")
     else:
         return ("0", "int")
 
 
-            # Strategy for bool function calls
-            @st.composite
+# Strategy for bool function calls
+@st.composite
 def bool_function_strategy(draw) -> Tuple[str, str]:
     """
     Generates a boolean function call, including exists(), isNone(), and type checks.
@@ -324,11 +323,10 @@ def bool_function_strategy(draw) -> Tuple[str, str]:
     """
     function_kind = draw(st.sampled_from(["exists", "isNone"]))
 
-                if function_kind == "exists":
+    if function_kind == "exists":
         # exists() checks if a column exists and has a value
-                    col_name, _ = draw(column_ref_strategy())
-        return (f"exists({col_name})", "bool",
-        )
+        col_name, _ = draw(column_ref_strategy())
+        return (f"exists({col_name})", "bool")
 
     elif function_kind == "isNone":
         # isNone() checks if a column is None
@@ -465,16 +463,14 @@ def arithmetic_strategy(draw, type_hint: Optional[str] = None) -> Tuple[str, str
 
             if paren_style == "left":
                 return (
-                    f"(({terms[0]} {ops[0]} {terms[1]}) {ops[1]} {terms[2]},
-                )",
+                    f"(({terms[0]} {ops[0]} {terms[1]}) {ops[1]} {terms[2]})",
                     "int",
                 )
             elif paren_style == "right":
                 return (
-                    f"(
-                        {terms[0]} {ops[0]} ({terms[1]} {ops[1]} {terms[2]}))",
-                            "int",
-                    )
+                    f"({terms[0]} {ops[0]} ({terms[1]} {ops[1]} {terms[2]}))",
+                    "int",
+                )
             else:
                 return (f"({terms[0]} {ops[0]} {terms[1]} {ops[1]} {terms[2]})", "int")
 
@@ -506,16 +502,14 @@ def arithmetic_strategy(draw, type_hint: Optional[str] = None) -> Tuple[str, str
 
             if paren_style == "left":
                 return (
-                    f"(({terms[0]} {ops[0]} {terms[1]}) {ops[1]} {terms[2]},
-                )",
+                    f"(({terms[0]} {ops[0]} {terms[1]}) {ops[1]} {terms[2]})",
                     "float",
                 )
             elif paren_style == "right":
                 return (
-                    f"(
-                        {terms[0]} {ops[0]} ({terms[1]} {ops[1]} {terms[2]}))",
-                            "float",
-                    )
+                    f"({terms[0]} {ops[0]} ({terms[1]} {ops[1]} {terms[2]}))",
+                    "float",
+                )
             else:
                 return (
                     f"({terms[0]} {ops[0]} {terms[1]} {ops[1]} {terms[2]})",
@@ -896,8 +890,7 @@ def temporal_expression_strategy(
             else:
                 col_name, _ = draw(column_ref_strategy(allowed_types=["timestamp"]))
                 precision = draw(st.integers(min_value=1, max_value=60))
-                return (f"round_timestamp({col_name}, {precision})", "timestamp",
-                )
+                return (f"round_timestamp({col_name}, {precision})", "timestamp")
 
     elif type_hint == "date":
         # Generate date expressions
@@ -1254,41 +1247,40 @@ def bool_filter_strategy(draw, max_depth: int = 3) -> Tuple[str, str]:
             # Explicit NULL comparison
             col_name, _ = draw(column_ref_strategy())
             op = draw(st.sampled_from(NULL_COMPARISON_OPS))
-            return (
-                f"({col_name} {op} None)", "bool")
+            return (f"({col_name} {op} None)", "bool")
 
-                        elif expr_kind == "complex_indexing":
+        elif expr_kind == "complex_indexing":
             # NEW: Use the complex indexing comparison strategy
-                            return draw(complex_indexing_comparison_strategy())
+            return draw(complex_indexing_comparison_strategy())
 
-                        else:  # value_comparison
+        else:  # value_comparison
             # Compare complex values
-                            value_type = draw(
-                                st.sampled_from(["int", "float", "str", "timestamp", "date", "time"]),
-                )
+            value_type = draw(
+                st.sampled_from(["int", "float", "str", "timestamp", "date", "time"]),
+            )
 
-                            # Generate left and right expressions with appropriate types
-                            left_source = draw(
-                                st.sampled_from(
-                                    [
-                                        "function",
-                                        "indexing",
-                                        "nested_indexing",
-                                        "arithmetic",
-                                        "column",
-                                        "temporal",
-                                    ],
-                                ),
-                            )
+            # Generate left and right expressions with appropriate types
+            left_source = draw(
+                st.sampled_from(
+                    [
+                        "function",
+                        "indexing",
+                        "nested_indexing",
+                        "arithmetic",
+                        "column",
+                        "temporal",
+                    ],
+                ),
+            )
 
-                            if left_source == "function" and value_type in [
-                                "int",
-                                "float",
-                                "str",
-                                "timestamp",
-                                "date",
-                                "time",
-                            ]:
+            if left_source == "function" and value_type in [
+                "int",
+                "float",
+                "str",
+                "timestamp",
+                "date",
+                "time",
+            ]:
                 left_expr, _ = draw(value_function_strategy(type_hint=value_type))
             elif left_source == "indexing" and value_type == "int":
                 left_expr, _ = draw(indexing_strategy())
@@ -1297,38 +1289,38 @@ def bool_filter_strategy(draw, max_depth: int = 3) -> Tuple[str, str]:
             elif left_source == "arithmetic" and value_type in ["int", "float"]:
                 left_expr, _ = draw(arithmetic_strategy(type_hint=value_type))
             elif left_source == "temporal" and value_type in [
-                                "timestamp",
-                                "date",
-                                "time",
-                                "timedelta",
+                "timestamp",
+                "date",
+                "time",
+                "timedelta",
             ]:
                 left_expr, _ = draw(temporal_expression_strategy(type_hint=value_type))
             else:  # column
                 left_col, _ = draw(column_ref_strategy(allowed_types=[value_type]))
                 left_expr = left_col
 
-                            right_source = draw(
-                                st.sampled_from(
-                                    [
-                                        "function",
-                                        "indexing",
-                                        "nested_indexing",
-                                        "arithmetic",
-                                        "column",
-                                        "literal",
-                                        "temporal",
-                                    ],
-                                ),
-                            )
+            right_source = draw(
+                st.sampled_from(
+                    [
+                        "function",
+                        "indexing",
+                        "nested_indexing",
+                        "arithmetic",
+                        "column",
+                        "literal",
+                        "temporal",
+                    ],
+                ),
+            )
 
-                            if right_source == "function" and value_type in [
-                                "int",
-                                "float",
-                                "str",
-                                "timestamp",
-                                "date",
-                                "time",
-                            ]:
+            if right_source == "function" and value_type in [
+                "int",
+                "float",
+                "str",
+                "timestamp",
+                "date",
+                "time",
+            ]:
                 right_expr, _ = draw(value_function_strategy(type_hint=value_type))
             elif right_source == "indexing" and value_type == "int":
                 right_expr, _ = draw(indexing_strategy())
@@ -1337,10 +1329,10 @@ def bool_filter_strategy(draw, max_depth: int = 3) -> Tuple[str, str]:
             elif right_source == "arithmetic" and value_type in ["int", "float"]:
                 right_expr, _ = draw(arithmetic_strategy(type_hint=value_type))
             elif right_source == "temporal" and value_type in [
-                                "timestamp",
-                                "date",
-                                "time",
-                                "timedelta",
+                "timestamp",
+                "date",
+                "time",
+                "timedelta",
             ]:
                 right_expr, _ = draw(temporal_expression_strategy(type_hint=value_type))
             elif right_source == "column":
@@ -1348,39 +1340,38 @@ def bool_filter_strategy(draw, max_depth: int = 3) -> Tuple[str, str]:
                 right_expr = right_col
             else:  # literal
                 right_val, _ = draw(
-                                    literal_from_column_strategy(column_type=value_type),
+                    literal_from_column_strategy(column_type=value_type),
                 )
                 right_expr = right_val
 
-                            # Choose an appropriate comparison operator
-                            if value_type in ["int", "float", "timestamp", "date", "time", "timedelta"]:
+            # Choose an appropriate comparison operator
+            if value_type in ["int", "float", "timestamp", "date", "time", "timedelta"]:
                 op = draw(st.sampled_from(COMPARISON_OPS))
             else:
                 op = draw(st.sampled_from(["==", "!="]))
 
-                            return (f"({left_expr} {op} {right_expr})", "bool")
+            return (f"({left_expr} {op} {right_expr})", "bool")
 
-                    # Non-base case (build complex expressions)
-                    expr_kind = draw(
-                        st.sampled_from(
-                            [
-                                "logical",  # Combine with logical operators
-                                "negation",  # Negate an expression
-                            ],
-                        ),
-                    )
+    # Non-base case (build complex expressions)
+    expr_kind = draw(
+        st.sampled_from(
+            [
+                "logical",  # Combine with logical operators
+                "negation",  # Negate an expression
+            ],
+        ),
+    )
 
-                    if expr_kind == "logical":
+    if expr_kind == "logical":
         left_expr, _ = draw(bool_filter_strategy(max_depth=max_depth - 1))
         right_expr, _ = draw(bool_filter_strategy(max_depth=max_depth - 1))
         op = draw(st.sampled_from(LOGICAL_OPS))
 
-                        return (f"({left_expr} {op} {right_expr})", "bool")
+        return (f"({left_expr} {op} {right_expr})", "bool")
 
-                    else:  # negation
+    else:  # negation
         expr, _ = draw(bool_filter_strategy(max_depth=max_depth - 1))
-        return (f"(not {expr})", "bool",
-            )
+        return (f"(not {expr})", "bool")
 
 
 def evaluate_in_python(expr_str: str, row: Dict[str, Any]) -> bool:
