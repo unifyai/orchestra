@@ -157,6 +157,10 @@ class Settings(BaseSettings):
         "/secrets/gcp/mail_sender_service_account_key.json",
     )
 
+    # Variables for Cartesia voice management
+    cartesia_api_key: Optional[str] = os.environ.get("CARTESIA_API_KEY")
+    cartesia_api_version: Optional[str] = os.environ.get("CARTESIA_API_VERSION")
+
     @property
     def db_url(self) -> URL:
         """
