@@ -1,22 +1,13 @@
 import base64
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
+import pytest  # Make sure pytest is imported
 from httpx import AsyncClient
-
-from orchestra.services.bucket_service import BucketService
-from orchestra.tests.utils import (
-    HEADERS,
-)  # Assuming HEADERS implies an authenticated user
+from typing import Dict, Any  # For type hinting the fixture
 
 
 # A simple 1x1 pixel PNG image (transparent)
-# You can replace this with a small actual image file if preferred
-# For example, create a 'sample_photo.png' in a 'sample_data' directory
-# and load it like _get_sample_wav_bytes.
 def _get_sample_png_bytes() -> bytes:
-    # Minimal PNG: 1x1 transparent pixel
     return base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
     )
@@ -27,16 +18,18 @@ def _get_sample_text_file_bytes() -> bytes:
 
 
 @pytest.mark.anyio
-async def test_upload_assistant_photo_success(client: AsyncClient):
+async def test_upload_assistant_photo_success(
+    client: AsyncClient, valid_user_with_headers: Dict[str, Any]
+):
     """
     Test `POST /v0/assistant/photo/upload` successful photo upload.
     Mocks BucketService to avoid actual GCS upload.
     """
-    mock_gcs_url = "gs://test-bucket/assistant_photos/user123/sample_photo.png"
+    user_id_from_fixture = valid_user_with_headers["id"]
+    mock_gcs_url = (
+        f"gs://test-bucket/assistant_photos/{user_id_from_fixture}/sample_photo.png"
+    )
 
-    # Patch the BucketService instance within the view's context
-    # The path to patch depends on how BucketService is instantiated/injected in your views.
-    # Assuming it's instantiated directly or via a simple dependency:
     with patch("orchestra.web.api.assistant.views.BucketService") as MockBucketService:
         mock_bucket_instance = MockBucketService.return_value
         mock_bucket_instance.upload_assistant_photo_file = MagicMock(
@@ -46,57 +39,67 @@ async def test_upload_assistant_photo_success(client: AsyncClient):
         image_bytes = _get_sample_png_bytes()
         files = {"file": ("sample_photo.png", image_bytes, "image/png")}
 
+        upload_headers = {
+            "accept": "application/json",
+            "Authorization": valid_user_with_headers["headers"]["Authorization"],
+        }
+
         resp = await client.post(
-            "/v0/assistant/photo/upload", files=files, headers=HEADERS
+            "/v0/assistant/photo/upload", files=files, headers=upload_headers
         )
 
-        assert resp.status_code == 201
+        assert resp.status_code == 201, f"Response: {resp.text}"
         body = resp.json()
         assert "info" in body
         assert body["info"]["gcs_url"] == mock_gcs_url
 
         mock_bucket_instance.upload_assistant_photo_file.assert_called_once()
-        # You can add more specific assertions on the call arguments if needed,
-        # e.g., checking user_id, content_type.
-        # args, kwargs = mock_bucket_instance.upload_assistant_photo_file.call_args
-        # assert kwargs['user_id'] is not None # Requires user_id to be accessible in test
-        # assert kwargs['content_type'] == "image/png"
-        # assert kwargs['file_content'] == image_bytes
+        args, kwargs = mock_bucket_instance.upload_assistant_photo_file.call_args
+        assert kwargs.get("user_id") == user_id_from_fixture
+        assert kwargs.get("content_type") == "image/png"
+        assert kwargs.get("file_content") == image_bytes
 
 
 @pytest.mark.anyio
-async def test_upload_assistant_photo_invalid_file_type(client: AsyncClient):
+async def test_upload_assistant_photo_invalid_file_type(
+    client: AsyncClient, valid_user_with_headers: Dict[str, Any]
+):
     """Test `POST /v0/assistant/photo/upload` with a non-image file type."""
     text_bytes = _get_sample_text_file_bytes()
     files = {"file": ("not_an_image.txt", text_bytes, "text/plain")}
 
-    resp = await client.post("/v0/assistant/photo/upload", files=files, headers=HEADERS)
+    upload_headers = {
+        "accept": "application/json",
+        "Authorization": valid_user_with_headers["headers"]["Authorization"],
+    }
+    resp = await client.post(
+        "/v0/assistant/photo/upload", files=files, headers=upload_headers
+    )
 
-    assert resp.status_code == 400
+    assert resp.status_code == 400, f"Response: {resp.text}"
     body = resp.json()
     assert "detail" in body
     assert "invalid file type" in body["detail"].lower()
 
 
 @pytest.mark.anyio
-async def test_upload_assistant_photo_file_too_large(client: AsyncClient):
+async def test_upload_assistant_photo_file_too_large(
+    client: AsyncClient, valid_user_with_headers: Dict[str, Any]
+):
     """Test `POST /v0/assistant/photo/upload` with a file exceeding size limits."""
-    # Create a dummy file larger than 5MB (adjust MAX_SIZE_BYTES if different in your view)
-    # This is a simplified way; a real large file or mocking UploadFile.size might be needed
-    # if the check happens before reading the full content.
-    # The view checks `file.size` and `len(file_content)`.
-    # We'll mock the content to be large.
     large_file_content = b"A" * (6 * 1024 * 1024)  # 6MB
     files = {"file": ("large_image.png", large_file_content, "image/png")}
 
-    with patch(
-        "orchestra.web.api.assistant.views.BucketService"
-    ):  # Mock to prevent GCS call
+    upload_headers = {
+        "accept": "application/json",
+        "Authorization": valid_user_with_headers["headers"]["Authorization"],
+    }
+    with patch("orchestra.web.api.assistant.views.BucketService"):
         resp = await client.post(
-            "/v0/assistant/photo/upload", files=files, headers=HEADERS
+            "/v0/assistant/photo/upload", files=files, headers=upload_headers
         )
 
-    assert resp.status_code == 413  # Request Entity Too Large
+    assert resp.status_code == 413, f"Response: {resp.text}"
     body = resp.json()
     assert "detail" in body
     assert (
@@ -106,7 +109,9 @@ async def test_upload_assistant_photo_file_too_large(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_upload_assistant_photo_gcs_failure(client: AsyncClient):
+async def test_upload_assistant_photo_gcs_failure(
+    client: AsyncClient, valid_user_with_headers: Dict[str, Any]
+):
     """Test `POST /v0/assistant/photo/upload` when GCS upload fails."""
     with patch("orchestra.web.api.assistant.views.BucketService") as MockBucketService:
         mock_bucket_instance = MockBucketService.return_value
@@ -116,12 +121,15 @@ async def test_upload_assistant_photo_gcs_failure(client: AsyncClient):
 
         image_bytes = _get_sample_png_bytes()
         files = {"file": ("sample_photo.png", image_bytes, "image/png")}
-
+        upload_headers = {
+            "accept": "application/json",
+            "Authorization": valid_user_with_headers["headers"]["Authorization"],
+        }
         resp = await client.post(
-            "/v0/assistant/photo/upload", files=files, headers=HEADERS
+            "/v0/assistant/photo/upload", files=files, headers=upload_headers
         )
 
-        assert resp.status_code == 500
+        assert resp.status_code == 500, f"Response: {resp.text}"
         body = resp.json()
         assert "detail" in body
         assert "could not upload photo" in body["detail"].lower()
@@ -129,7 +137,9 @@ async def test_upload_assistant_photo_gcs_failure(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_create_assistant_with_uploaded_gcs_photo(client: AsyncClient):
+async def test_create_assistant_with_uploaded_gcs_photo(
+    client: AsyncClient, valid_user_with_headers: Dict[str, Any]
+):
     """
     Test creating an assistant with a profile_photo URL that
     would have come from a previous photo upload.
@@ -138,19 +148,17 @@ async def test_create_assistant_with_uploaded_gcs_photo(client: AsyncClient):
     payload = {
         "first_name": "PhotoAs",
         "surname": "GCSUser",
-        "profile_photo": mock_gcs_photo_url,  # This is the key part
-        # ... other required fields from your test_create_assistant_success
+        "profile_photo": mock_gcs_photo_url,
         "age": 30,
         "weekly_limit": 10.0,
         "max_parallel": 2,
-        "user_phone": "+15551234567",  # Assuming this is now required
-        "email": "test.photo@unify.ai",  # Assuming this is now required
+        "user_phone": "+15551234567",
+        "email": f"test.photo_{valid_user_with_headers['id'][:8]}@unify.ai",  # Unique email
     }
 
-    # We need to mock the infrastructure creation calls within create_assistant
     with patch(
         "orchestra.web.api.assistant.views.create_email",
-        return_value={"user": {"primaryEmail": "test@example.com"}},
+        return_value={"user": {"primaryEmail": payload["email"]}},
     ), patch(
         "orchestra.web.api.assistant.views.watch_email", return_value={"status": "ok"}
     ), patch(
@@ -171,13 +179,15 @@ async def test_create_assistant_with_uploaded_gcs_photo(client: AsyncClient):
         "orchestra.db.dao.users_dao.UsersDAO.recharge_credit"
     ) as mock_recharge_credit:
 
-        mock_user = MagicMock()
-        mock_user.credits = 100  # Ensure sufficient credits
-        mock_get_user.return_value = mock_user
+        mock_user_db_obj = MagicMock()
+        mock_user_db_obj.credits = 100
+        mock_get_user.return_value = mock_user_db_obj
 
-        resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+        resp = await client.post(
+            "/v0/assistant", json=payload, headers=valid_user_with_headers["headers"]
+        )
 
-    assert resp.status_code == 200  # Or 201 depending on your create success code
+    assert resp.status_code == 200, f"Response: {resp.text}"
     body = resp.json()
     assert "info" in body
     created_assistant = body["info"]
@@ -185,12 +195,19 @@ async def test_create_assistant_with_uploaded_gcs_photo(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_delete_assistant_with_gcs_photo(client: AsyncClient):
+async def test_delete_assistant_with_gcs_photo(
+    client: AsyncClient, valid_user_with_headers: Dict[str, Any]
+):
     """
     Test `DELETE /v0/assistant/{assistant_id}` for an assistant
     that has a GCS photo URL. Mocks BucketService.delete_assistant_photo.
     """
-    mock_gcs_photo_url = "gs://my-assistant-photos/user-abc/photo-to-delete.jpg"
+    mock_gcs_photo_url = (
+        f"gs://my-assistant-photos/{valid_user_with_headers['id']}/photo-to-delete.jpg"
+    )
+    unique_email_for_delete = (
+        f"delete.photo_{valid_user_with_headers['id'][:8]}@unify.ai"
+    )
     create_payload = {
         "first_name": "ToDelete",
         "surname": "WithPhoto",
@@ -199,15 +216,13 @@ async def test_delete_assistant_with_gcs_photo(client: AsyncClient):
         "weekly_limit": 11.0,
         "max_parallel": 1,
         "user_phone": "+15550001111",
-        "email": "delete.photo@unify.ai",
+        "email": unique_email_for_delete,
     }
-
     assistant_id_to_delete = None
 
-    # Mock infrastructure and BucketService for create and delete
     with patch(
         "orchestra.web.api.assistant.views.create_email",
-        return_value={"user": {"primaryEmail": "del@example.com"}},
+        return_value={"user": {"primaryEmail": unique_email_for_delete}},
     ), patch(
         "orchestra.web.api.assistant.views.watch_email", return_value={"status": "ok"}
     ), patch(
@@ -249,31 +264,30 @@ async def test_delete_assistant_with_gcs_photo(client: AsyncClient):
             return_value=True
         )
 
-        # Create assistant
         create_resp = await client.post(
-            "/v0/assistant", json=create_payload, headers=HEADERS
+            "/v0/assistant",
+            json=create_payload,
+            headers=valid_user_with_headers["headers"],
         )
-        assert create_resp.status_code == 200  # or 201
+        assert create_resp.status_code == 200, f"Response: {create_resp.text}"
         assistant_id_to_delete = create_resp.json()["info"]["agent_id"]
-        created_email = create_resp.json()["info"][
-            "email"
-        ]  # Get the email assigned during creation
-        created_phone = create_resp.json()["info"]["phone"]  # Get the phone assigned
+        # Get the actual email and phone assigned during creation for accurate mock assertion
+        created_email = create_resp.json()["info"]["email"]
+        created_phone = create_resp.json()["info"]["phone"]
 
-        # Delete the assistant
         del_resp = await client.delete(
-            f"/v0/assistant/{assistant_id_to_delete}", headers=HEADERS
+            f"/v0/assistant/{assistant_id_to_delete}",
+            headers=valid_user_with_headers["headers"],
         )
-        assert del_resp.status_code == 200
+        assert del_resp.status_code == 200, f"Response: {del_resp.text}"
         assert "assistant deleted successfully" in del_resp.json()["info"].lower()
 
-        # Assert that BucketService.delete_assistant_photo was called
         mock_bucket_service_instance.delete_assistant_photo.assert_called_once_with(
             mock_gcs_photo_url
         )
-
-        # Assert infrastructure deletion calls
-        if created_email:
+        if (
+            created_email
+        ):  # email might not be set if creation failed before that step, but for success it should be
             mock_delete_email.assert_called_once_with(created_email)
         if created_phone:
             mock_delete_phone.assert_called_once_with(created_phone)
@@ -283,13 +297,18 @@ async def test_delete_assistant_with_gcs_photo(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_delete_assistant_with_non_gcs_photo(client: AsyncClient):
+async def test_delete_assistant_with_non_gcs_photo(
+    client: AsyncClient, valid_user_with_headers: Dict[str, Any]
+):
     """
     Test `DELETE /v0/assistant/{assistant_id}` for an assistant
     with a non-GCS (e.g., http) photo URL.
     BucketService.delete_assistant_photo should NOT be called.
     """
     http_photo_url = "https://example.com/some_preset_image.jpg"
+    unique_email_for_preset = (
+        f"preset.photo_{valid_user_with_headers['id'][:8]}@unify.ai"
+    )
     create_payload = {
         "first_name": "PresetUser",
         "surname": "PhotoTest",
@@ -298,13 +317,13 @@ async def test_delete_assistant_with_non_gcs_photo(client: AsyncClient):
         "weekly_limit": 12.0,
         "max_parallel": 3,
         "user_phone": "+15552223333",
-        "email": "preset.photo@unify.ai",
+        "email": unique_email_for_preset,
     }
     assistant_id_to_delete = None
 
     with patch(
         "orchestra.web.api.assistant.views.create_email",
-        return_value={"user": {"primaryEmail": "pre@example.com"}},
+        return_value={"user": {"primaryEmail": unique_email_for_preset}},
     ), patch(
         "orchestra.web.api.assistant.views.watch_email", return_value={"status": "ok"}
     ), patch(
@@ -344,18 +363,18 @@ async def test_delete_assistant_with_non_gcs_photo(client: AsyncClient):
         mock_bucket_instance_no_call = MockBucketServiceNoCall.return_value
         mock_bucket_instance_no_call.delete_assistant_photo = MagicMock()
 
-        # Create assistant
         create_resp = await client.post(
-            "/v0/assistant", json=create_payload, headers=HEADERS
+            "/v0/assistant",
+            json=create_payload,
+            headers=valid_user_with_headers["headers"],
         )
-        assert create_resp.status_code == 200
+        assert create_resp.status_code == 200, f"Response: {create_resp.text}"
         assistant_id_to_delete = create_resp.json()["info"]["agent_id"]
 
-        # Delete the assistant
         del_resp = await client.delete(
-            f"/v0/assistant/{assistant_id_to_delete}", headers=HEADERS
+            f"/v0/assistant/{assistant_id_to_delete}",
+            headers=valid_user_with_headers["headers"],
         )
-        assert del_resp.status_code == 200
+        assert del_resp.status_code == 200, f"Response: {del_resp.text}"
 
-        # Assert that BucketService.delete_assistant_photo was NOT called
         mock_bucket_instance_no_call.delete_assistant_photo.assert_not_called()
