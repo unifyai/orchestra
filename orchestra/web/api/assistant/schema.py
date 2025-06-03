@@ -336,3 +336,11 @@ class VoiceLocalizeRequest(BaseModel):
     dialect: Optional[str] = Field(
         None, description="Optional dialect for localization"
     )
+
+
+class AssistantPhotoUploadResponse(BaseModel):
+    gcs_url: str = Field(
+        ...,
+        description="GCS URL of the uploaded photo",
+        example="gs://your-bucket-name/user_id/image_uuid.jpg",
+    )

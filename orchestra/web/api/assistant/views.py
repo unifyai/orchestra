@@ -37,6 +37,7 @@ from orchestra.web.api.assistant.schema import (
     VoiceRead,
     VoiceCloneRequestData,
     VoiceLocalizeRequest,
+    AssistantPhotoUploadResponse,
 )
 from orchestra.web.api.utils.assistant_infra import (
     create_cloud_run_job,
@@ -562,16 +563,18 @@ def delete_assistant(
     assistant_id: int,
     request: Request,
     session: Session = Depends(get_db_session),
+    bucket_service: BucketService = Depends(),
 ) -> InfoResponse[str]:
     """
     Delete an assistant by ID for the authenticated user.
 
     Permanently removes the specified assistant from the user's account.
-    This action cannot be undone.
+    This action cannot be undone. Associated GCS profile photos will also be deleted.
     """
     dao = AssistantDAO(session)
+    cleanup_errors = []
     try:
-        # First get the assistant to retrieve infrastructure details
+        # First get the assistant to retrieve infrastructure details including GCS photo URL
         assistant = dao.get_assistant_by_id(
             user_id=request.state.user_id,
             agent_id=assistant_id,
@@ -582,13 +585,28 @@ def delete_assistant(
                 detail="Assistant not found.",
             )
 
-        # Wait before starting cleanup (same as rollback operations)
+        # Delete GCS profile photo if it exists and is a GCS URL from the assistant images bucket
+        if assistant.profile_photo and assistant.profile_photo.startswith("gs://"):
+            try:
+                deleted_from_gcs = bucket_service.delete_assistant_photo(
+                    assistant.profile_photo
+                )
+                if not deleted_from_gcs:
+                    logging.error(
+                        f"Profile photo {assistant.profile_photo} for assistant {assistant_id} was not deleted from GCS (either not found, wrong bucket, or other non-critical issue)."
+                    )
+                    cleanup_errors.append(
+                        f"Failed to delete profile photo: {str(e_gcs)}"
+                    )
+            except Exception as e_gcs:
+                logging.error(
+                    f"Failed to delete profile photo {assistant.profile_photo} for assistant {assistant_id}: {str(e_gcs)}"
+                )
+                cleanup_errors.append(f"Failed to delete profile photo: {str(e_gcs)}")
+
+        # Wait before starting other infra cleanup (same as rollback operations)
         time.sleep(10)
 
-        # Clean up infrastructure in reverse order (matching rollback pattern)
-        cleanup_errors = []
-
-        # Stop cloud run job
         try:
             stop_cloud_run_job(str(assistant_id))
         except Exception as e:
@@ -638,11 +656,19 @@ def delete_assistant(
 
         return InfoResponse(info=response_msg)
     except HTTPException:
+        session.rollback()
         raise
     except Exception as e:
+        session.rollback()
+        final_error_detail = f"Error deleting assistant: {str(e)}"
+        if cleanup_errors:
+            final_error_detail += (
+                f" | Cleanup issues prior to full rollback: {'; '.join(cleanup_errors)}"
+            )
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error deleting assistant: {str(e)}",
+            detail=final_error_detail,
         )
 
 
@@ -651,7 +677,7 @@ def delete_assistant(
     response_model=InfoResponse[AssistantRead],
     status_code=status.HTTP_200_OK,
     summary="Update assistant configuration",
-    description="Updates the configuration parameters of an existing assistant.",
+    description="Updates the configuration parameters of an existing assistant. Profile photo cannot be updated via this endpoint.",
     tags=["Assistants"],
     responses={
         200: {
@@ -1462,6 +1488,62 @@ def delete_voice(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error deleting voice record: {str(e_generic_delete)}",
+        )
+
+
+@router.post(
+    "/assistant/photo/upload",
+    response_model=InfoResponse[AssistantPhotoUploadResponse],
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload an assistant profile photo",
+    description="Uploads a profile photo for an assistant to GCS and returns the GCS URL.",
+    tags=["Assistants", "Storage"],
+)
+async def upload_assistant_photo(
+    request: Request,
+    file: UploadFile = File(...),
+):
+    bucket_service = BucketService()
+    user_id = request.state.user_id
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="User not authenticated."
+        )
+
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid file type. Only images are allowed.",
+        )
+
+    MAX_SIZE_BYTES = 5 * 1024 * 1024
+    if (
+        file.size and file.size > MAX_SIZE_BYTES
+    ):  # FastAPI's UploadFile might have size after spooling
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File size exceeds {MAX_SIZE_BYTES // (1024*1024)}MB limit.",
+        )
+
+    try:
+        file_content = await file.read()
+        if len(file_content) > MAX_SIZE_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File content size exceeds {MAX_SIZE_BYTES // (1024*1024)}MB limit.",
+            )
+
+        gcs_url = bucket_service.upload_assistant_photo_file(
+            file_content=file_content, user_id=user_id, content_type=file.content_type
+        )
+        return InfoResponse(info=AssistantPhotoUploadResponse(gcs_url=gcs_url))
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logging.error(f"Error uploading assistant photo for user {user_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Could not upload photo: {str(e)}",
         )
 
 

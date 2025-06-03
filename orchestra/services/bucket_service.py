@@ -2,10 +2,12 @@ import base64
 import hashlib
 import os
 import uuid
+import logging
 from typing import Optional, Tuple
 
 from google.api_core import exceptions
 from google.cloud import storage
+from orchestra.web.api.utils.gcp import parse_gcs_url
 
 
 class BucketService:
@@ -157,3 +159,73 @@ class BucketService:
         """
         blob = self.bucket.blob(filename)
         return blob.public_url
+
+    # -- Assistant photos --
+    def upload_assistant_photo_file(
+        self,
+        file_content: bytes,
+        user_id: str,  # For path organization
+        content_type: str = "image/jpeg",  # Default, can be overridden
+    ) -> str:
+        """
+        Uploads an assistant's profile photo file to the assistant images GCS bucket.
+        Args:
+            file_content: Raw bytes of the image file.
+            user_id: ID of the user uploading the photo, for path organization.
+            content_type: MIME type of the image.
+        Returns:
+            The GCS URL (gs://bucket-name/object-path) of the uploaded photo.
+        Raises:
+            Exception: If upload fails.
+        """
+        try:
+            extension = (
+                content_type.split("/")[-1]
+                if content_type and "/" in content_type
+                else "jpg"
+            )
+            file_name = self._generate_unique_filename(file_content)
+            object_path = f"assistant_photos/{user_id}/{file_name}.{extension}"
+
+            blob = self.assistant_images_bucket.blob(object_path)
+            blob.upload_from_string(file_content, content_type=content_type)
+            gcs_url = f"gs://{self.assistant_images_bucket_name}/{object_path}"
+
+            return gcs_url
+        except exceptions.GoogleAPIError as e:
+            logging.error(f"Failed to upload assistant photo to GCS: {str(e)}")
+            raise Exception(f"Failed to upload assistant photo: {str(e)}")
+
+    def delete_assistant_photo(self, gcs_url: str) -> bool:
+        """
+        Delete an assistant's profile photo from GCS using its GCS URL.
+        Ensures deletion only occurs from the designated assistant images bucket.
+        Args:
+            gcs_url: The GCS URL of the photo to delete (e.g., gs://bucket/path/to/photo.jpg)
+        Returns:
+            Boolean indicating success.
+        Raises:
+            Exception: If deletion fails for reasons other than NotFound.
+        """
+        parsed_bucket, object_path = parse_gcs_url(gcs_url)
+
+        if not parsed_bucket or not object_path:
+            logging.warning(f"Invalid GCS URL for deletion: {gcs_url}")
+            return False
+
+        if parsed_bucket != self.assistant_images_bucket_name:
+            logging.error(
+                f"Attempt to delete photo from incorrect bucket. Expected '{self.assistant_images_bucket_name}', got '{parsed_bucket}'. URL: {gcs_url}"
+            )
+            return False
+        try:
+            blob = self.assistant_images_bucket.blob(object_path)
+            blob.delete()
+            logging.info(f"Successfully deleted assistant photo: {gcs_url}")
+            return True
+        except exceptions.NotFound:
+            logging.warning(f"Assistant photo not found during deletion: {gcs_url}")
+            return True  # Consider not found as a successful deletion from client's perspective
+        except exceptions.GoogleAPIError as e:
+            logging.error(f"Failed to delete assistant photo {gcs_url}: {str(e)}")
+            raise Exception(f"Failed to delete assistant photo: {str(e)}")
