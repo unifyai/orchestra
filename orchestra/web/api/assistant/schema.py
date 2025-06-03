@@ -76,6 +76,11 @@ class AssistantCreate(BaseModel):
         description="Contact phone number of the user",
         example="+15551234567",
     )
+    create_infra: Optional[bool] = Field(
+        True,
+        description="Whether to create the infrastructure for the assistant",
+        example=True,
+    )
 
     class Config:
         orm_mode = True
