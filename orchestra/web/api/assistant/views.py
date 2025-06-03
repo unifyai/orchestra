@@ -562,7 +562,6 @@ def delete_assistant(
     assistant_id: int,
     request: Request,
     session: Session = Depends(get_db_session),
-    bucket_service: BucketService = Depends(),
 ) -> InfoResponse[str]:
     """
     Delete an assistant by ID for the authenticated user.
@@ -570,6 +569,7 @@ def delete_assistant(
     Permanently removes the specified assistant from the user's account.
     This action cannot be undone. Associated GCS profile photos will also be deleted.
     """
+    bucket_service = BucketService()
     dao = AssistantDAO(session)
     cleanup_errors = []
     try:
