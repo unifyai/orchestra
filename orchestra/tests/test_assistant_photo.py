@@ -1,15 +1,15 @@
 import base64
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Any, Dict  # For type hinting the fixture
+from unittest.mock import MagicMock, patch
+
 import pytest  # Make sure pytest is imported
 from httpx import AsyncClient
-from typing import Dict, Any  # For type hinting the fixture
 
 
 # A simple 1x1 pixel PNG image (transparent)
 def _get_sample_png_bytes() -> bytes:
     return base64.b64decode(
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
     )
 
 
@@ -19,7 +19,8 @@ def _get_sample_text_file_bytes() -> bytes:
 
 @pytest.mark.anyio
 async def test_upload_assistant_photo_success(
-    client: AsyncClient, valid_user_with_headers: Dict[str, Any]
+    client: AsyncClient,
+    valid_user_with_headers: Dict[str, Any],
 ):
     """
     Test `POST /v0/assistant/photo/upload` successful photo upload.
@@ -33,7 +34,7 @@ async def test_upload_assistant_photo_success(
     with patch("orchestra.web.api.assistant.views.BucketService") as MockBucketService:
         mock_bucket_instance = MockBucketService.return_value
         mock_bucket_instance.upload_assistant_photo_file = MagicMock(
-            return_value=mock_gcs_url
+            return_value=mock_gcs_url,
         )
 
         image_bytes = _get_sample_png_bytes()
@@ -45,7 +46,9 @@ async def test_upload_assistant_photo_success(
         }
 
         resp = await client.post(
-            "/v0/assistant/photo/upload", files=files, headers=upload_headers
+            "/v0/assistant/photo/upload",
+            files=files,
+            headers=upload_headers,
         )
 
         assert resp.status_code == 201, f"Response: {resp.text}"
@@ -62,7 +65,8 @@ async def test_upload_assistant_photo_success(
 
 @pytest.mark.anyio
 async def test_upload_assistant_photo_invalid_file_type(
-    client: AsyncClient, valid_user_with_headers: Dict[str, Any]
+    client: AsyncClient,
+    valid_user_with_headers: Dict[str, Any],
 ):
     """Test `POST /v0/assistant/photo/upload` with a non-image file type."""
     text_bytes = _get_sample_text_file_bytes()
@@ -73,7 +77,9 @@ async def test_upload_assistant_photo_invalid_file_type(
         "Authorization": valid_user_with_headers["headers"]["Authorization"],
     }
     resp = await client.post(
-        "/v0/assistant/photo/upload", files=files, headers=upload_headers
+        "/v0/assistant/photo/upload",
+        files=files,
+        headers=upload_headers,
     )
 
     assert resp.status_code == 400, f"Response: {resp.text}"
@@ -84,7 +90,8 @@ async def test_upload_assistant_photo_invalid_file_type(
 
 @pytest.mark.anyio
 async def test_upload_assistant_photo_file_too_large(
-    client: AsyncClient, valid_user_with_headers: Dict[str, Any]
+    client: AsyncClient,
+    valid_user_with_headers: Dict[str, Any],
 ):
     """Test `POST /v0/assistant/photo/upload` with a file exceeding size limits."""
     large_file_content = b"A" * (6 * 1024 * 1024)  # 6MB
@@ -96,7 +103,9 @@ async def test_upload_assistant_photo_file_too_large(
     }
     with patch("orchestra.web.api.assistant.views.BucketService"):
         resp = await client.post(
-            "/v0/assistant/photo/upload", files=files, headers=upload_headers
+            "/v0/assistant/photo/upload",
+            files=files,
+            headers=upload_headers,
         )
 
     assert resp.status_code == 413, f"Response: {resp.text}"
@@ -110,13 +119,14 @@ async def test_upload_assistant_photo_file_too_large(
 
 @pytest.mark.anyio
 async def test_upload_assistant_photo_gcs_failure(
-    client: AsyncClient, valid_user_with_headers: Dict[str, Any]
+    client: AsyncClient,
+    valid_user_with_headers: Dict[str, Any],
 ):
     """Test `POST /v0/assistant/photo/upload` when GCS upload fails."""
     with patch("orchestra.web.api.assistant.views.BucketService") as MockBucketService:
         mock_bucket_instance = MockBucketService.return_value
         mock_bucket_instance.upload_assistant_photo_file = MagicMock(
-            side_effect=Exception("GCS upload failed")
+            side_effect=Exception("GCS upload failed"),
         )
 
         image_bytes = _get_sample_png_bytes()
@@ -126,7 +136,9 @@ async def test_upload_assistant_photo_gcs_failure(
             "Authorization": valid_user_with_headers["headers"]["Authorization"],
         }
         resp = await client.post(
-            "/v0/assistant/photo/upload", files=files, headers=upload_headers
+            "/v0/assistant/photo/upload",
+            files=files,
+            headers=upload_headers,
         )
 
         assert resp.status_code == 500, f"Response: {resp.text}"
@@ -138,7 +150,8 @@ async def test_upload_assistant_photo_gcs_failure(
 
 @pytest.mark.anyio
 async def test_create_assistant_with_uploaded_gcs_photo(
-    client: AsyncClient, valid_user_with_headers: Dict[str, Any]
+    client: AsyncClient,
+    valid_user_with_headers: Dict[str, Any],
 ):
     """
     Test creating an assistant with a profile_photo URL that
@@ -160,7 +173,8 @@ async def test_create_assistant_with_uploaded_gcs_photo(
         "orchestra.web.api.assistant.views.create_email",
         return_value={"user": {"primaryEmail": payload["email"]}},
     ), patch(
-        "orchestra.web.api.assistant.views.watch_email", return_value={"status": "ok"}
+        "orchestra.web.api.assistant.views.watch_email",
+        return_value={"status": "ok"},
     ), patch(
         "orchestra.web.api.assistant.views.create_phone_number",
         return_value={"phoneNumber": "+1234567890"},
@@ -174,9 +188,9 @@ async def test_create_assistant_with_uploaded_gcs_photo(
         "orchestra.web.api.assistant.views.create_cloud_run_job",
         return_value={"status": "ok"},
     ), patch(
-        "orchestra.db.dao.users_dao.UsersDAO.get_user_with_id"
+        "orchestra.db.dao.users_dao.UsersDAO.get_user_with_id",
     ) as mock_get_user, patch(
-        "orchestra.db.dao.users_dao.UsersDAO.recharge_credit"
+        "orchestra.db.dao.users_dao.UsersDAO.recharge_credit",
     ) as mock_recharge_credit:
 
         mock_user_db_obj = MagicMock()
@@ -184,7 +198,9 @@ async def test_create_assistant_with_uploaded_gcs_photo(
         mock_get_user.return_value = mock_user_db_obj
 
         resp = await client.post(
-            "/v0/assistant", json=payload, headers=valid_user_with_headers["headers"]
+            "/v0/assistant",
+            json=payload,
+            headers=valid_user_with_headers["headers"],
         )
 
     assert resp.status_code == 200, f"Response: {resp.text}"
@@ -196,7 +212,8 @@ async def test_create_assistant_with_uploaded_gcs_photo(
 
 @pytest.mark.anyio
 async def test_delete_assistant_with_gcs_photo(
-    client: AsyncClient, valid_user_with_headers: Dict[str, Any]
+    client: AsyncClient,
+    valid_user_with_headers: Dict[str, Any],
 ):
     """
     Test `DELETE /v0/assistant/{assistant_id}` for an assistant
@@ -224,7 +241,8 @@ async def test_delete_assistant_with_gcs_photo(
         "orchestra.web.api.assistant.views.create_email",
         return_value={"user": {"primaryEmail": unique_email_for_delete}},
     ), patch(
-        "orchestra.web.api.assistant.views.watch_email", return_value={"status": "ok"}
+        "orchestra.web.api.assistant.views.watch_email",
+        return_value={"status": "ok"},
     ), patch(
         "orchestra.web.api.assistant.views.create_phone_number",
         return_value={"phoneNumber": "+1234567891"},
@@ -238,21 +256,21 @@ async def test_delete_assistant_with_gcs_photo(
         "orchestra.web.api.assistant.views.create_cloud_run_job",
         return_value={"status": "ok"},
     ), patch(
-        "orchestra.web.api.assistant.views.delete_email"
+        "orchestra.web.api.assistant.views.delete_email",
     ) as mock_delete_email, patch(
-        "orchestra.web.api.assistant.views.delete_phone_number"
+        "orchestra.web.api.assistant.views.delete_phone_number",
     ) as mock_delete_phone, patch(
-        "orchestra.web.api.assistant.views.delete_pubsub_topic"
+        "orchestra.web.api.assistant.views.delete_pubsub_topic",
     ) as mock_delete_pubsub, patch(
-        "orchestra.web.api.assistant.views.delete_cloud_run_job"
+        "orchestra.web.api.assistant.views.delete_cloud_run_job",
     ) as mock_delete_job, patch(
-        "orchestra.web.api.assistant.views.stop_cloud_run_job"
+        "orchestra.web.api.assistant.views.stop_cloud_run_job",
     ) as mock_stop_job, patch(
-        "orchestra.web.api.assistant.views.BucketService"
+        "orchestra.web.api.assistant.views.BucketService",
     ) as MockBucketServiceCreateDelete, patch(
-        "orchestra.db.dao.users_dao.UsersDAO.get_user_with_id"
+        "orchestra.db.dao.users_dao.UsersDAO.get_user_with_id",
     ) as mock_get_user_del, patch(
-        "orchestra.db.dao.users_dao.UsersDAO.recharge_credit"
+        "orchestra.db.dao.users_dao.UsersDAO.recharge_credit",
     ) as mock_recharge_credit_del:
 
         mock_user_del = MagicMock()
@@ -261,7 +279,7 @@ async def test_delete_assistant_with_gcs_photo(
 
         mock_bucket_service_instance = MockBucketServiceCreateDelete.return_value
         mock_bucket_service_instance.delete_assistant_photo = MagicMock(
-            return_value=True
+            return_value=True,
         )
 
         create_resp = await client.post(
@@ -283,7 +301,7 @@ async def test_delete_assistant_with_gcs_photo(
         assert "assistant deleted successfully" in del_resp.json()["info"].lower()
 
         mock_bucket_service_instance.delete_assistant_photo.assert_called_once_with(
-            mock_gcs_photo_url
+            mock_gcs_photo_url,
         )
         if (
             created_email
@@ -298,7 +316,8 @@ async def test_delete_assistant_with_gcs_photo(
 
 @pytest.mark.anyio
 async def test_delete_assistant_with_non_gcs_photo(
-    client: AsyncClient, valid_user_with_headers: Dict[str, Any]
+    client: AsyncClient,
+    valid_user_with_headers: Dict[str, Any],
 ):
     """
     Test `DELETE /v0/assistant/{assistant_id}` for an assistant
@@ -325,7 +344,8 @@ async def test_delete_assistant_with_non_gcs_photo(
         "orchestra.web.api.assistant.views.create_email",
         return_value={"user": {"primaryEmail": unique_email_for_preset}},
     ), patch(
-        "orchestra.web.api.assistant.views.watch_email", return_value={"status": "ok"}
+        "orchestra.web.api.assistant.views.watch_email",
+        return_value={"status": "ok"},
     ), patch(
         "orchestra.web.api.assistant.views.create_phone_number",
         return_value={"phoneNumber": "+1234567892"},
@@ -339,21 +359,21 @@ async def test_delete_assistant_with_non_gcs_photo(
         "orchestra.web.api.assistant.views.create_cloud_run_job",
         return_value={"status": "ok"},
     ), patch(
-        "orchestra.web.api.assistant.views.delete_email"
+        "orchestra.web.api.assistant.views.delete_email",
     ), patch(
-        "orchestra.web.api.assistant.views.delete_phone_number"
+        "orchestra.web.api.assistant.views.delete_phone_number",
     ), patch(
-        "orchestra.web.api.assistant.views.delete_pubsub_topic"
+        "orchestra.web.api.assistant.views.delete_pubsub_topic",
     ), patch(
-        "orchestra.web.api.assistant.views.delete_cloud_run_job"
+        "orchestra.web.api.assistant.views.delete_cloud_run_job",
     ), patch(
-        "orchestra.web.api.assistant.views.stop_cloud_run_job"
+        "orchestra.web.api.assistant.views.stop_cloud_run_job",
     ), patch(
-        "orchestra.web.api.assistant.views.BucketService"
+        "orchestra.web.api.assistant.views.BucketService",
     ) as MockBucketServiceNoCall, patch(
-        "orchestra.db.dao.users_dao.UsersDAO.get_user_with_id"
+        "orchestra.db.dao.users_dao.UsersDAO.get_user_with_id",
     ) as mock_get_user_pre, patch(
-        "orchestra.db.dao.users_dao.UsersDAO.recharge_credit"
+        "orchestra.db.dao.users_dao.UsersDAO.recharge_credit",
     ) as mock_recharge_credit_pre:
 
         mock_user_pre = MagicMock()

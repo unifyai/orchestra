@@ -6,16 +6,16 @@ from typing import List, Optional
 from fastapi import (
     APIRouter,
     Depends,
+    File,
+    Form,
     HTTPException,
     Query,
     Request,
-    status,
     UploadFile,
-    File,
-    Form,
+    status,
 )
-from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.recording_dao import RecordingDAO
@@ -24,20 +24,19 @@ from orchestra.db.dao.voice_dao import VoiceDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.call_recording_service import CallRecordingService
-from orchestra.services.cartesia_service import CartesiaService, CartesiaAPIError
+from orchestra.services.cartesia_service import CartesiaAPIError, CartesiaService
 from orchestra.settings import settings
 from orchestra.web.api.assistant.schema import (
     AssistantCreate,
+    AssistantPhotoUploadResponse,
     AssistantRead,
     AssistantUpdate,
     InfoResponse,
     RecordingCreate,
     RecordingInfo,
     VoiceCreate,
-    VoiceRead,
-    VoiceCloneRequestData,
     VoiceLocalizeRequest,
-    AssistantPhotoUploadResponse,
+    VoiceRead,
 )
 from orchestra.web.api.utils.assistant_infra import (
     create_cloud_run_job,
@@ -589,18 +588,18 @@ def delete_assistant(
         if assistant.profile_photo and assistant.profile_photo.startswith("gs://"):
             try:
                 deleted_from_gcs = bucket_service.delete_assistant_photo(
-                    assistant.profile_photo
+                    assistant.profile_photo,
                 )
                 if not deleted_from_gcs:
                     logging.error(
-                        f"Profile photo {assistant.profile_photo} for assistant {assistant_id} was not deleted from GCS (either not found, wrong bucket, or other non-critical issue)."
+                        f"Profile photo {assistant.profile_photo} for assistant {assistant_id} was not deleted from GCS (either not found, wrong bucket, or other non-critical issue).",
                     )
                     cleanup_errors.append(
-                        f"Failed to delete profile photo: {str(e_gcs)}"
+                        f"Failed to delete profile photo: {str(e_gcs)}",
                     )
             except Exception as e_gcs:
                 logging.error(
-                    f"Failed to delete profile photo {assistant.profile_photo} for assistant {assistant_id}: {str(e_gcs)}"
+                    f"Failed to delete profile photo {assistant.profile_photo} for assistant {assistant_id}: {str(e_gcs)}",
                 )
                 cleanup_errors.append(f"Failed to delete profile photo: {str(e_gcs)}")
 
@@ -1165,7 +1164,8 @@ async def clone_voice_endpoint(
             voice_id=new_cartesia_voice_id,
             name=cartesia_response.get("name", name),
             description=cartesia_response.get(
-                "description", description or f"Cloned voice: {name}"
+                "description",
+                description or f"Cloned voice: {name}",
             ),
             gender=cartesia_response.get("gender", "female"),
             language=cartesia_response.get("language", language),
@@ -1181,25 +1181,26 @@ async def clone_voice_endpoint(
                 language=db_voice.language,
                 gender=db_voice.gender,
                 is_preset=False,
-            )
+            ),
         )
 
     except CartesiaAPIError as e:
         session.rollback()
         raise HTTPException(
-            status_code=e.status_code, detail=f"Cartesia API error: {e.detail}"
+            status_code=e.status_code,
+            detail=f"Cartesia API error: {e.detail}",
         )
     except IntegrityError as e_db_integrity:  # DB unique constraint violation
         session.rollback()
         if new_cartesia_voice_id:  # If Cartesia voice was created but DB save failed
             logging.warning(
-                f"DB save failed for cloned voice {new_cartesia_voice_id} due to integrity error. Attempting Cartesia cleanup."
+                f"DB save failed for cloned voice {new_cartesia_voice_id} due to integrity error. Attempting Cartesia cleanup.",
             )
             try:
                 cartesia_service.delete_voice(new_cartesia_voice_id)
             except Exception as e_cartesia_cleanup:
                 logging.error(
-                    f"Failed to cleanup Cartesia voice {new_cartesia_voice_id} after DB integrity error: {e_cartesia_cleanup}"
+                    f"Failed to cleanup Cartesia voice {new_cartesia_voice_id} after DB integrity error: {e_cartesia_cleanup}",
                 )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1211,13 +1212,13 @@ async def clone_voice_endpoint(
             new_cartesia_voice_id
         ):  # If Cartesia voice was created but another DB error occurred
             logging.warning(
-                f"DB operation failed for cloned voice {new_cartesia_voice_id}. Attempting Cartesia cleanup. Error: {str(e_generic)}"
+                f"DB operation failed for cloned voice {new_cartesia_voice_id}. Attempting Cartesia cleanup. Error: {str(e_generic)}",
             )
             try:
                 cartesia_service.delete_voice(new_cartesia_voice_id)
             except Exception as e_cartesia_cleanup:
                 logging.error(
-                    f"Failed to cleanup Cartesia voice {new_cartesia_voice_id} after generic DB error: {e_cartesia_cleanup}"
+                    f"Failed to cleanup Cartesia voice {new_cartesia_voice_id} after generic DB error: {e_cartesia_cleanup}",
                 )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1270,10 +1271,12 @@ def localize_voice_endpoint(
                 or f"Localized voice: {localize_request_data.name}",
             ),
             gender=cartesia_response.get(
-                "gender", localize_request_data.original_speaker_gender
+                "gender",
+                localize_request_data.original_speaker_gender,
             ),
             language=cartesia_response.get(
-                "language", localize_request_data.target_language
+                "language",
+                localize_request_data.target_language,
             ),
         )
         db_voice.is_preset = False
@@ -1287,25 +1290,26 @@ def localize_voice_endpoint(
                 language=db_voice.language,
                 gender=db_voice.gender,
                 is_preset=False,
-            )
+            ),
         )
 
     except CartesiaAPIError as e:
         session.rollback()
         raise HTTPException(
-            status_code=e.status_code, detail=f"Cartesia API error: {e.detail}"
+            status_code=e.status_code,
+            detail=f"Cartesia API error: {e.detail}",
         )
     except IntegrityError as e_db_integrity:
         session.rollback()
         if new_cartesia_voice_id:
             logging.warning(
-                f"DB save failed for localized voice {new_cartesia_voice_id} due to integrity error. Attempting Cartesia cleanup."
+                f"DB save failed for localized voice {new_cartesia_voice_id} due to integrity error. Attempting Cartesia cleanup.",
             )
             try:
                 cartesia_service.delete_voice(new_cartesia_voice_id)
             except Exception as e_cartesia_cleanup:
                 logging.error(
-                    f"Failed to cleanup Cartesia voice {new_cartesia_voice_id} after DB integrity error: {e_cartesia_cleanup}"
+                    f"Failed to cleanup Cartesia voice {new_cartesia_voice_id} after DB integrity error: {e_cartesia_cleanup}",
                 )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1315,13 +1319,13 @@ def localize_voice_endpoint(
         session.rollback()
         if new_cartesia_voice_id:
             logging.warning(
-                f"DB operation failed for localized voice {new_cartesia_voice_id}. Attempting Cartesia cleanup. Error: {str(e_generic)}"
+                f"DB operation failed for localized voice {new_cartesia_voice_id}. Attempting Cartesia cleanup. Error: {str(e_generic)}",
             )
             try:
                 cartesia_service.delete_voice(new_cartesia_voice_id)
             except Exception as e_cartesia_cleanup:
                 logging.error(
-                    f"Failed to cleanup Cartesia voice {new_cartesia_voice_id} after generic DB error: {e_cartesia_cleanup}"
+                    f"Failed to cleanup Cartesia voice {new_cartesia_voice_id} after generic DB error: {e_cartesia_cleanup}",
                 )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1450,12 +1454,12 @@ def delete_voice(
             try:
                 cartesia_service.delete_voice(voice_id)
                 logging.info(
-                    f"Successfully deleted voice {voice_id} from Cartesia for user {user_id}."
+                    f"Successfully deleted voice {voice_id} from Cartesia for user {user_id}.",
                 )
             except CartesiaAPIError as e_cartesia:
                 if e_cartesia.status_code == 404:
                     logging.warning(
-                        f"Voice {voice_id} not found on Cartesia for user {user_id}. Proceeding with DB deletion."
+                        f"Voice {voice_id} not found on Cartesia for user {user_id}. Proceeding with DB deletion.",
                     )
                 else:
                     # For other Cartesia errors, prevent DB deletion and report
@@ -1475,7 +1479,8 @@ def delete_voice(
 
         # If it was a preset, or Cartesia deletion was successful/404 for a non-preset
         voice_dao.delete_voice(
-            user_id=user_id, voice_id=voice_id
+            user_id=user_id,
+            voice_id=voice_id,
         )  # This re-fetches and deletes the user-specific record
         session.commit()
         return InfoResponse(info="Voice deleted successfully.")
@@ -1507,7 +1512,8 @@ async def upload_assistant_photo(
     user_id = request.state.user_id
     if not user_id:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="User not authenticated."
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User not authenticated.",
         )
 
     if not file.content_type or not file.content_type.startswith("image/"):
@@ -1534,7 +1540,9 @@ async def upload_assistant_photo(
             )
 
         gcs_url = bucket_service.upload_assistant_photo_file(
-            file_content=file_content, user_id=user_id, content_type=file.content_type
+            file_content=file_content,
+            user_id=user_id,
+            content_type=file.content_type,
         )
         return InfoResponse(info=AssistantPhotoUploadResponse(gcs_url=gcs_url))
     except HTTPException as e:

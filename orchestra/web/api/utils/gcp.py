@@ -1,5 +1,5 @@
 import json
-from typing import Dict, List, Union, Tuple, Optional
+from typing import Dict, List, Optional, Tuple, Union
 
 from google.cloud import aiplatform, aiplatform_v1, pubsub_v1, storage
 from google.cloud.exceptions import NotFound

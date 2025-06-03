@@ -1,12 +1,13 @@
 import base64
 import hashlib
+import logging
 import os
 import uuid
-import logging
 from typing import Optional, Tuple
 
 from google.api_core import exceptions
 from google.cloud import storage
+
 from orchestra.web.api.utils.gcp import parse_gcs_url
 
 
@@ -215,7 +216,7 @@ class BucketService:
 
         if parsed_bucket != self.assistant_images_bucket_name:
             logging.error(
-                f"Attempt to delete photo from incorrect bucket. Expected '{self.assistant_images_bucket_name}', got '{parsed_bucket}'. URL: {gcs_url}"
+                f"Attempt to delete photo from incorrect bucket. Expected '{self.assistant_images_bucket_name}', got '{parsed_bucket}'. URL: {gcs_url}",
             )
             return False
         try:

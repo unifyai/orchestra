@@ -315,26 +315,32 @@ class VoiceCloneRequestData(BaseModel):
     name: str = Field(..., description="Name for the new cloned voice")
     language: str = Field(..., description="Language of the audio clip (e.g., 'en')")
     description: Optional[str] = Field(
-        None, description="Optional description for the voice"
+        None,
+        description="Optional description for the voice",
     )
 
 
 class VoiceLocalizeRequest(BaseModel):
     base_cartesia_voice_id: str = Field(
-        ..., description="Cartesia Voice ID of the voice to localize"
+        ...,
+        description="Cartesia Voice ID of the voice to localize",
     )
     name: str = Field(..., description="Name for the new localized voice")
     target_language: str = Field(
-        ..., description="Target language for localization (e.g., 'es')"
+        ...,
+        description="Target language for localization (e.g., 'es')",
     )
     original_speaker_gender: str = Field(
-        ..., description="Gender of the original speaker ('female' or 'male')"
+        ...,
+        description="Gender of the original speaker ('female' or 'male')",
     )
     description: Optional[str] = Field(
-        None, description="Optional description for the voice"
+        None,
+        description="Optional description for the voice",
     )
     dialect: Optional[str] = Field(
-        None, description="Optional dialect for localization"
+        None,
+        description="Optional dialect for localization",
     )
 
 

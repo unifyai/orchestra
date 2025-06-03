@@ -1,7 +1,7 @@
 import io
-import httpx
-from typing import Optional, Dict, Any, Union
+from typing import Any, Dict, Optional, Union
 
+import httpx
 from fastapi import HTTPException, status
 
 from orchestra.settings import settings
@@ -39,10 +39,12 @@ class CartesiaService:
 
         if not (200 <= response.status_code < 300):
             error_detail = response_data.get(
-                "detail", response_data.get("message", "Unknown Cartesia API error")
+                "detail",
+                response_data.get("message", "Unknown Cartesia API error"),
             )
             raise CartesiaAPIError(
-                status_code=response.status_code, detail=str(error_detail)
+                status_code=response.status_code,
+                detail=str(error_detail),
             )
         return response_data
 
@@ -59,7 +61,7 @@ class CartesiaService:
         """
         url = f"{self.base_url}/voices/clone"
         files = {
-            "clip": (file_name, io.BytesIO(file_content), "application/octet-stream")
+            "clip": (file_name, io.BytesIO(file_content), "application/octet-stream"),
         }
         payload: Dict[str, Union[str, None]] = {
             "name": name,
@@ -72,7 +74,10 @@ class CartesiaService:
         try:
             with httpx.Client() as client:
                 response = client.post(
-                    url, data=payload, files=files, headers=self.headers
+                    url,
+                    data=payload,
+                    files=files,
+                    headers=self.headers,
                 )
             return self._handle_response(response)
         except httpx.RequestError as e:
@@ -110,7 +115,9 @@ class CartesiaService:
         try:
             with httpx.Client() as client:
                 response = client.post(
-                    url, json=payload, headers=headers_with_content_type
+                    url,
+                    json=payload,
+                    headers=headers_with_content_type,
                 )
             return self._handle_response(response)
         except httpx.RequestError as e:
