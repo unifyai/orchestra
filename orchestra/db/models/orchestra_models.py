@@ -1165,6 +1165,11 @@ class Voice(Base):
     description = Column(String, nullable=False)
     gender = Column(String, nullable=False)
     language = Column(String, nullable=False)  # e.g., "en", "es"
+    is_preset = Column(
+        Boolean,
+        nullable=False,
+        server_default="f",
+    )  # True if this is a Cartesia preset voice
 
 
 class Tab(Base):

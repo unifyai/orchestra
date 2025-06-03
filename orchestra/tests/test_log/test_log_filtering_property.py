@@ -129,6 +129,7 @@ async def setup_test_data(client):
 
 # ===== ENHANCED STRATEGY DEFINITIONS =====
 
+
 # Strategy for column references with optional type filtering
 @st.composite
 def column_ref_strategy(draw, allowed_types=None) -> Tuple[str, str]:
