@@ -21,7 +21,6 @@ from orchestra.web.api import (  # noqa: WPS235
     monitoring,
     project,
     provider,
-    stripe_webhook,
     supported_endpoints,
     users,
 )
@@ -34,8 +33,12 @@ from orchestra.web.api.dependencies import (
 )
 from orchestra.web.api.log.views import admin_router as log_admin_router
 from orchestra.web.api.project.views import admin_router as project_admin_router
+from orchestra.web.api.webhooks import stripe as stripe_webhooks
 
-API_KEY_AUTH = [Depends(auth_api_key), Depends(check_account_not_frozen)]
+API_KEY_AUTH = [
+    Depends(auth_api_key),
+    Depends(check_account_not_frozen),
+]
 ADMIN_AUTH = [Depends(auth_admin_key)] if not os.environ.get("ON_PREM") else None
 
 api_router = APIRouter()
@@ -207,7 +210,4 @@ api_router.include_router(
 
 api_router.include_router(monitoring.router)
 api_router.include_router(docs.router)
-api_router.include_router(
-    stripe_webhook.router,
-    tags=["Stripe Webhooks"],
-)
+api_router.include_router(stripe_webhooks.router)

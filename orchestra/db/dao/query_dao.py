@@ -1,4 +1,5 @@
 import datetime
+from decimal import Decimal
 from typing import List, Optional
 
 from sqlalchemy import and_, func, or_, select
@@ -22,7 +23,7 @@ class QueryDAO:
         endpoint_id: Optional[int],
         custom_endpoint_id: Optional[int],
         local_endpoint_id: Optional[int],
-        credits: float,
+        credits: Decimal,
         query_body: str,
         response_body: str,
         status_code: int,
@@ -37,7 +38,7 @@ class QueryDAO:
         :param user_id: user_id of a query.
         :param at: at of a query.
         :param endpoint_id: endpoint_id of a query.
-        :param credits: credits of a query.
+        :param credits: credits of a query (whole-credit units, Decimal OK).
         """
 
         new_query = Query(
@@ -47,7 +48,7 @@ class QueryDAO:
             endpoint_id=endpoint_id,
             custom_endpoint_id=custom_endpoint_id,
             local_endpoint_id=local_endpoint_id,
-            credits=credits,
+            credits=Decimal(str(credits)),
             query_body=query_body,
             response_body=response_body,
             signature=signature,
@@ -79,9 +80,11 @@ class QueryDAO:
 
                 try:
                     self.session.add(query_tag_association)
-                    self.session.commit()
                 except IntegrityError:
                     self.session.rollback()
+
+        # Commit the query and tags (credit deduction handled elsewhere)
+        self.session.commit()
 
     def get_all_queries(self, limit: int, offset: int) -> List[Query]:
         """
@@ -99,7 +102,9 @@ class QueryDAO:
 
     def get_num_queries(self, user_id) -> int:
         return self.session.execute(
-            select(func.count()).select_from(Query).where(Query.user_id == user_id),
+            select(func.count(Query.id))
+            .select_from(Query)
+            .where(Query.user_id == user_id),
         ).scalar()
 
     def filter(
@@ -110,7 +115,7 @@ class QueryDAO:
         endpoint_ids: Optional[list[int]] = None,
         custom_endpoint_ids: Optional[list[int]] = None,
         local_endpoint_ids: Optional[list[int]] = None,
-        credits: Optional[float] = None,
+        credits: Optional[Decimal] = None,
         signature: Optional[str] = None,
         used_router: Optional[str] = None,
         router: Optional[str] = None,
