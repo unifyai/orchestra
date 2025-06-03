@@ -1,17 +1,20 @@
 import base64
-from typing import Any, Dict  # For type hinting the fixture
+from typing import Any, Dict
 from unittest.mock import MagicMock, patch
-
-import pytest  # Make sure pytest is imported
+import pytest
 from httpx import AsyncClient
+from orchestra.tests.utils import HEADERS
 
+async def get_user_id_from_request_state(
+    client: AsyncClient,
+    path: str = "/v0/assistant/photo",
+) -> str:
+    return "test-user-id-default"
 
-# A simple 1x1 pixel PNG image (transparent)
 def _get_sample_png_bytes() -> bytes:
     return base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
     )
-
 
 def _get_sample_text_file_bytes() -> bytes:
     return b"This is not an image."
@@ -20,15 +23,14 @@ def _get_sample_text_file_bytes() -> bytes:
 @pytest.mark.anyio
 async def test_upload_assistant_photo_success(
     client: AsyncClient,
-    valid_user_with_headers: Dict[str, Any],
 ):
     """
     Test `POST /v0/assistant/photo/upload` successful photo upload.
     Mocks BucketService to avoid actual GCS upload.
     """
-    user_id_from_fixture = valid_user_with_headers["id"]
+    user_id = await get_user_id_from_request_state(client)
     mock_gcs_url = (
-        f"gs://test-bucket/assistant_photos/{user_id_from_fixture}/sample_photo.png"
+        f"gs://test-bucket/assistant_photos/{user_id}/sample_photo.png"
     )
 
     with patch("orchestra.web.api.assistant.views.BucketService") as MockBucketService:
@@ -42,7 +44,7 @@ async def test_upload_assistant_photo_success(
 
         upload_headers = {
             "accept": "application/json",
-            "Authorization": valid_user_with_headers["headers"]["Authorization"],
+            "Authorization": HEADERS["Authorization"],
         }
 
         resp = await client.post(
@@ -58,7 +60,7 @@ async def test_upload_assistant_photo_success(
 
         mock_bucket_instance.upload_assistant_photo_file.assert_called_once()
         args, kwargs = mock_bucket_instance.upload_assistant_photo_file.call_args
-        assert kwargs.get("user_id") == user_id_from_fixture
+        assert kwargs.get("user_id") == user_id
         assert kwargs.get("content_type") == "image/png"
         assert kwargs.get("file_content") == image_bytes
 
@@ -66,7 +68,6 @@ async def test_upload_assistant_photo_success(
 @pytest.mark.anyio
 async def test_upload_assistant_photo_invalid_file_type(
     client: AsyncClient,
-    valid_user_with_headers: Dict[str, Any],
 ):
     """Test `POST /v0/assistant/photo/upload` with a non-image file type."""
     text_bytes = _get_sample_text_file_bytes()
@@ -74,7 +75,7 @@ async def test_upload_assistant_photo_invalid_file_type(
 
     upload_headers = {
         "accept": "application/json",
-        "Authorization": valid_user_with_headers["headers"]["Authorization"],
+        "Authorization": HEADERS["Authorization"],
     }
     resp = await client.post(
         "/v0/assistant/photo/upload",
@@ -91,7 +92,6 @@ async def test_upload_assistant_photo_invalid_file_type(
 @pytest.mark.anyio
 async def test_upload_assistant_photo_file_too_large(
     client: AsyncClient,
-    valid_user_with_headers: Dict[str, Any],
 ):
     """Test `POST /v0/assistant/photo/upload` with a file exceeding size limits."""
     large_file_content = b"A" * (6 * 1024 * 1024)  # 6MB
@@ -99,7 +99,7 @@ async def test_upload_assistant_photo_file_too_large(
 
     upload_headers = {
         "accept": "application/json",
-        "Authorization": valid_user_with_headers["headers"]["Authorization"],
+        "Authorization": HEADERS["Authorization"],
     }
     with patch("orchestra.web.api.assistant.views.BucketService"):
         resp = await client.post(
@@ -120,7 +120,6 @@ async def test_upload_assistant_photo_file_too_large(
 @pytest.mark.anyio
 async def test_upload_assistant_photo_gcs_failure(
     client: AsyncClient,
-    valid_user_with_headers: Dict[str, Any],
 ):
     """Test `POST /v0/assistant/photo/upload` when GCS upload fails."""
     with patch("orchestra.web.api.assistant.views.BucketService") as MockBucketService:
@@ -133,7 +132,7 @@ async def test_upload_assistant_photo_gcs_failure(
         files = {"file": ("sample_photo.png", image_bytes, "image/png")}
         upload_headers = {
             "accept": "application/json",
-            "Authorization": valid_user_with_headers["headers"]["Authorization"],
+            "Authorization": HEADERS["Authorization"],
         }
         resp = await client.post(
             "/v0/assistant/photo/upload",
@@ -151,12 +150,12 @@ async def test_upload_assistant_photo_gcs_failure(
 @pytest.mark.anyio
 async def test_create_assistant_with_uploaded_gcs_photo(
     client: AsyncClient,
-    valid_user_with_headers: Dict[str, Any],
 ):
     """
     Test creating an assistant with a profile_photo URL that
     would have come from a previous photo upload.
     """
+    user_id = await get_user_id_from_request_state(client)
     mock_gcs_photo_url = "gs://my-assistant-photos/user-xyz/photo-abc.jpg"
     payload = {
         "first_name": "PhotoAs",
@@ -166,7 +165,7 @@ async def test_create_assistant_with_uploaded_gcs_photo(
         "weekly_limit": 10.0,
         "max_parallel": 2,
         "user_phone": "+15551234567",
-        "email": f"test.photo_{valid_user_with_headers['id'][:8]}@unify.ai",  # Unique email
+        "email": f"test.photo_{user_id}@unify.ai",
     }
 
     with patch(
@@ -200,7 +199,7 @@ async def test_create_assistant_with_uploaded_gcs_photo(
         resp = await client.post(
             "/v0/assistant",
             json=payload,
-            headers=valid_user_with_headers["headers"],
+            headers=HEADERS,
         )
 
     assert resp.status_code == 200, f"Response: {resp.text}"
@@ -213,17 +212,17 @@ async def test_create_assistant_with_uploaded_gcs_photo(
 @pytest.mark.anyio
 async def test_delete_assistant_with_gcs_photo(
     client: AsyncClient,
-    valid_user_with_headers: Dict[str, Any],
 ):
     """
     Test `DELETE /v0/assistant/{assistant_id}` for an assistant
     that has a GCS photo URL. Mocks BucketService.delete_assistant_photo.
     """
+    user_id = await get_user_id_from_request_state(client)
     mock_gcs_photo_url = (
-        f"gs://my-assistant-photos/{valid_user_with_headers['id']}/photo-to-delete.jpg"
+        f"gs://my-assistant-photos/{user_id}/photo-to-delete.jpg"
     )
     unique_email_for_delete = (
-        f"delete.photo_{valid_user_with_headers['id'][:8]}@unify.ai"
+        f"delete.photo_{user_id}@unify.ai"
     )
     create_payload = {
         "first_name": "ToDelete",
@@ -285,7 +284,7 @@ async def test_delete_assistant_with_gcs_photo(
         create_resp = await client.post(
             "/v0/assistant",
             json=create_payload,
-            headers=valid_user_with_headers["headers"],
+            headers=HEADERS,
         )
         assert create_resp.status_code == 200, f"Response: {create_resp.text}"
         assistant_id_to_delete = create_resp.json()["info"]["agent_id"]
@@ -295,7 +294,7 @@ async def test_delete_assistant_with_gcs_photo(
 
         del_resp = await client.delete(
             f"/v0/assistant/{assistant_id_to_delete}",
-            headers=valid_user_with_headers["headers"],
+            headers=HEADERS,
         )
         assert del_resp.status_code == 200, f"Response: {del_resp.text}"
         assert "assistant deleted successfully" in del_resp.json()["info"].lower()
@@ -317,16 +316,16 @@ async def test_delete_assistant_with_gcs_photo(
 @pytest.mark.anyio
 async def test_delete_assistant_with_non_gcs_photo(
     client: AsyncClient,
-    valid_user_with_headers: Dict[str, Any],
 ):
     """
     Test `DELETE /v0/assistant/{assistant_id}` for an assistant
     with a non-GCS (e.g., http) photo URL.
     BucketService.delete_assistant_photo should NOT be called.
     """
+    user_id = await get_user_id_from_request_state(client)
     http_photo_url = "https://example.com/some_preset_image.jpg"
     unique_email_for_preset = (
-        f"preset.photo_{valid_user_with_headers['id'][:8]}@unify.ai"
+        f"preset.photo_{user_id}@unify.ai"
     )
     create_payload = {
         "first_name": "PresetUser",
@@ -386,14 +385,14 @@ async def test_delete_assistant_with_non_gcs_photo(
         create_resp = await client.post(
             "/v0/assistant",
             json=create_payload,
-            headers=valid_user_with_headers["headers"],
+            headers=HEADERS,
         )
         assert create_resp.status_code == 200, f"Response: {create_resp.text}"
         assistant_id_to_delete = create_resp.json()["info"]["agent_id"]
 
         del_resp = await client.delete(
             f"/v0/assistant/{assistant_id_to_delete}",
-            headers=valid_user_with_headers["headers"],
+            headers=HEADERS,
         )
         assert del_resp.status_code == 200, f"Response: {del_resp.text}"
 

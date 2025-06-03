@@ -4,8 +4,7 @@ import random
 import time
 import warnings
 from datetime import datetime, timedelta
-from typing import Any, AsyncGenerator, Generator, Dict
-import uuid
+from typing import Any, AsyncGenerator, Generator
 
 import pytest
 from fastapi import FastAPI
@@ -23,8 +22,6 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.db.utils import create_database, drop_database
 from orchestra.settings import settings
 from orchestra.web.application import get_app
-from orchestra.tests.utils import create_test_user
-
 
 @pytest.fixture(scope="session")
 def anyio_backend() -> str:
@@ -132,35 +129,6 @@ async def client(
     """
     async with AsyncClient(app=fastapi_app, base_url="http://test") as ac:
         yield ac
-
-
-@pytest.fixture(scope="function")
-async def valid_user_with_headers(client: AsyncClient) -> Dict[str, Any]:
-    """
-    Creates a new test user for each test function that requests this fixture.
-    Returns a dictionary containing user details and their authentication headers.
-    Relies on the `create_test_user` utility from `orchestra.tests.utils`.
-    """
-    user_email = f"testuser_photo_{uuid.uuid4().hex[:12]}@example.com"
-
-    # The `client` fixture passed here is the one defined above.
-    # `create_test_user` (from your utils.py) uses ADMIN_HEADERS internally to create the user.
-    # This client doesn't need to be admin-authenticated itself for this step,
-    # as `create_test_user` handles the admin-authorized call.
-    user_data = await create_test_user(client, user_email)
-
-    # Assert that the necessary keys are present in the returned data
-    assert (
-        "headers" in user_data
-    ), "User data from create_test_user must include 'headers'"
-    assert "id" in user_data, "User data from create_test_user must include 'id'"
-    assert (
-        "api_key" in user_data
-    ), "User data from create_test_user must include 'api_key'"
-    assert user_data["headers"]["Authorization"] == f"Bearer {user_data['api_key']}"
-
-    return user_data
-
 
 ### PERF TESTS FIXTURES ###
 
