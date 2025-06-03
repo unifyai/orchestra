@@ -112,21 +112,50 @@ def auth_admin_key(
 
 
 def check_account_not_frozen(request: Request):
+    """
+    Check if the user's account is frozen or suspended.
+
+    This combines both frozen and suspended checks to avoid multiple dependency layers.
+    """
     user_id = getattr(request.state, "user_id", None)
     if user_id:
         try:
             with _ro_session() as session:
-                if UsersDAO(session).is_account_frozen(user_id):
+                users_dao = UsersDAO(session)
+
+                # Check if account is frozen
+                if users_dao.is_account_frozen(user_id):
                     raise account_frozen
+
+                # Check if account is suspended due to unpaid invoices
+                try:
+                    user = users_dao.get_user_with_id(user_id)
+                    # If user doesn't exist in users table, they can't be suspended
+                    # (they don't have billing setup yet)
+                    if user and user.billing_state == "SUSPENDED":
+                        raise account_suspended
+                except HTTPException as e:
+                    # If it's a 404 "User ID not found", allow the request to proceed
+                    # since users without billing setup can't be suspended
+                    if e.status_code == 404:
+                        pass
+                    else:
+                        # Re-raise other HTTP exceptions (like account_suspended)
+                        raise
+
         except Exception as e:
-            if e == account_frozen:
-                raise account_frozen
+            if e == account_frozen or e == account_suspended:
+                raise
             else:
+                # If there's any other error, allow the request to proceed
+                # rather than blocking legitimate users
                 pass
 
 
 def check_account_not_suspended(request: Request):
     """
+    DEPRECATED: Use check_account_not_frozen instead which now handles both checks.
+
     Check if the user's account is suspended due to unpaid invoices.
 
     This should be called after authentication to prevent suspended users

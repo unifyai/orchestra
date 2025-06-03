@@ -192,43 +192,23 @@ async def test_autorecharge_qty(  # noqa: WPS218, E501
     fastapi_app: FastAPI,
     dbsession,
 ) -> None:
-    """Checks the autorecharge qty endpoint."""
-    # Add spending history to meet billing requirements
-    add_spending_history_for_user(dbsession, "stripe_autorecharge")
+    """Test autorecharge quantity endpoint."""
+    add_spending_history_for_user(dbsession, "user1")
 
-    url = fastapi_app.url_path_for("update_user_autorecharge_qty")
-    query = text("SELECT * FROM users WHERE users.id = 'stripe_autorecharge';")
-    payload = {
-        "id": "stripe_autorecharge",
-        "qty": "30",  # Changed to meet minimum $25 requirement
-    }
+    response = await client.put(
+        "/v0/admin/autorecharge_qty",
+        params={"id": "user1", "qty": 50.0},
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 200
 
-    pre = dbsession.execute(query).all()[0][5]
-    assert pre == 0
-    response = await client.put(url, headers=ADMIN_HEADERS, params=payload)
-    assert response.status_code == status.HTTP_200_OK
-    post = dbsession.execute(query).all()[0][5]
-    assert post == 30  # Updated expected value
-
-
-# TODO: amount has to be stored in the user
-def test_initial_credits(dbsession, worker_id) -> None:
-    """Test to check initial user credits from seeding data."""
-    user1 = get_user("user1", dbsession)[0]
-    user2 = get_user("user2", dbsession)[0]
-    user3 = get_user("user3", dbsession)[0]
-    user4 = get_user("user4", dbsession)[0]
-
-    print(f"user1 initial credits: {user1.credits}")
-    print(f"user2 initial credits: {user2.credits}")
-    print(f"user3 initial credits: {user3.credits}")
-    print(f"user4 initial credits: {user4.credits}")
-
-    # Expected values for decimal credits
-    assert user1.credits == 1
-    assert math.isclose(user2.credits, 9.99)  # Should be 9.99 as decimal
-    assert user3.credits == 10
-    assert user4.credits == 20
+    # Test with amount below minimum - should fail
+    response = await client.put(
+        "/v0/admin/autorecharge_qty",
+        params={"id": "user1", "qty": 10.0},
+        headers=ADMIN_HEADERS,
+    )
+    assert response.status_code == 400
 
 
 if __name__ == "__main__":

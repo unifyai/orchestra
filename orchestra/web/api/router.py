@@ -30,7 +30,6 @@ from orchestra.web.api.dependencies import (
     auth_admin_key,
     auth_api_key,
     check_account_not_frozen,
-    check_account_not_suspended,
 )
 from orchestra.web.api.log.views import admin_router as log_admin_router
 from orchestra.web.api.project.views import admin_router as project_admin_router
@@ -39,7 +38,6 @@ from orchestra.web.api.webhooks import stripe as stripe_webhooks
 API_KEY_AUTH = [
     Depends(auth_api_key),
     Depends(check_account_not_frozen),
-    Depends(check_account_not_suspended),
 ]
 ADMIN_AUTH = [Depends(auth_admin_key)] if not os.environ.get("ON_PREM") else None
 
