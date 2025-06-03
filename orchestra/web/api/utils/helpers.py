@@ -15,7 +15,9 @@ import stripe
 from anthropic import Anthropic
 from openai import OpenAI
 
-from orchestra.db.models.orchestra_models import Recharge
+from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
+from orchestra.lib.billing import credits_to_usd, get_appropriate_stripe_key
+from orchestra.lib.time import month_end_utc
 
 oai_func = OpenAI(api_key="").chat.completions.create
 OPENAI_ALLOWED_ARGS = set(inspect.signature(oai_func).parameters.keys())
@@ -118,7 +120,13 @@ def check_litellm_supported_args(kwargs, provider_endpoint):
 
 def recharge_and_generate_invoice(user, users_dao):
     try:
-        stripe.api_key = os.environ.get("STRIPE_SECRET_KEY_LIVE")
+        # Use intelligent key selection - prefer test keys in test environments
+        stripe_key = get_appropriate_stripe_key()
+        if not stripe_key:
+            logging.error("No valid Stripe API key found")
+            return None
+
+        stripe.api_key = stripe_key
         customer_id = user.stripe_customer_id
         customer = stripe.Customer.retrieve(customer_id)
         if not customer.invoice_settings.default_payment_method:
@@ -163,20 +171,25 @@ def recharge_and_generate_invoice(user, users_dao):
 
         if pay_invoice.status == "paid":
             logging.info(
-                f"Invoice {finalized_invoice.number} has been paid. Recording pending recharge.",
+                f"Invoice {finalized_invoice.number} has been paid. Recording paid recharge.",
             )
 
-            # Record the pending transaction in the Recharge table
-            # Note: Credit will be added by the webhook handler when payment is confirmed
+            # Record the paid transaction in the Recharge table
+            # Since we paid immediately, mark it as PAID and add credits immediately
             recharge = Recharge(
-                at=datetime.now(tz=timezone.utc),
                 user_id=user.id,
                 quantity=user.autorecharge_qty,
+                amount_usd=credits_to_usd(int(user.autorecharge_qty)),
+                invoice_group=month_end_utc(date.today()),
                 type="invoice",
                 transaction_id=finalized_invoice.id,
-                status="pending",
+                status=RechargeStatus.PAID,  # Mark as PAID since we paid immediately
+                stripe_invoice_id=finalized_invoice.id,
             )
             users_dao.session.add(recharge)
+
+            # Add credits immediately since payment succeeded
+            users_dao.recharge_credit(user.id, int(user.autorecharge_qty))
             users_dao.session.commit()
         else:
             logging.warning(

@@ -2,7 +2,7 @@ import os
 import subprocess
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -12,7 +12,6 @@ from google.cloud.storage import Client
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
-from orchestra.db.dao.beta_list_dao import BetaListDAO
 from orchestra.db.dao.credit_card_fingerprint import CreditCardFingerprintDAO
 from orchestra.db.dao.custom_router_dao import CustomRouterDAO
 from orchestra.db.dao.datapoint_dao import DatapointDAO
@@ -39,6 +38,7 @@ from orchestra.db.models.orchestra_models import (  # noqa: WPS235
     Task,
     Users,
 )
+from orchestra.lib.billing import credits_to_usd
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
     BenchmarkRunModelResponse,
     CreditCardFingerprintModelResponse,
@@ -680,11 +680,18 @@ def create_recharge_model(
         quantity=new_recharge_object.quantity,
     )
 
+    # Calculate amount_usd and invoice_group for the new billing system
+    amount_usd = credits_to_usd(int(new_recharge_object.quantity))
+    # Use month-end date for invoice grouping
+    first_next_month = (at.replace(day=1) + timedelta(days=32)).replace(day=1)
+    invoice_group = (first_next_month - timedelta(microseconds=1)).date()
+
     recharge_dao.create_recharge(
-        at=at,
         user_id=new_recharge_object.user_id,
-        quantity=new_recharge_object.quantity,
-        type=new_recharge_object.type,
+        quantity=int(new_recharge_object.quantity),
+        amount_usd=amount_usd,
+        invoice_group=invoice_group,
+        type_=new_recharge_object.type,
         transaction_id=new_recharge_object.transaction_id,
     )
 
@@ -712,32 +719,15 @@ def create_task_model(
     session=Depends(get_db_session),
 ) -> None:
     """
-    Creates task model in the database.
+    Create new task model in the database.
 
     :param new_task_object: new task model item.
     :param task_dao: DAO for task models.
     """
     task_dao = TaskDAO(session)
-    task_dao.create_task(
+    task_dao.create_task_model(
         name=new_task_object.name,
-        modality=new_task_object.modality,
     )
-
-
-@router.put("/create_beta_list")
-def create_beta_list(
-    email: str,
-    type: str,
-    session=Depends(get_db_session),
-) -> None:
-    """
-    Creates beta list model in the database.
-
-    :param new_beta_list_object: new beta list model item.
-    :param beta_list_dao: DAO for beta_list models.
-    """
-    beta_list_dao = BetaListDAO(session)
-    beta_list_dao.create_beta_list(email=email, type=type)
 
 
 @router.put("/update_benchmark_run")
@@ -836,8 +826,14 @@ def update_user_autorecharge(  # noqa: WPS211
     :param users_dao: DAO for users models.
     """
     users_dao = UsersDAO(session)
-    users_dao.enable_autorecharge(user_id=id, enable=enable)
-    users_dao.session.commit()
+    try:
+        users_dao.enable_autorecharge(user_id=id, enable=enable)
+        users_dao.session.commit()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException as e:
+        # Re-raise HTTPExceptions (like 404 for user not found)
+        raise e
 
 
 @router.put("/autorecharge_threshold")
@@ -872,8 +868,14 @@ def update_user_autorecharge_qty(  # noqa: WPS211
     :param users_dao: DAO for users models.
     """
     users_dao = UsersDAO(session)
-    users_dao.set_autorecharge_qty(user_id=id, qty=qty)
-    users_dao.session.commit()
+    try:
+        users_dao.set_autorecharge_qty(user_id=id, qty=qty)
+        users_dao.session.commit()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException as e:
+        # Re-raise HTTPExceptions (like 404 for user not found)
+        raise e
 
 
 @router.put("/create_custom_router")
@@ -1358,3 +1360,95 @@ def delete_file_or_folder(
             status_code=500,
             detail=f"Failed to delete file or folder: {str(e)}",
         )
+
+
+@router.post("/billing/invoice-month")
+def trigger_monthly_invoicing(
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Trigger monthly invoicing for the specified period.
+    Defaults to previous month if not specified.
+
+    This endpoint is designed to be called by Cloud Scheduler.
+    """
+    try:
+        # Import here to avoid circular imports
+        from orchestra.routines.monthly_invoicer import invoice_month
+
+        # Pass the session to avoid creating a new one
+        invoice_month(year, month, session=session)
+
+        period = f"{year}-{month:02d}" if year and month else "previous month"
+        return {
+            "status": "success",
+            "message": f"Monthly invoicing completed for {period}",
+            "year": year,
+            "month": month,
+        }
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Monthly invoicing failed: {str(e)}",
+        )
+
+
+@router.post("/billing/suspend-past-due")
+def trigger_billing_guard(
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Trigger billing guard to suspend past-due users with zero credits.
+
+    This endpoint is designed to be called by Cloud Scheduler.
+    """
+    try:
+        # Import here to avoid circular imports
+        from orchestra.routines.billing_guard import suspend_past_due_users
+
+        # Pass the session directly instead of letting the function manage its own
+        suspend_past_due_users(session=session)
+
+        return {
+            "status": "success",
+            "message": "Billing guard completed - past due users with zero credits suspended",
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Billing guard failed: {str(e)}")
+
+
+@router.get("/user_billing_eligibility")
+def get_user_billing_eligibility(
+    user_id: str,
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Check if a user is eligible for monthly billing based on spending.
+
+    :param user_id: id of the user to check.
+    :return: dict with eligibility status and spending information.
+    """
+    users_dao = UsersDAO(session)
+    try:
+        # First check if user exists - this will raise HTTPException if not found
+        user = users_dao.get_user_with_id(user_id)
+
+        total_spending = users_dao.get_total_spending(user_id)
+        can_enable_monthly = users_dao.can_enable_monthly_billing(user_id)
+
+        return {
+            "user_id": user_id,
+            "total_spending": total_spending,
+            "can_enable_monthly_billing": can_enable_monthly,
+            "minimum_spend_required": 100.0,
+            "remaining_spend_needed": max(0, 100.0 - total_spending),
+        }
+    except HTTPException as e:
+        # Re-raise HTTPExceptions (like 404 for user not found)
+        raise e
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"User not found: {str(e)}")
