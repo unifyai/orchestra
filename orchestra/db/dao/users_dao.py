@@ -1,11 +1,15 @@
 import decimal
 from typing import List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import Users
+from orchestra.db.models.orchestra_models import Query, Users
 from orchestra.web.api.utils.http_responses import not_found
+
+# Constants for billing requirements
+MIN_SPEND_FOR_MONTHLY_BILLING = 100.0  # $100 in credits (10,000 credits)
+MIN_AUTORECHARGE_AMOUNT = 25.0  # $25 in credits (2,500 credits)
 
 
 class UsersDAO:
@@ -69,6 +73,31 @@ class UsersDAO:
         except IndexError:
             raise not_found("User ID")
 
+    def get_total_spending(self, user_id: str) -> float:
+        """
+        Calculate total spending for a user from the Query table.
+
+        :param user_id: id of the user
+        :return: total spending in credits (equivalent to dollars since 1 credit = $0.01)
+        """
+        result = self.session.execute(
+            select(func.sum(Query.credits)).where(
+                Query.user_id == user_id,
+            ),  # Count all queries since providers charge for failed requests too
+        ).scalar()
+
+        return float(result) if result else 0.0
+
+    def can_enable_monthly_billing(self, user_id: str) -> bool:
+        """
+        Check if user has spent enough to enable monthly billing.
+
+        :param user_id: id of the user
+        :return: True if user has spent at least $100
+        """
+        total_spending = self.get_total_spending(user_id)
+        return total_spending >= MIN_SPEND_FOR_MONTHLY_BILLING
+
     def is_telemetry_activated(self, id: str) -> bool:
         try:
             telemetry_activated = self.filter(id=id)[0].store_prompts
@@ -93,12 +122,12 @@ class UsersDAO:
         raw_users = self.session.execute(query)
         user = raw_users.scalars().first()
         if user is not None:
+            new_credits = user.credits + decimal.Decimal(quantity)
             setattr(  # noqa: B010
                 user,
                 "credits",
-                user.credits + decimal.Decimal(quantity),
+                new_credits,
             )
-        self.session.commit()
 
     def set_prompt_telemetry(
         self,
@@ -142,10 +171,22 @@ class UsersDAO:
         """
         Enable/disable autorecharge for a user.
 
+        Validates that user has spent at least $100 before enabling monthly billing.
+
         :param user_id: id of a user.
         :param enable: whether to enable (true) or disable (false) autorecharge.
+        :raises ValueError: if trying to enable autorecharge without sufficient spending
         """
+        # First check if user exists - this will raise HTTPException if not found
         user = self.get_user_with_id(user_id)
+
+        if enable and not self.can_enable_monthly_billing(user_id):
+            total_spending = self.get_total_spending(user_id)
+            raise ValueError(
+                f"User must spend at least ${MIN_SPEND_FOR_MONTHLY_BILLING:.2f} before enabling monthly billing. "
+                f"Current spending: ${total_spending:.2f}",
+            )
+
         if user is not None:
             setattr(user, "autorecharge", enable)  # noqa: B010
 
@@ -176,9 +217,18 @@ class UsersDAO:
         """
         Modify the autorecharge quantity for a user.
 
+        Validates that the quantity meets the minimum requirement.
+
         :param user_id: id of a user.
-        :param threshold: quantity of credits to be added during autorecharge.
+        :param qty: quantity of credits to be added during autorecharge.
+        :raises ValueError: if quantity is below minimum requirement
         """
+        if qty < MIN_AUTORECHARGE_AMOUNT:
+            raise ValueError(
+                f"Minimum auto-recharge amount is ${MIN_AUTORECHARGE_AMOUNT:.2f} "
+                f"({MIN_AUTORECHARGE_AMOUNT:.0f} credits). Provided: ${qty:.2f}",
+            )
+
         user = self.get_user_with_id(user_id)
         if user is not None:
             setattr(user, "autorecharge_qty", decimal.Decimal(qty))  # noqa: B010

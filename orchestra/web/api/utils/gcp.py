@@ -10,7 +10,7 @@ from orchestra.web.api.utils.helpers import CustomEncoder
 try:
     PUBLISHER = pubsub_v1.PublisherClient()
 except:
-    pass
+    PUBLISHER = None
 
 
 def send_pubsub_msg(topic: str, msg: Dict[str, str]) -> None:
@@ -18,6 +18,10 @@ def send_pubsub_msg(topic: str, msg: Dict[str, str]) -> None:
     # - Staging
     # - Local
     # - Tests / CI
+
+    # Skip if PUBLISHER is not available (e.g., in test environment)
+    if PUBLISHER is None:
+        return
 
     # To instantiate with specific credentials
     # from google.oauth2 import service_account
