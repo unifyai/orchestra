@@ -75,6 +75,31 @@ REQUESTS_WITH_USER = Counter(
     ["user_id", "user_email", "method", "path", "app_name", "request_id"],
 )
 
+# Billing metrics
+INVOICE_CREATED_TOTAL = Counter(
+    "invoice_created_total",
+    "Stripe invoices created by the monthly invoicer",
+    ["user_id"],
+)
+
+INVOICE_PAID_TOTAL = Counter(
+    "invoice_paid_total",
+    "Invoices reported PAID by Stripe webhook",
+    ["user_id"],
+)
+
+INVOICE_FAILED_TOTAL = Counter(
+    "invoice_failed_total",
+    "Invoices reported FAILED / ACTION_REQUIRED by Stripe webhook",
+    ["user_id"],
+)
+
+BILLING_SUSPENDED_TOTAL = Counter(
+    "billing_suspended_total",
+    "User accounts suspended by the daily billing-guard",
+    ["user_id"],
+)
+
 
 class PrometheusMiddleware(BaseHTTPMiddleware):
     """

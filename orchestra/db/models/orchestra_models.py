@@ -1,11 +1,15 @@
 import uuid
+from datetime import datetime
+from enum import Enum
 
 import sqlalchemy as sa
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     TIMESTAMP,
+    BigInteger,
     Boolean,
     Column,
+    Date,
     Float,
     ForeignKey,
     Index,
@@ -20,6 +24,29 @@ from sqlalchemy.dialects.postgresql import JSON, JSONB
 from sqlalchemy.orm import relationship
 
 from orchestra.db.base import Base
+
+# Python 3.11 ships enum.StrEnum. – Provide a fallback for older versions
+try:
+    from enum import StrEnum
+except ImportError:  # pragma: no cover
+
+    class StrEnum(str, Enum):  # type: ignore[override]
+        """Minimal back-port of enum.StrEnum."""
+
+
+# New enum mirrors the DB type ``recharge_status`` (see migration 20250520…)
+class RechargeStatus(StrEnum):
+    PENDING_INVOICE = "PENDING_INVOICE"
+    INVOICE_CREATED = "INVOICE_CREATED"
+    PAID = "PAID"
+    FAILED = "FAILED"
+    DISPUTED = "DISPUTED"
+
+
+# Recharge type constants (moved from consts.py)
+RECHARGE_TYPE_AUTO = "auto"
+RECHARGE_TYPE_PAYMENT = "payment"
+RECHARGE_TYPE_PROMO = "promo"
 
 
 class Model(Base):
@@ -144,13 +171,48 @@ class Users(Base):
 
     # IMPORTANT: If any change happens here the DB trigger must be updated as well!
     id = Column(String(), primary_key=True)
-    credits = Column(Numeric(), nullable=False)
+    credits = Column(
+        Numeric,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
     stripe_customer_id = Column(String())
-    autorecharge = Column(Boolean, nullable=False)
-    autorecharge_threshold = Column(Numeric, nullable=False)
-    autorecharge_qty = Column(Numeric, nullable=False)
-    store_prompts = Column(Boolean)
+    autorecharge = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    autorecharge_threshold = Column(
+        Numeric,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    autorecharge_qty = Column(
+        Numeric,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    store_prompts = Column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="true",
+    )
     frozen = Column(Boolean(), nullable=False, server_default="f")
+    credit_balance = Column(BigInteger, default=0)
+    billing_state = Column(String, default="OK", server_default="OK")
+
+    # back-reference for the relationship defined on Recharge
+    recharges = relationship(
+        "Recharge",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
 
 class Recharge(Base):
@@ -159,16 +221,35 @@ class Recharge(Base):
     __tablename__ = "recharge"
 
     id = Column(Integer(), primary_key=True)
-    at = Column(TIMESTAMP, nullable=False)
+    at = Column(
+        TIMESTAMP,
+        nullable=False,
+        server_default=func.now(),
+        default=datetime.utcnow,
+    )
     user_id = Column(String(), ForeignKey("users.id"), nullable=False)
     quantity = Column(Numeric(), nullable=False)
+    amount_usd = Column(Numeric(), nullable=False)
     type = Column(String())
     transaction_id = Column(String())
     status = Column(
         String(),
         nullable=False,
-        server_default="pending",
-    )  # one of: pending, completed, refunded, disputed
+        server_default=RechargeStatus.PENDING_INVOICE.value,
+    )
+    stripe_invoice_id = Column(String)
+    invoice_group = Column(Date)
+
+    # ORM relationship (handy: recharge.user.billing_state)
+    user = relationship("Users", back_populates="recharges")
+
+    __table_args__ = (
+        Index("idx_recharge_pending", "status", "invoice_group"),
+        sa.CheckConstraint(
+            "status IN ('PENDING_INVOICE','PAID','FAILED','INVOICE_CREATED','DISPUTED')",
+            name="ck_recharge_status",
+        ),
+    )
 
 
 class WebhookLog(Base):

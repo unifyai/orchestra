@@ -4,6 +4,15 @@ from typing import List
 from fastapi import HTTPException
 from starlette import status
 
+
+class OutOfCreditError(RuntimeError):
+    """Raised when a user runs out of credits."""
+
+
+class AccountSuspendedError(RuntimeError):
+    """Raised when a user's account is suspended due to billing issues."""
+
+
 router_already_deployed = HTTPException(
     status_code=status.HTTP_400_BAD_REQUEST,
     detail="This router is already deployed!",
@@ -112,6 +121,14 @@ invalid_api_key = HTTPException(
 account_frozen = HTTPException(
     status_code=status.HTTP_403_FORBIDDEN,
     detail="Your account has been suspended. Please reach out to hello@unify.ai if you have any questions.",
+)
+
+account_suspended = HTTPException(
+    status_code=status.HTTP_402_PAYMENT_REQUIRED,
+    detail=(
+        "Your account has been suspended due to an unpaid invoice. "
+        "Please update your payment method at https://console.unify.ai/ to resume service."
+    ),
 )
 
 insufficient_credits_error = HTTPException(
