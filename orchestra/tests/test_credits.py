@@ -7,15 +7,21 @@ from sqlalchemy import text
 from starlette import status
 
 from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.routines.recharging import recharge_credits
 from orchestra.tests.utils import ADMIN_HEADERS, HEADERS
 from orchestra.web.api.admin.views import get_user
 
 
 # TODO: amount has to be stored in the user
 def test_positive_recharge(dbsession, worker_id) -> None:
-    recharge_credits(worker_id, session=dbsession)
     users_dao = UsersDAO(dbsession)
+
+    # Recharge each test user with 2.5 credits
+    test_users = ["user1", "user2", "user3", "user4"]
+    for user_id in test_users:
+        users_dao.recharge_credit(user_id, 2.5)
+
+    dbsession.commit()
+
     # user1
     simple = get_user("user1", dbsession)[0]
     assert math.isclose(simple.credits, 3.5)  # 1 + 2.5 = 3.5
@@ -32,9 +38,15 @@ def test_positive_recharge(dbsession, worker_id) -> None:
 
 # TODO: amount has to be stored in the user
 def test_negative_recharge(dbsession, worker_id) -> None:
-    # negative recharge
-    recharge_credits(worker_id, amount=-0.5, session=dbsession)
     users_dao = UsersDAO(dbsession)
+
+    # Negative recharge (deduct credits) for each test user
+    test_users = ["user1", "user2", "user3", "user4"]
+    for user_id in test_users:
+        users_dao.recharge_credit(user_id, -0.5)
+
+    dbsession.commit()
+
     # user1
     simple = get_user("user1", session=dbsession)[0]
     assert math.isclose(simple.credits, 0.5)  # 1 - 0.5 = 0.5
