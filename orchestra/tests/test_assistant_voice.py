@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -8,7 +9,6 @@ from orchestra.services.cartesia_service import (
     CartesiaService as OriginalCartesiaService,
 )
 from orchestra.tests.utils import HEADERS
-from pathlib import Path
 
 
 def _get_sample_wav_bytes() -> bytes:
