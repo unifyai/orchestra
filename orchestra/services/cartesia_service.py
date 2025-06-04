@@ -12,6 +12,9 @@ class CartesiaAPIError(HTTPException):
         super().__init__(status_code=status_code, detail=detail)
 
 
+LONG_OPERATION_TIMEOUT = httpx.Timeout(60.0)  # 60 seconds
+
+
 class CartesiaService:
     """
     Service for interacting with the Cartesia API.
@@ -72,7 +75,7 @@ class CartesiaService:
         payload = {k: v for k, v in payload.items() if v is not None}
 
         try:
-            with httpx.Client() as client:
+            with httpx.Client(timeout=LONG_OPERATION_TIMEOUT) as client:
                 response = client.post(
                     url,
                     data=payload,
@@ -113,7 +116,7 @@ class CartesiaService:
         headers_with_content_type = {**self.headers, "Content-Type": "application/json"}
 
         try:
-            with httpx.Client() as client:
+            with httpx.Client(timeout=LONG_OPERATION_TIMEOUT) as client:
                 response = client.post(
                     url,
                     json=payload,
@@ -130,7 +133,7 @@ class CartesiaService:
         """
         Deletes a voice from Cartesia.
         """
-        url = f"{self.base_url}/voices/{voice_id}"  # Corrected URL from example
+        url = f"{self.base_url}/voices/{voice_id}"
         try:
             with httpx.Client() as client:
                 response = client.delete(url, headers=self.headers)
