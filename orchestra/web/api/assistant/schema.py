@@ -121,6 +121,11 @@ class AssistantRead(AssistantCreate):
         description="Timestamp when the assistant was last updated",
         example="2025-04-26T14:15:00Z",
     )
+    phone: Optional[str] = Field(
+        None,
+        description="Phone number of the assistant",
+        example="+15551234567",
+    )
 
     class Config:
         orm_mode = True

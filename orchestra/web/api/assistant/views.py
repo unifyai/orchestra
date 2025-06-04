@@ -411,7 +411,6 @@ def create_assistant(
             updated_at=assistant.updated_at,
             phone=assistant.phone,
             email=assistant.email,
-            whatsapp_sid=assistant.whatsapp_sid,
             voice_id=assistant.voice_id,
         ),
     )
@@ -514,7 +513,6 @@ def list_assistants(
                     updated_at=a.updated_at,
                     phone=a.phone,
                     email=a.email,
-                    whatsapp_sid=a.whatsapp_sid,
                     voice_id=a.voice_id,
                 )
                 for a in assistants
