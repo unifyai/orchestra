@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -8,7 +9,6 @@ from orchestra.services.cartesia_service import (
     CartesiaService as OriginalCartesiaService,
 )
 from orchestra.tests.utils import HEADERS
-from pathlib import Path
 
 
 def _get_sample_wav_bytes() -> bytes:
@@ -57,9 +57,9 @@ def mock_cartesia_service_factory(
         "orchestra.web.api.utils.production_traffic_middleware.send_pubsub_msg",
     ) as mock_send_pubsub:
 
-        fastapi_app.dependency_overrides[OriginalCartesiaService] = (
-            lambda: cartesia_mock_instance
-        )
+        fastapi_app.dependency_overrides[
+            OriginalCartesiaService
+        ] = lambda: cartesia_mock_instance
         yield cartesia_mock_instance  # Yield the CartesiaService mock
         fastapi_app.dependency_overrides.pop(OriginalCartesiaService, None)
 
