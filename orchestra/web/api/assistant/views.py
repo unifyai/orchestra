@@ -619,6 +619,9 @@ def delete_assistant(
 
         # Finally delete the assistant record (matching rollback error handling)
         try:
+            session.close()
+            session = next(get_db_session(request))
+            dao = AssistantDAO(session)
             dao.delete_assistant(user_id=request.state.user_id, agent_id=assistant_id)
         except Exception as e:
             cleanup_errors.append(f"Failed to delete assistant: {str(e)}")
