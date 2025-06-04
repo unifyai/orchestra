@@ -57,9 +57,9 @@ def mock_cartesia_service_factory(
         "orchestra.web.api.utils.production_traffic_middleware.send_pubsub_msg",
     ) as mock_send_pubsub:
 
-        fastapi_app.dependency_overrides[OriginalCartesiaService] = (
-            lambda: cartesia_mock_instance
-        )
+        fastapi_app.dependency_overrides[
+            OriginalCartesiaService
+        ] = lambda: cartesia_mock_instance
         yield cartesia_mock_instance  # Yield the CartesiaService mock
         fastapi_app.dependency_overrides.pop(OriginalCartesiaService, None)
 

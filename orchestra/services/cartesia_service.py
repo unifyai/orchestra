@@ -70,6 +70,7 @@ class CartesiaService:
             "name": name,
             "language": language,
             "description": description,
+            "mode": "stability",
         }
         # Filter out None values from payload
         payload = {k: v for k, v in payload.items() if v is not None}
