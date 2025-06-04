@@ -1014,7 +1014,7 @@ class TileDAO:
         column_context: Optional[str] = None,
         grouping: Optional[str] = None,
         content: str = "",
-        file_path: Optional[str] = None,
+        file_name: Optional[str] = None,
         file_type: Optional[str] = None,
         is_checkpoint: bool = False,
     ) -> EditorTile:
@@ -1054,7 +1054,7 @@ class TileDAO:
             editor_tile = EditorTile(
                 tile_id=tile_id,
                 content=content,
-                file_path=file_path,
+                file_name=file_name,
                 file_type=file_type,
             )
             self.session.add(editor_tile)
@@ -1087,7 +1087,7 @@ class TileDAO:
         name: Optional[str] = None,
         is_checkpoint: Optional[bool] = False,
         content: Optional[str] = None,
-        file_path: Optional[str] = None,
+        file_name: Optional[str] = None,
         file_type: Optional[str] = None,
     ) -> Optional[EditorTile]:
         """
@@ -1109,8 +1109,8 @@ class TileDAO:
         # Update specialized fields
         if content is not None:
             editor_tile.content = content
-        if file_path is not None:
-            editor_tile.file_path = file_path
+        if file_name is not None:
+            editor_tile.file_name = file_name
         if file_type is not None:
             editor_tile.file_type = file_type
 
@@ -1726,7 +1726,7 @@ class TileDAO:
                 self.update_editor_tile(
                     id=str(existing_specialized.id),
                     content=source_tile.editor_tile.content,
-                    file_path=source_tile.editor_tile.file_path,
+                    file_name=source_tile.editor_tile.file_name,
                     file_type=source_tile.editor_tile.file_type,
                 )
             else:
@@ -1736,7 +1736,7 @@ class TileDAO:
                     name=source_tile.name,
                     tile_id=updated.id,
                     content=source_tile.editor_tile.content,
-                    file_path=source_tile.editor_tile.file_path,
+                    file_name=source_tile.editor_tile.file_name,
                     file_type=source_tile.editor_tile.file_type,
                     is_checkpoint=True,
                 )
@@ -2186,7 +2186,7 @@ class TileDAO:
                         editor_tile_updates.append(
                             {
                                 "id": existing_editor_tile.id,
-                                "file_path": et.file_path,
+                                "file_name": et.file_name,
                                 "file_type": et.file_type,
                                 "content": et.content,
                             },
@@ -2196,7 +2196,7 @@ class TileDAO:
                         editor_tile_values.append(
                             {
                                 "tile_id": new_tile_id,
-                                "file_path": et.file_path,
+                                "file_name": et.file_name,
                                 "file_type": et.file_type,
                                 "content": et.content,
                             },

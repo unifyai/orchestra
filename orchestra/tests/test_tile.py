@@ -380,7 +380,7 @@ async def _create_test_editor_tile(
     name=f"{TEST_TILE}-editor",
     file_type="python",
     content="print('Hello World')",
-    file_path=None,
+    file_name=None,
     **kwargs,
 ):
     """Create a test editor tile with appropriate defaults.
@@ -391,15 +391,15 @@ async def _create_test_editor_tile(
         name: Name of the tile
         file_type: File type/language
         content: Editor content
-        file_path: Path of the file
+        file_name: Name of the file
         **kwargs: Additional arguments to pass to _create_test_tile
     """
     # Default file name if not provided
-    if file_path is None:
-        file_path = f"{name}.{file_type}"
+    if file_name is None:
+        file_name = f"{name}.{file_type}"
 
     editor_tile_data = {
-        "file_path": file_path,
+        "file_name": file_name,
         "file_type": file_type,
         "content": content,
     }
@@ -783,7 +783,7 @@ async def test_create_different_tile_types(client: AsyncClient):
         tab_id,
         file_type="python",
         content="print('Test')",
-        file_path="test.py",
+        file_name="test.py",
     )
     assert editor_response.status_code == 201
     editor_data = editor_response.json()
@@ -791,7 +791,7 @@ async def test_create_different_tile_types(client: AsyncClient):
     assert "editor_tile" in editor_data
     assert editor_data["editor_tile"]["file_type"] == "python"
     assert editor_data["editor_tile"]["content"] == "print('Test')"
-    assert editor_data["editor_tile"]["file_path"] == "test.py"
+    assert editor_data["editor_tile"]["file_name"] == "test.py"
     # Verify specialized tile ID relationship
     assert "id" in editor_data["editor_tile"]
     assert editor_data["editor_tile"]["id"] is not None
@@ -1300,7 +1300,7 @@ async def test_update_specialized_tile_data(client: AsyncClient):
     update_data = {
         "editor_tile": {
             "file_type": "javascript",
-            "file_path": "script.js",
+            "file_name": "script.js",
             "content": "console.log('Hello');",
         },
     }
@@ -1310,7 +1310,7 @@ async def test_update_specialized_tile_data(client: AsyncClient):
     # Verify the update worked
     updated_data = response.json()
     assert updated_data["editor_tile"]["file_type"] == "javascript"
-    assert updated_data["editor_tile"]["file_path"] == "script.js"
+    assert updated_data["editor_tile"]["file_name"] == "script.js"
     assert updated_data["editor_tile"]["content"] == "console.log('Hello');"
     # Verify specialized tile ID relationship after update
     assert "id" in updated_data["editor_tile"]
@@ -1431,7 +1431,7 @@ async def test_patch_specialized_tile_endpoint(client: AsyncClient):
 
     # Test patch for editor tile
     editor_patch = {
-        "file_path": "updated.js",
+        "file_name": "updated.js",
         "file_type": "javascript",
         "content": "console.log('Updated');",
     }
@@ -1443,7 +1443,7 @@ async def test_patch_specialized_tile_endpoint(client: AsyncClient):
     )
     assert editor_response.status_code == 200
     editor_data = editor_response.json()
-    assert editor_data["editor_tile"]["file_path"] == "updated.js"
+    assert editor_data["editor_tile"]["file_name"] == "updated.js"
     assert editor_data["editor_tile"]["file_type"] == "javascript"
     assert editor_data["editor_tile"]["content"] == "console.log('Updated');"
     # Verify specialized tile ID relationship after patch
@@ -1769,7 +1769,7 @@ async def test_create_tile_with_specialized_data_in_one_step(client: AsyncClient
         tile_type="Editor",
         editor_tile_data={
             "file_type": "markdown",
-            "file_path": "notes.md",
+            "file_name": "notes.md",
             "content": "# Test Notes\nThis is a test document.",
         },
     )

@@ -1402,7 +1402,7 @@ class EditorTile(Base):
     )
 
     # Editor-specific properties
-    file_path = Column(String(), nullable=True)
+    file_name = Column(String(), nullable=True)
     file_type = Column(String(), nullable=True)
     content = Column(String(), nullable=True)
 
