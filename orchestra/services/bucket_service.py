@@ -14,15 +14,32 @@ from orchestra.web.api.utils.gcp import parse_gcs_url
 class BucketService:
     def __init__(self):
         """Initialize the bucket service with GCP credentials and bucket configuration."""
-        self.bucket_name = os.getenv("ORCHESTRA_GCP_BUCKET_NAME")
         self.project_id = os.getenv("ORCHESTRA_VERTEXAI_PROJECT")
-
-        if not all([self.bucket_name, self.project_id]):
-            raise ValueError("Missing required GCP configuration")
-
-        # GCP client will automatically look for GOOGLE_APPLICATION_CREDENTIALS environment variable
+        if not self.project_id:
+            raise ValueError(
+                "Missing required GCP project ID configuration (ORCHESTRA_VERTEXAI_PROJECT)"
+            )
         self.storage_client = storage.Client(project=self.project_id)
+
+        # Generic bucket
+        self.bucket_name = os.getenv("ORCHESTRA_GCP_BUCKET_NAME")
+        if not self.bucket_name:
+            raise ValueError(
+                "Missing required GCP configuration (ORCHESTRA_GCP_BUCKET_NAME)"
+            )
         self.bucket = self.storage_client.bucket(self.bucket_name)
+
+        # Assistant images bucket
+        self.assistant_images_bucket_name = os.getenv(
+            "ORCHESTRA_GCP_ASSISTANT_IMAGES_BUCKET_NAME"
+        )
+        if not self.assistant_images_bucket_name:
+            raise ValueError(
+                "Missing required GCP assistant images bucket name configuration (ORCHESTRA_GCP_ASSISTANT_IMAGES_BUCKET_NAME)"
+            )
+        self.assistant_images_bucket = self.storage_client.bucket(
+            self.assistant_images_bucket_name
+        )
 
     def _generate_unique_filename(self, content: bytes) -> str:
         """Generate a unique filename using content hash and UUID."""
