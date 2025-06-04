@@ -17,7 +17,7 @@ class BucketService:
         self.project_id = os.getenv("ORCHESTRA_VERTEXAI_PROJECT")
         if not self.project_id:
             raise ValueError(
-                "Missing required GCP project ID configuration (ORCHESTRA_VERTEXAI_PROJECT)"
+                "Missing required GCP project ID configuration (ORCHESTRA_VERTEXAI_PROJECT)",
             )
         self.storage_client = storage.Client(project=self.project_id)
 
@@ -25,20 +25,20 @@ class BucketService:
         self.bucket_name = os.getenv("ORCHESTRA_GCP_BUCKET_NAME")
         if not self.bucket_name:
             raise ValueError(
-                "Missing required GCP configuration (ORCHESTRA_GCP_BUCKET_NAME)"
+                "Missing required GCP configuration (ORCHESTRA_GCP_BUCKET_NAME)",
             )
         self.bucket = self.storage_client.bucket(self.bucket_name)
 
         # Assistant images bucket
         self.assistant_images_bucket_name = os.getenv(
-            "ORCHESTRA_GCP_ASSISTANT_IMAGES_BUCKET_NAME"
+            "ORCHESTRA_GCP_ASSISTANT_IMAGES_BUCKET_NAME",
         )
         if not self.assistant_images_bucket_name:
             raise ValueError(
-                "Missing required GCP assistant images bucket name configuration (ORCHESTRA_GCP_ASSISTANT_IMAGES_BUCKET_NAME)"
+                "Missing required GCP assistant images bucket name configuration (ORCHESTRA_GCP_ASSISTANT_IMAGES_BUCKET_NAME)",
             )
         self.assistant_images_bucket = self.storage_client.bucket(
-            self.assistant_images_bucket_name
+            self.assistant_images_bucket_name,
         )
 
     def _generate_unique_filename(self, content: bytes) -> str:
@@ -203,7 +203,7 @@ class BucketService:
                 else "jpg"
             )
             file_name = self._generate_unique_filename(file_content)
-            object_path = f"assistant_photos/{user_id}/{file_name}.{extension}"
+            object_path = f"{user_id}/{file_name}.{extension}"
 
             blob = self.assistant_images_bucket.blob(object_path)
             blob.upload_from_string(file_content, content_type=content_type)
