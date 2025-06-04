@@ -29,7 +29,7 @@ from orchestra.web.lifetime import get_engine
 # --------------------------------------------------------------------------- #
 # public API                                                                  #
 # --------------------------------------------------------------------------- #
-def invoice_month(  # Celery entry-point
+def invoice_month(
     year: int | None = None,
     month: int | None = None,
     session: Session | None = None,

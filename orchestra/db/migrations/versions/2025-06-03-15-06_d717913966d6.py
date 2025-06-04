@@ -1,18 +1,17 @@
 """handle assistant voice and image management
 
 Revision ID: d717913966d6
-Revises: 2c12988f18c9
+Revises: 31c100c206d2
 Create Date: 2025-06-03 15:06:37.531716
 
 """
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "d717913966d6"
-down_revision = "2c12988f18c9"
+down_revision = "31c100c206d2"
 branch_labels = None
 depends_on = None
 
