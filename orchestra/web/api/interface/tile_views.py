@@ -75,7 +75,7 @@ def _create_tile_response(tile: Tile) -> TileSchema:
         editor_tile_data = EditorTileSchema(
             id=str(tile.editor_tile.id),
             tile_id=str(tile.editor_tile.tile_id),
-            file_path=tile.editor_tile.file_path,
+            file_name=tile.editor_tile.file_name,
             file_type=tile.editor_tile.file_type,
             content=tile.editor_tile.content,
         )
@@ -1278,7 +1278,7 @@ async def patch_specialized_tile(
 
     For View tiles, valid specialized fields include: base_index
 
-    For Editor tiles, valid specialized fields include: file_path, file_type, content
+    For Editor tiles, valid specialized fields include: file_name, file_type, content
     """
     # Validate the tile type
     valid_types = ["Table", "Plot", "View", "Editor"]
