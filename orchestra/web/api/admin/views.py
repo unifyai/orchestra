@@ -19,6 +19,7 @@ from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.metric_dao import MetricDAO
 from orchestra.db.dao.modality_dao import ModalityDAO
 from orchestra.db.dao.model_dao import ModelDAO
+from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.dao.recharge_dao import RechargeDAO
@@ -1087,7 +1088,8 @@ def write_files(
     Write/Update files to the Google Cloud Storage bucket.
     The files will be stored at <user-id>/<project>/<path>
     """
-    project_dao = ProjectDAO(session)
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
     project = project_dao.get_by_user_and_name(
         user_id=request.user_id,
         name=request.project,
@@ -1163,7 +1165,8 @@ def get_files(
     Get all files in a user's project folder in the bucket.
     Returns a flat list of file paths and contents.
     """
-    project_dao = ProjectDAO(session)
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
     project_obj = project_dao.get_by_user_and_name(
         user_id=user_id,
         name=project,
@@ -1248,7 +1251,8 @@ def get_file_contents(
     """
     Get the contents of a specific file in the bucket.
     """
-    project_dao = ProjectDAO(session)
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
     project_obj = project_dao.get_by_user_and_name(
         user_id=user_id,
         name=project,
@@ -1330,7 +1334,8 @@ def delete_file_or_folder(
     Delete a file or folder from the user's project directory.
     If the path points to a folder, all contents will be deleted recursively.
     """
-    project_dao = ProjectDAO(session)
+    organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
     project_obj = project_dao.get_by_user_and_name(
         user_id=user_id,
         name=project,
