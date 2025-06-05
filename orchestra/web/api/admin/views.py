@@ -34,6 +34,7 @@ from orchestra.db.models.orchestra_models import (  # noqa: WPS235
     Metric,
     Modality,
     Recharge,
+    RechargeStatus,
     RechargeType,
     Task,
     Users,
@@ -687,6 +688,15 @@ def create_recharge_model(
     first_next_month = (at.replace(day=1) + timedelta(days=32)).replace(day=1)
     invoice_group = (first_next_month - timedelta(microseconds=1)).date()
 
+    # Set status based on recharge type:
+    # - "payment": Already paid via Stripe checkout → PAID (exclude from invoicing)
+    # - "auto": Usage-based recharge → PENDING_INVOICE (include in invoicing)
+    # - "promo": Free credits → PAID (exclude from invoicing)
+    if new_recharge_object.type in ["payment", "promo"]:
+        status = RechargeStatus.PAID
+    else:  # "auto" and any other types
+        status = RechargeStatus.PENDING_INVOICE
+
     recharge_dao.create_recharge(
         user_id=new_recharge_object.user_id,
         quantity=int(new_recharge_object.quantity),
@@ -694,6 +704,7 @@ def create_recharge_model(
         invoice_group=invoice_group,
         type_=new_recharge_object.type,
         transaction_id=new_recharge_object.transaction_id,
+        status=status,
     )
 
 
