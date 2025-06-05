@@ -35,13 +35,13 @@ def get_appropriate_stripe_key() -> str | None:
         The appropriate Stripe API key, or None if no valid key is found.
     """
     # Check for test key first (safer for development/testing)
-    test_key = os.environ.get("STRIPE_SECRET_KEY_TEST")
+    test_key = os.environ.get("STRIPE_SECRET_KEY")
     if test_key and test_key.startswith("sk_test_"):
         return test_key
 
     # Fall back to live key for production
     live_key = os.environ.get("STRIPE_SECRET_KEY_LIVE")
-    if live_key and live_key.startswith("sk_"):
+    if live_key and live_key.startswith("sk_live_"):
         return live_key
 
     return None
