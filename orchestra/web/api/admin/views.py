@@ -470,7 +470,6 @@ def admin_list_assistants(
     """
     # Normalize phone parameter to handle URL-decoded '+' characters
     phone = normalize_phone_parameter(phone)
-
     dao = AssistantDAO(session)
     try:
         assistants = dao.list_all_assistants(phone=phone, email=email)
