@@ -171,7 +171,9 @@ class UsersDAO:
         """
         Enable/disable autorecharge for a user.
 
-        Validates that user has spent at least $100 before enabling monthly billing.
+        Validates that user has spent at least $100 before enabling monthly billing,
+        but allows grandfathered users (who already have autorecharge enabled) to
+        modify or disable their settings.
 
         :param user_id: id of a user.
         :param enable: whether to enable (true) or disable (false) autorecharge.
@@ -180,7 +182,14 @@ class UsersDAO:
         # First check if user exists - this will raise HTTPException if not found
         user = self.get_user_with_id(user_id)
 
-        if enable and not self.can_enable_monthly_billing(user_id):
+        # Only check spending requirements if:
+        # 1. Trying to ENABLE autorecharge, AND
+        # 2. User doesn't already have autorecharge enabled (grandfathering)
+        if (
+            enable
+            and not user.autorecharge
+            and not self.can_enable_monthly_billing(user_id)
+        ):
             total_spending = self.get_total_spending(user_id)
             raise ValueError(
                 f"User must spend at least ${MIN_SPEND_FOR_MONTHLY_BILLING:.2f} before enabling monthly billing. "
