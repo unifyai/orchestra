@@ -50,6 +50,7 @@ __all__ = [
     "_handle_jaccard",
 ]
 
+
 # Helper function for logical operators (and, or, not)
 def _handle_logical_operator(
     filter_dict,
@@ -97,7 +98,32 @@ def _handle_logical_operator(
     rhs_is_sub = isinstance(rhs, Subquery)
 
     def _true_ids(subq):
-        return select(subq.c.log_event_id).where(subq.c.value.is_(True))
+        val_col, val_type = _select_value(subq, session)
+
+        if val_type == "bool":
+            # For boolean types, check if the value is True
+            condition = val_col.is_(True)
+        elif val_type in ("int", "float"):
+            # For numeric types, check if the value is not zero
+            condition = val_col != 0
+        elif val_type == "str":
+            # For string types, check if not empty (after removing JSON quotes)
+            condition = func.length(func.replace(cast(val_col, String), '"', "")) > 0
+        elif val_type in ("list", "dict"):
+            # For collections, check if not empty
+            if val_type == "list":
+                condition = func.jsonb_array_length(val_col) > 0
+            else:  # dict
+                # Check if dict is not empty using simple comparison
+                condition = val_col != cast(literal("{}"), JSONB)
+        elif val_type == "NoneType":
+            # None is always falsy
+            condition = literal(False)
+        else:
+            # For other types (timestamp, date, time, timedelta), check if not null
+            condition = subq.c.value.isnot(None)
+
+        return select(subq.c.log_event_id).select_from(subq).where(condition)
 
     def _make_bool_subq(ids_selectable):
         tmp = ids_selectable.subquery()
@@ -114,7 +140,33 @@ def _handle_logical_operator(
     # Handle "not"
     if operand == "not":
         if rhs_is_sub:
-            not_expr = not_(rhs.c.value)
+            val_col, val_type = _select_value(rhs, session)
+
+            if val_type == "bool":
+                # For boolean types, negate the value
+                not_expr = not_(val_col)
+            elif val_type in ("int", "float"):
+                # For numeric types, check if the value is zero
+                not_expr = val_col == 0
+            elif val_type == "str":
+                # For string types, check if empty (after removing JSON quotes)
+                not_expr = (
+                    func.length(func.replace(cast(val_col, String), '"', "")) == 0
+                )
+            elif val_type in ("list", "dict"):
+                # For collections, check if empty
+                if val_type == "list":
+                    not_expr = func.jsonb_array_length(val_col) == 0
+                else:  # dict
+                    # Check if dict is empty using simple comparison
+                    not_expr = val_col == cast(literal("{}"), JSONB)
+            elif val_type == "NoneType":
+                # None is always falsy, so not None is True
+                not_expr = literal(True)
+            else:
+                # For other types (timestamp, date, time, timedelta), check if null
+                not_expr = not_(rhs.c.value)
+
             return (
                 select(
                     rhs.c.log_event_id.label("log_event_id"),
