@@ -566,6 +566,7 @@ def delete_assistant(
             user_id=request.state.user_id,
             agent_id=assistant_id,
         )
+        session.commit()
         if not assistant:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
