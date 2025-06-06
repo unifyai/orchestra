@@ -607,6 +607,7 @@ def delete_assistant(
             session = next(get_db_session(request))
             dao = AssistantDAO(session)
             dao.delete_assistant(user_id=request.state.user_id, agent_id=assistant_id)
+            session.commit()
         except Exception as e:
             cleanup_errors.append(f"Failed to delete assistant: {str(e)}")
         print(f"ASSISTANT DELETED: {assistant_id}")
