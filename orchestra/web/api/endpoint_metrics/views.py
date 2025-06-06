@@ -14,6 +14,7 @@ from fastapi.param_functions import Depends
 from providers.completion import PROVIDER_CLASSES
 from providers.completion.base_completion_provider import BaseCompletionProvider
 
+from orchestra import settings
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.custom_endpoint_benchmark_dao import CustomEndpointBenchmarkDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
@@ -537,7 +538,8 @@ def get_endpoint_details(
             "Please make sure you're passing it in the correct format.",
         )
     return {
-        "input_cost": details["cost"]["prompt"],
-        "output_cost": details["cost"]["completion"],
+        "input_cost": details["cost"]["prompt"] * settings.chat_completions_markup_rate,
+        "output_cost": details["cost"]["completion"]
+        * settings.chat_completions_markup_rate,
         "context_window": details["context_window"],
     }
