@@ -28,7 +28,7 @@ def get_appropriate_stripe_key() -> str | None:
     Get the appropriate Stripe API key based on environment.
 
     Priority order:
-    1. STRIPE_SECRET_KEY_TEST (for testing environments)
+    1. STRIPE_SECRET_KEY (for testing environments)
     2. STRIPE_SECRET_KEY_LIVE (for production)
 
     Returns:
