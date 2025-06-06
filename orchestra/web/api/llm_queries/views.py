@@ -16,6 +16,7 @@ from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.router_dao import RouterDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dependencies import get_db_session
+from orchestra.settings import settings
 from orchestra.web.api.dependencies import _ro_session
 from orchestra.web.api.llm_queries.schema import (
     ChatCompletionRequest,
@@ -384,9 +385,14 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                 yield f"data: {json.dumps(chat_response.model_dump())}\n\n"  # noqa: WPS237, E501
             processing_time = (time.time() - t0) * 1000
             chat_response.choices[0]["delta"]["content"] = msg
+            cost = (
+                response.total_cost * settings.chat_completions_markup_rate
+                if not use_custom_keys
+                else 0
+            )
             background_tasks.add_task(
                 db_operations,
-                cost=response.total_cost if not use_custom_keys else 0,
+                cost=cost,
                 processing_time=processing_time,
                 usage=chat_response.usage,
                 response_body=(
@@ -403,9 +409,12 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         return StreamingResponse(stream_and_update_db(), media_type="text/event-stream")
     else:
         processing_time = (time.time() - t0) * 1000
+        cost = (
+            cost * settings.chat_completions_markup_rate if not use_custom_keys else 0
+        )
         background_tasks.add_task(
             db_operations,
-            cost=cost if not use_custom_keys else 0,
+            cost=cost,
             processing_time=processing_time,
             usage=response["usage"],
             response_body=json.dumps(response) if store_response_body else "",
