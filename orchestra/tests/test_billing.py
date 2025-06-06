@@ -674,12 +674,8 @@ def test_real_stripe_invoicer_integration(dbsession: Session, monkeypatch):
     """
     Test the monthly invoicer with REAL Stripe API calls (no mocking).
 
-    To run this test, set the STRIPE_SECRET_KEY_TEST environment variable
+    To run this test, set the STRIPE_SECRET_KEY environment variable
     with a Stripe test key (starts with sk_test_).
-
-    Example:
-        export STRIPE_SECRET_KEY_TEST=sk_test_your_test_key_here
-        pytest orchestra/tests/test_billing.py::test_real_stripe_invoicer_integration -v -s
 
     This test will be skipped if no test key is provided.
     """
@@ -689,12 +685,12 @@ def test_real_stripe_invoicer_integration(dbsession: Session, monkeypatch):
 
     from orchestra.routines import monthly_invoicer as invoicer
 
-    # Get the TEST Stripe key from environment - only use test keys in tests!
-    test_stripe_key = os.environ.get("STRIPE_SECRET_KEY_TEST")
+    # Get the TEST Stripe key from environment - use the same env var as production
+    test_stripe_key = os.environ.get("STRIPE_SECRET_KEY")
 
     if not test_stripe_key or not test_stripe_key.startswith("sk_test_"):
         pytest.skip(
-            "No test Stripe API key available - set STRIPE_SECRET_KEY_TEST environment variable",
+            "No test Stripe API key available - set STRIPE_SECRET_KEY environment variable with test key",
         )
 
     # The monthly invoicer will now automatically use the test key since it's available
