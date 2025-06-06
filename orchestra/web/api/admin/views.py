@@ -5,6 +5,7 @@ import tempfile
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 
+import stripe
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.param_functions import Depends
 from google.cloud.storage import Client
@@ -40,7 +41,7 @@ from orchestra.db.models.orchestra_models import (  # noqa: WPS235
     Task,
     Users,
 )
-from orchestra.lib.billing import credits_to_usd
+from orchestra.lib.billing import credits_to_usd, get_appropriate_stripe_key
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
     BenchmarkRunModelResponse,
     CreditCardFingerprintModelResponse,
@@ -685,9 +686,27 @@ def create_recharge_model(
 
     # Calculate amount_usd and invoice_group for the new billing system
     amount_usd = credits_to_usd(int(new_recharge_object.quantity))
-    # Use month-end date for invoice grouping
-    first_next_month = (at.replace(day=1) + timedelta(days=32)).replace(day=1)
-    invoice_group = (first_next_month - timedelta(microseconds=1)).date()
+
+    # Handle custom invoice grouping for testing
+    if new_recharge_object.target_month:
+        try:
+            year, month = map(int, new_recharge_object.target_month.split("-"))
+            # Create a date for the first day of the target month
+            target_date = datetime(year, month, 1, tzinfo=timezone.utc)
+            # Calculate month-end date for the target month
+            first_next_month = (
+                target_date.replace(day=1) + timedelta(days=32)
+            ).replace(day=1)
+            invoice_group = (first_next_month - timedelta(microseconds=1)).date()
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid target_month format. Use 'YYYY-MM' (e.g., '2025-06')",
+            )
+    else:
+        # Default behavior: use month-end date for current month
+        first_next_month = (at.replace(day=1) + timedelta(days=32)).replace(day=1)
+        invoice_group = (first_next_month - timedelta(microseconds=1)).date()
 
     # Set status based on recharge type:
     # - "payment": Already paid via Stripe checkout → PAID (exclude from invoicing)
@@ -697,6 +716,38 @@ def create_recharge_model(
         status = RechargeStatus.PAID
     else:  # "auto" and any other types
         status = RechargeStatus.PENDING_INVOICE
+
+    # For "auto" recharges, also create Stripe invoice item immediately
+    if new_recharge_object.type == "auto":
+        # Get user to check for Stripe customer ID
+        user = user_dao.filter(id=new_recharge_object.user_id)
+        if user and len(user) > 0 and user[0].stripe_customer_id:
+            try:
+                # Configure Stripe API key
+                stripe_key = get_appropriate_stripe_key()
+                if stripe_key:
+                    stripe.api_key = stripe_key
+
+                    # Convert amount to cents for Stripe
+                    cents = int(amount_usd * 100)
+
+                    if cents > 0:  # Only create if there's an actual amount
+                        # Create Stripe invoice item
+                        invoice_item = stripe.InvoiceItem.create(
+                            customer=user[0].stripe_customer_id,
+                            amount=cents,
+                            currency="usd",
+                            description=f"{new_recharge_object.quantity} credits",
+                            metadata={
+                                "recharge_type": "auto",
+                                "user_id": new_recharge_object.user_id,
+                                "invoice_group": str(invoice_group),
+                            },
+                        )
+                else:
+                    pass
+            except Exception as e:
+                pass
 
     recharge_dao.create_recharge(
         user_id=new_recharge_object.user_id,
