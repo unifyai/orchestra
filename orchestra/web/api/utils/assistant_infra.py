@@ -156,14 +156,14 @@ def delete_pubsub_topic(assistant_id: str):
     ).json()
 
 
-def create_cloud_run_job(
+def create_cloud_run_service(
     assistant_id: str,
     user_name: str,
     assistant_number: str,
     user_number: str,
 ):
     """
-    Create a Cloud Run job by making a POST request to the comms endpoint.
+    Create a Cloud Run service by making a POST request to the comms endpoint.
 
     Args:
         assistant_id (str): The ID of the assistant
@@ -172,10 +172,10 @@ def create_cloud_run_job(
         user_number (str): The user's phone number
 
     Returns:
-        JSON response from the Cloud Run job creation endpoint
+        JSON response from the Cloud Run service creation endpoint
     """
     return requests.post(
-        f"{COMMS_URL}/infra/job/create",
+        f"{COMMS_URL}/infra/service/create",
         data={
             "assistant_id": assistant_id,
             "user_name": user_name,
@@ -185,34 +185,34 @@ def create_cloud_run_job(
     ).json()
 
 
-def delete_cloud_run_job(assistant_id: str):
+def delete_cloud_run_service(assistant_id: str):
     """
-    Delete a Cloud Run job by making a DELETE request to the comms endpoint.
+    Delete a Cloud Run service by making a DELETE request to the comms endpoint.
 
     Args:
         assistant_id (str): The ID of the assistant
 
     Returns:
-        JSON response from the Cloud Run job deletion endpoint
+        JSON response from the Cloud Run service deletion endpoint
     """
     return requests.delete(
-        f"{COMMS_URL}/infra/job/delete",
+        f"{COMMS_URL}/infra/service/delete",
         data={"assistant_id": assistant_id},
     ).json()
 
 
-def start_cloud_run_job(assistant_id: str):
+def start_cloud_run_service(assistant_id: str):
     """
-    Start a Cloud Run job by making a POST request to the comms endpoint.
+    Start a Cloud Run service by making a POST request to the comms endpoint.
 
     Args:
         assistant_id (str): The ID of the assistant
 
     Returns:
-        JSON response from the Cloud Run job start endpoint
+        JSON response from the Cloud Run service start endpoint
     """
     return requests.post(
-        f"{COMMS_URL}/infra/job/control",
+        f"{COMMS_URL}/infra/service/control",
         data={
             "assistant_id": assistant_id,
             "action": "start",
@@ -220,18 +220,18 @@ def start_cloud_run_job(assistant_id: str):
     ).json()
 
 
-def stop_cloud_run_job(assistant_id: str):
+def stop_cloud_run_service(assistant_id: str):
     """
-    Stop a Cloud Run job by making a POST request to the comms endpoint.
+    Stop a Cloud Run service by making a POST request to the comms endpoint.
 
     Args:
         assistant_id (str): The ID of the assistant
 
     Returns:
-        JSON response from the Cloud Run job stop endpoint
+        JSON response from the Cloud Run service stop endpoint
     """
     return requests.post(
-        f"{COMMS_URL}/infra/job/control",
+        f"{COMMS_URL}/infra/service/control",
         data={
             "assistant_id": assistant_id,
             "action": "stop",
@@ -239,17 +239,17 @@ def stop_cloud_run_job(assistant_id: str):
     ).json()
 
 
-def get_cloud_run_job_status(assistant_id: str):
+def get_cloud_run_service_status(assistant_id: str):
     """
-    Get the status of a Cloud Run job by making a GET request to the comms endpoint.
+    Get the status of a Cloud Run service by making a GET request to the comms endpoint.
 
     Args:
         assistant_id (str): The ID of the assistant
 
     Returns:
-        JSON response containing the Cloud Run job status
+        JSON response containing the Cloud Run service status
     """
     return requests.get(
-        f"{COMMS_URL}/infra/job/status",
+        f"{COMMS_URL}/infra/service/status",
         params={"assistant_id": assistant_id},
     ).json()
