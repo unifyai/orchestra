@@ -119,20 +119,34 @@ def mock_stripe(monkeypatch) -> Dict[str, list]:
         calls["invoice"].append(kw)
         return _Inv(id="in_test_123")
 
-    def _construct_event(payload, sig_header, secret):
+    def _construct_event(payload, sig_header, secret, tolerance=None):
         calls["construct"].append({"sig": sig_header})
         return json.loads(payload)
+
+    def _mock_retrieve(payment_intent_id):
+        # Mock PaymentIntent.retrieve for dispute tests
+        return {
+            "metadata": {
+                "user_id": "test_user",
+                "credits_purchased": "50",
+            },
+            "invoice": "in_test_dispute",
+        }
 
     dummy = SimpleNamespace(
         InvoiceItem=SimpleNamespace(create=_item_create),
         Invoice=SimpleNamespace(create=_inv_create),
         Webhook=SimpleNamespace(construct_event=_construct_event),
+        PaymentIntent=SimpleNamespace(retrieve=_mock_retrieve),
+        error=SimpleNamespace(SignatureVerificationError=Exception),
     )
 
     # Patch the monthly_invoicer's stripe import directly
     import orchestra.routines.monthly_invoicer as monthly_invoicer
+    import orchestra.web.api.webhooks.stripe as webhook_stripe
 
     monkeypatch.setattr(monthly_invoicer, "stripe", dummy, raising=True)
+    monkeypatch.setattr(webhook_stripe, "stripe", dummy, raising=True)
     return calls
 
 
@@ -141,8 +155,34 @@ def mock_stripe(monkeypatch) -> Dict[str, list]:
 # --------------------------------------------------------------------------- #
 @pytest.fixture(autouse=True)
 def _env_secrets(monkeypatch):
-    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
-    monkeypatch.setenv("STRIPE_SECRET_KEY_LIVE", "sk_test_dummy")
+    import os
+
+    # Only set dummy values if real ones aren't already present
+    if not os.environ.get("STRIPE_WEBHOOK_SECRET"):
+        monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
+
+    # For STRIPE_SECRET_KEY, only set dummy if no real test key exists
+    existing_key = os.environ.get("STRIPE_SECRET_KEY")
+    if not existing_key or not existing_key.startswith("sk_test_"):
+        monkeypatch.setenv(
+            "STRIPE_SECRET_KEY",
+            "sk_test_dummy_for_mocking",
+        )  # Valid format but clearly a dummy
+
+    # For STRIPE_SECRET_KEY_LIVE, only set dummy if no real live key exists
+    existing_live_key = os.environ.get("STRIPE_SECRET_KEY_LIVE")
+    if not existing_live_key or not existing_live_key.startswith("sk_live_"):
+        monkeypatch.setenv(
+            "STRIPE_SECRET_KEY_LIVE",
+            "sk_live_dummy_for_mocking",
+        )  # Valid format but clearly a dummy
+
+    if not os.environ.get("ORCHESTRA_ADMIN_KEY"):
+        monkeypatch.setenv(
+            "ORCHESTRA_ADMIN_KEY",
+            "test_admin_key",
+        )  # Admin key for tests
+
     # ensure the live settings instance has the field
     monkeypatch.setattr(settings, "STRIPE_WEBHOOK_SECRET", "whsec_test", raising=False)
 
@@ -688,9 +728,13 @@ def test_real_stripe_invoicer_integration(dbsession: Session, monkeypatch):
     # Get the TEST Stripe key from environment - use the same env var as production
     test_stripe_key = os.environ.get("STRIPE_SECRET_KEY")
 
-    if not test_stripe_key or not test_stripe_key.startswith("sk_test_"):
+    if (
+        not test_stripe_key
+        or not test_stripe_key.startswith("sk_test_")
+        or "dummy" in test_stripe_key.lower()
+    ):
         pytest.skip(
-            "No test Stripe API key available - set STRIPE_SECRET_KEY environment variable with test key",
+            "No real test Stripe API key available - set STRIPE_SECRET_KEY environment variable with real test key",
         )
 
     # The monthly invoicer will now automatically use the test key since it's available
