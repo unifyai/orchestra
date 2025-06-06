@@ -46,6 +46,7 @@ def invoice_month(
 
     # Use UTC so "previous month" is calculated consistently on any host
     today = _dt.datetime.now(_dt.timezone.utc).date()
+
     if year is None or month is None:
         # default → last month (so job on 1st invoices the month we just left)
         first_this_month = today.replace(day=1)
@@ -103,6 +104,7 @@ def _invoice_month_with_session(
         total_usd: Decimal = sum(r.amount_usd for r in bucket)
         total_cr: Decimal = sum(r.quantity for r in bucket)
         cents = int(total_usd.quantize(Decimal("0.01")) * 100)
+
         if cents == 0:  # nothing to bill
             continue
 
@@ -122,12 +124,13 @@ def _invoice_month_with_session(
             invoice = stripe.Invoice.create(
                 customer=user.stripe_customer_id,
                 auto_advance=True,
+                pending_invoice_items_behavior="include",
                 description=f"{total_cr} credits used in {year}-{month:02d}",
                 metadata={"invoice_group": str(group_day)},
                 idempotency_key=idem_base,
             )
 
-        except Exception:  # e.g. network / Stripe error
+        except Exception as e:  # e.g. network / Stripe error
             session.rollback()
             raise
 

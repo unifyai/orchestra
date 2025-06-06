@@ -106,12 +106,16 @@ class RechargeModelRequest(BaseModel):
         user_id (str): The id of the user.
         quantity (float): The quantity of the recharge.
         type (str): The type of the recharge.
+        transaction_id (Optional[str]): The transaction id (required for payment type).
+        target_month (Optional[str]): Target month for invoice grouping (format: "2025-06").
+                                     Defaults to current month if not specified.
     """
 
     user_id: str
     quantity: float
     type: str
     transaction_id: Optional[str] = None
+    target_month: Optional[str] = None
 
 
 class RechargeTypeModelRequest(BaseModel):

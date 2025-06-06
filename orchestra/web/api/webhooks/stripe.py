@@ -162,9 +162,11 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
                 logger.error(f"Failed to debit user {user_id} on refund: {e}")
 
     elif event_type in ("charge.dispute.created", "charge.dispute.funds_withdrawn"):
-        # Charge -> PaymentIntent (metadata) -> User
         payment_intent_id = data_object.get("payment_intent")
         payment_intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+        invoice_id = payment_intent.get("invoice")
+
+        # Direct credit purchase (user_id in PaymentIntent metadata)
         user_id = payment_intent.get("metadata", {}).get("user_id")
         try:
             credits_original = float(
@@ -173,10 +175,9 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
         except Exception as e:
             logger.error(f"Invalid credits_purchased on dispute event: {e}")
             credits_original = 0
+
         if user_id and credits_original > 0:
             try:
-                # Update the Recharge record status to 'disputed'
-                invoice_id = payment_intent.get("invoice")
                 if invoice_id:
                     recharge = recharge_dao.get_recharge_by_transaction_id(invoice_id)
                     if recharge:
@@ -184,10 +185,58 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
 
                 users_dao.recharge_credit(user_id, -credits_original)
                 logger.info(
-                    f"User {user_id} debited with {credits_original} credits due to dispute event.",
+                    f"User {user_id} debited with {credits_original} credits due to dispute event (direct purchase).",
                 )
             except Exception as e:
                 logger.error(f"Failed to debit user {user_id} on dispute: {e}")
+
+        elif invoice_id:
+            # Monthly invoice dispute (lookup recharges by invoice ID)
+            try:
+                recharges = (
+                    session.query(Recharge)
+                    .filter_by(stripe_invoice_id=invoice_id)
+                    .all()
+                )
+
+                if recharges:
+                    total_credits = sum(float(r.quantity) for r in recharges)
+                    user_id = recharges[0].user_id
+
+                    # Update recharge statuses to DISPUTED
+                    session.query(Recharge).filter_by(
+                        stripe_invoice_id=invoice_id,
+                    ).update(
+                        {"status": RechargeStatus.DISPUTED},
+                        synchronize_session=False,
+                    )
+
+                    # Debit user's credits
+                    users_dao.recharge_credit(user_id, -total_credits)
+
+                    # Auto-suspend user for disputing monthly invoice
+                    session.query(User).filter(User.id == user_id).update(
+                        {"billing_state": "SUSPENDED"},
+                        synchronize_session=False,
+                    )
+                    session.commit()
+
+                    logger.info(
+                        f"User {user_id} debited with {total_credits} credits due to dispute event (monthly invoice {invoice_id}). "
+                        f"Updated {len(recharges)} recharge records to DISPUTED. User account SUSPENDED.",
+                    )
+                else:
+                    logger.warning(
+                        f"No recharges found for disputed invoice {invoice_id}",
+                    )
+            except Exception as e:
+                logger.error(
+                    f"Failed to handle monthly invoice dispute for invoice {invoice_id}: {e}",
+                )
+        else:
+            logger.warning(
+                f"Dispute event has no user_id in metadata and no invoice_id - cannot process dispute",
+            )
 
     # Log the event for idempotency
     webhook_log_dao.create_webhook_log(event_id, event_type)
