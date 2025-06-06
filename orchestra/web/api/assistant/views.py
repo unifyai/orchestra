@@ -25,16 +25,15 @@ from orchestra.web.api.assistant.schema import (
     VoiceRead,
 )
 from orchestra.web.api.utils.assistant_infra import (
-    create_cloud_run_job,
+    create_cloud_run_service,
     create_email,
     create_phone_number,
     create_pubsub_topic,
     create_whatsapp_sender,
-    delete_cloud_run_job,
+    delete_cloud_run_service,
     delete_email,
     delete_phone_number,
     delete_pubsub_topic,
-    stop_cloud_run_job,
     watch_email,
 )
 
@@ -172,183 +171,182 @@ def create_assistant(
         created_job = None
         started_job = False
 
-        try:
-            # Step 1: create email
-            email_local = (
-                assistant_in.email.split("@")[0]
-                if "@" in assistant_in.email
-                else assistant_in.email
-            )
-            email_response = create_email(
-                email_local,
-                assistant_in.first_name,
-                assistant_in.surname,
-            )
-            if "detail" in email_response:
-                raise Exception(
-                    f"Email creation failed: {email_response['detail']}",
-                )
-            created_email = email_response.get("user").get("primaryEmail")
-            print(f"EMAIL CREATED: {created_email}")
-
-            # Step 2: watch email
-            time.sleep(10)
-            watch_response = watch_email(created_email)
-            print(watch_response)
-            if "detail" in watch_response:
-                raise Exception(
-                    f"Email watch setup failed: {watch_response['detail']}",
-                )
-            print(f"EMAIL WATCHED: {created_email}")
-
-            # Step 3: create phone number
-            phone_response = create_phone_number()
-            if "detail" in phone_response:
-                raise Exception(
-                    f"Phone number creation failed: {phone_response['detail']}",
-                )
-            created_phone = phone_response.get("phoneNumber")
-            print(f"PHONE CREATED: {created_phone}")
-
-            # Step 4: create whatsapp sender
-            whatsapp_response = create_whatsapp_sender(
-                created_phone,
-                assistant_in.first_name,
-                assistant_in.surname,
-            )
-            if "detail" in whatsapp_response:
-                raise Exception(
-                    f"WhatsApp sender creation failed: {whatsapp_response['detail']}",
-                )
-            created_whatsapp = whatsapp_response.get("sid")
-            print(f"WHATSAPP CREATED: {created_whatsapp}")
-
-            # Step 5: create pubsub topic
-            pubsub_response = create_pubsub_topic(str(assistant_id))
-            if "detail" in pubsub_response:
-                raise Exception(
-                    f"Pubsub topic creation failed: {pubsub_response['detail']}",
-                )
-            created_pubsub = True
-            print(f"PUBSUB CREATED: {assistant_id}")
-
-            # Step 6: create cloud run job
-            job_response = create_cloud_run_job(
-                assistant_id=str(assistant_id),
-                user_name=f"{assistant_in.first_name} {assistant_in.surname}",
-                assistant_number=created_phone,
-                user_number=assistant_in.user_phone,
-            )
-            if "detail" in job_response:
-                raise Exception(
-                    f"Cloud Run job creation failed: {job_response['detail']}",
-                )
-            created_job = True
-            print(f"JOB CREATED: {assistant_id}")
-
-            # Step 7: start cloud run job
-            # start_response = start_cloud_run_job(str(assistant_id))
-            # if "detail" in start_response:
-            #     raise Exception(
-            #         f"Cloud Run job start failed: {start_response['detail']}",
-            #     )
-            # started_job = True
-            # print(f"JOB STARTED: {assistant_id}")
-
-            # Refresh database session after long infrastructure operations
-            logging.info(
-                f"Refreshing database session after infrastructure setup for assistant {assistant_id}",
-            )
-            session.close()
-            session = next(get_db_session(request))
-            assistant_dao = AssistantDAO(session)
-
-            # Update assistant with created infrastructure details
-            assistant_dao.update_assistant(
-                user_id=user_id,
-                agent_id=assistant_id,
-                email=created_email,
-                phone=created_phone,
-                user_phone=assistant_in.user_phone,
-                whatsapp_sid=created_whatsapp,
-            )
-            # Commit the infrastructure updates
-            session.commit()
-            print(f"ASSISTANT UPDATED: {assistant_id}")
-
-            # Retrieve the updated assistant for the final response
-            assistant = assistant_dao.get_assistant_by_id(
-                user_id=user_id,
-                agent_id=assistant_id,
-            )
-
-        except Exception as infra_error:
-            # can't rollback infra if the setup isn't complete so need to wait
-            time.sleep(10)
-
-            # Refresh database session to avoid stale connections during rollback
-            logging.warning(
-                f"Infrastructure setup failed for assistant {assistant_id}, refreshing session for rollback",
-            )
-            session.close()
-            session = next(get_db_session(request))
-            assistant_dao = AssistantDAO(session)
-
-            # Rollback infrastructure in reverse order
-            rollback_errors = []
-
-            if started_job:
-                try:
-                    stop_cloud_run_job(str(assistant_id))
-                except Exception as e:
-                    rollback_errors.append(f"Failed to stop job: {str(e)}")
-            print(f"JOB STOPPED: {assistant_id}")
-
-            if created_job:
-                try:
-                    delete_cloud_run_job(str(assistant_id))
-                except Exception as e:
-                    rollback_errors.append(f"Failed to delete job: {str(e)}")
-            print(f"JOB DELETED: {assistant_id}")
-
-            if created_pubsub:
-                try:
-                    delete_pubsub_topic(str(assistant_id))
-                except Exception as e:
-                    rollback_errors.append(f"Failed to delete pubsub topic: {str(e)}")
-            print(f"PUBSUB DELETED: {assistant_id}")
-
-            if created_phone:
-                try:
-                    delete_phone_number(created_phone)
-                except Exception as e:
-                    rollback_errors.append(f"Failed to delete phone: {str(e)}")
-            print(f"PHONE DELETED: {created_phone}")
-
-            if created_email:
-                try:
-                    delete_email(created_email)
-                except Exception as e:
-                    rollback_errors.append(f"Failed to delete email: {str(e)}")
-            print(f"EMAIL DELETED: {created_email}")
-
-            # Delete the assistant record since infrastructure failed
+        if assistant_in.create_infra:
             try:
-                assistant_dao.delete_assistant(user_id=user_id, agent_id=assistant_id)
-                # Commit the assistant deletion
+                # Step 1: create email
+                email_local = (
+                    assistant_in.email.split("@")[0]
+                    if "@" in assistant_in.email
+                    else assistant_in.email
+                )
+                email_response = create_email(
+                    email_local,
+                    assistant_in.first_name,
+                    assistant_in.surname,
+                )
+                if "detail" in email_response:
+                    raise Exception(
+                        f"Email creation failed: {email_response['detail']}",
+                    )
+                created_email = email_response.get("user").get("primaryEmail")
+                print(f"EMAIL CREATED: {created_email}")
+
+                # Step 2: watch email
+                time.sleep(10)
+                watch_response = watch_email(created_email)
+                print(watch_response)
+                if "detail" in watch_response:
+                    raise Exception(
+                        f"Email watch setup failed: {watch_response['detail']}",
+                    )
+                print(f"EMAIL WATCHED: {created_email}")
+
+                # Step 3: create phone number
+                phone_response = create_phone_number()
+                if "detail" in phone_response:
+                    raise Exception(
+                        f"Phone number creation failed: {phone_response['detail']}",
+                    )
+                created_phone = phone_response.get("phoneNumber")
+                print(f"PHONE CREATED: {created_phone}")
+
+                # Step 4: create whatsapp sender
+                whatsapp_response = create_whatsapp_sender(
+                    created_phone,
+                    assistant_in.first_name,
+                    assistant_in.surname,
+                )
+                if "detail" in whatsapp_response:
+                    raise Exception(
+                        f"WhatsApp sender creation failed: {whatsapp_response['detail']}",
+                    )
+                created_whatsapp = whatsapp_response.get("sid")
+                print(f"WHATSAPP CREATED: {created_whatsapp}")
+
+                # Step 5: create pubsub topic
+                pubsub_response = create_pubsub_topic(str(assistant_id))
+                if "detail" in pubsub_response:
+                    raise Exception(
+                        f"Pubsub topic creation failed: {pubsub_response['detail']}",
+                    )
+                created_pubsub = True
+                print(f"PUBSUB CREATED: {assistant_id}")
+
+                # Step 6: create cloud run service
+                service_response = create_cloud_run_service(
+                    assistant_id=str(assistant_id),
+                    user_name=f"{assistant_in.first_name} {assistant_in.surname}",
+                    assistant_number=created_phone,
+                    user_number=assistant_in.user_phone,
+                )
+                if "detail" in service_response:
+                    raise Exception(
+                        f"Cloud Run service creation failed: {service_response['detail']}",
+                    )
+                created_service = True
+                print(f"SERVICE CREATED: {assistant_id}")
+
+                # Step 7: start cloud run job
+                # start_response = start_cloud_run_job(str(assistant_id))
+                # if "detail" in start_response:
+                #     raise Exception(
+                #         f"Cloud Run job start failed: {start_response['detail']}",
+                #     )
+                # started_job = True
+                # print(f"JOB STARTED: {assistant_id}")
+
+                # Refresh database session after long infrastructure operations
+                logging.info(
+                    f"Refreshing database session after infrastructure setup for assistant {assistant_id}",
+                )
+                session.close()
+                session = next(get_db_session(request))
+                assistant_dao = AssistantDAO(session)
+
+                # Update assistant with created infrastructure details
+                assistant_dao.update_assistant(
+                    user_id=user_id,
+                    agent_id=assistant_id,
+                    email=created_email,
+                    phone=created_phone,
+                    user_phone=assistant_in.user_phone,
+                    whatsapp_sid=created_whatsapp,
+                )
+                # Commit the infrastructure updates
                 session.commit()
-            except Exception as e:
-                rollback_errors.append(f"Failed to delete assistant: {str(e)}")
-            print(f"ASSISTANT DELETED: {assistant_id}")
+                print(f"ASSISTANT UPDATED: {assistant_id}")
 
-            error_msg = f"Infrastructure setup failed: {str(infra_error)}"
-            if rollback_errors:
-                error_msg += f" Rollback issues: {'; '.join(rollback_errors)}"
+                # Retrieve the updated assistant for the final response
+                assistant = assistant_dao.get_assistant_by_id(
+                    user_id=user_id,
+                    agent_id=assistant_id,
+                )
 
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=error_msg,
-            )
+            except Exception as infra_error:
+                # can't rollback infra if the setup isn't complete so need to wait
+                time.sleep(10)
+
+                # Refresh database session to avoid stale connections during rollback
+                logging.warning(
+                    f"Infrastructure setup failed for assistant {assistant_id}, refreshing session for rollback",
+                )
+                session.close()
+                session = next(get_db_session(request))
+                assistant_dao = AssistantDAO(session)
+
+                # Rollback infrastructure in reverse order
+                rollback_errors = []
+
+                if created_service:
+                    try:
+                        delete_cloud_run_service(str(assistant_id))
+                    except Exception as e:
+                        rollback_errors.append(f"Failed to delete service: {str(e)}")
+                print(f"SERVICE DELETED: {assistant_id}")
+
+                if created_pubsub:
+                    try:
+                        delete_pubsub_topic(str(assistant_id))
+                    except Exception as e:
+                        rollback_errors.append(
+                            f"Failed to delete pubsub topic: {str(e)}",
+                        )
+                print(f"PUBSUB DELETED: {assistant_id}")
+
+                if created_phone:
+                    try:
+                        delete_phone_number(created_phone)
+                    except Exception as e:
+                        rollback_errors.append(f"Failed to delete phone: {str(e)}")
+                print(f"PHONE DELETED: {created_phone}")
+
+                if created_email:
+                    try:
+                        delete_email(created_email)
+                    except Exception as e:
+                        rollback_errors.append(f"Failed to delete email: {str(e)}")
+                print(f"EMAIL DELETED: {created_email}")
+
+                # Delete the assistant record since infrastructure failed
+                try:
+                    assistant_dao.delete_assistant(
+                        user_id=user_id,
+                        agent_id=assistant_id,
+                    )
+                    # Commit the assistant deletion
+                    session.commit()
+                except Exception as e:
+                    rollback_errors.append(f"Failed to delete assistant: {str(e)}")
+                print(f"ASSISTANT DELETED: {assistant_id}")
+
+                error_msg = f"Infrastructure setup failed: {str(infra_error)}"
+                if rollback_errors:
+                    error_msg += f" Rollback issues: {'; '.join(rollback_errors)}"
+
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=error_msg,
+                )
 
     except HTTPException:
         raise
@@ -405,7 +403,6 @@ def create_assistant(
             updated_at=assistant.updated_at,
             phone=assistant.phone,
             email=assistant.email,
-            whatsapp_sid=assistant.whatsapp_sid,
             voice_id=assistant.voice_id,
         ),
     )
@@ -508,7 +505,6 @@ def list_assistants(
                     updated_at=a.updated_at,
                     phone=a.phone,
                     email=a.email,
-                    whatsapp_sid=a.whatsapp_sid,
                     voice_id=a.voice_id,
                 )
                 for a in assistants
@@ -562,6 +558,7 @@ def delete_assistant(
             user_id=request.state.user_id,
             agent_id=assistant_id,
         )
+        session.commit()
         if not assistant:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -574,19 +571,12 @@ def delete_assistant(
         # Clean up infrastructure in reverse order (matching rollback pattern)
         cleanup_errors = []
 
-        # Stop cloud run job
+        # Delete cloud run service
         try:
-            stop_cloud_run_job(str(assistant_id))
+            delete_cloud_run_service(str(assistant_id))
         except Exception as e:
-            cleanup_errors.append(f"Failed to stop job: {str(e)}")
-        print(f"JOB STOPPED: {assistant_id}")
-
-        # Delete cloud run job
-        try:
-            delete_cloud_run_job(str(assistant_id))
-        except Exception as e:
-            cleanup_errors.append(f"Failed to delete job: {str(e)}")
-        print(f"JOB DELETED: {assistant_id}")
+            cleanup_errors.append(f"Failed to delete service: {str(e)}")
+        print(f"SERVICE DELETED: {assistant_id}")
 
         # Delete pubsub topic
         try:
@@ -613,7 +603,11 @@ def delete_assistant(
 
         # Finally delete the assistant record (matching rollback error handling)
         try:
+            session.close()
+            session = next(get_db_session(request))
+            dao = AssistantDAO(session)
             dao.delete_assistant(user_id=request.state.user_id, agent_id=assistant_id)
+            session.commit()
         except Exception as e:
             cleanup_errors.append(f"Failed to delete assistant: {str(e)}")
         print(f"ASSISTANT DELETED: {assistant_id}")

@@ -503,7 +503,7 @@ def _ast_op_to_str(op: ast.AST) -> str:
         raise ValueError(f"Unsupported operator type: {type(op)}")
 
 
-def _transform_ast(node: ast.AST) -> dict:
+def _transform_ast(node: ast.AST, preserve_string_literals: bool = False) -> dict:
     """
     Recursively transforms an AST node into a filter dictionary.
 
@@ -515,6 +515,10 @@ def _transform_ast(node: ast.AST) -> dict:
     """
     # Handle literals (constants)
     if isinstance(node, ast.Constant):
+        # Skip timestamp normalization if we're in a string method context
+        if preserve_string_literals:
+            return node.value
+
         try:
             # First try to normalize the timestamp if it's in a non-standard format
             normalized_value = normalize_timestamp(node.value)
@@ -529,47 +533,54 @@ def _transform_ast(node: ast.AST) -> dict:
     # Handle unary operations (not, +, -)
     elif isinstance(node, ast.UnaryOp):
         if isinstance(node.op, ast.Not):
-            return {"operand": "not", "rhs": _transform_ast(node.operand)}
+            return {
+                "operand": "not",
+                "rhs": _transform_ast(node.operand, preserve_string_literals),
+            }
         elif isinstance(node.op, ast.USub):
             # Handle negative numbers
             if isinstance(node.operand, ast.Constant):
                 return -node.operand.value
             else:
                 # For more complex expressions, use a binary operation with 0
-                return {"operand": "-", "lhs": 0, "rhs": _transform_ast(node.operand)}
+                return {
+                    "operand": "-",
+                    "lhs": 0,
+                    "rhs": _transform_ast(node.operand, preserve_string_literals),
+                }
         elif isinstance(node.op, ast.UAdd):
             # Positive sign, just return the operand
-            return _transform_ast(node.operand)
+            return _transform_ast(node.operand, preserve_string_literals)
 
     # Handle binary operations (+, -, *, /, etc.)
     elif isinstance(node, ast.BinOp):
         return {
-            "lhs": _transform_ast(node.left),
+            "lhs": _transform_ast(node.left, preserve_string_literals),
             "operand": _ast_op_to_str(node.op),
-            "rhs": _transform_ast(node.right),
+            "rhs": _transform_ast(node.right, preserve_string_literals),
         }
 
     # Handle boolean operations (and, or)
     elif isinstance(node, ast.BoolOp):
         # For multiple operands (a and b and c), we need to nest them
-        result = _transform_ast(node.values[0])
+        result = _transform_ast(node.values[0], preserve_string_literals)
         for value in node.values[1:]:
             result = {
                 "lhs": result,
                 "operand": _ast_op_to_str(node.op),
-                "rhs": _transform_ast(value),
+                "rhs": _transform_ast(value, preserve_string_literals),
             }
         return result
 
     # Handle comparisons (==, !=, <, >, etc.)
     elif isinstance(node, ast.Compare):
         # For multiple comparisons (a < b < c), we need to handle each pair
-        result = _transform_ast(node.left)
+        result = _transform_ast(node.left, preserve_string_literals)
         for op, comparator in zip(node.ops, node.comparators):
             result = {
                 "lhs": result,
                 "operand": _ast_op_to_str(op),
-                "rhs": _transform_ast(comparator),
+                "rhs": _transform_ast(comparator, preserve_string_literals),
             }
         return result
 
@@ -583,8 +594,8 @@ def _transform_ast(node: ast.AST) -> dict:
 
         # Special-case vector similarity functions
         if func_name in SIMILARITY_FUNCS and len(node.args) == 2:
-            lhs = _transform_ast(node.args[0])
-            rhs = _transform_ast(node.args[1])
+            lhs = _transform_ast(node.args[0], preserve_string_literals)
+            rhs = _transform_ast(node.args[1], preserve_string_literals)
             return {"lhs": lhs, "operand": func_name, "rhs": rhs}
 
         # Handle special functions
@@ -613,18 +624,26 @@ def _transform_ast(node: ast.AST) -> dict:
                 func_name = "len"
             # For functions with a single argument
             if len(node.args) == 1:
-                return {"operand": func_name, "rhs": _transform_ast(node.args[0])}
+                return {
+                    "operand": func_name,
+                    "rhs": _transform_ast(node.args[0], preserve_string_literals),
+                }
             # For functions with multiple arguments (like round with precision)
             else:
                 return {
                     "operand": func_name,
-                    "rhs": [_transform_ast(arg) for arg in node.args],
+                    "rhs": [
+                        _transform_ast(arg, preserve_string_literals)
+                        for arg in node.args
+                    ],
                 }
         # Handle embed function
         elif func_name == "embed":
             return {
                 "operand": "embed",
-                "rhs": [_transform_ast(arg) for arg in node.args],
+                "rhs": [
+                    _transform_ast(arg, preserve_string_literals) for arg in node.args
+                ],
             }
         # Handle BASE function
         elif func_name == "BASE":
@@ -633,11 +652,18 @@ def _transform_ast(node: ast.AST) -> dict:
                 raise ValueError("BASE function requires exactly 2 arguments")
             return {
                 "operand": "BASE",
-                "rhs": [_transform_ast(arg) for arg in node.args],
+                "rhs": [
+                    _transform_ast(arg, preserve_string_literals) for arg in node.args
+                ],
             }
         # Handle zip function
         elif func_name == "zip":
-            return {"operand": "zip", "rhs": [_transform_ast(arg) for arg in node.args]}
+            return {
+                "operand": "zip",
+                "rhs": [
+                    _transform_ast(arg, preserve_string_literals) for arg in node.args
+                ],
+            }
         # Handle string methods (lower, upper, capitalize, strip, etc.)
         elif isinstance(node.func, ast.Attribute) and node.func.attr in (
             "lower",
@@ -691,11 +717,23 @@ def _transform_ast(node: ast.AST) -> dict:
                     detail=f"str.substring() invalid args: expected 1-2, got {len(node.args)}",
                 )
 
+            # For string methods that take literal string arguments, preserve them exactly
+            preserve_args = attr in (
+                "startswith",
+                "endswith",
+                "contains",
+                "match",
+                "replace",
+            )
+
             return {
                 "operand": "str_method",
                 "method": attr,
-                "rhs": _transform_ast(node.func.value),
-                "args": [_transform_ast(a) for a in node.args],
+                "rhs": _transform_ast(node.func.value, preserve_string_literals),
+                "args": [
+                    _transform_ast(a, preserve_string_literals=preserve_args)
+                    for a in node.args
+                ],
             }
         # Handle dict methods (keys, values, items, get)
         elif isinstance(node.func, ast.Attribute) and node.func.attr in (
@@ -717,11 +755,14 @@ def _transform_ast(node: ast.AST) -> dict:
                         detail="dict.get() accepts at most two arguments",
                     )
 
-                container = _transform_ast(node.func.value)
-                key_expr = _transform_ast(node.args[0])
+                container = _transform_ast(node.func.value, preserve_string_literals)
+                key_expr = _transform_ast(node.args[0], preserve_string_literals)
                 default_expr = None
                 if len(node.args) > 1:
-                    default_expr = _transform_ast(node.args[1])
+                    default_expr = _transform_ast(
+                        node.args[1],
+                        preserve_string_literals,
+                    )
 
                 filter_dict = {
                     "operand": "dict_method",
@@ -738,7 +779,7 @@ def _transform_ast(node: ast.AST) -> dict:
                 return {
                     "operand": "dict_method",
                     "method": node.func.attr,
-                    "rhs": _transform_ast(node.func.value),
+                    "rhs": _transform_ast(node.func.value, preserve_string_literals),
                 }
 
         # Handle other function calls
@@ -746,7 +787,9 @@ def _transform_ast(node: ast.AST) -> dict:
             # Default handling for other functions
             return {
                 "operand": func_name,
-                "rhs": [_transform_ast(arg) for arg in node.args],
+                "rhs": [
+                    _transform_ast(arg, preserve_string_literals) for arg in node.args
+                ],
             }
 
     # Handle subscripts (indexing with [] or {})
@@ -754,49 +797,57 @@ def _transform_ast(node: ast.AST) -> dict:
         if isinstance(node.slice, ast.Slice):
             # Handle slice operations [lower:upper]
             lower = (
-                None if node.slice.lower is None else _transform_ast(node.slice.lower)
+                None
+                if node.slice.lower is None
+                else _transform_ast(node.slice.lower, preserve_string_literals)
             )
             upper = (
-                None if node.slice.upper is None else _transform_ast(node.slice.upper)
+                None
+                if node.slice.upper is None
+                else _transform_ast(node.slice.upper, preserve_string_literals)
             )
             return {
                 "operand": "SLICE",
-                "lhs": _transform_ast(node.value),
+                "lhs": _transform_ast(node.value, preserve_string_literals),
                 "rhs": [lower, upper],
             }
         else:
             # Handle regular index operations
             return {
                 "operand": "INDEX",
-                "lhs": _transform_ast(node.value),
-                "rhs": _transform_ast(node.slice),
+                "lhs": _transform_ast(node.value, preserve_string_literals),
+                "rhs": _transform_ast(node.slice, preserve_string_literals),
             }
 
     # Handle lists and tuples
     elif isinstance(node, (ast.List, ast.Tuple)):
-        return [_transform_ast(elt) for elt in node.elts]
+        return [_transform_ast(elt, preserve_string_literals) for elt in node.elts]
 
     # Handle dictionaries
     elif isinstance(node, ast.Dict):
         return {
-            _transform_ast(k): _transform_ast(v) for k, v in zip(node.keys, node.values)
+            _transform_ast(k, preserve_string_literals): _transform_ast(
+                v,
+                preserve_string_literals,
+            )
+            for k, v in zip(node.keys, node.values)
         }
 
     # Handle string literals that might be parsed as Expr nodes
     elif isinstance(node, ast.Expr):
-        return _transform_ast(node.value)
+        return _transform_ast(node.value, preserve_string_literals)
 
     # Handle the root Expression node from ast.parse(mode='eval')
     elif isinstance(node, ast.Expression):
-        return _transform_ast(node.body)
+        return _transform_ast(node.body, preserve_string_literals)
 
     # Handle if expressions
     if isinstance(node, ast.IfExp):
         return {
             "operand": "if_expr",
-            "test": _transform_ast(node.test),
-            "body": _transform_ast(node.body),
-            "orelse": _transform_ast(node.orelse),
+            "test": _transform_ast(node.test, preserve_string_literals),
+            "body": _transform_ast(node.body, preserve_string_literals),
+            "orelse": _transform_ast(node.orelse, preserve_string_literals),
         }
 
     # Handle list comprehensions
@@ -804,10 +855,10 @@ def _transform_ast(node: ast.AST) -> dict:
         comp = node.generators[0]
         return {
             "operand": "list_comp",
-            "elt": _transform_ast(node.elt),
-            "target": _transform_ast(comp.target),
-            "iter": _transform_ast(comp.iter),
-            "ifs": [_transform_ast(iff) for iff in comp.ifs],
+            "elt": _transform_ast(node.elt, preserve_string_literals),
+            "target": _transform_ast(comp.target, preserve_string_literals),
+            "iter": _transform_ast(comp.iter, preserve_string_literals),
+            "ifs": [_transform_ast(iff, preserve_string_literals) for iff in comp.ifs],
         }
 
     # Handle dictionary comprehensions
@@ -815,11 +866,11 @@ def _transform_ast(node: ast.AST) -> dict:
         comp = node.generators[0]
         return {
             "operand": "dict_comp",
-            "key_elt": _transform_ast(node.key),
-            "val_elt": _transform_ast(node.value),
-            "target": _transform_ast(comp.target),
-            "iter": _transform_ast(comp.iter),
-            "ifs": [_transform_ast(iff) for iff in comp.ifs],
+            "key_elt": _transform_ast(node.key, preserve_string_literals),
+            "val_elt": _transform_ast(node.value, preserve_string_literals),
+            "target": _transform_ast(comp.target, preserve_string_literals),
+            "iter": _transform_ast(comp.iter, preserve_string_literals),
+            "ifs": [_transform_ast(iff, preserve_string_literals) for iff in comp.ifs],
         }
 
     # Default case for unsupported nodes

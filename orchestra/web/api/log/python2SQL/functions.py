@@ -1563,14 +1563,8 @@ def _handle_str_method(
     if isinstance(src, (Subquery, ColumnClause)):
         val, val_type = _select_value(src, session)
 
-        if val_type != "str":
-            raise HTTPException(
-                status_code=400,
-                detail=f"{method}() requires string input, got {val_type}",
-            )
-
         # Ensure we're working with a string
-        str_val = cast(val, String)
+        str_val = func.replace(cast(val, String), '"', "")
 
         # Apply the appropriate string operation
         if method == "lower":
