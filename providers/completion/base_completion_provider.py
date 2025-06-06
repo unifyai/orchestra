@@ -10,6 +10,7 @@ from openai import AsyncStream, OpenAI, Stream
 
 # from litellm.utils import get_model_info  # Uncomment later
 from orchestra.db.models.orchestra_models import CustomEndpoint
+from orchestra.settings import settings
 from orchestra.web.api.utils.exceptions import (
     APIConnectionError,
     APIError,
@@ -160,7 +161,7 @@ class BaseCompletionProvider:
     def compute_cost(self, prompt_tks, output_tks) -> float:
         prompt_cost = prompt_tks * self.prompt_cost / PRICING_PER_TOKENS
         completion_cost = output_tks * self.completion_cost / PRICING_PER_TOKENS
-        return prompt_cost + completion_cost
+        return (prompt_cost + completion_cost) * settings.chat_completions_markup_rate
 
     def get_response_cost(
         self,
