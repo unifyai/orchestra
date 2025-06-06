@@ -25,16 +25,15 @@ from orchestra.web.api.assistant.schema import (
     VoiceRead,
 )
 from orchestra.web.api.utils.assistant_infra import (
-    create_cloud_run_job,
+    create_cloud_run_service,
     create_email,
     create_phone_number,
     create_pubsub_topic,
     create_whatsapp_sender,
-    delete_cloud_run_job,
+    delete_cloud_run_service,
     delete_email,
     delete_phone_number,
     delete_pubsub_topic,
-    stop_cloud_run_job,
     watch_email,
 )
 
@@ -233,19 +232,19 @@ def create_assistant(
                 created_pubsub = True
                 print(f"PUBSUB CREATED: {assistant_id}")
 
-                # Step 6: create cloud run job
-                job_response = create_cloud_run_job(
+                # Step 6: create cloud run service
+                service_response = create_cloud_run_service(
                     assistant_id=str(assistant_id),
                     user_name=f"{assistant_in.first_name} {assistant_in.surname}",
                     assistant_number=created_phone,
                     user_number=assistant_in.user_phone,
                 )
-                if "detail" in job_response:
+                if "detail" in service_response:
                     raise Exception(
-                        f"Cloud Run job creation failed: {job_response['detail']}",
+                        f"Cloud Run service creation failed: {service_response['detail']}",
                     )
-                created_job = True
-                print(f"JOB CREATED: {assistant_id}")
+                created_service = True
+                print(f"SERVICE CREATED: {assistant_id}")
 
                 # Step 7: start cloud run job
                 # start_response = start_cloud_run_job(str(assistant_id))
@@ -298,19 +297,12 @@ def create_assistant(
                 # Rollback infrastructure in reverse order
                 rollback_errors = []
 
-                if started_job:
+                if created_service:
                     try:
-                        stop_cloud_run_job(str(assistant_id))
+                        delete_cloud_run_service(str(assistant_id))
                     except Exception as e:
-                        rollback_errors.append(f"Failed to stop job: {str(e)}")
-                print(f"JOB STOPPED: {assistant_id}")
-
-                if created_job:
-                    try:
-                        delete_cloud_run_job(str(assistant_id))
-                    except Exception as e:
-                        rollback_errors.append(f"Failed to delete job: {str(e)}")
-                print(f"JOB DELETED: {assistant_id}")
+                        rollback_errors.append(f"Failed to delete service: {str(e)}")
+                print(f"SERVICE DELETED: {assistant_id}")
 
                 if created_pubsub:
                     try:
@@ -579,19 +571,12 @@ def delete_assistant(
         # Clean up infrastructure in reverse order (matching rollback pattern)
         cleanup_errors = []
 
-        # Stop cloud run job
+        # Delete cloud run service
         try:
-            stop_cloud_run_job(str(assistant_id))
+            delete_cloud_run_service(str(assistant_id))
         except Exception as e:
-            cleanup_errors.append(f"Failed to stop job: {str(e)}")
-        print(f"JOB STOPPED: {assistant_id}")
-
-        # Delete cloud run job
-        try:
-            delete_cloud_run_job(str(assistant_id))
-        except Exception as e:
-            cleanup_errors.append(f"Failed to delete job: {str(e)}")
-        print(f"JOB DELETED: {assistant_id}")
+            cleanup_errors.append(f"Failed to delete service: {str(e)}")
+        print(f"SERVICE DELETED: {assistant_id}")
 
         # Delete pubsub topic
         try:
