@@ -135,7 +135,7 @@ class Settings(BaseSettings):
 
     # Chat Completions Project
     chat_completions_project_name: str = "Usage"
-
+    chat_completions_markup_rate: float = 1.4
     cors_allow_origins: list[str] = []
 
     vertexai_service_acc_json: str = ""
