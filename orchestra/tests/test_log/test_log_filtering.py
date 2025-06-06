@@ -47,6 +47,14 @@ from . import (
             {"d": None},
         ),
         (
+            "d and d.get('x').startswith('a')",
+            {"d": {"x": "apple"}},
+        ),
+        (
+            "d is not None and d.get('x') and d.get('x').startswith('a')",
+            {"d": {"x": "apple"}},
+        ),
+        (
             "((a == 5) and (b > 7)) or (len(c) < 10 and 'earth' not in d)",
             {"a": 5, "b": 8, "c": "abcdef", "d": "hello world"},
         ),
