@@ -109,6 +109,7 @@ async def _create_test_tile(
     plot_tile_data=None,
     view_tile_data=None,
     editor_tile_data=None,
+    terminal_tile_data=None,
     tile_id=None,
 ):
     """Create a test tile
@@ -117,7 +118,7 @@ async def _create_test_tile(
         client: AsyncClient for making requests
         tab_id: ID of the tab to create the tile in
         name: Name of the tile
-        tile_type: Type of tile (table, plot, view, editor)
+        tile_type: Type of tile (table, plot, view, editor, terminal)
         width: Width of the tile
         height: Height of the tile
         x: X position of the tile
@@ -142,6 +143,7 @@ async def _create_test_tile(
         plot_tile_data: Specialized data for plot tiles
         view_tile_data: Specialized data for view tiles
         editor_tile_data: Specialized data for editor tiles
+        terminal_tile_data: Specialized data for terminal tiles
         tile_id: Optional pre-specified ID for the tile
     """
 
@@ -188,6 +190,8 @@ async def _create_test_tile(
         payload["view_tile"] = view_tile_data
     elif tile_type and tile_type.lower() == "editor" and editor_tile_data:
         payload["editor_tile"] = editor_tile_data
+    elif tile_type and tile_type.lower() == "terminal" and terminal_tile_data:
+        payload["terminal_tile"] = terminal_tile_data
 
     response = await client.post(
         "/v0/tile/",
@@ -426,6 +430,46 @@ async def _create_test_editor_tile(
     )
 
 
+async def _create_test_terminal_tile(
+    client: AsyncClient,
+    tab_id,
+    name=f"{TEST_TILE}-terminal",
+    shell_type="bash",
+    **kwargs,
+):
+    """Create a test terminal tile with appropriate defaults.
+
+    Args:
+        client: AsyncClient for making requests
+        tab_id: ID of the tab to create the tile in
+        name: Name of the tile
+        shell_type: Shell type for the terminal
+        **kwargs: Additional arguments to pass to _create_test_tile
+    """
+    terminal_tile_data = {"shell_type": shell_type}
+
+    # Remove None values
+    terminal_tile_data = {k: v for k, v in terminal_tile_data.items()}
+
+    # Set defaults for terminal tiles
+    terminal_kwargs = {
+        "width": 4,
+        "height": 3,
+    }
+
+    # Override defaults with any provided kwargs
+    terminal_kwargs.update(kwargs)
+
+    return await _create_test_tile(
+        client=client,
+        tab_id=tab_id,
+        name=name,
+        tile_type="Terminal",
+        terminal_tile_data=terminal_tile_data,
+        **terminal_kwargs,
+    )
+
+
 async def _get_tile(client: AsyncClient, tile_id=None, tab_id=None, name=None):
     """
     Get tile by ID or by tab_id and name
@@ -557,7 +601,7 @@ async def _patch_specialized_tile(
 
     Args:
         client: AsyncClient for making requests
-        tile_type: The type of tile (Table, Plot, View, Editor)
+        tile_type: The type of tile (Table, Plot, View, Editor, Terminal)
         tile_id: ID of the tile to patch
         tab_id: ID of the tab containing the tile
         name: Name of the tile to patch
@@ -797,6 +841,23 @@ async def test_create_different_tile_types(client: AsyncClient):
     assert editor_data["editor_tile"]["id"] is not None
     assert editor_data["editor_tile"]["id"] != editor_data["id"]
     assert editor_data["editor_tile"]["tile_id"] == editor_data["id"]
+
+    # Create a terminal tile
+    terminal_response = await _create_test_terminal_tile(
+        client,
+        tab_id,
+        shell_type="bash",
+    )
+    assert terminal_response.status_code == 201
+    terminal_data = terminal_response.json()
+    assert terminal_data["type"] == "Terminal"
+    assert "terminal_tile" in terminal_data
+    assert terminal_data["terminal_tile"]["shell_type"] == "bash"
+    # Verify specialized tile ID relationship
+    assert "id" in terminal_data["terminal_tile"]
+    assert terminal_data["terminal_tile"]["id"] is not None
+    assert terminal_data["terminal_tile"]["id"] != terminal_data["id"]
+    assert terminal_data["terminal_tile"]["tile_id"] == terminal_data["id"]
 
 
 @pytest.mark.anyio
@@ -1318,6 +1379,40 @@ async def test_update_specialized_tile_data(client: AsyncClient):
     assert updated_data["editor_tile"]["id"] != updated_data["id"]
     assert updated_data["editor_tile"]["tile_id"] == updated_data["id"]
 
+    # Create a terminal tile
+    terminal_tile_response = await _create_test_terminal_tile(
+        client,
+        tab_id,
+        shell_type="bash",
+    )
+    assert terminal_tile_response.status_code == 201
+    terminal_tile_id = terminal_tile_response.json()["id"]
+    # Verify specialized tile ID relationship
+    assert "id" in terminal_tile_response.json()["terminal_tile"]
+    assert terminal_tile_response.json()["terminal_tile"]["id"] is not None
+    assert terminal_tile_response.json()["terminal_tile"]["id"] != terminal_tile_id
+    assert terminal_tile_response.json()["terminal_tile"]["tile_id"] == terminal_tile_id
+
+    # Update the specialized terminal data
+    update_data = {
+        "terminal_tile": {
+            "shell_type": "zsh",
+        },
+    }
+    response = await _patch_tile(
+        client,
+        tile_id=terminal_tile_id,
+        patch_data=update_data,
+    )
+    assert response.status_code == 200
+    updated_data = response.json()
+    assert updated_data["terminal_tile"]["shell_type"] == "zsh"
+    # Verify specialized tile ID relationship after update
+    assert "id" in updated_data["terminal_tile"]
+    assert updated_data["terminal_tile"]["id"] is not None
+    assert updated_data["terminal_tile"]["id"] != updated_data["id"]
+    assert updated_data["terminal_tile"]["tile_id"] == updated_data["id"]
+
 
 @pytest.mark.anyio
 async def test_patch_specialized_tile_endpoint(client: AsyncClient):
@@ -1365,6 +1460,18 @@ async def test_patch_specialized_tile_endpoint(client: AsyncClient):
     assert editor_tile.json()["editor_tile"]["id"] is not None
     assert editor_tile.json()["editor_tile"]["id"] != editor_id
     assert editor_tile.json()["editor_tile"]["tile_id"] == editor_id
+
+    terminal_tile = await _create_test_terminal_tile(
+        client,
+        tab_id,
+        name="spec-terminal-tile",
+    )
+    terminal_id = terminal_tile.json()["id"]
+    # Verify specialized tile ID relationship
+    assert "id" in terminal_tile.json()["terminal_tile"]
+    assert terminal_tile.json()["terminal_tile"]["id"] is not None
+    assert terminal_tile.json()["terminal_tile"]["id"] != terminal_id
+    assert terminal_tile.json()["terminal_tile"]["tile_id"] == terminal_id
 
     # Test patch for table tile
     table_patch = {
@@ -1451,6 +1558,25 @@ async def test_patch_specialized_tile_endpoint(client: AsyncClient):
     assert editor_data["editor_tile"]["id"] is not None
     assert editor_data["editor_tile"]["id"] != editor_data["id"]
     assert editor_data["editor_tile"]["tile_id"] == editor_data["id"]
+
+    # Test patch for terminal tile
+    terminal_patch = {
+        "shell_type": "zsh",
+    }
+    terminal_response = await _patch_specialized_tile(
+        client,
+        tile_type="Terminal",
+        tile_id=terminal_id,
+        patch_data=terminal_patch,
+    )
+    assert terminal_response.status_code == 200
+    terminal_data = terminal_response.json()
+    assert terminal_data["terminal_tile"]["shell_type"] == "zsh"
+    # Verify specialized tile ID relationship after patch
+    assert "id" in terminal_data["terminal_tile"]
+    assert terminal_data["terminal_tile"]["id"] is not None
+    assert terminal_data["terminal_tile"]["id"] != terminal_data["id"]
+    assert terminal_data["terminal_tile"]["tile_id"] == terminal_data["id"]
 
 
 @pytest.mark.anyio
@@ -1560,6 +1686,7 @@ async def test_patch_tile_set_type_and_specialized_data(client: AsyncClient):
     assert data["plot_tile"] is None
     assert data["view_tile"] is None
     assert data["editor_tile"] is None
+    assert data["terminal_tile"] is None
     # Verify specialized tile ID relationship
     assert "id" in data["table_tile"]
     assert data["table_tile"]["id"] is not None
@@ -1619,6 +1746,7 @@ async def test_patch_tile_change_type_with_new_specialized_data(client: AsyncCli
     assert data["table_tile"] is None
     assert data["view_tile"] is None
     assert data["editor_tile"] is None
+    assert data["terminal_tile"] is None
     # Verify specialized tile ID relationship
     assert "id" in data["plot_tile"]
     assert data["plot_tile"]["id"] is not None
@@ -1670,6 +1798,7 @@ async def test_patch_tile_change_type_without_specialized_data(client: AsyncClie
     assert data["table_tile"] is None
     assert data["plot_tile"] is None
     assert data["editor_tile"] is None
+    assert data["terminal_tile"] is None
     # Verify specialized tile ID relationship
     assert "id" in data["view_tile"]
     assert data["view_tile"]["id"] is not None
@@ -1787,6 +1916,25 @@ async def test_create_tile_with_specialized_data_in_one_step(client: AsyncClient
     assert editor_data["editor_tile"]["id"] is not None
     assert editor_data["editor_tile"]["id"] != editor_data["id"]
     assert editor_data["editor_tile"]["tile_id"] == editor_data["id"]
+
+    # Create a terminal tile
+    terminal_reponse = await _create_test_tile(
+        client,
+        tab_id,
+        name="one-step-terminal-tile",
+        tile_type="Terminal",
+        terminal_tile_data={"shell_type": "bash"},
+    )
+    assert terminal_reponse.status_code == 201
+    terminal_data = terminal_reponse.json()
+    assert terminal_data["type"] == "Terminal"
+    assert terminal_data["terminal_tile"] is not None
+    assert terminal_data["terminal_tile"]["shell_type"] == "bash"
+    # Verify specialized tile ID relationship
+    assert "id" in terminal_data["terminal_tile"]
+    assert terminal_data["terminal_tile"]["id"] is not None
+    assert terminal_data["terminal_tile"]["id"] != terminal_data["id"]
+    assert terminal_data["terminal_tile"]["tile_id"] == terminal_data["id"]
 
     # Test with pre-specified ID
     custom_id = str(uuid.uuid4())
