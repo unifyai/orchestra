@@ -290,9 +290,6 @@ def create_assistant(
                 logging.warning(
                     f"Infrastructure setup failed for assistant {assistant_id}, refreshing session for rollback",
                 )
-                session.close()
-                session = next(get_db_session(request))
-                assistant_dao = AssistantDAO(session)
 
                 # Rollback infrastructure in reverse order
                 rollback_errors = []
@@ -329,6 +326,9 @@ def create_assistant(
 
                 # Delete the assistant record since infrastructure failed
                 try:
+                    session.close()
+                    session = next(get_db_session(request))
+                    assistant_dao = AssistantDAO(session)
                     assistant_dao.delete_assistant(
                         user_id=user_id,
                         agent_id=assistant_id,
@@ -362,14 +362,11 @@ def create_assistant(
     if not settings.is_staging:
         try:
             # Refresh session before credit operation to ensure connection is valid
-            session.close()
-            session = next(get_db_session(request))
-            users_dao = UsersDAO(session)
-
             users_dao.recharge_credit(
                 user_id=user_id,
                 quantity=-float(ASSISTANT_CREATION_COST),
             )
+            session.commit()
         except Exception as e_commit:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
