@@ -13,6 +13,7 @@ from orchestra.web.api.interface.schema import (
     EditorTileSchema,
     PlotTileSchema,
     TableTileSchema,
+    TerminalTileSchema,
     TileSchema,
     UpdateTileRequest,
     ViewTileSchema,
@@ -32,6 +33,7 @@ def _create_tile_response(tile: Tile) -> TileSchema:
     plot_tile_data = None
     view_tile_data = None
     editor_tile_data = None
+    terminal_tile_data = None
 
     if hasattr(tile, "table_tile") and tile.table_tile:
         table_tile_data = TableTileSchema(
@@ -80,6 +82,13 @@ def _create_tile_response(tile: Tile) -> TileSchema:
             content=tile.editor_tile.content,
         )
 
+    if hasattr(tile, "terminal_tile") and tile.terminal_tile:
+        terminal_tile_data = TerminalTileSchema(
+            id=str(tile.terminal_tile.id),
+            tile_id=str(tile.terminal_tile.tile_id),
+            shell_type=tile.terminal_tile.shell_type,
+        )
+
     position = {
         "x": tile.x_position,
         "y": tile.y_position,
@@ -114,6 +123,7 @@ def _create_tile_response(tile: Tile) -> TileSchema:
         plot_tile=plot_tile_data,
         view_tile=view_tile_data,
         editor_tile=editor_tile_data,
+        terminal_tile=terminal_tile_data,
         created_at=tile.created_at.isoformat() if tile.created_at else None,
         updated_at=tile.updated_at.isoformat() if tile.updated_at else None,
     )
@@ -231,6 +241,7 @@ def _get_tile(
                         "plot_tile": None,
                         "view_tile": None,
                         "editor_tile": None,
+                        "terminal_tile": None,
                         "created_at": "2024-01-01T12:00:00Z",
                         "updated_at": "2024-01-01T12:00:00Z",
                     },
@@ -307,6 +318,10 @@ def create_tile(
             )
         elif request.type == "Editor" and request.editor_tile:
             specialized_data["editor_tile"] = request.editor_tile.model_dump(
+                exclude_unset=True,
+            )
+        elif request.type == "Terminal" and request.terminal_tile:
+            specialized_data["terminal_tile"] = request.terminal_tile.model_dump(
                 exclude_unset=True,
             )
 
@@ -398,6 +413,7 @@ def create_tile(
                         "plot_tile": None,
                         "view_tile": None,
                         "editor_tile": None,
+                        "terminal_tile": None,
                         "created_at": "2024-01-01T12:00:00Z",
                         "updated_at": "2024-01-01T12:00:00Z",
                     },
@@ -499,6 +515,7 @@ def get_tile(
                             "plot_tile": None,
                             "view_tile": None,
                             "editor_tile": None,
+                            "terminal_tile": None,
                             "created_at": "2024-01-01T12:00:00Z",
                             "updated_at": "2024-01-01T12:00:00Z",
                         },
@@ -542,6 +559,7 @@ def get_tile(
                             },
                             "view_tile": None,
                             "editor_tile": None,
+                            "terminal_tile": None,
                             "created_at": "2024-01-01T12:00:00Z",
                             "updated_at": "2024-01-01T12:00:00Z",
                         },
@@ -639,6 +657,7 @@ def list_tiles(
                         "plot_tile": None,
                         "view_tile": None,
                         "editor_tile": None,
+                        "terminal_tile": None,
                         "created_at": "2024-01-01T12:00:00Z",
                         "updated_at": "2024-01-01T12:30:00Z",
                     },
@@ -759,6 +778,7 @@ def update_tile(
                         "plot_tile": None,
                         "view_tile": None,
                         "editor_tile": None,
+                        "terminal_tile": None,
                         "created_at": "2024-01-01T12:00:00Z",
                         "updated_at": "2024-01-01T12:30:00Z",
                     },
@@ -912,6 +932,7 @@ def create_tile_checkpoint(
                         "plot_tile": None,
                         "view_tile": None,
                         "editor_tile": None,
+                        "terminal_tile": None,
                         "created_at": "2024-01-01T12:00:00Z",
                         "updated_at": "2024-01-01T12:30:00Z",
                     },
@@ -1100,6 +1121,7 @@ def delete_tile(
                         "plot_tile": None,
                         "view_tile": None,
                         "editor_tile": None,
+                        "terminal_tile": None,
                         "created_at": "2024-01-01T12:00:00Z",
                         "updated_at": "2024-01-01T12:45:00Z",
                     },
@@ -1225,6 +1247,7 @@ def patch_tile(
                         "plot_tile": None,
                         "view_tile": None,
                         "editor_tile": None,
+                        "terminal_tile": None,
                         "created_at": "2024-01-01T12:00:00Z",
                         "updated_at": "2024-01-01T13:00:00Z",
                     },
@@ -1244,7 +1267,7 @@ def patch_tile(
             "content": {
                 "application/json": {
                     "example": {
-                        "detail": "Invalid tile_type. Must be one of Table, Plot, View, Editor",
+                        "detail": "Invalid tile_type. Must be one of Table, Plot, View, Editor, Terminal",
                     },
                 },
             },
@@ -1254,7 +1277,7 @@ def patch_tile(
 async def patch_specialized_tile(
     tile_type: str = Query(
         ...,
-        description="Type of tile to patch (Table, Plot, View, Editor)",
+        description="Type of tile to patch (Table, Plot, View, Editor, Terminal)",
     ),
     tile_id: Optional[str] = None,
     tab_id: Optional[str] = None,
@@ -1267,7 +1290,7 @@ async def patch_specialized_tile(
     Generic endpoint to patch any specialized tile type.
 
     The tile_type parameter determines which specialized tile type to update.
-    Valid values are: Table, Plot, View, Editor
+    Valid values are: Table, Plot, View, Editor, Terminal
 
     For Table tiles, valid specialized fields include: table_type, column_context, page_number,
     column_order, hidden_columns, sorting, grouping, group_sorting, columns_pin_left,
@@ -1279,9 +1302,11 @@ async def patch_specialized_tile(
     For View tiles, valid specialized fields include: base_index
 
     For Editor tiles, valid specialized fields include: file_name, file_type, content
+
+    For Terminal tiles, valid specialized fields include: shell_type
     """
     # Validate the tile type
-    valid_types = ["Table", "Plot", "View", "Editor"]
+    valid_types = ["Table", "Plot", "View", "Editor", "Terminal"]
     if tile_type not in valid_types:
         raise HTTPException(
             status_code=400,
