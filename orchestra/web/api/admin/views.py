@@ -41,7 +41,7 @@ from orchestra.db.models.orchestra_models import (  # noqa: WPS235
     Task,
     Users,
 )
-from orchestra.lib.billing import credits_to_usd, get_appropriate_stripe_key
+from orchestra.lib.billing import UNIFY_CREDITS_PRICE_ID, get_appropriate_stripe_key
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
     BenchmarkRunModelResponse,
     CreditCardFingerprintModelResponse,
@@ -684,7 +684,7 @@ def create_recharge_model(
     )
 
     # Calculate amount_usd and invoice_group for the new billing system
-    amount_usd = credits_to_usd(int(new_recharge_object.quantity))
+    amount_usd = new_recharge_object.quantity
 
     # Handle custom invoice grouping for testing
     if new_recharge_object.target_month:
@@ -727,15 +727,15 @@ def create_recharge_model(
                 if stripe_key:
                     stripe.api_key = stripe_key
 
-                    # Convert amount to cents for Stripe
-                    cents = int(amount_usd * 100)
+                    # Use Stripe product for consistent 1:1 pricing (1 credit = $1)
+                    quantity = int(new_recharge_object.quantity)
 
-                    if cents > 0:  # Only create if there's an actual amount
-                        # Create Stripe invoice item
+                    if quantity > 0:  # Only create if there's an actual quantity
+                        # Create Stripe invoice item using price ID (not price_data due to custom_unit_amount)
                         invoice_item = stripe.InvoiceItem.create(
                             customer=user[0].stripe_customer_id,
-                            amount=cents,
-                            currency="usd",
+                            price=UNIFY_CREDITS_PRICE_ID,
+                            quantity=quantity,  # Number of credits
                             description=f"{new_recharge_object.quantity} credits",
                             metadata={
                                 "recharge_type": "auto",
