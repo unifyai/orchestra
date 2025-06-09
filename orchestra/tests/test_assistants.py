@@ -495,7 +495,7 @@ async def test_search_assistants_by_phone(client: AsyncClient):
         "region": "Europe",
         "profile_photo": "https://example.com/photos/paul.jpg",
         "about": "Mobile app developer",
-        "phone": "+1-555-111-2222",
+        "phone": "+15551112222",
         "create_infra": False,
     }
     payload2 = {
@@ -507,7 +507,7 @@ async def test_search_assistants_by_phone(client: AsyncClient):
         "region": "Asia",
         "profile_photo": "https://example.com/photos/quinn.jpg",
         "about": "UX designer",
-        "phone": "+1-555-333-4444",
+        "phone": "+15553334444",
         "create_infra": False,
     }
 
@@ -587,7 +587,7 @@ async def test_admin_list_assistants_filter_phone(client: AsyncClient):
         "region": "Asia",
         "profile_photo": "https://example.com/photos/phone1.jpg",
         "about": "Phone test assistant 1",
-        "phone": "+1-555-111-1111",
+        "phone": "+15551111111",
         "create_infra": False,
     }
     payload2 = {
@@ -599,7 +599,7 @@ async def test_admin_list_assistants_filter_phone(client: AsyncClient):
         "region": "Australia",
         "profile_photo": "https://example.com/photos/phone2.jpg",
         "about": "Phone test assistant 2",
-        "phone": "+1-555-222-2222",
+        "phone": "+15552222222",
         "create_infra": False,
     }
 
