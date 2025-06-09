@@ -27,7 +27,6 @@ async def test_create_assistant_success(client: AsyncClient):
         "create_infra": False,
     }
     resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-    assert resp.text == "Assistant created successfully"
     assert resp.status_code == 200
     body = resp.json()
     assert "info" in body
