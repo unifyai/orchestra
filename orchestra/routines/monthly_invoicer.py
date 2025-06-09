@@ -5,7 +5,7 @@ The job is meant to run once a month (e.g. 00:05 on the 1st) and:
 1. picks every `Recharge` row whose
       • status        == PENDING_INVOICE
       • invoice_group == last day of the target month (UTC)
-2. creates a single Stripe invoice + invoice-item for the total
+2. creates a single Stripe invoice + invoice-item for the total using the Stripe product
 3. updates all rows to INVOICE_CREATED and stores the invoice-id
 """
 
@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
-from orchestra.lib.billing import get_appropriate_stripe_key
+from orchestra.lib.billing import UNIFY_CREDITS_PRICE_ID, get_appropriate_stripe_key
 from orchestra.lib.time import month_end_utc  # helper already exists
 from orchestra.web.api.utils.prometheus_middleware import INVOICE_CREATED_TOTAL
 from orchestra.web.lifetime import get_engine
@@ -103,20 +103,31 @@ def _invoice_month_with_session(
 
         total_usd: Decimal = sum(r.amount_usd for r in bucket)
         total_cr: Decimal = sum(r.quantity for r in bucket)
-        cents = int(total_usd.quantize(Decimal("0.01")) * 100)
 
-        if cents == 0:  # nothing to bill
+        # With 1 credit = $1, total_cr should equal total_usd
+        if total_cr != total_usd:
+            pass
+
+        # Use credits as the quantity (1 credit = $1 with Stripe product)
+        quantity = int(total_cr)
+
+        if quantity == 0:  # nothing to bill
             continue
 
         try:
             idem_base = f"{user_id}-{group_day}"
 
-            # 1. create invoice-item (pending)
+            # 1. create invoice-item using Stripe price (not price_data due to custom_unit_amount)
             stripe.InvoiceItem.create(
                 customer=user.stripe_customer_id,
-                amount=cents,
-                currency="usd",
-                description=f"{total_cr} credits",
+                price=UNIFY_CREDITS_PRICE_ID,
+                quantity=quantity,  # Number of credits
+                description=f"{total_cr} credits used in {year}-{month:02d}",
+                metadata={
+                    "invoice_group": str(group_day),
+                    "user_id": user_id,
+                    "period": f"{year}-{month:02d}",
+                },
                 idempotency_key=idem_base + "-item",
             )
 
@@ -126,7 +137,11 @@ def _invoice_month_with_session(
                 auto_advance=True,
                 pending_invoice_items_behavior="include",
                 description=f"{total_cr} credits used in {year}-{month:02d}",
-                metadata={"invoice_group": str(group_day)},
+                metadata={
+                    "invoice_group": str(group_day),
+                    "user_id": user_id,
+                    "period": f"{year}-{month:02d}",
+                },
                 idempotency_key=idem_base,
             )
 

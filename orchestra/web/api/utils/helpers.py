@@ -16,7 +16,7 @@ from anthropic import Anthropic
 from openai import OpenAI
 
 from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
-from orchestra.lib.billing import credits_to_usd, get_appropriate_stripe_key
+from orchestra.lib.billing import get_appropriate_stripe_key
 from orchestra.lib.time import month_end_utc
 
 oai_func = OpenAI(api_key="").chat.completions.create
@@ -179,7 +179,7 @@ def recharge_and_generate_invoice(user, users_dao):
             recharge = Recharge(
                 user_id=user.id,
                 quantity=user.autorecharge_qty,
-                amount_usd=credits_to_usd(int(user.autorecharge_qty)),
+                amount_usd=Decimal(user.autorecharge_qty),  # 1 credit = $1
                 invoice_group=month_end_utc(date.today()),
                 type="invoice",
                 transaction_id=finalized_invoice.id,

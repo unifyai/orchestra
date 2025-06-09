@@ -231,7 +231,7 @@ def test_invoicer_aggregates(dbsession: Session, mock_stripe):
             Recharge(
                 user_id=uid,
                 quantity=10,
-                amount_usd=Decimal("2.50"),
+                amount_usd=Decimal("50.00"),
                 status=RechargeStatus.PENDING_INVOICE,
                 invoice_group=LAST_GROUP,
                 type="usage",
@@ -258,7 +258,7 @@ async def test_webhook_idempotent(client: AsyncClient, dbsession: Session):
     rec = Recharge(
         user_id=uid,
         quantity=5,
-        amount_usd=Decimal("1.25"),
+        amount_usd=Decimal("50.00"),
         status=RechargeStatus.INVOICE_CREATED,
         stripe_invoice_id="in_test_1",
         type="usage",
@@ -385,7 +385,7 @@ def test_prepaid_skip(dbsession: Session, mock_stripe):
     rec = Recharge(
         user_id=uid,
         quantity=500,
-        amount_usd=Decimal("5.00"),
+        amount_usd=Decimal("50.00"),
         status=RechargeStatus.PAID,
         stripe_invoice_id="in_paid",
         type="payment",
@@ -430,7 +430,7 @@ def test_queue_auto_recharge_basic(dbsession: Session):
     recharge = dbsession.query(Recharge).filter_by(user_id=uid).first()
     assert recharge is not None
     assert recharge.quantity == Decimal("50")  # Use quantity instead of credits
-    assert recharge.amount_usd == Decimal("0.50")  # 50 credits * $0.01
+    assert recharge.amount_usd == Decimal("50.00")  # 50 credits * $1
     assert recharge.status == RechargeStatus.PENDING_INVOICE
     assert recharge.type == "auto"  # Use type instead of recharge_type
 
@@ -501,6 +501,7 @@ def test_auto_recharge_logic_triggers_correctly(dbsession: Session):
     recharge = dbsession.query(Recharge).filter_by(user_id=uid).first()
     assert recharge is not None
     assert recharge.quantity == Decimal("50")  # Use quantity instead of credits
+    assert recharge.amount_usd == Decimal("50.00")  # 50 credits * $1
 
 
 def test_auto_recharge_disabled_no_trigger(dbsession: Session):
@@ -601,7 +602,7 @@ def test_auto_recharge_integration_with_monthly_invoicer(
             if "Auto-recharge" in item.get("description", "")
         ]
         if len(invoice_items) > 0:
-            # Verify the total amount is correct (50 + 25 = 75 credits = $0.75 = 75 cents)
+            # Verify the total amount is correct (50 + 25 = 75 credits = $75 = 75 cents)
             total_amount = sum(item["amount"] for item in invoice_items)
             assert total_amount == 75
 
