@@ -41,7 +41,7 @@ from orchestra.db.models.orchestra_models import (  # noqa: WPS235
     Task,
     Users,
 )
-from orchestra.lib.billing import UNIFY_CREDITS_PRICE_ID, get_appropriate_stripe_key
+from orchestra.lib.billing import get_appropriate_stripe_key
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
     BenchmarkRunModelResponse,
     CreditCardFingerprintModelResponse,
@@ -731,11 +731,13 @@ def create_recharge_model(
                     quantity = int(new_recharge_object.quantity)
 
                     if quantity > 0:  # Only create if there's an actual quantity
-                        # Create Stripe invoice item using price ID (not price_data due to custom_unit_amount)
+                        # Create Stripe invoice item using amount instead of price to avoid custom_unit_amount issues
                         invoice_item = stripe.InvoiceItem.create(
                             customer=user[0].stripe_customer_id,
-                            price=UNIFY_CREDITS_PRICE_ID,
-                            quantity=quantity,  # Number of credits
+                            amount=int(
+                                new_recharge_object.quantity * 100,
+                            ),  # Convert to cents
+                            currency="usd",
                             description=f"{new_recharge_object.quantity} credits",
                             metadata={
                                 "recharge_type": "auto",

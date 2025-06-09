@@ -20,7 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
-from orchestra.lib.billing import UNIFY_CREDITS_PRICE_ID, get_appropriate_stripe_key
+from orchestra.lib.billing import get_appropriate_stripe_key
 from orchestra.lib.time import month_end_utc  # helper already exists
 from orchestra.web.api.utils.prometheus_middleware import INVOICE_CREATED_TOTAL
 from orchestra.web.lifetime import get_engine
@@ -117,11 +117,11 @@ def _invoice_month_with_session(
         try:
             idem_base = f"{user_id}-{group_day}"
 
-            # 1. create invoice-item using Stripe price (not price_data due to custom_unit_amount)
+            # 1. create invoice-item using amount instead of price to avoid custom_unit_amount issues
             stripe.InvoiceItem.create(
                 customer=user.stripe_customer_id,
-                price=UNIFY_CREDITS_PRICE_ID,
-                quantity=quantity,  # Number of credits
+                amount=int(total_usd * 100),  # Convert to cents
+                currency="usd",
                 description=f"{total_cr} credits used in {year}-{month:02d}",
                 metadata={
                     "invoice_group": str(group_day),
