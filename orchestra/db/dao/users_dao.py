@@ -8,8 +8,8 @@ from orchestra.db.models.orchestra_models import Query, Users
 from orchestra.web.api.utils.http_responses import not_found
 
 # Constants for billing requirements
-MIN_SPEND_FOR_MONTHLY_BILLING = 100.0  # $100 in credits (10,000 credits)
-MIN_AUTORECHARGE_AMOUNT = 25.0  # $25 in credits (2,500 credits)
+MIN_SPEND_FOR_MONTHLY_BILLING = 100.0  # $100 in credits (100 credits)
+MIN_AUTORECHARGE_AMOUNT = 25.0  # $25 in credits (25 credits)
 
 
 class UsersDAO:
@@ -89,7 +89,7 @@ class UsersDAO:
         Calculate total spending for a user from the Query table.
 
         :param user_id: id of the user
-        :return: total spending in credits (equivalent to dollars since 1 credit = $0.01)
+        :return: total spending in credits (equivalent to dollars since 1 credit = $1)
         """
         result = self.session.execute(
             select(func.sum(Query.credits)).where(
