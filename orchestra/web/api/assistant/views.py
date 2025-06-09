@@ -156,6 +156,8 @@ def create_assistant(
             weekly_limit=parsed_weekly_limit,
             max_parallel=assistant_in.max_parallel,
             voice_id=assistant_in.voice_id,
+            phone=assistant_in.phone,
+            email=assistant_in.email,
         )
 
         # Commit the assistant creation before infrastructure setup
@@ -569,17 +571,19 @@ def delete_assistant(
         cleanup_errors = []
 
         # Delete cloud run service
-        try:
-            delete_cloud_run_service(str(assistant_id))
-        except Exception as e:
-            cleanup_errors.append(f"Failed to delete service: {str(e)}")
+        if assistant.email:
+            try:
+                delete_cloud_run_service(str(assistant_id))
+            except Exception as e:
+                cleanup_errors.append(f"Failed to delete service: {str(e)}")
         print(f"SERVICE DELETED: {assistant_id}")
 
         # Delete pubsub topic
-        try:
-            delete_pubsub_topic(str(assistant_id))
-        except Exception as e:
-            cleanup_errors.append(f"Failed to delete pubsub topic: {str(e)}")
+        if assistant.email:
+            try:
+                delete_pubsub_topic(str(assistant_id))
+            except Exception as e:
+                cleanup_errors.append(f"Failed to delete pubsub topic: {str(e)}")
         print(f"PUBSUB DELETED: {assistant_id}")
 
         # Delete phone number if exists
@@ -598,11 +602,13 @@ def delete_assistant(
                 cleanup_errors.append(f"Failed to delete email: {str(e)}")
         print(f"EMAIL DELETED: {assistant.email}")
 
-        # Finally delete the assistant record (matching rollback error handling)
-        try:
+        if assistant.email:
             session.close()
             session = next(get_db_session(request))
             dao = AssistantDAO(session)
+
+        # Finally delete the assistant record (matching rollback error handling)
+        try:
             dao.delete_assistant(user_id=request.state.user_id, agent_id=assistant_id)
             session.commit()
         except Exception as e:
