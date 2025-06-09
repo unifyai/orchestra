@@ -17,10 +17,10 @@ from orchestra.lib.time import month_end_utc
 
 logger = logging.getLogger(__name__)
 
-
-def credits_to_usd(credits: int) -> Decimal:
-    """Convert credits to USD amount."""
-    return Decimal(credits) * Decimal("0.01")
+# Stripe product configuration for Unify Credits
+# This ensures consistent 1:1 pricing (1 credit = $1) throughout the system
+UNIFY_CREDITS_PRICE_ID = "price_1Oyd7CKWSwIeRavwlfMp1uGp"
+UNIFY_CREDITS_PRODUCT_ID = "prod_PoFcbDHMdLYNH5"
 
 
 def get_appropriate_stripe_key() -> str | None:
@@ -65,12 +65,12 @@ def queue_auto_recharge(session: Session, user: User, credits: int) -> None:
         user_id=user.id,
         type=RECHARGE_TYPE_AUTO,
         quantity=Decimal(credits),
-        amount_usd=credits_to_usd(credits),
+        amount_usd=Decimal(credits),  # 1 credit = $1
         invoice_group=month_end_utc(datetime.now(timezone.utc)),
         status=RechargeStatus.PENDING_INVOICE,
     )
 
     session.add(recharge)
     logger.info(
-        f"Auto-recharge queued for user {user.id}: ${credits_to_usd(credits):.2f}",
+        f"Auto-recharge queued for user {user.id}: ${credits:.2f}",
     )
