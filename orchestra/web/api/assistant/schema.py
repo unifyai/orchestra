@@ -79,7 +79,12 @@ class AssistantCreate(BaseModel):
     create_infra: Optional[bool] = Field(
         True,
         description="Whether to create the infrastructure for the assistant",
-        example=True,
+        exclude=True,
+    )
+    phone: Optional[str] = Field(
+        None,
+        description="Phone number of the assistant (just for testing purposes)",
+        exclude=True,
     )
 
     class Config:
