@@ -84,6 +84,12 @@ class EditorTileSchema(BaseModel):
     content: Optional[str] = None
 
 
+class TerminalTileSchema(BaseModel):
+    id: Optional[str] = None
+    tile_id: Optional[str] = None
+    shell_type: Optional[str] = None
+
+
 class TileSchema(BaseTileSchema):
     """Complete Tile schema with type-specific properties"""
 
@@ -92,6 +98,7 @@ class TileSchema(BaseTileSchema):
     plot_tile: Optional[PlotTileSchema] = None
     view_tile: Optional[ViewTileSchema] = None
     editor_tile: Optional[EditorTileSchema] = None
+    terminal_tile: Optional[TerminalTileSchema] = None
 
 
 # Tab-related schemas
@@ -143,6 +150,7 @@ class CreateTileRequest(BaseModel):
     plot_tile: Optional[PlotTileSchema] = None
     view_tile: Optional[ViewTileSchema] = None
     editor_tile: Optional[EditorTileSchema] = None
+    terminal_tile: Optional[TerminalTileSchema] = None
 
     class Config:
         extra = "forbid"  # Reject unknown fields
@@ -173,6 +181,7 @@ class UpdateTileRequest(BaseModel):
     plot_tile: Optional[PlotTileSchema] = None
     view_tile: Optional[ViewTileSchema] = None
     editor_tile: Optional[EditorTileSchema] = None
+    terminal_tile: Optional[TerminalTileSchema] = None
 
     class Config:
         extra = "forbid"  # Reject unknown fields
