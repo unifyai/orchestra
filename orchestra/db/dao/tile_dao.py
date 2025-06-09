@@ -8,6 +8,7 @@ from orchestra.db.models.orchestra_models import (
     EditorTile,
     PlotTile,
     TableTile,
+    TerminalTile,
     Tile,
     ViewTile,
 )
@@ -52,6 +53,7 @@ class TileDAO:
         plot_tile: Optional[dict] = None,
         view_tile: Optional[dict] = None,
         editor_tile: Optional[dict] = None,
+        terminal_tile: Optional[dict] = None,
     ) -> Tile:
         """
         Create a new tile in a tab.
@@ -85,6 +87,7 @@ class TileDAO:
             plot_tile: Optional specialized data for Plot tile
             view_tile: Optional specialized data for View tile
             editor_tile: Optional specialized data for Editor tile
+            terminal_tile: Optional specialized data for Terminal tile
 
         Returns:
             The created tile
@@ -104,7 +107,7 @@ class TileDAO:
         if existing:
             raise ValueError(f"Tile with name {name} already exists in tab {tab_id}")
         # Validate tile type if provided
-        valid_types = ["Table", "Plot", "View", "Editor"]
+        valid_types = ["Table", "Plot", "View", "Editor", "Terminal"]
         if type and type not in valid_types:
             raise ValueError(
                 f"Invalid tile type '{type}'. Must be one of {', '.join(valid_types)}",
@@ -187,6 +190,15 @@ class TileDAO:
                 self.session.add(editor_obj)
                 tile.editor_tile = editor_obj
 
+            elif type == "Terminal" and terminal_tile:
+                specialized_data = terminal_tile.copy()
+                # Remove id if it exists in specialized data
+                specialized_data.pop("id", None)
+
+                terminal_obj = TerminalTile(tile_id=tile.id, **(specialized_data or {}))
+                self.session.add(terminal_obj)
+                tile.terminal_tile = terminal_obj
+
             # If no specialized data was provided but a type was, create a default specialized tile
             elif type == "Table":
                 print(f"Creating table tile")
@@ -208,6 +220,11 @@ class TileDAO:
                 editor_obj = EditorTile(tile_id=tile.id, content="")
                 self.session.add(editor_obj)
                 tile.editor_tile = editor_obj
+            elif type == "Terminal":
+                print(f"Creating terminal tile")
+                terminal_obj = TerminalTile(tile_id=tile.id)
+                self.session.add(terminal_obj)
+                tile.terminal_tile = terminal_obj
 
             # Commit the specialized tile
             self.session.commit()
@@ -255,6 +272,12 @@ class TileDAO:
             if existing:
                 print(f"Existing editor tile: {existing}")
                 self.session.delete(existing)
+        elif tile_type == "Terminal":
+            existing = (
+                self.session.query(TerminalTile)
+                .filter(TerminalTile.tile_id == tile_id)
+                .first()
+            )
 
     def _handle_type_change(self, tile: Tile, new_type: str) -> None:
         """Handle logic when a tile's type is updated.
@@ -264,7 +287,7 @@ class TileDAO:
         necessary) and removes any previously attached specialized tile
         objects that no longer match the new type.
         """
-        valid_types = ["Table", "Plot", "View", "Editor"]
+        valid_types = ["Table", "Plot", "View", "Editor", "Terminal"]
         if new_type not in valid_types:
             raise ValueError(
                 f"Invalid tile type '{new_type}'. Must be one of {', '.join(valid_types)}",
@@ -276,6 +299,7 @@ class TileDAO:
             "Plot": ("plot_tile", PlotTile),
             "View": ("view_tile", ViewTile),
             "Editor": ("editor_tile", EditorTile),
+            "Terminal": ("terminal_tile", TerminalTile),
         }
 
         # Remove specialized tiles that do not match the new type
@@ -434,6 +458,7 @@ class TileDAO:
         plot_tile: Optional[dict] = None,
         view_tile: Optional[dict] = None,
         editor_tile: Optional[dict] = None,
+        terminal_tile: Optional[dict] = None,
     ) -> Optional[Tile]:
         """
         Update tile by ID or by tab_id and name.
@@ -469,6 +494,7 @@ class TileDAO:
             plot_tile: Specialized payload for Plot tile
             view_tile: Specialized payload for View tile
             editor_tile: Specialized payload for Editor tile
+            terminal_tile: Specialized payload for Terminal tile
 
         Returns:
             The updated tile if found, None otherwise
@@ -592,6 +618,15 @@ class TileDAO:
                 # After _handle_type_change, the editor_tile should exist
                 if tile.editor_tile is not None:
                     self.update_editor_tile(id=tile.editor_tile.id, **editor_tile)
+        elif tile.type == "Terminal" and terminal_tile is not None:
+            if tile.terminal_tile is not None:
+                self.update_terminal_tile(id=tile.terminal_tile.id, **terminal_tile)
+            else:
+                # If no specialized tile exists, create one first
+                self._handle_type_change(tile, "Terminal")
+                # After _handle_type_change, the terminal_tile should exist
+                if tile.terminal_tile is not None:
+                    self.update_terminal_tile(id=tile.terminal_tile.id, **terminal_tile)
 
         self.session.commit()
         return tile
@@ -736,7 +771,7 @@ class TileDAO:
         tab_id: Optional[str] = None,
         name: Optional[str] = None,
         is_checkpoint: Optional[bool] = False,
-    ) -> Optional[Union[TableTile, PlotTile, ViewTile, EditorTile]]:
+    ) -> Optional[Union[TableTile, PlotTile, ViewTile, EditorTile, TerminalTile]]:
         """Helper method to get a specialized tile by ID or by tab_id and name."""
         if id is not None:
             # Direct lookup by specialized tile primary key
@@ -1117,6 +1152,113 @@ class TileDAO:
         self.session.commit()
         return editor_tile
 
+    def create_terminal_tile(
+        self,
+        tab_id: str,
+        name: str,
+        tile_id: Optional[str] = None,
+        x_position: float = 0,
+        y_position: float = 0,
+        width: float = 600,
+        height: float = 400,
+        minW: Optional[float] = None,
+        minH: Optional[float] = None,
+        visible: bool = True,
+        locked: bool = False,
+        moved: bool = False,
+        static: bool = False,
+        color: Optional[str] = None,
+        context: Optional[str] = None,
+        table: Optional[str] = None,
+        auto_update: Optional[str] = None,
+        freeze: Optional[str] = None,
+        filters: Optional[str] = None,
+        common_filter: Optional[str] = None,
+        metric: Optional[str] = None,
+        column_context: Optional[str] = None,
+        grouping: Optional[str] = None,
+        shell_type: Optional[str] = None,
+        is_checkpoint: bool = False,
+    ) -> TerminalTile:
+        """Create a new terminal tile."""
+
+        # Ensure a base tile exists
+        if not tile_id:
+            base_tile = self.create_tile(
+                tab_id=tab_id,
+                name=name,
+                type="Terminal",
+                x_position=x_position,
+                y_position=y_position,
+                width=width,
+                height=height,
+                minW=minW,
+                minH=minH,
+                visible=visible,
+                locked=locked,
+                moved=moved,
+                static=static,
+                color=color,
+                context=context,
+                table=table,
+                auto_update=auto_update,
+                freeze=freeze,
+                filters=filters,
+                common_filter=common_filter,
+                metric=metric,
+                column_context=column_context,
+                grouping=grouping,
+                is_checkpoint=is_checkpoint,
+            )
+            tile_id = base_tile.id
+        else:
+            base_tile = self._get_tile(id=tile_id, is_checkpoint=is_checkpoint)
+
+        # Create specialized record if missing
+        if getattr(base_tile, "terminal_tile", None) is None:
+            term_tile = TerminalTile(tile_id=tile_id, shell_type=shell_type)
+            self.session.add(term_tile)
+        else:
+            term_tile = base_tile.terminal_tile  # type: ignore
+
+        # Attach relationship & commit
+        base_tile.terminal_tile = term_tile
+        self.session.commit()
+        return term_tile
+
+    def get_terminal_tile(
+        self,
+        id: Optional[str] = None,
+        tab_id: Optional[str] = None,
+        name: Optional[str] = None,
+        is_checkpoint: Optional[bool] = False,
+    ) -> Optional[TerminalTile]:
+        """Retrieve a terminal tile by id or (tab_id, name)."""
+        return self._get_specialized_tile(TerminalTile, id, tab_id, name, is_checkpoint)
+
+    def update_terminal_tile(
+        self,
+        id: Optional[str] = None,
+        tab_id: Optional[str] = None,
+        name: Optional[str] = None,
+        is_checkpoint: Optional[bool] = False,
+        shell_type: Optional[str] = None,
+    ) -> Optional[TerminalTile]:
+        """Update terminal tile fields."""
+        term_tile = self._get_specialized_tile(
+            TerminalTile,
+            id,
+            tab_id,
+            name,
+            is_checkpoint,
+        )
+        if term_tile is None:
+            return None
+        if shell_type is not None:
+            term_tile.shell_type = shell_type
+        self.session.commit()
+        return term_tile
+
     def create_view_tile(
         self,
         tab_id: str,
@@ -1281,6 +1423,7 @@ class TileDAO:
             "plot_tile": update_data.pop("plot_tile", None),
             "view_tile": update_data.pop("view_tile", None),
             "editor_tile": update_data.pop("editor_tile", None),
+            "terminal_tile": update_data.pop("terminal_tile", None),
         }
 
         print(f"Specialized payloads: {specialized_payloads}")
@@ -1334,12 +1477,12 @@ class TileDAO:
                 "Plot": "plot_tile",
                 "View": "view_tile",
                 "Editor": "editor_tile",
+                "Terminal": "terminal_tile",
             }.get(effective_type)
 
             payload = specialized_payloads.get(payload_key)
 
             print(f"Payload: {payload}")
-
             if payload:
                 # Map type to updater method and corresponding specialized tile attribute
                 updater_map = {
@@ -1347,6 +1490,7 @@ class TileDAO:
                     "Plot": (self.update_plot_tile, "plot_tile"),
                     "View": (self.update_view_tile, "view_tile"),
                     "Editor": (self.update_editor_tile, "editor_tile"),
+                    "Terminal": (self.update_terminal_tile, "terminal_tile"),
                 }
 
                 # Convert complex structures to json strings where necessary
@@ -1378,7 +1522,7 @@ class TileDAO:
         id: str,
         tile_type: str,
         update_data: dict,
-    ) -> Optional[Union[Tile, TableTile, PlotTile, ViewTile, EditorTile]]:
+    ) -> Optional[Union[Tile, TableTile, PlotTile, ViewTile, EditorTile, TerminalTile]]:
         """
         Update a specialized tile with specific data for its type.
 
@@ -1405,6 +1549,8 @@ class TileDAO:
             specialized_tile = self.get_view_tile(id=id)
         elif tile_type == "Editor":
             specialized_tile = self.get_editor_tile(id=id)
+        elif tile_type == "Terminal":
+            specialized_tile = self.get_terminal_tile(id=id)
         else:
             # Invalid tile type
             return None
@@ -1740,6 +1886,32 @@ class TileDAO:
                     file_type=source_tile.editor_tile.file_type,
                     is_checkpoint=True,
                 )
+        elif (
+            source_tile.type == "Terminal"
+            and hasattr(source_tile, "terminal_tile")
+            and source_tile.terminal_tile
+        ):
+            # Check if checkpoint specialized tile exists
+            existing_specialized = self.get_terminal_tile(
+                tab_id=effective_tab_id,
+                name=source_tile.name,
+                is_checkpoint=True,
+            )
+
+            if existing_specialized:
+                # Update existing specialized tile
+                self.update_terminal_tile(
+                    id=str(existing_specialized.id),
+                    shell_type=source_tile.terminal_tile.shell_type,
+                )
+            else:
+                self.create_terminal_tile(
+                    tab_id=effective_tab_id,
+                    name=source_tile.name,
+                    tile_id=updated.id,
+                    shell_type=source_tile.terminal_tile.shell_type,
+                    is_checkpoint=True,
+                )
 
         # Get the full checkpoint tile with all associated data
         checkpoint_tile = self.get_by_tab_and_name(
@@ -1864,6 +2036,7 @@ class TileDAO:
         plot_tile_count = 0
         view_tile_count = 0
         editor_tile_count = 0
+        terminal_tile_count = 0
 
         # Process each tab
         for old_tab_id, new_tab_id in tab_id_map.items():
@@ -2216,6 +2389,58 @@ class TileDAO:
                     ).update(update_data)
                     editor_tile_count += 1
 
+            # Process TerminalTiles
+            terminal_tiles = (
+                self.session.query(TerminalTile)
+                .filter(TerminalTile.tile_id.in_(list(tile_id_map.keys())))
+                .all()
+            )
+
+            if terminal_tiles:
+                terminal_tile_values = []
+                terminal_tile_updates = []
+
+                for tt in terminal_tiles:
+                    new_tile_id = tile_id_map[tt.tile_id]
+
+                    # Check if a TerminalTile already exists for this tile
+                    existing_terminal_tile = (
+                        self.session.query(TerminalTile)
+                        .filter(TerminalTile.tile_id == new_tile_id)
+                        .first()
+                    )
+
+                    if existing_terminal_tile:
+                        # Update existing TerminalTile
+                        terminal_tile_updates.append(
+                            {
+                                "id": existing_terminal_tile.id,
+                                "shell_type": tt.shell_type,
+                            },
+                        )
+                    else:
+                        # Create new TerminalTile
+                        terminal_tile_values.append(
+                            {
+                                "tile_id": new_tile_id,
+                                "shell_type": tt.shell_type,
+                            },
+                        )
+
+                # Insert new TerminalTiles
+                if terminal_tile_values:
+                    stmt = sqlalchemy.insert(TerminalTile).values(terminal_tile_values)
+                    self.session.execute(stmt)
+                    terminal_tile_count = len(terminal_tile_values)
+
+                # Update existing TerminalTiles
+                for update_data in terminal_tile_updates:
+                    terminal_tile_id = update_data.pop("id")
+                    self.session.query(TerminalTile).filter(
+                        TerminalTile.id == terminal_tile_id,
+                    ).update(update_data)
+                    terminal_tile_count += 1
+
         return {
             "id_map": tile_id_map,
             "tile_count": total_tile_count,
@@ -2223,4 +2448,5 @@ class TileDAO:
             "plot_tile_count": plot_tile_count,
             "view_tile_count": view_tile_count,
             "editor_tile_count": editor_tile_count,
+            "terminal_tile_count": terminal_tile_count,
         }

@@ -878,6 +878,7 @@ def admin_share_project(
                             "plot_tiles_copied": 3,
                             "editor_tiles_copied": 2,
                             "view_tiles_copied": 1,
+                            "terminal_tiles_copied": 1,
                         },
                     },
                 },
@@ -995,6 +996,7 @@ def admin_duplicate_project(
         "plot_tiles_copied": 0,
         "editor_tiles_copied": 0,
         "view_tiles_copied": 0,
+        "terminal_tiles_copied": 0,
     }
 
     # Create mappings to track old IDs to new IDs
@@ -1307,6 +1309,7 @@ def admin_duplicate_project(
             stats["plot_tiles_copied"] = tile_result["plot_tile_count"]
             stats["view_tiles_copied"] = tile_result["view_tile_count"]
             stats["editor_tiles_copied"] = tile_result["editor_tile_count"]
+            stats["terminal_tiles_copied"] = tile_result["terminal_tile_count"]
 
     # 15. Commit all changes
     session.commit()
