@@ -1230,7 +1230,10 @@ class Tile(Base):
         index=True,
     )
     name = Column(String(), nullable=False)
-    type = Column(String(), nullable=True)  # "Table", "Plot", "View", "Editor"
+    type = Column(
+        String(),
+        nullable=True,
+    )  # "Table", "Plot", "View", "Editor", "Terminal"
 
     # Position properties
     x_position = Column(Float, nullable=False)
@@ -1291,6 +1294,13 @@ class Tile(Base):
     )
     editor_tile = relationship(
         "EditorTile",
+        back_populates="tile",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        uselist=False,
+    )
+    terminal_tile = relationship(
+        "TerminalTile",
         back_populates="tile",
         cascade="all, delete-orphan",
         passive_deletes=True,
@@ -1408,6 +1418,27 @@ class EditorTile(Base):
 
     # Relationships
     tile = relationship("Tile", back_populates="editor_tile")
+
+
+class TerminalTile(Base):
+    """Model class for Terminal-specific tile properties."""
+
+    __tablename__ = "terminal_tile"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    tile_id = Column(
+        String,
+        ForeignKey("tile.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+
+    # Terminal-specific properties
+    shell_type = Column(String(), nullable=True)
+
+    # Relationships
+    tile = relationship("Tile", back_populates="terminal_tile")
 
 
 class CallRecording(Base):
