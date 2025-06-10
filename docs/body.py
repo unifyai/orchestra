@@ -114,6 +114,12 @@ def get_request_code(
     for property in properties:
         if property["example"] is not None:
             json_input[property["title"]] = property["example"]
+
+    # Add default examples for file parameters if they don't exist
+    for file in files:
+        if file not in json_input:
+            json_input[file] = "/path/to/your/file.ext"
+
     non_file_args = {
         arg: json_input[arg]
         for arg in list(set(list(json_input.keys())).difference(files))
