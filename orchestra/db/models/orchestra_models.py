@@ -595,6 +595,8 @@ class Project(Base):
     name = Column(String, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
+    is_versioned = Column(Boolean, nullable=False, server_default="f")
+    version = Column(Integer, nullable=False, server_default="1")
     contexts = relationship("Context", back_populates="project", passive_deletes=True)
     interfaces = relationship(
         "Interface",
@@ -614,6 +616,23 @@ class Project(Base):
         UniqueConstraint("user_id", "name"),
         UniqueConstraint("organization_id", "name"),
     )
+
+
+class ProjectVersion(Base):
+    """Model class for storing historical versions of projects."""
+
+    __tablename__ = "project_version"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    commit_hash = Column(String, nullable=False, unique=True)
+    commit_message = Column(String, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now())
 
 
 class LogEventContext(Base):
@@ -689,6 +708,8 @@ class ContextHistory(Base):
     name = Column(String, nullable=True)
     description = Column(String, nullable=True)
     archived_at = Column(TIMESTAMP, server_default=func.now())
+    commit_hash = Column(String, nullable=True)
+    commit_message = Column(String, nullable=True)
 
 
 class ContextArtifact(Base):
