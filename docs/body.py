@@ -169,30 +169,35 @@ def get_body(path, route, schemas, route_config, curl_example, python_example):
         required_props = schema_details.get("required", [])
         properties = get_property_details(schema_details["properties"])
     else:
+        # If there's no proper schema but there's a requestBody,
+        # only process parameters that are actually body parameters (not query or path)
         properties = []
         required_props = []
-        parameters = route_config["parameters"]
+        parameters = route_config.get("parameters", [])
         for parameter in parameters:
-            (
-                name,
-                required,
-                param_type,
-                default,
-                description,
-                example,
-            ) = get_param_details(parameter)
-            default = None if not default else default
-            properties.append(
-                {
-                    "title": name,
-                    "type": param_type,
-                    "example": example,
-                    "default": default,
-                    "description": description,
-                },
-            )
-            if required:
-                required_props.append(name)
+            # Only process parameters that are meant for the request body
+            # Skip query and path parameters as they're handled elsewhere
+            if parameter.get("in") not in ["query", "path"]:
+                (
+                    name,
+                    required,
+                    param_type,
+                    default,
+                    description,
+                    example,
+                ) = get_param_details(parameter)
+                default = None if not default else default
+                properties.append(
+                    {
+                        "title": name,
+                        "type": param_type,
+                        "example": example,
+                        "default": default,
+                        "description": description,
+                    },
+                )
+                if required:
+                    required_props.append(name)
 
     # create param field tags
     chat_completions = path == "/v0/chat/completions"
