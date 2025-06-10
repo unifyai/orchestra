@@ -746,9 +746,19 @@ def create_recharge_model(
                             },
                         )
                 else:
-                    pass
+                    raise ValueError("No valid Stripe API key found for auto-recharge")
             except Exception as e:
-                pass
+                # Log the error and re-raise instead of silently passing
+                import logging
+
+                logger = logging.getLogger(__name__)
+                logger.error(
+                    f"Failed to create Stripe invoice item for auto-recharge: {str(e)}",
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to create auto-recharge invoice item: {str(e)}",
+                )
 
     recharge_dao.create_recharge(
         user_id=new_recharge_object.user_id,

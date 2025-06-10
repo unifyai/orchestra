@@ -231,7 +231,7 @@ def test_invoicer_aggregates(dbsession: Session, mock_stripe):
             Recharge(
                 user_id=uid,
                 quantity=10,
-                amount_usd=Decimal("50.00"),
+                amount_usd=Decimal("10.00"),  # Fixed: 10 credits = $10.00 (1:1 ratio)
                 status=RechargeStatus.PENDING_INVOICE,
                 invoice_group=LAST_GROUP,
                 type="usage",
@@ -781,7 +781,7 @@ def test_real_stripe_invoicer_integration(dbsession: Session, monkeypatch):
     recharge = Recharge(
         user_id=uid,
         quantity=100,
-        amount_usd=Decimal("1.00"),  # $1.00 for 100 credits
+        amount_usd=Decimal("100.00"),  # Fixed: 100 credits = $100.00 (1:1 ratio)
         status=RechargeStatus.PENDING_INVOICE,
         invoice_group=current_group,
         type="usage",
