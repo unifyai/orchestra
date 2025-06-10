@@ -83,7 +83,7 @@ class UsersDAO:
         query = select(Users).where(Users.stripe_customer_id == stripe_id)
         result = self.session.execute(query).scalars().first()
         return result
-    
+
     def get_total_spending(self, user_id: str) -> float:
         """
         Calculate total spending for a user from the Query table.

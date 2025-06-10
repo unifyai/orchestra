@@ -39,15 +39,16 @@ from orchestra.web.api.assistant.schema import (
     VoiceRead,
 )
 from orchestra.web.api.utils.assistant_infra import (
-    create_cloud_run_service,
+    create_cloud_run_job,
     create_email,
     create_phone_number,
     create_pubsub_topic,
     create_whatsapp_sender,
-    delete_cloud_run_service,
+    delete_cloud_run_job,
     delete_email,
     delete_phone_number,
     delete_pubsub_topic,
+    stop_cloud_run_job,
     watch_email,
 )
 
@@ -429,6 +430,7 @@ def create_assistant(
         ),
     )
 
+
 @router.get(
     "/assistant",
     response_model=InfoResponse[List[AssistantRead]],
@@ -674,6 +676,7 @@ def delete_assistant(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=final_error_detail,
         )
+
 
 @router.patch(
     "/assistant/{assistant_id}/config",
