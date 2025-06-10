@@ -8,7 +8,7 @@ STR_TO_SQL_TYPES = {
     "int": Integer,
     "float": Float,
     "str": String,
-    "timestamp": DateTime,
+    "datetime": DateTime,
     "time": Time,
     "date": Date,
     "timedelta": Interval,
