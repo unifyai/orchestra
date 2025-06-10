@@ -30,6 +30,16 @@ class FreezeAccountRequest(BaseModel):
     freeze: bool = True
 
 
+class FreezeAccountByStripeIdRequest(BaseModel):
+    stripe_id: str
+    freeze: bool
+
+
+class StripeIdRequest(BaseModel):
+    user_id: str
+    stripe_id: str
+
+
 class QueryLoggingStatus(BaseModel):
     model_config = ConfigDict(extra="allow")
     enabled: bool

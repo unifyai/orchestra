@@ -159,6 +159,48 @@ async def test_reset_user_quotas(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_freeze_account_by_stripe_id(client: AsyncClient):
+    # Create a user
+    url = "/v0/admin/auth-user"
+    email = "testfreeze@example.com"
+    params = {"email": email}
+    response = await client.post(url, json=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    user_id = response.json()["id"]
+
+    # Set a stripe_id for the user
+    stripe_id = "stripe_test_123"
+    url = "/v0/admin/auth-user/stripe-id"
+    params = {"user_id": user_id, "stripe_id": stripe_id}
+    response = await client.put(url, json=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    # Freeze the account by stripe_id
+    url = "/v0/admin/auth-user/freeze-by-stripe-id"
+    params = {"stripe_id": stripe_id, "freeze": True}
+    response = await client.post(url, json=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    # Check if the account is frozen
+    url = f"/v0/admin/auth-user/is-frozen?user_id={user_id}"
+    response = await client.get(url, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    assert response.json()["is_frozen"] is True
+
+    # Unfreeze the account
+    url = "/v0/admin/auth-user/freeze-by-stripe-id"
+    params = {"stripe_id": stripe_id, "freeze": False}
+    response = await client.post(url, json=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    # Check if the account is unfrozen
+    url = f"/v0/admin/auth-user/is-frozen?user_id={user_id}"
+    response = await client.get(url, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    assert response.json()["is_frozen"] is False
+
+
+@pytest.mark.anyio
 async def test_create_api_key(client: AsyncClient):
     url = "/v0/admin/api_key"
     params = {"name": "test_key", "user_id": "test_user_id"}
