@@ -1,4 +1,5 @@
 from docs.query import get_param_details
+from docs.utils import escape_mdx_content
 
 
 def get_request_code(route, path, examples):
@@ -49,6 +50,8 @@ def get_path(path, route, route_config):
 
         if not description:
             description = ""
+        else:
+            description = escape_mdx_content(description)
 
         # create param field tag
         path_str += (
