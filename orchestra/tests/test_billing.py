@@ -2028,7 +2028,7 @@ async def test_billing_migration_endpoint_comprehensive(
             "credits": 100,
             "stripe_customer_id": "cus_no_auto",
             "autorecharge": False,
-            "autorecharge_qty": None,
+            "autorecharge_qty": 5.0,  # Low value that should be updated to $25
             "autorecharge_threshold": None,
             "spending": 30.0,
         },
@@ -2169,10 +2169,7 @@ async def test_billing_migration_endpoint_comprehensive(
         for u in data["users_amount_updated"]
         if u["user_id"] == "user_no_autorecharge"
     )
-    assert updated_none_user["old_amount"] in [
-        None,
-        0.0,
-    ]  # Can be None or 0.0 depending on conversion
+    assert updated_none_user["old_amount"] == 5.0  # Changed from None to 5.0
     assert updated_none_user["new_amount"] == 25.0
     assert updated_none_user["autorecharge_enabled"] is False  # Still disabled
 
