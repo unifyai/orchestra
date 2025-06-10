@@ -69,6 +69,17 @@ class UsersDAO:
         except IndexError:
             raise not_found("User ID")
 
+    def get_user_by_stripe_id(self, stripe_id: str) -> Optional[Users]:
+        """
+        Get a user by their Stripe customer ID.
+
+        :param stripe_id: The Stripe customer ID.
+        :return: A Users object or None if not found.
+        """
+        query = select(Users).where(Users.stripe_customer_id == stripe_id)
+        result = self.session.execute(query).scalars().first()
+        return result
+
     def is_telemetry_activated(self, id: str) -> bool:
         try:
             telemetry_activated = self.filter(id=id)[0].store_prompts
