@@ -330,7 +330,7 @@ class LogDAO:
                     return "timedelta"
 
                 datetime.fromisoformat(raw_v)
-                return "timestamp"
+                return "datetime"
             except:
                 if not maybe_img:
                     return "str"
@@ -709,7 +709,7 @@ class LogDAO:
                     and not value.lower().startswith("http")
                 ):
                     value = self.upload_image_to_bucket(value)
-                if inferred_type == "timestamp" and isinstance(value, str):
+                if inferred_type == "datetime" and isinstance(value, str):
                     value = normalize_timestamp(value)
                 # Handle versioned history
                 if is_versioned and context_obj is not None:
