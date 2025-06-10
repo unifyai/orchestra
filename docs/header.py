@@ -1,7 +1,12 @@
+from docs.utils import escape_mdx_content
+
+
 def get_title(summary, description, route, path):
     description = description if description else ""
+    if description:
+        description = escape_mdx_content(description)
     return (
-        f"---\ntitle: '{summary}'\n"
+        f'---\ntitle: "{summary}"\n'
         f"api: '{route.upper()} {path}'\n"
         "---\n"
         f"{description}\n\n"
