@@ -3,6 +3,7 @@ from typing import List, Optional, Tuple
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
+from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.interface_dao import InterfaceDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
@@ -187,7 +188,8 @@ def create_interface(
 ):
     """Create a new interface in a project."""
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     interface_dao = InterfaceDAO(session)
     tab_dao = TabDAO(session)
 
@@ -296,7 +298,8 @@ def get_interface(
 ):
     """Get a specific interface by ID or by project ID and name."""
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     interface_dao = InterfaceDAO(session)
     tab_dao = TabDAO(session)
 
@@ -367,7 +370,8 @@ def list_interfaces(
 ):
     """List all interfaces for a project."""
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     interface_dao = InterfaceDAO(session)
     tab_dao = TabDAO(session)
 
@@ -466,7 +470,8 @@ def update_interface(
 ):
     """Update an interface by ID or by project ID and name."""
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     interface_dao = InterfaceDAO(session)
     tab_dao = TabDAO(session)
 
@@ -648,7 +653,8 @@ def create_interface_checkpoint(
 ):
     """Create a manual checkpoint (save) of an interface by ID or by project ID and name."""
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     interface_dao = InterfaceDAO(session)
     tab_dao = TabDAO(session)
 
@@ -783,7 +789,8 @@ def get_interface_checkpoint(
 ):
     """Get the latest checkpoint (manual save) for an interface by ID or by project ID and name."""
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     interface_dao = InterfaceDAO(session)
     tab_dao = TabDAO(session)
 
@@ -878,7 +885,8 @@ def delete_interface(
 ):
     """Delete an interface by ID or by project ID and name."""
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     interface_dao = InterfaceDAO(session)
     tab_dao = TabDAO(session)
 
