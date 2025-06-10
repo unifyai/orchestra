@@ -171,6 +171,8 @@ def create_assistant(
             weekly_limit=parsed_weekly_limit,
             max_parallel=assistant_in.max_parallel,
             voice_id=assistant_in.voice_id,
+            phone=assistant_in.phone,
+            email=assistant_in.email,
         )
 
         # Commit the assistant creation before infrastructure setup
@@ -384,14 +386,11 @@ def create_assistant(
     if not settings.is_staging:
         try:
             # Refresh session before credit operation to ensure connection is valid
-            session.close()
-            session = next(get_db_session(request))
-            users_dao = UsersDAO(session)
-
             users_dao.recharge_credit(
                 user_id=user_id,
                 quantity=-float(ASSISTANT_CREATION_COST),
             )
+            session.commit()
         except Exception as e_commit:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
