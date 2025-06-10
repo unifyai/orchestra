@@ -43,6 +43,10 @@ class ProjectConfig(BaseModel):
             "pattern_description": "Only letters, numbers, underscores, slashes, and hyphens are allowed",
         },
     )
+    is_versioned: bool = Field(
+        description="Whether the project is versioned",
+        default=False,
+    )
 
 
 class ShareProjectRequest(BaseModel):
@@ -60,3 +64,11 @@ class DuplicateProjectRequest(BaseModel):
     from_project_name: str
     to_user_id: str
     new_project_name: str
+
+
+class ProjectCommitRequest(BaseModel):
+    commit_message: Optional[str] = None
+
+
+class ProjectRollbackRequest(BaseModel):
+    commit_hash: str
