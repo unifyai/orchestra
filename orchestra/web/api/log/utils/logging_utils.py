@@ -118,11 +118,12 @@ def log_chat_completion_event(
     try:
         # Initialize DAOs
         organization_member_dao = OrganizationMemberDAO(session=session)
+        context_dao = ContextDAO(session=session)
         project_dao = ProjectDAO(
             session=session,
             organization_member_dao=organization_member_dao,
+            context_dao=context_dao,
         )
-        context_dao = ContextDAO(session=session)
         field_type_dao = FieldTypeDAO(session=session)
         log_event_dao = LogEventDAO(session=session)
         log_dao = LogDAO(session=session, context_dao=context_dao)
@@ -244,9 +245,11 @@ def _apply_post_filters(
                 base_q = base_q.filter(
                     tuple_(
                         ul_table.c.log_event_id,
-                        ul_table.c.context_version
-                        if "context_version" in ul_table.c
-                        else ul_table.c.param_version,
+                        (
+                            ul_table.c.context_version
+                            if "context_version" in ul_table.c
+                            else ul_table.c.param_version
+                        ),
                     ).in_(allowed_pairs),
                 )
             except Exception as e:
@@ -267,9 +270,11 @@ def _apply_post_filters(
                 base_q = base_q.filter(
                     ~tuple_(
                         ul_table.c.log_event_id,
-                        ul_table.c.context_version
-                        if "context_version" in ul_table.c
-                        else ul_table.c.param_version,
+                        (
+                            ul_table.c.context_version
+                            if "context_version" in ul_table.c
+                            else ul_table.c.param_version
+                        ),
                     ).in_(excluded_pairs),
                 )
             except Exception as e:
