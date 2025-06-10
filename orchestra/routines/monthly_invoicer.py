@@ -106,7 +106,10 @@ def _invoice_month_with_session(
 
         # With 1 credit = $1, total_cr should equal total_usd
         if total_cr != total_usd:
-            pass
+            raise ValueError(
+                f"Credit/USD ratio mismatch for user {user_id}: "
+                f"{total_cr} credits != ${total_usd}. Expected 1:1 ratio.",
+            )
 
         # Use credits as the quantity (1 credit = $1 with Stripe product)
         quantity = int(total_cr)
