@@ -37,7 +37,7 @@ COLUMN_TYPES = {
     "flt_col": "float",
     "str_col": "str",
     "bool_col": "bool",
-    "ts_col": "timestamp",
+    "ts_col": "datetime",
     "dt_col": "date",
     "tm_col": "time",
     "td_col": "timedelta",
@@ -206,7 +206,7 @@ def literal_from_column_strategy(draw, column_type) -> Tuple[str, str]:
         # Convert frozenset back to dict representation
         dict_value = dict(value)
         return (str(dict_value), column_type)
-    elif column_type in ["timestamp", "date", "time", "timedelta"]:
+    elif column_type in ["datetime", "date", "time", "timedelta"]:
         # Temporal types need quotes
         return (f"'{value}'", column_type)
     else:
@@ -240,7 +240,7 @@ def simple_comparison_strategy(draw) -> Tuple[str, str]:
         literal_val, _ = draw(literal_from_column_strategy(column_type=col_type))
 
         # Choose an appropriate comparison operator based on the type
-        if col_type in ["int", "float", "timestamp", "date", "time", "timedelta"]:
+        if col_type in ["int", "float", "datetime", "date", "time", "timedelta"]:
             # These types support all comparison operators
             op = draw(st.sampled_from(COMPARISON_OPS))
         else:
@@ -284,14 +284,14 @@ def literal_strategy(draw, type_hint: Optional[str] = None) -> Tuple[str, str]:
         # Use dates from test data
         d = draw(st.sampled_from(["2025-03-21", "2025-03-22", "2025-03-23"]))
         return (f"'{d}'", "date")
-    elif t == "timestamp":
+    elif t == "datetime":
         # Use timestamps from test data
         dt = draw(
             st.sampled_from(
                 ["2025-03-21T12:30:45", "2025-03-22T10:00:00", "2025-03-23T23:59:59"],
             ),
         )
-        return (f"'{dt}'", "timestamp")
+        return (f"'{dt}'", "datetime")
     elif t == "time":
         # Use times from test data
         tm = draw(st.sampled_from(["10:15:00", "12:30:45", "23:59:59"]))
@@ -860,15 +860,15 @@ def temporal_expression_strategy(
         Tuple[str, str]: (expression_string, type_string)
     """
     if not type_hint:
-        type_hint = draw(st.sampled_from(["timestamp", "date", "time", "timedelta"]))
+        type_hint = draw(st.sampled_from(["datetime", "date", "time", "timedelta"]))
 
-    if type_hint == "timestamp":
+    if type_hint == "datetime":
         # Generate timestamp expressions
         expr_type = draw(st.sampled_from(["column", "literal", "function"]))
 
         if expr_type == "column":
-            col_name, _ = draw(column_ref_strategy(allowed_types=["timestamp"]))
-            return (col_name, "timestamp")
+            col_name, _ = draw(column_ref_strategy(allowed_types=["datetime"]))
+            return (col_name, "datetime")
 
         elif expr_type == "literal":
             ts = draw(
@@ -880,17 +880,17 @@ def temporal_expression_strategy(
                     ],
                 ),
             )
-            return (f"'{ts}'", "timestamp")
+            return (f"'{ts}'", "datetime")
 
         else:  # function
             func = draw(st.sampled_from(["now", "round_timestamp"]))
 
             if func == "now":
-                return ("now()", "timestamp")
+                return ("now()", "datetime")
             else:
-                col_name, _ = draw(column_ref_strategy(allowed_types=["timestamp"]))
+                col_name, _ = draw(column_ref_strategy(allowed_types=["datetime"]))
                 precision = draw(st.integers(min_value=1, max_value=60))
-                return (f"round_timestamp({col_name}, {precision})", "timestamp")
+                return (f"round_timestamp({col_name}, {precision})", "datetime")
 
     elif type_hint == "date":
         # Generate date expressions
@@ -905,7 +905,7 @@ def temporal_expression_strategy(
             return (f"'{dt}'", "date")
 
         else:  # function
-            col_name, _ = draw(column_ref_strategy(allowed_types=["timestamp"]))
+            col_name, _ = draw(column_ref_strategy(allowed_types=["datetime"]))
             return (f"date({col_name})", "date")
 
     elif type_hint == "time":
@@ -921,7 +921,7 @@ def temporal_expression_strategy(
             return (f"'{tm}'", "time")
 
         else:  # function
-            col_name, _ = draw(column_ref_strategy(allowed_types=["timestamp"]))
+            col_name, _ = draw(column_ref_strategy(allowed_types=["datetime"]))
             return (f"time({col_name})", "time")
 
     else:  # timedelta
@@ -1061,22 +1061,22 @@ def terminal_strategy(draw, type_hint: Optional[str] = None) -> Tuple[str, str]:
             col_name, _ = draw(column_ref_strategy())
             return (f"str({col_name})", "str")
 
-        elif type_hint == "timestamp":
+        elif type_hint == "datetime":
             func = draw(st.sampled_from(["now", "round_timestamp"]))
 
             if func == "now":
-                return ("now()", "timestamp")
+                return ("now()", "datetime")
             else:
-                col_name, _ = draw(column_ref_strategy(allowed_types=["timestamp"]))
+                col_name, _ = draw(column_ref_strategy(allowed_types=["datetime"]))
                 precision = draw(st.integers(min_value=1, max_value=60))
-                return (f"round_timestamp({col_name}, {precision})", "timestamp")
+                return (f"round_timestamp({col_name}, {precision})", "datetime")
 
         elif type_hint == "date":
-            col_name, _ = draw(column_ref_strategy(allowed_types=["timestamp"]))
+            col_name, _ = draw(column_ref_strategy(allowed_types=["datetime"]))
             return (f"date({col_name})", "date")
 
         elif type_hint == "time":
-            col_name, _ = draw(column_ref_strategy(allowed_types=["timestamp"]))
+            col_name, _ = draw(column_ref_strategy(allowed_types=["datetime"]))
             return (f"time({col_name})", "time")
 
         else:
@@ -1137,7 +1137,7 @@ def value_function_strategy(draw, type_hint: Optional[str] = None) -> Tuple[str,
     if type_hint is None:
         # Choose a return type that's supported by our functions
         type_hint = draw(
-            st.sampled_from(["int", "float", "str", "timestamp", "date", "time"]),
+            st.sampled_from(["int", "float", "str", "datetime", "date", "time"]),
         )
 
     if type_hint == "int":
@@ -1177,28 +1177,28 @@ def value_function_strategy(draw, type_hint: Optional[str] = None) -> Tuple[str,
         col_name, _ = draw(column_ref_strategy())
         return (f"str({col_name})", "str")
 
-    elif type_hint == "timestamp":
+    elif type_hint == "datetime":
         # Timestamp-returning functions: now, round_timestamp
         func_name = draw(st.sampled_from(["now", "round_timestamp"]))
 
         if func_name == "now":
-            return ("now()", "timestamp")
+            return ("now()", "datetime")
         else:
             # round_timestamp takes a timestamp and a precision
-            col_name, _ = draw(column_ref_strategy(allowed_types=["timestamp"]))
+            col_name, _ = draw(column_ref_strategy(allowed_types=["datetime"]))
             precision = draw(st.integers(min_value=1, max_value=60))
-            return (f"round_timestamp({col_name}, {precision})", "timestamp")
+            return (f"round_timestamp({col_name}, {precision})", "datetime")
 
     elif type_hint == "date":
         # Date-returning functions: date
         # date extracts date from timestamp
-        col_name, _ = draw(column_ref_strategy(allowed_types=["timestamp"]))
+        col_name, _ = draw(column_ref_strategy(allowed_types=["datetime"]))
         return (f"date({col_name})", "date")
 
     elif type_hint == "time":
         # Time-returning functions: time
         # time extracts time from timestamp
-        col_name, _ = draw(column_ref_strategy(allowed_types=["timestamp"]))
+        col_name, _ = draw(column_ref_strategy(allowed_types=["datetime"]))
         return (f"time({col_name})", "time")
 
     else:
@@ -1256,7 +1256,7 @@ def bool_filter_strategy(draw, max_depth: int = 3) -> Tuple[str, str]:
         else:  # value_comparison
             # Compare complex values
             value_type = draw(
-                st.sampled_from(["int", "float", "str", "timestamp", "date", "time"]),
+                st.sampled_from(["int", "float", "str", "datetime", "date", "time"]),
             )
 
             # Generate left and right expressions with appropriate types
@@ -1277,7 +1277,7 @@ def bool_filter_strategy(draw, max_depth: int = 3) -> Tuple[str, str]:
                 "int",
                 "float",
                 "str",
-                "timestamp",
+                "datetime",
                 "date",
                 "time",
             ]:
@@ -1289,7 +1289,7 @@ def bool_filter_strategy(draw, max_depth: int = 3) -> Tuple[str, str]:
             elif left_source == "arithmetic" and value_type in ["int", "float"]:
                 left_expr, _ = draw(arithmetic_strategy(type_hint=value_type))
             elif left_source == "temporal" and value_type in [
-                "timestamp",
+                "datetime",
                 "date",
                 "time",
                 "timedelta",
@@ -1317,7 +1317,7 @@ def bool_filter_strategy(draw, max_depth: int = 3) -> Tuple[str, str]:
                 "int",
                 "float",
                 "str",
-                "timestamp",
+                "datetime",
                 "date",
                 "time",
             ]:
@@ -1329,7 +1329,7 @@ def bool_filter_strategy(draw, max_depth: int = 3) -> Tuple[str, str]:
             elif right_source == "arithmetic" and value_type in ["int", "float"]:
                 right_expr, _ = draw(arithmetic_strategy(type_hint=value_type))
             elif right_source == "temporal" and value_type in [
-                "timestamp",
+                "datetime",
                 "date",
                 "time",
                 "timedelta",
@@ -1345,7 +1345,7 @@ def bool_filter_strategy(draw, max_depth: int = 3) -> Tuple[str, str]:
                 right_expr = right_val
 
             # Choose an appropriate comparison operator
-            if value_type in ["int", "float", "timestamp", "date", "time", "timedelta"]:
+            if value_type in ["int", "float", "datetime", "date", "time", "timedelta"]:
                 op = draw(st.sampled_from(COMPARISON_OPS))
             else:
                 op = draw(st.sampled_from(["==", "!="]))

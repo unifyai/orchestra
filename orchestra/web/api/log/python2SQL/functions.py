@@ -72,7 +72,7 @@ def _handle_date_function(rhs_expr, session):
         # Create a CASE expression to handle different input types
         expr = case(
             (
-                val_type == "timestamp",
+                val_type == "datetime",
                 func.cast(
                     func.date_trunc(
                         "day",
@@ -381,7 +381,7 @@ def _handle_functions(
             select_cols.extend(
                 [
                     expr.label("value"),
-                    literal("timestamp").label("inferred_type"),
+                    literal("datetime").label("inferred_type"),
                 ],
             )
             return (
@@ -408,7 +408,7 @@ def _handle_functions(
                 select_cols.extend(
                     [
                         expr.label("value"),
-                        literal("timestamp").label("inferred_type"),
+                        literal("datetime").label("inferred_type"),
                     ],
                 )
                 return select(*select_cols).select_from(ts_expr).subquery()
@@ -438,7 +438,7 @@ def _handle_functions(
                 select_cols.extend(
                     [
                         expr.label("value"),
-                        literal("timestamp").label("inferred_type"),
+                        literal("datetime").label("inferred_type"),
                     ],
                 )
                 return select(*select_cols).select_from(sec_expr).subquery()
@@ -605,7 +605,7 @@ def _handle_functions(
             # Create a CASE expression to handle different input types
             expr = case(
                 (
-                    val_type == "timestamp",
+                    val_type == "datetime",
                     func.cast(
                         func.date_trunc(
                             "microseconds",
@@ -674,7 +674,7 @@ def _handle_functions(
                 select(
                     ids_subq.c.log_event_id.label("log_event_id"),
                     func.timezone("UTC", func.now()).label("value"),
-                    literal("timestamp").label("inferred_type"),
+                    literal("datetime").label("inferred_type"),
                 )
                 .select_from(ids_subq)
                 .subquery()
@@ -689,7 +689,7 @@ def _handle_functions(
                 select(
                     event_id_col.label("log_event_id"),
                     func.timezone("UTC", func.now()).label("value"),
-                    literal("timestamp").label("inferred_type"),
+                    literal("datetime").label("inferred_type"),
                 )
                 .select_from(ids_subq)
                 .subquery()
