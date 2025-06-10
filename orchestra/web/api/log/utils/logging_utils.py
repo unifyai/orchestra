@@ -190,7 +190,7 @@ def _build_sort_criteria(
         pytype = field_types[sort_key]
         cast_type = STR_TO_SQL_TYPES.get(pytype, None)
         if cast_type is not None:
-            if pytype in ("timestamp", "date", "time"):
+            if pytype in ("datetime", "date", "time"):
                 sort_expr = case(
                     (val_col.is_(None), None),
                     (val_col == text("'null'::jsonb"), None),

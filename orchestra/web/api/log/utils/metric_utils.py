@@ -130,7 +130,7 @@ def _postprocess_aggregator_value(
 
     try:
         # Convert based on the field type
-        if field_type == "timestamp":
+        if field_type == "datetime":
             if metric in ("var", "std"):
                 try:
                     return timedelta(seconds=value).__repr__()
@@ -141,7 +141,7 @@ def _postprocess_aggregator_value(
                 return datetime.fromtimestamp(value).isoformat()
             except (OverflowError, ValueError, OSError):
                 # Fallback if timestamp is out of range
-                return f"timestamp({value})"
+                return f"datetime({value})"
 
         # Handle new data types: time, date, and timedelta
         elif field_type == "time":
@@ -334,7 +334,7 @@ def _get_reduction_expr(metric, inferred_type, aggCol, label):
             func.length(cast(aggCol, JSONB)[0].astext).cast(Float),
         ),
         (
-            inferred_type == "timestamp",
+            inferred_type == "datetime",
             func.extract("epoch", cast(cast(aggCol, String), TIMESTAMP)).cast(
                 Float,
             ),
@@ -649,7 +649,7 @@ def _compute_metric_for_key_grouped(
             func.length(cast(X.c.value, JSONB)[0].astext).cast(Float),
         ),
         (
-            X.c.inferred_type == "timestamp",
+            X.c.inferred_type == "datetime",
             func.extract("epoch", cast(cast(X.c.value, String), TIMESTAMP)).cast(Float),
         ),
         (
@@ -994,7 +994,7 @@ def compute_metric_for_key(
             func.length(cast(X.c.value, JSONB)[0].astext).cast(Float),
         ),
         (
-            X.c.inferred_type == "timestamp",
+            X.c.inferred_type == "datetime",
             func.extract("epoch", cast(cast(X.c.value, String), TIMESTAMP)).cast(Float),
         ),
         (
@@ -1230,7 +1230,7 @@ def compute_metric_bulk(
             func.length(cast(entries.c.value, JSONB)[0].astext).cast(Float),
         ),
         (
-            entries.c.inferred_type == "timestamp",
+            entries.c.inferred_type == "datetime",
             func.extract("epoch", cast(cast(entries.c.value, String), TIMESTAMP)).cast(
                 Float,
             ),

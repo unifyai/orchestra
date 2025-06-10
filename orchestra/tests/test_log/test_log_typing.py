@@ -48,7 +48,7 @@ async def test_create_log_strongly_typed(client: AsyncClient):
 
     assert "logged_at" in field_types
     logged_at_type = field_types["logged_at"]
-    assert logged_at_type["data_type"] == "timestamp"
+    assert logged_at_type["data_type"] == "datetime"
     assert logged_at_type["field_type"] == "entry"
     assert logged_at_type["mutable"] is True
     assert logged_at_type["artifacts"] == ""

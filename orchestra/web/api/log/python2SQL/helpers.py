@@ -181,7 +181,7 @@ def _select_value(subq, session, is_collection=False):
             "float": subq.c.float_value,
             "bool": subq.c.bool_value,
             "str": subq.c.str_value,
-            "timestamp": subq.c.timestamp_value,
+            "datetime": subq.c.timestamp_value,
             "time": subq.c.time_value,
             "date": subq.c.date_value,
             "timedelta": subq.c.timedelta_value,
@@ -210,7 +210,7 @@ def unify_inferred_types(t1: str, t2: str) -> str:
         "int",
         "float",
         "str",
-        "timestamp",
+        "datetime",
         "time",
         "date",
         "timedelta",
@@ -265,7 +265,7 @@ def cast_expr(expr, from_type: str, to_type: str):
         return cast(expr, Integer)
     elif final_type == "bool":
         return cast(expr, Boolean)
-    elif final_type == "timestamp":
+    elif final_type == "datetime":
         return cast(func.replace(cast(expr, Text), '"', ""), DateTime(timezone=True))
     elif final_type == "time":
         return cast(func.replace(cast(expr, Text), '"', ""), Time)
@@ -358,7 +358,7 @@ def _build_subquery_for_identifier(
                 literal(None).label("int_value"),
                 literal(None).label("float_value"),
                 literal(None).label("bool_value"),
-                literal("timestamp").label("inferred_type"),
+                literal("datetime").label("inferred_type"),
             )
             .where(log_event_condition)
             .subquery(name=alias)
@@ -374,7 +374,7 @@ def _build_subquery_for_identifier(
             else_=None,
         ).label("jsonb_value"),
         case(
-            (log_alias.inferred_type == "timestamp", cast(log_alias.value, JSONB)),
+            (log_alias.inferred_type == "datetime", cast(log_alias.value, JSONB)),
             else_=None,
         ).label("timestamp_value"),
         case(
@@ -428,7 +428,7 @@ def _build_subquery_for_identifier(
         ).label("jsonb_value"),
         case(
             (
-                derived_log_alias.inferred_type == "timestamp",
+                derived_log_alias.inferred_type == "datetime",
                 cast(derived_log_alias.value, JSONB),
             ),
             else_=None,

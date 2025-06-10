@@ -235,17 +235,17 @@ def _handle_logical_operator(
 
 def _arithmetic_expr(lval, rval, operand, lval_type, rval_type):
     # Special handling for date/time/timestamp and timedelta arithmetic
-    if operand == "+" and lval_type == "timestamp" and rval_type == "timedelta":
+    if operand == "+" and lval_type == "datetime" and rval_type == "timedelta":
         lval = cast(cast(lval, Text), TIMESTAMP)
         rval = cast(cast(rval, Text), Interval)
         expr = lval + rval
-        result_type = "timestamp"
-    elif operand == "-" and lval_type == "timestamp" and rval_type == "timedelta":
+        result_type = "datetime"
+    elif operand == "-" and lval_type == "datetime" and rval_type == "timedelta":
         lval = cast(cast(lval, Text), TIMESTAMP)
         rval = cast(cast(rval, Text), Interval)
         expr = lval - rval
-        result_type = "timestamp"
-    elif operand == "-" and lval_type == "timestamp" and rval_type == "timestamp":
+        result_type = "datetime"
+    elif operand == "-" and lval_type == "datetime" and rval_type == "datetime":
         lval = cast(cast(lval, Text), TIMESTAMP)
         rval = cast(cast(rval, Text), TIMESTAMP)
         expr = lval - rval
@@ -278,10 +278,10 @@ def _arithmetic_expr(lval, rval, operand, lval_type, rval_type):
     elif (
         operand == "+"
         and lval_type == "timedelta"
-        and rval_type in ("timestamp", "date", "time")
+        and rval_type in ("datetime", "date", "time")
     ):
         lval = cast(lval, Interval)
-        if rval_type == "timestamp":
+        if rval_type == "datetime":
             rval = cast(cast(rval, Text), TIMESTAMP)
         elif rval_type == "date":
             rval = cast(cast(rval, Text), Date)
