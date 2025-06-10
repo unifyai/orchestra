@@ -1146,3 +1146,127 @@ async def test_derived_embedding_and_filtering(client: AsyncClient):
             break
 
     assert not chair_found, "Chair should not be returned due to low similarity"
+
+
+@pytest.mark.anyio
+async def test_create_derived_entry_with_partial_null_values(client: AsyncClient):
+    """
+    Test creating derived entries where some logs have null/non-existent values
+    for the referenced field, but not all logs are null.
+
+    This verifies that the derived entry creation succeeds even when some
+    referenced values are missing or null.
+    """
+    project_name = "test_partial_null_derived"
+    await _create_project(client, project_name, user=1)
+
+    # Create base logs with mixed presence of the target field
+    log_ids = []
+
+    # Log 0: Has the field but with null value
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"temperature": None, "location": "outdoor"},
+    )
+    assert response.status_code == 200
+    log_ids.append(response.json()["log_event_ids"][0])
+
+    # Log 1: Has the field with a valid value
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"temperature": 25.0, "location": "indoor"},
+    )
+    assert response.status_code == 200
+    log_ids.append(response.json()["log_event_ids"][0])
+
+    # Log 2: Has the field but with null value
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"temperature": None, "location": "outdoor"},
+    )
+    assert response.status_code == 200
+    log_ids.append(response.json()["log_event_ids"][0])
+
+    # Log 3: Missing the field entirely
+    response = await _create_log(client, project_name, entries={"location": "basement"})
+    assert response.status_code == 200
+    log_ids.append(response.json()["log_event_ids"][0])
+
+    # Log 4: Has the field with another valid value
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"temperature": 30.0, "location": "attic"},
+    )
+    assert response.status_code == 200
+    log_ids.append(response.json()["log_event_ids"][0])
+
+    # Log 5: Has the field with zero value (should not be treated as null)
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"temperature": 0.0, "location": "freezer"},
+    )
+    assert response.status_code == 200
+    log_ids.append(response.json()["log_event_ids"][0])
+
+    # Log 6: Missing the field entirely again
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"location": "living room"},
+    )
+    assert response.status_code == 200
+    log_ids.append(response.json()["log_event_ids"][0])
+
+    # Log 7: Has the field but with null value again
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"temperature": None, "location": "basement"},
+    )
+    assert response.status_code == 200
+    log_ids.append(response.json()["log_event_ids"][0])
+
+    # Create derived entry that references the temperature field
+    # This should succeed even though some logs don't have temperature values
+    key = "temp_celsius_to_fahrenheit"
+    equation = "{log:temperature} * 9 / 5 + 32"
+    referenced_logs = {"log": log_ids}
+
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key,
+        equation,
+        referenced_logs,
+    )
+
+    # Assert that the operation succeeded
+    assert (
+        response.status_code == 200
+    ), f"Expected 200 but got {response.status_code}: {response.text}"
+
+    # Verify the derived field is not NoneType
+    response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    fields = response.json()
+    print(fields)
+    assert key in fields
+    assert fields[key]["data_type"] == "float"
+
+    # Verify the derived entries were created correctly
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+
+    print(logs)
