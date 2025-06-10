@@ -75,7 +75,7 @@ def write_data_to_db(data, engine, user_id, email_id, api_key):
             "stripe_customer_id": "",
             "autorecharge": False,
             "autorecharge_threshold": -1,
-            "autorecharge_qty": 0,
+            "autorecharge_qty": 25,
             "store_prompts": True,
         },
     ]

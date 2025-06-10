@@ -1506,28 +1506,142 @@ def get_user_billing_eligibility(
     session=Depends(get_db_session),
 ) -> dict:
     """
-    Check if a user is eligible for monthly billing based on spending.
+    Get billing eligibility information for a specific user.
 
-    :param user_id: id of the user to check.
-    :return: dict with eligibility status and spending information.
+    Checks if the user has spent at least $100 to be eligible for monthly billing.
+
+    :param user_id: The user ID to check
+    :param session: Database session
+    :return: Dictionary with eligibility information
     """
     users_dao = UsersDAO(session)
+
     try:
-        # First check if user exists - this will raise HTTPException if not found
         user = users_dao.get_user_with_id(user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User ID not found")
 
         total_spending = users_dao.get_total_spending(user_id)
-        can_enable_monthly = users_dao.can_enable_monthly_billing(user_id)
+        can_enable = users_dao.can_enable_monthly_billing(user_id)
 
         return {
             "user_id": user_id,
             "total_spending": total_spending,
-            "can_enable_monthly_billing": can_enable_monthly,
+            "can_enable_monthly_billing": can_enable,
             "minimum_spend_required": 100.0,
             "remaining_spend_needed": max(0, 100.0 - total_spending),
         }
-    except HTTPException as e:
-        # Re-raise HTTPExceptions (like 404 for user not found)
-        raise e
     except Exception as e:
-        raise HTTPException(status_code=404, detail=f"User not found: {str(e)}")
+        if "User ID not found" in str(e):
+            raise HTTPException(status_code=404, detail="User ID not found")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/billing/migrate-users")
+def migrate_users_to_billing_compliance(
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Migrate all users to comply with new billing requirements.
+
+    This endpoint will:
+    1. Disable autorecharge for users who have spent less than $100
+    2. Set autorecharge amount to $25 for users with amounts below $25
+
+    :param session: Database session
+    :return: Dictionary with migration results
+    """
+    users_dao = UsersDAO(session)
+
+    # Get all users with autorecharge enabled or with low autorecharge amounts
+    all_users = users_dao.get_all_users()
+
+    results = {
+        "total_users_processed": 0,
+        "users_disabled": [],
+        "users_amount_updated": [],
+        "users_unaffected": [],
+        "errors": [],
+    }
+
+    for user in all_users:
+        try:
+            results["total_users_processed"] += 1
+            user_id = user.id
+            total_spending = users_dao.get_total_spending(user_id)
+            can_enable_billing = users_dao.can_enable_monthly_billing(user_id)
+
+            # Capture original values before any modifications
+            original_autorecharge = user.autorecharge
+            original_autorecharge_qty = user.autorecharge_qty
+
+            changes_made = False
+
+            # Check if user has autorecharge enabled but insufficient spending
+            if user.autorecharge and not can_enable_billing:
+                # Force disable autorecharge
+                users_dao.enable_autorecharge(user_id, False)
+                results["users_disabled"].append(
+                    {
+                        "user_id": user_id,
+                        "spending": total_spending,
+                        "reason": f"Insufficient spending (${total_spending:.2f} < $100.00)",
+                    },
+                )
+                changes_made = True
+
+            # Check if user has autorecharge amount below $25 or None (regardless of enabled/disabled status)
+            if original_autorecharge_qty is None or original_autorecharge_qty < 25.0:
+                # Force update to $25 for everyone with low amounts or None values
+                users_dao.set_autorecharge_qty(user_id, 25.0)
+                results["users_amount_updated"].append(
+                    {
+                        "user_id": user_id,
+                        "old_amount": float(original_autorecharge_qty)
+                        if original_autorecharge_qty is not None
+                        else None,
+                        "new_amount": 25.0,
+                        "reason": f"Amount below minimum (${original_autorecharge_qty:.2f} < $25.00)"
+                        if original_autorecharge_qty is not None
+                        else "Amount was None, set to minimum $25.00",
+                        "autorecharge_enabled": original_autorecharge,
+                    },
+                )
+                changes_made = True
+
+            if not changes_made:
+                results["users_unaffected"].append(
+                    {
+                        "user_id": user_id,
+                        "autorecharge_enabled": original_autorecharge,
+                        "autorecharge_amount": float(original_autorecharge_qty)
+                        if original_autorecharge_qty is not None
+                        else None,
+                        "spending": total_spending,
+                        "billing_eligible": can_enable_billing,
+                    },
+                )
+
+        except Exception as e:
+            results["errors"].append(
+                {
+                    "user_id": user.id if hasattr(user, "id") else "unknown",
+                    "error": str(e),
+                },
+            )
+            continue
+
+    # Commit all changes
+    try:
+        session.commit()
+        results["status"] = "success"
+        results[
+            "message"
+        ] = f"Migration completed successfully. Processed {results['total_users_processed']} users."
+    except Exception as e:
+        session.rollback()
+        results["status"] = "error"
+        results["message"] = f"Migration failed during commit: {str(e)}"
+        raise HTTPException(status_code=500, detail=f"Migration failed: {str(e)}")
+
+    return results

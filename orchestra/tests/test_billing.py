@@ -1954,3 +1954,349 @@ async def test_user_not_found_error_handling(client: AsyncClient, dbsession: Ses
         headers=ADMIN_HEADERS,
     )
     assert response.status_code == 404  # Should be handled by the DAO
+
+
+# --------------------------------------------------------------------------- #
+# 11. Billing migration endpoint tests                                        #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.anyio
+async def test_billing_migration_endpoint_comprehensive(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Test the comprehensive billing migration endpoint that forces compliance."""
+    from orchestra.db.dao.query_dao import QueryDAO
+
+    # Clear existing users and queries to ensure clean test state
+    from orchestra.db.models.orchestra_models import Query
+    from orchestra.tests.utils import ADMIN_HEADERS
+
+    dbsession.query(Query).delete()
+    dbsession.query(Users).delete()
+    dbsession.commit()
+
+    query_dao = QueryDAO(dbsession)
+    import datetime
+
+    # Create users with different scenarios
+    test_users = [
+        # User 1: Has autorecharge enabled but < $100 spending (should be disabled)
+        {
+            "id": "user_disable_me",
+            "credits": 500,
+            "stripe_customer_id": "cus_disable",
+            "autorecharge": True,
+            "autorecharge_qty": 50.0,
+            "autorecharge_threshold": 100.0,
+            "spending": 75.0,  # Less than $100
+        },
+        # User 2: Has autorecharge amount < $25 (should be updated to $25)
+        {
+            "id": "user_update_amount",
+            "credits": 1000,
+            "stripe_customer_id": "cus_update",
+            "autorecharge": True,
+            "autorecharge_qty": 15.0,  # Less than $25
+            "autorecharge_threshold": 50.0,
+            "spending": 150.0,  # More than $100
+        },
+        # User 3: Has both issues (should be disabled and amount updated)
+        {
+            "id": "user_both_issues",
+            "credits": 200,
+            "stripe_customer_id": "cus_both",
+            "autorecharge": True,
+            "autorecharge_qty": 10.0,  # Less than $25
+            "autorecharge_threshold": 25.0,
+            "spending": 50.0,  # Less than $100
+        },
+        # User 4: Meets all requirements (should be unaffected)
+        {
+            "id": "user_compliant",
+            "credits": 2000,
+            "stripe_customer_id": "cus_compliant",
+            "autorecharge": True,
+            "autorecharge_qty": 100.0,  # More than $25
+            "autorecharge_threshold": 200.0,
+            "spending": 250.0,  # More than $100
+        },
+        # User 5: No autorecharge enabled (should be unaffected)
+        {
+            "id": "user_no_autorecharge",
+            "credits": 100,
+            "stripe_customer_id": "cus_no_auto",
+            "autorecharge": False,
+            "autorecharge_qty": None,
+            "autorecharge_threshold": None,
+            "spending": 30.0,
+        },
+        # User 6: Has autorecharge disabled but low amount (should be unaffected)
+        {
+            "id": "user_disabled_low_amount",
+            "credits": 300,
+            "stripe_customer_id": "cus_disabled",
+            "autorecharge": False,
+            "autorecharge_qty": 5.0,  # Less than $25, should now be updated even though disabled
+            "autorecharge_threshold": 10.0,
+            "spending": 200.0,  # More than $100
+        },
+    ]
+
+    # Create users and add spending
+    for user_data in test_users:
+        user = Users(
+            id=user_data["id"],
+            credits=user_data["credits"],
+            stripe_customer_id=user_data["stripe_customer_id"],
+            autorecharge=user_data["autorecharge"],
+            autorecharge_qty=user_data["autorecharge_qty"],
+            autorecharge_threshold=user_data["autorecharge_threshold"],
+        )
+        dbsession.add(user)
+
+    dbsession.commit()
+
+    # Add spending for each user
+    for user_data in test_users:
+        if user_data["spending"] > 0:
+            query_dao.create_query(
+                user_id=user_data["id"],
+                at=datetime.datetime.now(),
+                model_provider_str="gpt-4@openai",
+                endpoint_id=None,
+                custom_endpoint_id=None,
+                local_endpoint_id=None,
+                credits=user_data["spending"],
+                query_body='{"messages": [{"role": "user", "content": "test"}]}',
+                response_body='{"choices": [{"message": {"content": "response"}}]}',
+                status_code=200,
+            )
+
+    # Run the migration endpoint
+    response = await client.post(
+        "/v0/admin/billing/migrate-users",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    # Verify overall results
+    assert data["status"] == "success"
+    assert data["total_users_processed"] == 6
+    assert len(data["errors"]) == 0
+
+    # Verify specific user outcomes
+    disabled_user_ids = [u["user_id"] for u in data["users_disabled"]]
+    updated_user_ids = [u["user_id"] for u in data["users_amount_updated"]]
+    unaffected_user_ids = [u["user_id"] for u in data["users_unaffected"]]
+
+    # User 1: Should be disabled (autorecharge enabled but < $100 spending)
+    assert "user_disable_me" in disabled_user_ids
+    disabled_user = next(
+        u for u in data["users_disabled"] if u["user_id"] == "user_disable_me"
+    )
+    assert disabled_user["spending"] == 75.0
+    assert "Insufficient spending" in disabled_user["reason"]
+
+    # User 2: Should have amount updated (amount < $25)
+    assert "user_update_amount" in updated_user_ids
+    updated_user = next(
+        u for u in data["users_amount_updated"] if u["user_id"] == "user_update_amount"
+    )
+    assert updated_user["old_amount"] == 15.0
+    assert updated_user["new_amount"] == 25.0
+
+    # User 3: Should be in both disabled and updated lists
+    assert "user_both_issues" in disabled_user_ids
+    assert "user_both_issues" in updated_user_ids
+
+    # User 4: Should be unaffected (meets all requirements)
+    assert "user_compliant" in unaffected_user_ids
+    unaffected_user = next(
+        u for u in data["users_unaffected"] if u["user_id"] == "user_compliant"
+    )
+    assert unaffected_user["autorecharge_enabled"] is True
+    assert unaffected_user["autorecharge_amount"] == 100.0
+    assert unaffected_user["billing_eligible"] is True
+
+    # User 6: Should now have amount updated (even though autorecharge disabled)
+    assert "user_disabled_low_amount" in updated_user_ids
+    updated_disabled_user = next(
+        u
+        for u in data["users_amount_updated"]
+        if u["user_id"] == "user_disabled_low_amount"
+    )
+    assert updated_disabled_user["old_amount"] == 5.0
+    assert updated_disabled_user["new_amount"] == 25.0
+    assert updated_disabled_user["autorecharge_enabled"] is False  # Still disabled
+
+    # Verify database changes
+    from orchestra.db.dao.users_dao import UsersDAO
+
+    users_dao = UsersDAO(dbsession)
+
+    # User 1: Autorecharge should be disabled
+    user1 = users_dao.get_user_with_id("user_disable_me")
+    assert user1.autorecharge is False
+
+    # User 2: Amount should be updated to $25
+    user2 = users_dao.get_user_with_id("user_update_amount")
+    assert user2.autorecharge_qty == 25.0
+    assert user2.autorecharge is True  # Should still be enabled
+
+    # User 3: Should be disabled AND amount updated
+    user3 = users_dao.get_user_with_id("user_both_issues")
+    assert user3.autorecharge is False
+    assert user3.autorecharge_qty == 25.0
+
+    # User 4: Should remain unchanged
+    user4 = users_dao.get_user_with_id("user_compliant")
+    assert user4.autorecharge is True
+    assert user4.autorecharge_qty == 100.0
+
+    # User 6: Should have amount updated even though autorecharge is disabled
+    user6 = users_dao.get_user_with_id("user_disabled_low_amount")
+    assert user6.autorecharge is False  # Still disabled
+    assert user6.autorecharge_qty == 25.0  # But amount updated
+
+    # User 5: Should now have amount updated (None value set to $25)
+    assert "user_no_autorecharge" in updated_user_ids
+    updated_none_user = next(
+        u
+        for u in data["users_amount_updated"]
+        if u["user_id"] == "user_no_autorecharge"
+    )
+    assert updated_none_user["old_amount"] in [
+        None,
+        0.0,
+    ]  # Can be None or 0.0 depending on conversion
+    assert updated_none_user["new_amount"] == 25.0
+    assert updated_none_user["autorecharge_enabled"] is False  # Still disabled
+
+    # Verify user 5 in database
+    user5 = users_dao.get_user_with_id("user_no_autorecharge")
+    assert user5.autorecharge is False  # Still disabled
+    assert user5.autorecharge_qty == 25.0  # But amount updated
+
+
+@pytest.mark.anyio
+async def test_billing_migration_endpoint_edge_cases(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """Test edge cases for the billing migration endpoint."""
+    from orchestra.db.dao.query_dao import QueryDAO
+
+    # Clear existing users and queries to ensure clean test state
+    from orchestra.db.models.orchestra_models import Query
+    from orchestra.tests.utils import ADMIN_HEADERS
+
+    dbsession.query(Query).delete()
+    dbsession.query(Users).delete()
+    dbsession.commit()
+
+    query_dao = QueryDAO(dbsession)
+    import datetime
+
+    # Create edge case users
+    edge_case_users = [
+        # User with exactly $100 spending
+        {
+            "id": "user_exact_100",
+            "credits": 500,
+            "stripe_customer_id": "cus_exact",
+            "autorecharge": True,
+            "autorecharge_qty": 50.0,
+            "spending": 100.0,  # Exactly $100
+        },
+        # User with exactly $25 autorecharge amount
+        {
+            "id": "user_exact_25",
+            "credits": 1000,
+            "stripe_customer_id": "cus_exact_25",
+            "autorecharge": True,
+            "autorecharge_qty": 25.0,  # Exactly $25
+            "spending": 150.0,
+        },
+        # User with $99.99 spending (just below threshold)
+        {
+            "id": "user_just_below",
+            "credits": 200,
+            "stripe_customer_id": "cus_below",
+            "autorecharge": True,
+            "autorecharge_qty": 30.0,
+            "spending": 99.99,  # Just below $100
+        },
+        # User with $24.99 autorecharge amount (just below $25)
+        {
+            "id": "user_amount_below",
+            "credits": 1500,
+            "stripe_customer_id": "cus_amount_below",
+            "autorecharge": True,
+            "autorecharge_qty": 24.99,  # Just below $25
+            "spending": 200.0,
+        },
+    ]
+
+    # Create users and add spending
+    for user_data in edge_case_users:
+        user = Users(
+            id=user_data["id"],
+            credits=user_data["credits"],
+            stripe_customer_id=user_data["stripe_customer_id"],
+            autorecharge=user_data["autorecharge"],
+            autorecharge_qty=user_data["autorecharge_qty"],
+        )
+        dbsession.add(user)
+
+    dbsession.commit()
+
+    # Add spending for each user
+    for user_data in edge_case_users:
+        if user_data["spending"] > 0:
+            query_dao.create_query(
+                user_id=user_data["id"],
+                at=datetime.datetime.now(),
+                model_provider_str="gpt-4@openai",
+                endpoint_id=None,
+                custom_endpoint_id=None,
+                local_endpoint_id=None,
+                credits=user_data["spending"],
+                query_body='{"messages": [{"role": "user", "content": "test"}]}',
+                response_body='{"choices": [{"message": {"content": "response"}}]}',
+                status_code=200,
+            )
+
+    # Run the migration endpoint
+    response = await client.post(
+        "/v0/admin/billing/migrate-users",
+        headers=ADMIN_HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    # Verify results
+    assert data["status"] == "success"
+    assert data["total_users_processed"] == 4
+
+    disabled_user_ids = [u["user_id"] for u in data["users_disabled"]]
+    updated_user_ids = [u["user_id"] for u in data["users_amount_updated"]]
+    unaffected_user_ids = [u["user_id"] for u in data["users_unaffected"]]
+
+    # User with exactly $100 should NOT be disabled (meets threshold)
+    assert "user_exact_100" not in disabled_user_ids
+    assert "user_exact_100" in unaffected_user_ids
+
+    # User with exactly $25 should NOT be updated (meets minimum)
+    assert "user_exact_25" not in updated_user_ids
+    assert "user_exact_25" in unaffected_user_ids
+
+    # User with $99.99 should be disabled (below threshold)
+    assert "user_just_below" in disabled_user_ids
+
+    # User with $24.99 should be updated (below minimum)
+    assert "user_amount_below" in updated_user_ids
