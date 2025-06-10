@@ -643,10 +643,13 @@ def create_from_logs(
                 if k in ph
             }
             # Iterate over the computed values and resolved IDs
-            non_null_value = None
+            non_null_val = None
             for i, (le, value) in enumerate(computed_values):
                 # Get all log IDs involved in this specific computation
                 involved_log_ids = list(set(ids[i] for ids in resolved_ids.values()))
+                val = json.loads(json.dumps(value, cls=CustomEncoder))
+                non_null_val = val if val is not None else non_null_val
+                inferred_type = LogDAO.infer_type("", non_null_val)
 
                 # Create a derived entry for each log ID involved in this computation
                 for log_event_id in involved_log_ids:
@@ -659,9 +662,6 @@ def create_from_logs(
                             vector=value,
                         )
                         session.add(embeddings)
-                    val = json.loads(json.dumps(value, cls=CustomEncoder))
-                    non_null_val = val if val is not None else non_null_value
-                    inferred_type = LogDAO.infer_type("", non_null_val)
                     new_derived_logs.append(
                         DerivedLog(
                             log_event_id=log_event_id,
