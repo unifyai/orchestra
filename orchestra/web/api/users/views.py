@@ -31,8 +31,10 @@ from orchestra.web.api.users.schema import (
     AssistantHiringApprovalUserStatus,
     AssistantHiringOneTimeLinkClaimTokenRequest,
     AssistantHiringOneTimeLinkResponse,
+    FreezeAccountByStripeIdRequest,
     FreezeAccountRequest,
     QueryLoggingStatus,
+    StripeIdRequest,
     UpdateQueryLoggingRequest,
     UserRequest,
 )
@@ -308,6 +310,43 @@ async def freeze_account(
     users_dao.set_frozen_status(request.user_id, request.freeze)
     status_str = "frozen" if request.freeze else "unfrozen"
     return {"message": f"Account {status_str} successfully!"}
+
+
+@admin_router.post("/auth-user/freeze-by-stripe-id")
+async def freeze_account_by_stripe_id(
+    request: FreezeAccountByStripeIdRequest,
+    session: Session = Depends(get_db_session),
+):
+    users_dao = UsersDAO(session)
+    user = users_dao.get_user_by_stripe_id(request.stripe_id)
+    if not user:
+        raise not_found("User with specified Stripe ID")
+    users_dao.set_frozen_status(user.id, request.freeze)
+    status_str = "frozen" if request.freeze else "unfrozen"
+    return {
+        "message": f"Account with stripe_id {request.stripe_id} {status_str} successfully!",
+    }
+
+
+@admin_router.put("/auth-user/stripe-id")
+async def set_stripe_id_for_user(
+    request: StripeIdRequest,
+    session: Session = Depends(get_db_session),
+):
+    users_dao = UsersDAO(session)
+    users_dao.set_stripe_customer_id(request.user_id, request.stripe_id)
+    session.commit()
+    return {"message": f"Stripe ID set for user {request.user_id}"}
+
+
+@admin_router.get("/auth-user/is-frozen")
+async def is_account_frozen(
+    user_id: str,
+    session: Session = Depends(get_db_session),
+):
+    users_dao = UsersDAO(session)
+    frozen = users_dao.is_account_frozen(user_id)
+    return {"user_id": user_id, "is_frozen": frozen}
 
 
 @admin_router.get("/api_key/list")
