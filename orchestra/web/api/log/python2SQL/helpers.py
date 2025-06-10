@@ -171,9 +171,18 @@ def _select_value(subq, session, is_collection=False):
                 dt = session.execute(select(subq.c.inferred_type).limit(1)).first()[0]
             return subq.c.value, dt
 
-        dt = session.execute(select(subq).limit(1)).first()[
-            -1
-        ]  # execute the subquery to determine the type.
+        if hasattr(subq, "c") and hasattr(subq.c, "inferred_type"):
+            dt = session.execute(
+                select(subq.c.inferred_type)
+                .where(subq.c.inferred_type != "NoneType")
+                .limit(1),
+            ).first()  # execute the subquery to determine the type.
+        else:
+            dt = session.execute(select(subq).limit(1)).first()
+        if dt is None:
+            dt = "NoneType"
+        else:
+            dt = dt[-1]
         if not isinstance(subq, Subquery):
             return subq, LogDAO.infer_type("", dt)
         d = {
