@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, Path, Request
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.artifact_dao import ArtifactDAO
+from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
@@ -59,7 +60,8 @@ def create_artifacts(
     project-level metadata that don't depend on other variables.
     """
     organization_dao = OrganizationDAO(session)
-    project_dao = ProjectDAO(session, organization_dao)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_dao, context_dao)
     artifact_dao = ArtifactDAO(session)
     try:
         # TODO: Add organization id
@@ -122,7 +124,8 @@ def delete_artifact(
     Deletes an artifact from a project.
     """
     organization_dao = OrganizationDAO(session)
-    project_dao = ProjectDAO(session, organization_dao)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_dao, context_dao)
     artifact_dao = ArtifactDAO(session)
     try:
         # TODO: Deal with org when appropriate
@@ -176,7 +179,8 @@ def list_artifacts(
     Returns the key-value pairs of all artifacts in a project.
     """
     organization_dao = OrganizationDAO(session)
-    project_dao = ProjectDAO(session, organization_dao)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_dao, context_dao)
     artifact_dao = ArtifactDAO(session)
 
     try:
