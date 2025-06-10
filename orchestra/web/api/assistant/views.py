@@ -1138,10 +1138,10 @@ async def clone_voice_endpoint(
     request: Request,
     session: Session = Depends(get_db_session),
     cartesia_service: CartesiaService = Depends(),
-    name: str = Form(...),
-    language: str = Form(...),
-    description: Optional[str] = Form(None),
-    file: UploadFile = File(...),
+    name: str = Form(..., example="My Voice Clone"),
+    language: str = Form(..., example="en"),
+    description: Optional[str] = Form(None, example="A cloned voice for my assistant"),
+    file: UploadFile = File(..., example="voice_sample.wav"),
 ):
     user_id = request.state.user_id
     voice_dao = VoiceDAO(session)
@@ -1512,7 +1512,7 @@ def delete_voice(
 )
 async def upload_assistant_photo(
     request: Request,
-    file: UploadFile = File(...),
+    file: UploadFile = File(..., example="assistant_photo.jpg"),
 ):
     bucket_service = BucketService()
     user_id = request.state.user_id
