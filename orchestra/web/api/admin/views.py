@@ -1518,9 +1518,6 @@ def get_user_billing_eligibility(
 
     try:
         user = users_dao.get_user_with_id(user_id)
-        if not user:
-            raise HTTPException(status_code=404, detail="User ID not found")
-
         total_spending = users_dao.get_total_spending(user_id)
         can_enable = users_dao.can_enable_monthly_billing(user_id)
 
@@ -1531,9 +1528,10 @@ def get_user_billing_eligibility(
             "minimum_spend_required": 100.0,
             "remaining_spend_needed": max(0, 100.0 - total_spending),
         }
+    except HTTPException:
+        # Re-raise HTTPExceptions (like 404 for user not found) as-is
+        raise
     except Exception as e:
-        if "User ID not found" in str(e):
-            raise HTTPException(status_code=404, detail="User ID not found")
         raise HTTPException(status_code=500, detail=str(e))
 
 
