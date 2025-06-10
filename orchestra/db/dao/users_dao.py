@@ -36,7 +36,7 @@ class UsersDAO:
                 stripe_customer_id=None,
                 autorecharge=False,
                 autorecharge_threshold=0,
-                autorecharge_qty=0,
+                autorecharge_qty=25,
                 store_prompts=True,
             ),
         )
