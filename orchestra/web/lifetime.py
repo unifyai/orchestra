@@ -19,6 +19,7 @@ from opentelemetry.trace import set_tracer_provider
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dependencies import register_db_listeners
 from orchestra.settings import settings
 
@@ -319,7 +320,13 @@ def ensure_production_traffic_project_exists(app: FastAPI):
                 )
 
         # 3. Create the 'Production Traffic' project if it doesn't already exist
-        project_dao = ProjectDAO(session=session)
+        organization_member_dao = OrganizationMemberDAO(session=session)
+        context_dao = ContextDAO(session=session)
+        project_dao = ProjectDAO(
+            session=session,
+            organization_member_dao=organization_member_dao,
+            context_dao=context_dao,
+        )
         existing_project = project_dao.filter(
             organization_id=admin_org.id,
             name=PROJ_NAME,
