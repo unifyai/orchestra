@@ -193,8 +193,8 @@ class Users(Base):
     autorecharge_qty = Column(
         Numeric,
         nullable=False,
-        default=0,
-        server_default="0",
+        default=25,
+        server_default="25",
     )
     store_prompts = Column(
         Boolean,
