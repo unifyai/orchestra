@@ -1,7 +1,7 @@
 import json
 
 from docs.query import get_param_details
-from docs.utils import format_default
+from docs.utils import escape_mdx_content, format_default
 
 chat_completions_groups = {
     "model": {
@@ -68,12 +68,13 @@ def get_param_fields(properties, required_props, chat_completions=False):
         description = property.get("description", "")
         default = property.get("default")
         if default is not None:
-            default = "{" + default + "}"
             default_str = f" default={default}"
         else:
             default_str = ""
         if not description:
             description = ""
+        else:
+            description = escape_mdx_content(description)
         body_str += (
             f'<ParamField body="{title}" type="{property["type"]}" '
             f"{required_str}{default_str}>\n{description}\n</ParamField>\n\n"

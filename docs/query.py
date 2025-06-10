@@ -1,4 +1,4 @@
-from docs.utils import format_default
+from docs.utils import escape_mdx_content, format_default
 
 args_to_skip = {
     "/v0/promo": {"post": ["user"]},
@@ -71,6 +71,8 @@ def get_query(path, route, route_config, curl_example, python_example):
 
         if not description:
             description = ""
+        else:
+            description = escape_mdx_content(description)
 
         # create param field tag
         query_str += (
