@@ -3,7 +3,7 @@ Includes endpoints related to context management within projects.
 """
 
 import re
-from typing import Optional, Union
+from typing import List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from sqlalchemy.exc import IntegrityError
@@ -16,7 +16,10 @@ from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.context.schema import (
     AddLogsToContextRequest,
+    ContextCommit,
+    ContextCommitHistory,
     ContextCreateRequest,
+    ContextRollback,
     RenameContextRequest,
 )
 from orchestra.web.api.log.views import _get_logs_query
@@ -224,6 +227,41 @@ def get_contexts(
         return contexts
     except IndexError:
         raise not_found("Project")
+
+
+@router.get(
+    "/project/{project_name:path}/contexts/{context_name:path}/commits",
+    response_model=List[ContextCommitHistory],
+    summary="Get context commit history",
+)
+def get_context_commits(
+    request_fastapi: Request,
+    project_name: str,
+    context_name: str,
+    session=Depends(get_db_session),
+):
+    """
+    Retrieves the commit history for a versioned context.
+    """
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    user_id = request_fastapi.state.user_id
+
+    project = project_dao.get_by_user_and_name(user_id=user_id, name=project_name)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    context_obj = context_dao.filter(project_id=project.id, name=context_name)
+    if not context_obj:
+        raise HTTPException(status_code=404, detail="Context not found")
+    context_id = context_obj[0][0].id
+
+    try:
+        history = context_dao.get_commit_history(context_id)
+        return history
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get(
@@ -605,7 +643,7 @@ def add_logs_to_context(
         },
     },
 )
-async def rename_context(
+def rename_context(
     request_fastapi: Request,
     body: RenameContextRequest,
     project_name: str = Path(...),
@@ -647,3 +685,76 @@ async def rename_context(
             detail="A context with this name already exists in the project.",
         )
     return {"info": "Context renamed successfully!"}
+
+
+@router.post(
+    "/project/{project_name:path}/contexts/{context_name:path}/commit",
+    summary="Commit a context version",
+)
+def commit_context_version(
+    request_fastapi: Request,
+    project_name: str,
+    context_name: str,
+    commit_data: ContextCommit,
+    session=Depends(get_db_session),
+):
+    """
+    Creates a new version snapshot for a specific context.
+    """
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    user_id = request_fastapi.state.user_id
+
+    project = project_dao.get_by_user_and_name(user_id=user_id, name=project_name)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    context_obj = context_dao.filter(project_id=project.id, name=context_name)
+    if not context_obj:
+        raise HTTPException(status_code=404, detail="Context not found")
+    context_id = context_obj[0][0].id
+
+    try:
+        commit_hash = context_dao.commit(context_id, commit_data.commit_message)
+        return {"commit_hash": commit_hash}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post(
+    "/project/{project_name:path}/contexts/{context_name:path}/rollback",
+    summary="Rollback a context to a version",
+)
+def rollback_context_version(
+    request_fastapi: Request,
+    project_name: str,
+    context_name: str,
+    rollback_data: ContextRollback,
+    session=Depends(get_db_session),
+):
+    """
+    Rolls back a context to a specific version by commit hash.
+    """
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    user_id = request_fastapi.state.user_id
+
+    project = project_dao.get_by_user_and_name(user_id=user_id, name=project_name)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    context_obj = context_dao.filter(project_id=project.id, name=context_name)
+    if not context_obj:
+        raise HTTPException(status_code=404, detail="Context not found")
+    context_id = context_obj[0][0].id
+
+    try:
+        context_dao.rollback(context_id, rollback_data.commit_hash)
+        return {
+            "status": "success",
+            "message": f"Context {context_name} rolled back to {rollback_data.commit_hash}",
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
