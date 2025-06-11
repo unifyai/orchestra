@@ -575,7 +575,7 @@ def _compute_metric_for_key_grouped(
             group_q = (
                 session.query(
                     Log.log_event_id.label("log_event_id"),
-                    Log.version.label("value"),
+                    Log.param_version.label("value"),
                     literal("int").label("inferred_type"),
                 )
                 .filter(Log.key == group_field)

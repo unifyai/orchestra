@@ -474,7 +474,7 @@ class ContextDAO:
                         log_event_id=new_log_event.id,
                         key=original_log.key,
                         value=original_log.value,
-                        version=original_log.version,
+                        param_version=original_log.param_version,
                         inferred_type=original_log.inferred_type,
                     )
                     new_logs.append(new_log)
@@ -500,7 +500,6 @@ class ContextDAO:
                                 log_event_id=new_log_event.id,
                                 key=original_json_log.key,
                                 value=original_json_log.value,
-                                version=original_json_log.version,
                             )
                             new_json_logs.append(new_json_log)
 
@@ -643,7 +642,7 @@ class ContextDAO:
                             log_event_id=int(log_event_id),
                             key=key,
                             value=log_history.value,
-                            version=log_version,
+                            param_version=log_version,
                             inferred_type=log_history.inferred_type,
                         )
                         self.session.add(new_log)

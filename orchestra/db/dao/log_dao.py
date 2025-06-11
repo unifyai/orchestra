@@ -448,7 +448,7 @@ class LogDAO:
             cast_values = [cast(literal(val), JSONB) for val in value]
             query = query.where(Log.value.in_(cast_values))
         if version:
-            query = query.where(Log.version.in_(version))
+            query = query.where(Log.param_version.in_(version))
         if inferred_type:
             query = query.where(Log.inferred_type.in_(inferred_type))
         if project_id:
@@ -623,7 +623,7 @@ class LogDAO:
                 - log_event_id: int
                 - key: str
                 - value: Any (optional)
-                - version: int (optional)
+                - param_version: int (optional)
                 - explicit_types: Dict (optional)
                 - context_id: int (optional)
             context_obj: Optional Context object. When provided, enforces that all entries
@@ -670,7 +670,7 @@ class LogDAO:
                 log_event_id = entry.get("log_event_id")
                 key = entry.get("key")
                 value = entry.get("value")
-                version = entry.get("version")
+                param_version = entry.get("param_version")
                 explicit_types = entry.get("explicit_types", {})
                 key_explicit_type = explicit_types.get(key, {})
                 inferred_type = key_explicit_type.get("type")
@@ -759,14 +759,14 @@ class LogDAO:
                     )
 
                 # Create Log entry
-                if version is not None:
-                    pk_v = (log_event_id, key, version)
+                if param_version is not None:
+                    pk_v = (log_event_id, key, param_version)
                     if (
                         pk_v in rows_log_versioned_pk2val
                         and rows_log_versioned_pk2val[pk_v] != value
                     ):
                         raise OverwriteError(
-                            f"Conflicting values for key '{key}', version {version} "
+                            f"Conflicting values for key '{key}', param_version {param_version} "
                             "in same batch",
                         )
                     rows_log_versioned_pk2val[pk_v] = value
@@ -775,7 +775,7 @@ class LogDAO:
                             "log_event_id": log_event_id,
                             "key": key,
                             "value": value,
-                            "version": version,
+                            "param_version": param_version,
                             "inferred_type": inferred_type,
                             "created_at": now,
                             "updated_at": now,
@@ -787,7 +787,7 @@ class LogDAO:
                             "log_event_id": log_event_id,
                             "key": key,
                             "value": value,
-                            "version": None,
+                            "param_version": None,
                             "inferred_type": inferred_type,
                             "created_at": now,
                             "updated_at": now,
@@ -807,18 +807,18 @@ class LogDAO:
                     self.session.query(Log)
                     .filter(Log.log_event_id.in_([pk[0] for pk in pks_v]))
                     .filter(Log.key.in_([pk[1] for pk in pks_v]))
-                    .filter(Log.version.in_([pk[2] for pk in pks_v]))
+                    .filter(Log.param_version.in_([pk[2] for pk in pks_v]))
                     .with_for_update()
                     .all()
                 )
                 for row in rows_to_check:
                     intended = rows_log_versioned_pk2val[
-                        (row.log_event_id, row.key, row.version)
+                        (row.log_event_id, row.key, row.param_version)
                     ]
                     if row.value != intended:
                         raise OverwriteError(
                             f"Cannot overwrite existing value for key "
-                            f"'{row.key}', version {row.version}",
+                            f"'{row.key}', param_version {row.param_version}",
                         )
 
                 stmt_v = (
@@ -934,7 +934,7 @@ class LogDAO:
                 - log_event_id: int
                 - key: str
                 - value: Any
-                - version: int (optional)
+                - param_version: int (optional)
                 - explicit_types: Dict (optional)
                 - context_id: int (optional)
             overwrite: Whether to allow overwriting existing values
@@ -1027,7 +1027,7 @@ class LogDAO:
             for group_key, update in update_groups.items():
                 log_event_id, key = group_key
                 value = update.get("value")
-                version = update.get("version")
+                param_version = update.get("param_version")
                 explicit_types = update.get("explicit_types", {})
                 key_explicit_type = explicit_types.get(key, {})
                 inferred_type = key_explicit_type.get("type")
@@ -1094,7 +1094,7 @@ class LogDAO:
 
                     # Update existing log
                     existing_log.value = json_value
-                    existing_log.version = version
+                    existing_log.param_version = param_version
                     existing_log.inferred_type = inferred_type
                     existing_log.updated_at = now
 
@@ -1115,14 +1115,14 @@ class LogDAO:
                         contexts_to_update.add(context_id)
                 else:
                     # Prepare for batch upsert
-                    log_pk = (log_event_id, key, version)
+                    log_pk = (log_event_id, key, param_version)
                     rows_log_pk2val[log_pk] = json_value
                     rows_log.append(
                         {
                             "log_event_id": log_event_id,
                             "key": key,
                             "value": json_value,
-                            "version": version,
+                            "param_version": param_version,
                             "inferred_type": inferred_type,
                             "created_at": now,
                             "updated_at": now,
@@ -1189,7 +1189,7 @@ class LogDAO:
                         self.session.query(Log)
                         .filter(Log.log_event_id.in_(log_event_ids_check))
                         .filter(Log.key.in_(keys_check))
-                        .filter(Log.version.in_(versions_check))
+                        .filter(Log.param_version.in_(versions_check))
                         .with_for_update()
                         .all()
                     )
@@ -1198,7 +1198,7 @@ class LogDAO:
                         pk = (
                             existing_log.log_event_id,
                             existing_log.key,
-                            existing_log.version,
+                            existing_log.param_version,
                         )
                         intended_value = rows_log_pk2val.get(pk)
                         if (
@@ -1239,7 +1239,7 @@ class LogDAO:
                 stmt = pg_insert(Log).values(rows_log)
                 if overwrite:
                     stmt = stmt.on_conflict_do_update(
-                        index_elements=["log_event_id", "key", "version"],
+                        index_elements=["log_event_id", "key", "param_version"],
                         set_={
                             "value": pg_insert(Log).excluded.value,
                             "updated_at": func.now(),

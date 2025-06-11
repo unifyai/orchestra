@@ -49,6 +49,7 @@ __all__ = [
 # GroupBy Utils     #
 #####################
 
+
 # Sorting configuration modes
 class SortType(str, Enum):
     WITHIN_GROUPS = "within_groups"
@@ -90,7 +91,7 @@ def _get_distinct_group_values(
     """
     if is_param:
         # For parameters, use only base logs with version
-        value_col = Log.version
+        value_col = Log.param_version
         subquery = (
             session.query(
                 value_col.label("value"),
@@ -177,7 +178,7 @@ def _get_log_event_ids_for_group_value(
             session.query(Log.log_event_id)
             .filter(Log.log_event_id.in_(log_event_ids))
             .filter(Log.key == group_key)
-            .filter(Log.version == group_value)
+            .filter(Log.param_version == group_value)
         )
     elif group_key == "derived_entries":
         # For derived entries, only search derived logs
@@ -217,14 +218,14 @@ def _get_params_for_log_events(
     query = (
         session.query(Log)
         .filter(Log.log_event_id.in_(select(log_event_ids)))
-        .filter(Log.version.isnot(None))
+        .filter(Log.param_version.isnot(None))
     )
 
     params = {}
     for log in query.all():
         if log.key not in params:
             params[log.key] = {}
-        params[log.key][log.version] = log.value
+        params[log.key][log.param_version] = log.value
 
     return params
 
@@ -805,9 +806,11 @@ def _handle_group_depth_level(
                     session.query(
                         base_alias.c.log_event_id.label("log_event_id"),
                         base_alias.c.inferred_type.label("inferred_type"),
-                        base_alias.c.value.label("group_key_value")
-                        if prefix != "params"
-                        else base_alias.c.param_version.label("group_key_value"),
+                        (
+                            base_alias.c.value.label("group_key_value")
+                            if prefix != "params"
+                            else base_alias.c.param_version.label("group_key_value")
+                        ),
                         agg_alias.c.value.label("agg_val"),
                     )
                     .join(
@@ -1092,9 +1095,11 @@ def _build_grouped_data(
                 session.query(
                     base_alias.c.log_event_id.label("log_event_id"),
                     base_alias.c.inferred_type.label("inferred_type"),
-                    base_alias.c.value.label("group_key_value")
-                    if prefix != "params"
-                    else base_alias.c.param_version.label("group_key_value"),
+                    (
+                        base_alias.c.value.label("group_key_value")
+                        if prefix != "params"
+                        else base_alias.c.param_version.label("group_key_value")
+                    ),
                     agg_alias.c.value.label("agg_val"),
                 )
                 .join(
@@ -1206,9 +1211,9 @@ def _build_grouped_data(
             groups_only=groups_only,
             return_timestamps=return_timestamps,
             return_versions=return_versions,
-            parent_group_key="&".join([parent_group_key, raw_key])
-            if parent_group_key
-            else raw_key,
+            parent_group_key=(
+                "&".join([parent_group_key, raw_key]) if parent_group_key else raw_key
+            ),
         )
 
         # Add to group list instead of directly to result_dict
@@ -1252,9 +1257,9 @@ def _build_grouped_data(
             groups_only=groups_only,
             return_timestamps=return_timestamps,
             return_versions=return_versions,
-            parent_group_key="&".join([parent_group_key, raw_key])
-            if parent_group_key
-            else raw_key,
+            parent_group_key=(
+                "&".join([parent_group_key, raw_key]) if parent_group_key else raw_key
+            ),
         )
         # Add null group to the group list
         group_list.append({"key": "null", "value": null_sub})

@@ -491,7 +491,7 @@ def _handle_functions(
             version_subq = (
                 select(
                     Log.log_event_id.label("log_event_id"),
-                    Log.version.label("value"),
+                    Log.param_version.label("value"),
                     literal("int").label("inferred_type"),
                 )
                 .select_from(Log)
@@ -527,7 +527,7 @@ def _handle_functions(
             version_subq = (
                 select(
                     row_number.label("log_event_id"),
-                    Log.version.label("value"),
+                    Log.param_version.label("value"),
                     literal("int").label("inferred_type"),
                 )
                 .select_from(Log)
