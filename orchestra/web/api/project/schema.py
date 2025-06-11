@@ -72,3 +72,9 @@ class ProjectCommitRequest(BaseModel):
 
 class ProjectRollbackRequest(BaseModel):
     commit_hash: str
+
+
+class ProjectCommitHistory(BaseModel):
+    commit_hash: str
+    commit_message: Optional[str] = None
+    created_at: str
