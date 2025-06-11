@@ -1147,9 +1147,9 @@ def run_demo(
             env["UNIFY_KEY"] = api_key[0][0].key
 
             if demo_object.staging:
-                env[
-                    "UNIFY_BASE_URL"
-                ] = "https://orchestra-staging-lz5fmz6i7q-ew.a.run.app/v0"
+                env["UNIFY_BASE_URL"] = (
+                    "https://orchestra-staging-lz5fmz6i7q-ew.a.run.app/v0"
+                )
 
             # This will block until the subprocess completes
             result = subprocess.run(
@@ -1727,9 +1727,9 @@ def migrate_users_to_billing_compliance(
     try:
         session.commit()
         results["status"] = "success"
-        results[
-            "message"
-        ] = f"Migration completed successfully. Processed {results['total_users_processed']} users."
+        results["message"] = (
+            f"Migration completed successfully. Processed {results['total_users_processed']} users."
+        )
     except Exception as e:
         session.rollback()
         results["status"] = "error"
@@ -1810,13 +1810,13 @@ def test_queue_auto_recharge(
             "recharge": {
                 "created": latest_recharge is not None,
                 "id": latest_recharge.id if latest_recharge else None,
-                "quantity": (
-                    float(latest_recharge.quantity) if latest_recharge else None
-                ),
+                "quantity": float(latest_recharge.quantity)
+                if latest_recharge
+                else None,
                 "status": latest_recharge.status if latest_recharge else None,
-                "invoice_group": (
-                    str(latest_recharge.invoice_group) if latest_recharge else None
-                ),
+                "invoice_group": str(latest_recharge.invoice_group)
+                if latest_recharge
+                else None,
             },
             "notes": [],
         }
