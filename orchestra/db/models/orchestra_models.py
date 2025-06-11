@@ -701,13 +701,13 @@ class ContextVersion(Base):
     project_version_id = Column(
         Integer,
         ForeignKey("project_version.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
         index=True,
     )
     name = Column(String, nullable=True)
     description = Column(String, nullable=True)
     archived_at = Column(TIMESTAMP, server_default=func.now())
-    commit_hash = Column(String, nullable=True)
+    commit_hash = Column(String, nullable=False)
     commit_message = Column(String, nullable=True)
 
     # Relationship to its ProjectVersion
