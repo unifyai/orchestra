@@ -161,20 +161,12 @@ def _env_secrets(monkeypatch):
     if not os.environ.get("STRIPE_WEBHOOK_SECRET"):
         monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_test")
 
-    # For STRIPE_SECRET_KEY, only set dummy if no real test key exists
+    # For STRIPE_SECRET_KEY, only set dummy if no real key exists
     existing_key = os.environ.get("STRIPE_SECRET_KEY")
     if not existing_key or not existing_key.startswith("sk_test_"):
         monkeypatch.setenv(
             "STRIPE_SECRET_KEY",
             "sk_test_dummy_for_mocking",
-        )  # Valid format but clearly a dummy
-
-    # For STRIPE_SECRET_KEY_LIVE, only set dummy if no real live key exists
-    existing_live_key = os.environ.get("STRIPE_SECRET_KEY_LIVE")
-    if not existing_live_key or not existing_live_key.startswith("sk_live_"):
-        monkeypatch.setenv(
-            "STRIPE_SECRET_KEY_LIVE",
-            "sk_live_dummy_for_mocking",
         )  # Valid format but clearly a dummy
 
     if not os.environ.get("ORCHESTRA_ADMIN_KEY"):
@@ -726,7 +718,7 @@ def test_real_stripe_invoicer_integration(dbsession: Session, monkeypatch):
 
     from orchestra.routines import monthly_invoicer as invoicer
 
-    # Get the TEST Stripe key from environment - use the same env var as production
+    # Get the Stripe key from environment
     test_stripe_key = os.environ.get("STRIPE_SECRET_KEY")
 
     if (
@@ -737,9 +729,6 @@ def test_real_stripe_invoicer_integration(dbsession: Session, monkeypatch):
         pytest.skip(
             "No real test Stripe API key available - set STRIPE_SECRET_KEY environment variable with real test key",
         )
-
-    # The monthly invoicer will now automatically use the test key since it's available
-    # No need to override STRIPE_SECRET_KEY_LIVE anymore!
 
     # Temporarily restore real Stripe module
     import stripe as real_stripe
@@ -2297,3 +2286,255 @@ async def test_billing_migration_endpoint_edge_cases(
 
     # User with $24.99 should be updated (below minimum)
     assert "user_amount_below" in updated_user_ids
+
+
+# --------------------------------------------------------------------------- #
+# 12. Test auto-recharge Stripe invoice item creation                        #
+# --------------------------------------------------------------------------- #
+def test_queue_auto_recharge_creates_stripe_invoice_item(
+    dbsession: Session,
+    mock_stripe,
+    monkeypatch,
+):
+    """Test that queue_auto_recharge creates both a database record AND a Stripe invoice item."""
+    # Mock the stripe module in orchestra.lib.billing
+    import orchestra.lib.billing
+
+    # Create a mock that captures calls
+    calls = []
+
+    def mock_create(**kwargs):
+        calls.append(kwargs)
+        # Update the shared mock_stripe dictionary
+        mock_stripe["item"].append(kwargs)
+        return SimpleNamespace(
+            id="ii_test_123",
+            customer=kwargs["customer"],
+            amount=kwargs["amount"],
+        )
+
+    mock_invoice_item = SimpleNamespace(create=mock_create)
+    mock_stripe_module = SimpleNamespace(
+        InvoiceItem=mock_invoice_item,
+        error=SimpleNamespace(
+            StripeError=Exception,
+            InvalidRequestError=Exception,
+        ),
+    )
+
+    monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
+
+    uid = "auto_recharge_stripe_test"
+    stripe_customer_id = "cus_test_auto_recharge"
+
+    # Create user with Stripe customer ID
+    user = Users(
+        id=uid,
+        credits=5,  # Low credits to trigger auto-recharge
+        stripe_customer_id=stripe_customer_id,
+        autorecharge=True,
+        autorecharge_threshold=10,
+        autorecharge_qty=50,
+    )
+    dbsession.add(user)
+    dbsession.commit()
+
+    # Clear any previous calls
+    mock_stripe["item"].clear()
+
+    # Queue auto-recharge
+    queue_auto_recharge(dbsession, user, 50)
+    dbsession.commit()
+
+    # Verify database record was created
+    recharge = dbsession.query(Recharge).filter_by(user_id=uid).first()
+    assert recharge is not None
+    assert recharge.quantity == Decimal("50")
+    assert recharge.amount_usd == Decimal("50.00")
+    assert recharge.status == RechargeStatus.PENDING_INVOICE
+    assert recharge.type == "auto"
+
+    # Verify Stripe invoice item was created
+    assert len(mock_stripe["item"]) == 1
+    stripe_call = mock_stripe["item"][0]
+    assert stripe_call["customer"] == stripe_customer_id
+    assert stripe_call["amount"] == 5000  # 50 credits * 100 cents
+    assert stripe_call["currency"] == "usd"
+    assert "auto-recharge" in stripe_call["description"]
+    assert stripe_call["metadata"]["recharge_type"] == "auto"
+    assert stripe_call["metadata"]["user_id"] == uid
+
+
+def test_queue_auto_recharge_no_stripe_customer_id(
+    dbsession: Session,
+    mock_stripe,
+    monkeypatch,
+):
+    """Test that queue_auto_recharge handles users without Stripe customer ID gracefully."""
+    # Mock the stripe module
+    import orchestra.lib.billing
+
+    mock_stripe_module = SimpleNamespace(
+        InvoiceItem=SimpleNamespace(create=lambda **kw: None),
+        error=SimpleNamespace(StripeError=Exception),
+    )
+
+    monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
+
+    uid = "no_stripe_customer_user"
+
+    # Create user WITHOUT Stripe customer ID
+    user = Users(
+        id=uid,
+        credits=5,
+        stripe_customer_id=None,  # No Stripe customer
+        autorecharge=True,
+        autorecharge_threshold=10,
+        autorecharge_qty=50,
+    )
+    dbsession.add(user)
+    dbsession.commit()
+
+    # Clear any previous calls
+    mock_stripe["item"].clear()
+
+    # Queue auto-recharge - should not fail
+    queue_auto_recharge(dbsession, user, 50)
+    dbsession.commit()
+
+    # Verify database record was still created
+    recharge = dbsession.query(Recharge).filter_by(user_id=uid).first()
+    assert recharge is not None
+    assert recharge.quantity == Decimal("50")
+    assert recharge.status == RechargeStatus.PENDING_INVOICE
+
+    # Verify NO Stripe invoice item was created
+    assert len(mock_stripe["item"]) == 0
+
+
+def test_auto_recharge_flow_creates_stripe_items(
+    dbsession: Session,
+    mock_stripe,
+    monkeypatch,
+):
+    """Test the complete auto-recharge flow from credit deduction to Stripe invoice item."""
+    # Mock the stripe module
+    import orchestra.lib.billing
+    from orchestra.db.dao.users_dao import UsersDAO
+
+    def mock_create(**kwargs):
+        mock_stripe["item"].append(kwargs)
+        return SimpleNamespace(
+            id="ii_test_flow",
+            customer=kwargs["customer"],
+            amount=kwargs["amount"],
+        )
+
+    mock_stripe_module = SimpleNamespace(
+        InvoiceItem=SimpleNamespace(create=mock_create),
+        error=SimpleNamespace(StripeError=Exception),
+    )
+
+    monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
+
+    uid = "complete_flow_user"
+    stripe_customer_id = "cus_complete_flow"
+
+    # Create user with credits just above threshold
+    user = Users(
+        id=uid,
+        credits=15,  # Just above threshold of 10
+        stripe_customer_id=stripe_customer_id,
+        autorecharge=True,
+        autorecharge_threshold=10,
+        autorecharge_qty=50,
+    )
+    dbsession.add(user)
+    dbsession.commit()
+
+    users_dao = UsersDAO(dbsession)
+
+    # Clear any previous calls
+    mock_stripe["item"].clear()
+
+    # Simulate credit deduction that triggers auto-recharge
+    users_dao.recharge_credit(uid, -10)  # Deduct 10 credits, leaving 5
+    dbsession.commit()
+
+    # Now user has 5 credits, below threshold of 10
+    user = users_dao.get_user_with_id(uid)
+    assert user.credits == 5
+
+    # Simulate the auto-recharge trigger (normally done in bg_tasks)
+    if user.credits <= user.autorecharge_threshold:
+        queue_auto_recharge(dbsession, user, int(user.autorecharge_qty))
+        # Credit user immediately
+        users_dao.recharge_credit(uid, int(user.autorecharge_qty))
+        dbsession.commit()
+
+    # Verify final state
+    user = users_dao.get_user_with_id(uid)
+    assert user.credits == 55  # 5 + 50 from auto-recharge
+
+    # Verify recharge record
+    recharge = dbsession.query(Recharge).filter_by(user_id=uid).first()
+    assert recharge is not None
+    assert recharge.quantity == Decimal("50")
+    assert recharge.type == "auto"
+
+    # Verify Stripe invoice item was created
+    assert len(mock_stripe["item"]) == 1
+    assert mock_stripe["item"][0]["customer"] == stripe_customer_id
+    assert mock_stripe["item"][0]["amount"] == 5000  # 50 credits * 100 cents
+
+
+def test_queue_auto_recharge_stripe_error_handling(dbsession: Session, monkeypatch):
+    """Test that queue_auto_recharge handles Stripe errors gracefully."""
+    import orchestra.lib.billing
+
+    uid = "stripe_error_user"
+    stripe_customer_id = "cus_error_test"
+
+    # Create user
+    user = Users(
+        id=uid,
+        credits=5,
+        stripe_customer_id=stripe_customer_id,
+        autorecharge=True,
+        autorecharge_threshold=10,
+        autorecharge_qty=50,
+    )
+    dbsession.add(user)
+    dbsession.commit()
+
+    # Create a proper mock for Stripe errors
+    class MockStripeError(Exception):
+        def __init__(self, message, param=None):
+            super().__init__(message)
+            self.param = param
+
+    # Mock Stripe to raise an error
+    def mock_create(**kwargs):
+        raise MockStripeError("Customer not found", param="customer")
+
+    # Create the mock with proper error hierarchy
+    mock_stripe_module = SimpleNamespace(
+        InvoiceItem=SimpleNamespace(create=mock_create),
+        error=SimpleNamespace(
+            StripeError=MockStripeError,
+            InvalidRequestError=MockStripeError,
+        ),
+    )
+
+    monkeypatch.setattr(orchestra.lib.billing, "stripe", mock_stripe_module)
+
+    # Queue auto-recharge - should not raise despite Stripe error
+    queue_auto_recharge(dbsession, user, 50)
+    dbsession.commit()
+
+    # Verify database record was still created
+    recharge = dbsession.query(Recharge).filter_by(user_id=uid).first()
+    assert recharge is not None
+    assert recharge.quantity == Decimal("50")
+    assert recharge.status == RechargeStatus.PENDING_INVOICE
+    assert recharge.type == "auto"

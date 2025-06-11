@@ -24,7 +24,6 @@ from orchestra.db.dao.webhook_log_dao import WebhookLogDAO
 from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
 from orchestra.db.models.orchestra_models import Users as User
 from orchestra.db.models.orchestra_models import WebhookLog
-from orchestra.lib.billing import get_appropriate_stripe_key
 from orchestra.web.api.utils.prometheus_middleware import (
     INVOICE_FAILED_TOTAL,
     INVOICE_PAID_TOTAL,
@@ -275,10 +274,10 @@ async def handle_stripe_webhook(request: Request):
     payload = await request.body()
     sig_header = request.headers.get("Stripe-Signature")
 
-    # Use intelligent key selection - prefer test keys in test environments
-    stripe_key = get_appropriate_stripe_key()
+    # Configure Stripe API key
+    stripe_key = os.environ.get("STRIPE_SECRET_KEY")
     if not stripe_key:
-        logger.error("No valid Stripe API key found")
+        logger.error("STRIPE_SECRET_KEY environment variable not set")
         raise HTTPException(status_code=500, detail="Stripe configuration error")
 
     stripe.api_key = stripe_key

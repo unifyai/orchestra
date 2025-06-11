@@ -41,7 +41,6 @@ from orchestra.db.models.orchestra_models import (  # noqa: WPS235
     Task,
     Users,
 )
-from orchestra.lib.billing import get_appropriate_stripe_key
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
     BenchmarkRunModelResponse,
     CreditCardFingerprintModelResponse,
@@ -666,6 +665,17 @@ def create_recharge_model(
     :param recharge_dao: DAO for recharge models.
     :param user_dao: DAO for user models.
     """
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    # Log the incoming recharge request
+    logger.info(
+        f"Creating recharge - User: {new_recharge_object.user_id}, "
+        f"Type: {new_recharge_object.type}, "
+        f"Quantity: {new_recharge_object.quantity}",
+    )
+
     recharge_dao = RechargeDAO(session)
     user_dao = UsersDAO(session)
     if (
@@ -718,47 +728,116 @@ def create_recharge_model(
 
     # For "auto" recharges, also create Stripe invoice item immediately
     if new_recharge_object.type == "auto":
+        logger.info(f"Processing auto recharge for user {new_recharge_object.user_id}")
+
         # Get user to check for Stripe customer ID
         user = user_dao.filter(id=new_recharge_object.user_id)
-        if user and len(user) > 0 and user[0].stripe_customer_id:
-            try:
-                # Configure Stripe API key
-                stripe_key = get_appropriate_stripe_key()
-                if stripe_key:
-                    stripe.api_key = stripe_key
+        logger.info(f"User lookup result: {len(user) if user else 0} users found")
 
-                    # Use Stripe product for consistent 1:1 pricing (1 credit = $1)
-                    quantity = int(new_recharge_object.quantity)
+        if user and len(user) > 0:
+            logger.info(
+                f"User data - ID: {user[0].id}, "
+                f"Stripe Customer ID: {user[0].stripe_customer_id}",
+            )
 
-                    if quantity > 0:  # Only create if there's an actual quantity
-                        # Create Stripe invoice item using amount instead of price to avoid custom_unit_amount issues
-                        invoice_item = stripe.InvoiceItem.create(
-                            customer=user[0].stripe_customer_id,
-                            amount=int(
-                                new_recharge_object.quantity * 100,
-                            ),  # Convert to cents
-                            currency="usd",
-                            description=f"{new_recharge_object.quantity} credits",
-                            metadata={
-                                "recharge_type": "auto",
-                                "user_id": new_recharge_object.user_id,
-                                "invoice_group": str(invoice_group),
-                            },
+            if user[0].stripe_customer_id:
+                logger.info(
+                    f"User has Stripe customer ID: {user[0].stripe_customer_id}",
+                )
+                try:
+                    # Configure Stripe API key
+                    stripe_key = os.environ.get("STRIPE_SECRET_KEY")
+                    logger.info(
+                        f"Stripe key status: {'Present' if stripe_key else 'Missing'}, "
+                        f"Key prefix: {stripe_key[:10] if stripe_key else 'N/A'}",
+                    )
+
+                    if stripe_key:
+                        stripe.api_key = stripe_key
+                        logger.info("Stripe API key set successfully")
+
+                        # Use Stripe product for consistent 1:1 pricing (1 credit = $1)
+                        quantity = int(new_recharge_object.quantity)
+                        logger.info(f"Creating invoice item for quantity: {quantity}")
+
+                        if quantity > 0:  # Only create if there's an actual quantity
+                            # Create Stripe invoice item using amount instead of price to avoid custom_unit_amount issues
+                            logger.info(
+                                f"Calling Stripe API - Customer: {user[0].stripe_customer_id}, "
+                                f"Amount: ${new_recharge_object.quantity} ({new_recharge_object.quantity * 100} cents)",
+                            )
+
+                            invoice_item = stripe.InvoiceItem.create(
+                                customer=user[0].stripe_customer_id,
+                                amount=int(
+                                    new_recharge_object.quantity * 100,
+                                ),  # Convert to cents
+                                currency="usd",
+                                description=f"{new_recharge_object.quantity} credits",
+                                metadata={
+                                    "recharge_type": "auto",
+                                    "user_id": new_recharge_object.user_id,
+                                    "invoice_group": str(invoice_group),
+                                },
+                            )
+
+                            logger.info(
+                                f"Stripe invoice item created successfully - "
+                                f"Invoice Item ID: {invoice_item.id}, "
+                                f"Customer: {invoice_item.customer}, "
+                                f"Amount: {invoice_item.amount} cents",
+                            )
+                        else:
+                            logger.warning(
+                                f"Skipping invoice item creation - quantity is 0",
+                            )
+                    else:
+                        logger.error("STRIPE_SECRET_KEY environment variable not set")
+                        raise ValueError(
+                            "STRIPE_SECRET_KEY environment variable not set",
                         )
-                else:
-                    raise ValueError("No valid Stripe API key found for auto-recharge")
-            except Exception as e:
-                # Log the error and re-raise instead of silently passing
-                import logging
+                except stripe.error.StripeError as e:
+                    logger.error(
+                        f"Stripe API error for auto-recharge - "
+                        f"Type: {type(e).__name__}, "
+                        f"Message: {str(e)}, "
+                        f"Code: {getattr(e, 'code', 'N/A')}, "
+                        f"Param: {getattr(e, 'param', 'N/A')}",
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Stripe error: {str(e)}",
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Unexpected error creating Stripe invoice item for auto-recharge - "
+                        f"Type: {type(e).__name__}, "
+                        f"Message: {str(e)}",
+                    )
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"Failed to create auto-recharge invoice item: {str(e)}",
+                    )
+            else:
+                logger.warning(
+                    f"User {new_recharge_object.user_id} has no Stripe customer ID",
+                )
+        else:
+            logger.warning(f"User {new_recharge_object.user_id} not found in database")
+    else:
+        logger.info(
+            f"Recharge type is '{new_recharge_object.type}', skipping Stripe invoice item creation",
+        )
 
-                logger = logging.getLogger(__name__)
-                logger.error(
-                    f"Failed to create Stripe invoice item for auto-recharge: {str(e)}",
-                )
-                raise HTTPException(
-                    status_code=500,
-                    detail=f"Failed to create auto-recharge invoice item: {str(e)}",
-                )
+    # Create the recharge record in database
+    logger.info(
+        f"Creating recharge record in database - "
+        f"User: {new_recharge_object.user_id}, "
+        f"Quantity: {new_recharge_object.quantity}, "
+        f"Amount USD: {amount_usd}, "
+        f"Status: {status}, "
+        f"Invoice Group: {invoice_group}",
+    )
 
     recharge_dao.create_recharge(
         user_id=new_recharge_object.user_id,
@@ -768,6 +847,10 @@ def create_recharge_model(
         type_=new_recharge_object.type,
         transaction_id=new_recharge_object.transaction_id,
         status=status,
+    )
+
+    logger.info(
+        f"Recharge record created successfully for user {new_recharge_object.user_id}",
     )
 
 
@@ -1643,3 +1726,117 @@ def migrate_users_to_billing_compliance(
         raise HTTPException(status_code=500, detail=f"Migration failed: {str(e)}")
 
     return results
+
+
+@router.post("/billing/test-auto-recharge")
+def test_queue_auto_recharge(
+    user_id: str,
+    credits: int = 50,
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Test endpoint to manually trigger auto-recharge for a user.
+
+    This endpoint allows admins to test the auto-recharge functionality
+    without waiting for a user's credits to fall below their threshold.
+
+    :param user_id: The user ID to trigger auto-recharge for
+    :param credits: Number of credits to recharge (default 50)
+    :param session: Database session
+    :return: Dictionary with results
+    """
+    import logging
+
+    from orchestra.lib.billing import queue_auto_recharge
+
+    logger = logging.getLogger(__name__)
+    users_dao = UsersDAO(session)
+
+    try:
+        # Get the user
+        user = users_dao.get_user_with_id(user_id)
+
+        # Log current state
+        logger.info(
+            f"Test auto-recharge triggered - "
+            f"User: {user_id}, "
+            f"Current credits: {user.credits}, "
+            f"Stripe customer ID: {user.stripe_customer_id}, "
+            f"Requested recharge: {credits} credits",
+        )
+
+        # Queue the auto-recharge
+        queue_auto_recharge(session, user, credits)
+
+        # Also credit the user immediately (like the real auto-recharge flow does)
+        users_dao.recharge_credit(user_id, credits)
+        session.commit()
+
+        # Get updated user state
+        updated_user = users_dao.get_user_with_id(user_id)
+
+        # Check if a recharge record was created
+        recharge_dao = RechargeDAO(session)
+        recent_recharges = recharge_dao.filter(
+            user_id=user_id,
+            type="auto",
+        )
+        latest_recharge = recent_recharges[-1] if recent_recharges else None
+
+        result = {
+            "status": "success",
+            "message": f"Auto-recharge test completed for user {user_id}",
+            "user": {
+                "id": user_id,
+                "credits_before": user.credits
+                - credits,  # Approximate, since we already credited
+                "credits_after": updated_user.credits,
+                "stripe_customer_id": user.stripe_customer_id,
+                "autorecharge_enabled": user.autorecharge,
+                "autorecharge_threshold": user.autorecharge_threshold,
+                "autorecharge_qty": user.autorecharge_qty,
+            },
+            "recharge": {
+                "created": latest_recharge is not None,
+                "id": latest_recharge.id if latest_recharge else None,
+                "quantity": float(latest_recharge.quantity)
+                if latest_recharge
+                else None,
+                "status": latest_recharge.status if latest_recharge else None,
+                "invoice_group": str(latest_recharge.invoice_group)
+                if latest_recharge
+                else None,
+            },
+            "notes": [],
+        }
+
+        # Add any relevant notes
+        if not user.stripe_customer_id:
+            result["notes"].append(
+                "User has no Stripe customer ID - invoice item was NOT created in Stripe",
+            )
+        else:
+            result["notes"].append(
+                "Stripe invoice item should have been created (check Stripe dashboard)",
+            )
+
+        if not user.autorecharge:
+            result["notes"].append("User has autorecharge disabled")
+
+        logger.info(f"Test auto-recharge completed successfully: {result}")
+        return result
+
+    except HTTPException:
+        # Re-raise HTTPExceptions (like 404 for user not found)
+        raise
+    except Exception as e:
+        logger.error(
+            f"Error in test auto-recharge - "
+            f"User: {user_id}, "
+            f"Error type: {type(e).__name__}, "
+            f"Message: {str(e)}",
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to test auto-recharge: {str(e)}",
+        )

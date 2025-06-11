@@ -12,6 +12,7 @@ The job is meant to run once a month (e.g. 00:05 on the 1st) and:
 from __future__ import annotations
 
 import datetime as _dt
+import os
 from decimal import Decimal
 from typing import Dict, List
 
@@ -20,7 +21,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
-from orchestra.lib.billing import get_appropriate_stripe_key
 from orchestra.lib.time import month_end_utc  # helper already exists
 from orchestra.web.api.utils.prometheus_middleware import INVOICE_CREATED_TOTAL
 from orchestra.web.lifetime import get_engine
@@ -37,10 +37,10 @@ def invoice_month(
     """
     Invoice the given period; defaults to the *previous* month if omitted.
     """
-    # Configure Stripe API key - prefer test keys in test environments
-    stripe_key = get_appropriate_stripe_key()
+    # Configure Stripe API key
+    stripe_key = os.environ.get("STRIPE_SECRET_KEY")
     if not stripe_key:
-        raise ValueError("No valid Stripe API key found")
+        raise ValueError("STRIPE_SECRET_KEY environment variable not set")
 
     stripe.api_key = stripe_key
 
