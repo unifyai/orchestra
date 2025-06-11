@@ -206,10 +206,10 @@ class ProjectDAO:
         )
         for context in contexts:
             self.context_dao.create_version_snapshot(
-                context,
-                project_version,
-                commit_hash,
-                commit_message,
+                context=context,
+                commit_hash=commit_hash,
+                commit_message=commit_message,
+                project_version=project_version,
             )
         project.updated_at = datetime.now(timezone.utc)
 
@@ -244,7 +244,30 @@ class ProjectDAO:
 
         # 3. Rollback each context to its respective versioned state
         for cv in context_versions:
-            self.context_dao.rollback_to_version(cv.context_id, cv.id)
+            self.context_dao.rollback(cv.context_id, cv.commit_hash)
 
         project.updated_at = datetime.now(timezone.utc)
         self.session.commit()
+
+    def get_commit_history(self, project_id: int) -> List[dict]:
+        """
+        Retrieves the commit history for a versioned project.
+        """
+        project = self.session.query(Project).filter_by(id=project_id).one_or_none()
+        if not project or not project.is_versioned:
+            raise ValueError("Project is not versioned.")
+
+        versions = (
+            self.session.query(ProjectVersion)
+            .filter_by(project_id=project_id)
+            .order_by(ProjectVersion.created_at.desc())
+            .all()
+        )
+        return [
+            {
+                "commit_hash": v.commit_hash,
+                "commit_message": v.commit_message,
+                "created_at": v.created_at.isoformat(),
+            }
+            for v in versions
+        ]
