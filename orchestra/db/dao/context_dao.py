@@ -8,10 +8,13 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
     Context,
+    ContextVersion,
     JSONLog,
     Log,
     LogEvent,
     LogEventContext,
+    LogVersion,
+    ProjectVersion,
 )
 
 
@@ -472,3 +475,112 @@ class ContextDAO:
         except Exception as e:
             self.session.rollback()
             raise e
+
+    def create_version_snapshot(
+        self,
+        context: Context,
+        project_version: ProjectVersion,
+        commit_hash: str,
+        commit_message: Optional[str] = None,
+    ) -> None:
+        """Creates a snapshot of the context's current state."""
+        if not context.is_versioned:
+            return
+
+        # 1. Create a ContextVersion record
+        context_version = ContextVersion(
+            context_id=context.id,
+            project_version_id=project_version.id,
+            name=context.name,
+            description=context.description,
+            commit_hash=commit_hash,
+            commit_message=commit_message,
+        )
+        self.session.add(context_version)
+        self.session.flush()  # Flush to get the context_version.id
+
+        # 2. Get all current logs for the context
+        logs_to_version = (
+            self.session.query(Log)
+            .join(LogEvent, Log.log_event_id == LogEvent.id)
+            .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
+            .filter(LogEventContext.context_id == context.id)
+            .all()
+        )
+
+        if not logs_to_version:
+            return
+
+        # 3. Create a snapshot of each log
+        log_versions = [
+            LogVersion(
+                context_version_id=context_version.id,
+                log_event_id=log.log_event_id,
+                key=log.key,
+                value=log.value,
+                param_version=log.param_version,
+                inferred_type=log.inferred_type,
+                created_at=log.created_at,
+                updated_at=log.updated_at,
+            )
+            for log in logs_to_version
+        ]
+
+        # 4. Bulk insert the log snapshots for efficiency
+        self.session.bulk_save_objects(log_versions)
+
+    def rollback_to_version(self, context_id: int, context_version_id: int) -> None:
+        """Rolls back a context to a specific version snapshot."""
+        # 1. Get all the log snapshots for the target version
+        log_versions_to_restore = (
+            self.session.query(LogVersion)
+            .filter_by(context_version_id=context_version_id)
+            .all()
+        )
+
+        # 2. Get all current LogEvent IDs in the context
+        current_log_event_ids = [
+            r[0]
+            for r in self.session.query(LogEvent.id)
+            .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
+            .filter(LogEventContext.context_id == context_id)
+            .all()
+        ]
+
+        # 3. Delete all current logs from the context.
+        # This cascades to Log and JSONLog entries.
+        if current_log_event_ids:
+            self.session.query(Log).filter(
+                Log.log_event_id.in_(current_log_event_ids),
+            ).delete(synchronize_session=False)
+            self.session.query(JSONLog).filter(
+                JSONLog.log_event_id.in_(current_log_event_ids),
+            ).delete(synchronize_session=False)
+
+        # 4. Restore logs from the snapshot
+        if not log_versions_to_restore:
+            return
+
+        new_logs = []
+        new_json_logs = []
+        for lv in log_versions_to_restore:
+            new_logs.append(
+                Log(
+                    log_event_id=lv.log_event_id,
+                    key=lv.key,
+                    value=lv.value,
+                    param_version=lv.param_version,
+                    inferred_type=lv.inferred_type,
+                    created_at=lv.created_at,
+                    updated_at=lv.updated_at,
+                ),
+            )
+            # if the value is a dict or list, also restore the JSONLog
+            if isinstance(lv.value, (dict, list)):
+                new_json_logs.append(
+                    JSONLog(log_event_id=lv.log_event_id, key=lv.key, value=lv.value),
+                )
+
+        self.session.bulk_save_objects(new_logs)
+        if new_json_logs:
+            self.session.bulk_save_objects(new_json_logs)
