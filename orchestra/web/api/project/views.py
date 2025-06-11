@@ -43,9 +43,7 @@ from orchestra.web.api.project.schema import (
     FavoriteProjectIn,
     FavoriteProjectOut,
     FavoriteProjectUpdate,
-    ProjectCommitRequest,
     ProjectConfig,
-    ProjectRollbackRequest,
     ShareProjectRequest,
 )
 from orchestra.web.api.utils.http_responses import not_found
@@ -64,8 +62,7 @@ def get_project_or_404(
 ) -> Project:
 
     organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = ProjectDAO(session, organization_member_dao)
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
         name=project_name,
@@ -81,118 +78,6 @@ def get_project_or_404(
 ###########################
 # endpoints
 ###########################
-@router.post(
-    "/project/{project_name:path}/commit",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "info": "Project committed successfully!",
-                        "commit_hash": "...",
-                    },
-                },
-            },
-        },
-        404: {
-            "description": "Project Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Project <name> not found.",
-                    },
-                },
-            },
-        },
-        400: {
-            "description": "Bad Request",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Project is not versioned.",
-                    },
-                },
-            },
-        },
-    },
-)
-def commit_project(
-    request_fastapi: Request,
-    request: ProjectCommitRequest,
-    project: Project = Depends(get_project_or_404),
-    session: Session = Depends(get_db_session),
-):
-    """
-    Creates a new version of a project.
-    """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    try:
-        commit_hash = project_dao.commit(
-            project_id=project.id,
-            commit_message=request.commit_message,
-        )
-        return {
-            "info": "Project committed successfully!",
-            "commit_hash": commit_hash,
-        }
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-# New endpoint for rolling back a project
-@router.post(
-    "/project/{project_name:path}/rollback",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {"info": "Project rolled back successfully!"},
-                },
-            },
-        },
-        404: {
-            "description": "Project or Commit Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Project or commit not found.",
-                    },
-                },
-            },
-        },
-        400: {
-            "description": "Bad Request",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Project is not versioned.",
-                    },
-                },
-            },
-        },
-    },
-)
-def rollback_project(
-    request_fastapi: Request,
-    request: ProjectRollbackRequest,
-    project: Project = Depends(get_project_or_404),
-    session: Session = Depends(get_db_session),
-):
-    """
-    Rolls back a project to a specific version.
-    """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    try:
-        project_dao.rollback(project_id=project.id, commit_hash=request.commit_hash)
-        return {"info": "Project rolled back successfully!"}
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get(
@@ -230,8 +115,7 @@ def get_favorites(
     Returns a list of the user's favorite projects, sorted by position.
     """
     organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = ProjectDAO(session, organization_member_dao)
     favorite_project_dao = FavoriteProjectDAO(session)
 
     favorites = favorite_project_dao.filter_by_user(request_fastapi.state.user_id)
@@ -309,8 +193,7 @@ def create_favorite(
     Each favorite must include a project name, icon, and position.
     """
     organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = ProjectDAO(session, organization_member_dao)
     favorite_project_dao = FavoriteProjectDAO(session)
 
     user_id = request_fastapi.state.user_id
@@ -393,8 +276,7 @@ def get_favorite(
     Returns details of a specific favorite project.
     """
     organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = ProjectDAO(session, organization_member_dao)
     favorite_project_dao = FavoriteProjectDAO(session)
 
     user_id = request_fastapi.state.user_id
@@ -462,8 +344,7 @@ def update_favorite(
     Only the provided fields will be updated.
     """
     organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = ProjectDAO(session, organization_member_dao)
     favorite_project_dao = FavoriteProjectDAO(session)
 
     # Get the favorite
@@ -599,8 +480,7 @@ def create_project(
     have a set of logs associated with it.
     """
     organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = ProjectDAO(session, organization_member_dao)
 
     try:
         existing_project = project_dao.get_by_user_and_name(
@@ -613,7 +493,6 @@ def create_project(
             user_id=request_fastapi.state.user_id,
             # TODO: Add organization id when appropriate
             name=request.name,
-            is_versioned=request.is_versioned,
         )
 
         return {"info": "Project created successfully!"}
@@ -742,8 +621,7 @@ def delete_project(
     Deletes a project from your account.
     """
     organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = ProjectDAO(session, organization_member_dao)
 
     # Check if trying to delete the protected project (Unity)
     if project.name == "Unity":
@@ -820,8 +698,7 @@ def rename_project(
     Renames a project from `name` to `new_name` in your account.
     """
     organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = ProjectDAO(session, organization_member_dao)
 
     # Check if trying to rename the protected Unity project
     if project.name == "Unity":
@@ -866,8 +743,7 @@ def list_projects(
     Returns the names of all projects stored in your account.
     """
     organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = ProjectDAO(session, organization_member_dao)
 
     raw_projects = project_dao.filter_by_user_access(
         user_id=request_fastapi.state.user_id,
@@ -914,8 +790,7 @@ def admin_share_project(
     This enables real-time collaboration between users.
     """
     organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = ProjectDAO(session, organization_member_dao)
     auth_user_dao = AuthUserDAO(session)
     organization_dao = OrganizationDAO(session)
 
@@ -1051,9 +926,9 @@ def admin_duplicate_project(
     The duplicate is a separate project where changes in one do not affect the other.
     """
     organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = ProjectDAO(session, organization_member_dao)
     auth_user_dao = AuthUserDAO(session)
+    context_dao = ContextDAO(session)
     log_event_dao = LogEventDAO(session)
     derived_log_dao = DerivedLogDAO(session)
     legacy_interface_dao = LegacyInterfaceDAO(session)
