@@ -17,7 +17,6 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.context.schema import (
     AddLogsToContextRequest,
     ContextCreateRequest,
-    ContextRollbackRequest,
     RenameContextRequest,
 )
 from orchestra.web.api.log.views import _get_logs_query
@@ -37,7 +36,6 @@ router = APIRouter()
                         "name": "experiment1/trial1",
                         "description": "Context for experiment 1 trial 1",
                         "is_versioned": True,
-                        "version": 1,
                     },
                 },
             },
@@ -152,13 +150,11 @@ def create_context(
                             "name": "context1",
                             "description": "description1",
                             "is_versioned": True,
-                            "version": 1,
                         },
                         {
                             "name": "context2",
                             "description": "description2",
                             "is_versioned": False,
-                            "version": 1,
                         },
                     ],
                 },
@@ -241,7 +237,6 @@ def get_contexts(
                         "name": "context1",
                         "description": "description1",
                         "is_versioned": True,
-                        "version": 1,
                     },
                 },
             },
@@ -296,92 +291,10 @@ def get_context(
             "name": context[0][0].name,
             "description": context[0][0].description,
             "is_versioned": context[0][0].is_versioned,
-            "version": context[0][0].version,
             "allow_duplicates": context[0][0].allow_duplicates,
         }
     except IndexError as e:
         raise not_found(str(e))
-
-
-@router.post(
-    "/project/{project_name:path}/contexts/{context_name:path}/rollback",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {"info": "Context rolled back successfully!"},
-                },
-            },
-        },
-        404: {
-            "description": "Project, Context or Version Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Project, context or version not found.",
-                    },
-                },
-            },
-        },
-        400: {
-            "description": "Bad Request",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Context is not versioned.",
-                    },
-                },
-            },
-        },
-    },
-)
-def rollback_context(
-    request_fastapi: Request,
-    request: ContextRollbackRequest,
-    project_name: str = Path(
-        description="Name of the project to create context in.",
-        example="my_project",
-    ),
-    context_name: str = Path(
-        description="Name of the context to rollback.",
-        example="my_context",
-    ),
-    session=Depends(get_db_session),
-):
-    """
-    Rolls back a context to a specific version.
-    """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    try:
-        project = project_dao.get_by_user_and_name(
-            user_id=request_fastapi.state.user_id,
-            name=project_name,
-        )
-        if not project:
-            raise IndexError("Project not found")
-        project_id = project.id
-
-        context = context_dao.filter(
-            project_id=project_id,
-            name=context_name,
-        )
-        if not context:
-            raise IndexError("Context not found")
-        context_id = context[0][0].id
-
-        context_dao.rollback(
-            context_id=context_id,
-            version=request.version,
-            commit_hash=request.commit_hash,
-        )
-        return {"info": "Context rolled back successfully!"}
-    except IndexError as e:
-        raise not_found(str(e))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.delete(
