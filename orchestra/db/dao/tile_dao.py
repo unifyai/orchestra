@@ -1426,8 +1426,6 @@ class TileDAO:
             "terminal_tile": update_data.pop("terminal_tile", None),
         }
 
-        print(f"Specialized payloads: {specialized_payloads}")
-
         # Handle position updates specially
         if "position" in update_data:
             position = update_data.pop("position")
@@ -1482,7 +1480,6 @@ class TileDAO:
 
             payload = specialized_payloads.get(payload_key)
 
-            print(f"Payload: {payload}")
             if payload:
                 # Map type to updater method and corresponding specialized tile attribute
                 updater_map = {
@@ -1498,8 +1495,6 @@ class TileDAO:
                     k: (json.dumps(v) if isinstance(v, (list, tuple, dict)) else v)
                     for k, v in payload.items()
                 }
-
-                print(f"Cleaned payload: {cleaned_payload}")
 
                 updater_method, attr_name = updater_map[effective_type]
                 specialized_tile = getattr(tile, attr_name)
