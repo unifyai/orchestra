@@ -617,57 +617,58 @@ class ContextDAO:
         self.session.bulk_save_objects(log_versions)
 
     def rollback_to_version(self, context_id: int, context_version_id: int) -> None:
-        """Rolls back a context to a specific version snapshot."""
-        # 1. Get all the log snapshots for the target version
+        """
+        Helper method to prepare the rollback.
+        This method only prepares the operations and does NOT commit.
+        """
         log_versions_to_restore = (
             self.session.query(LogVersion)
             .filter_by(context_version_id=context_version_id)
             .all()
         )
+        context = self.session.query(Context).filter_by(id=context_id).one()
 
-        # 2. Get all current LogEvent IDs in the context
-        current_log_event_ids = [
-            r[0]
-            for r in self.session.query(LogEvent.id)
-            .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
-            .filter(LogEventContext.context_id == context_id)
-            .all()
-        ]
+        self.session.query(LogEventContext).filter_by(context_id=context_id).delete(
+            synchronize_session=False,
+        )
 
-        # 3. Delete all current logs from the context.
-        # This cascades to Log and JSONLog entries.
-        if current_log_event_ids:
-            self.session.query(Log).filter(
-                Log.log_event_id.in_(current_log_event_ids),
-            ).delete(synchronize_session=False)
-            self.session.query(JSONLog).filter(
-                JSONLog.log_event_id.in_(current_log_event_ids),
-            ).delete(synchronize_session=False)
+        grouped_lvs = {}
+        if log_versions_to_restore:
+            for lv in log_versions_to_restore:
+                grouped_lvs.setdefault(lv.log_event_id, []).append(lv)
 
-        # 4. Restore logs from the snapshot
-        if not log_versions_to_restore:
-            return
+        for original_log_event_id, lvs in grouped_lvs.items():
+            new_log_event = LogEvent(project_id=context.project_id)
+            self.session.add(new_log_event)
+            self.session.flush()
 
-        new_logs = []
-        new_json_logs = []
-        for lv in log_versions_to_restore:
-            new_logs.append(
-                Log(
-                    log_event_id=lv.log_event_id,
-                    key=lv.key,
-                    value=lv.value,
-                    param_version=lv.param_version,
-                    inferred_type=lv.inferred_type,
-                    created_at=lv.created_at,
-                    updated_at=lv.updated_at,
-                ),
+            self.session.add(
+                LogEventContext(log_event_id=new_log_event.id, context_id=context_id),
             )
-            # if the value is a dict or list, also restore the JSONLog
-            if isinstance(lv.value, (dict, list)):
-                new_json_logs.append(
-                    JSONLog(log_event_id=lv.log_event_id, key=lv.key, value=lv.value),
-                )
 
-        self.session.bulk_save_objects(new_logs)
-        if new_json_logs:
-            self.session.bulk_save_objects(new_json_logs)
+            new_logs = []
+            new_json_logs = []
+            for lv in lvs:
+                new_logs.append(
+                    Log(
+                        log_event_id=new_log_event.id,
+                        key=lv.key,
+                        value=lv.value,
+                        param_version=lv.param_version,
+                        inferred_type=lv.inferred_type,
+                        created_at=lv.created_at,
+                        updated_at=lv.updated_at,
+                    ),
+                )
+                if isinstance(lv.value, (dict, list)):
+                    new_json_logs.append(
+                        JSONLog(
+                            log_event_id=new_log_event.id,
+                            key=lv.key,
+                            value=lv.value,
+                        ),
+                    )
+            if new_logs:
+                self.session.bulk_save_objects(new_logs)
+            if new_json_logs:
+                self.session.bulk_save_objects(new_json_logs)
