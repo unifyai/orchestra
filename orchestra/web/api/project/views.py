@@ -43,6 +43,7 @@ from orchestra.web.api.project.schema import (
     FavoriteProjectIn,
     FavoriteProjectOut,
     FavoriteProjectUpdate,
+    ProjectCommitHistory,
     ProjectCommitRequest,
     ProjectConfig,
     ProjectRollbackRequest,
@@ -191,6 +192,31 @@ def rollback_project(
     try:
         project_dao.rollback(project_id=project.id, commit_hash=request.commit_hash)
         return {"info": "Project rolled back successfully!"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get(
+    "/project/{project_name:path}/commits",
+    response_model=List[ProjectCommitHistory],
+    summary="Get project commit history",
+)
+def get_project_commits(
+    request_fastapi: Request,
+    project_name: str,
+    project: Project = Depends(get_project_or_404),
+    session: Session = Depends(get_db_session),
+):
+    """
+    Retrieves the commit history for a versioned project.
+    """
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+
+    try:
+        history = project_dao.get_commit_history(project.id)
+        return history
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
