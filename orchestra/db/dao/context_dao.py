@@ -1,6 +1,6 @@
 import re
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Union
 
 from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -13,8 +13,8 @@ from orchestra.db.models.orchestra_models import (
     Log,
     LogEvent,
     LogEventContext,
-    LogHistory,
 )
+from orchestra.web.api.context.schema import ContextCreateRequest
 
 
 def delete_orphaned_log_events(session: Session, project_id: int) -> None:
@@ -130,11 +130,7 @@ class ContextDAO:
         context = self.session.query(Context).filter_by(id=id).one_or_none()
         if context and context.is_versioned:
             # 1) Archive current state before incrementing
-            self.archive_context_state(
-                context,
-                name=context.name,
-                description="Auto-commit from log modification",
-            )
+            self.archive_context_state(context)
 
             # 2) Now increment
             context.version += 1
@@ -315,7 +311,7 @@ class ContextDAO:
         context = self.session.query(Context).filter_by(id=context_id).one_or_none()
         return context and context.is_versioned
 
-    def get_context_id(self, project_id: int, body):
+    def get_context_id(self, project_id: int, body: Union[ContextCreateRequest, None]):
         if body:
             allow_duplicates = getattr(body, "allow_duplicates", True)
             return self.get_or_create(
@@ -533,8 +529,6 @@ class ContextDAO:
         context: Context,
         name: str,
         description: str,
-        commit_hash: Optional[str] = None,
-        commit_message: Optional[str] = None,
     ) -> None:
         """Archive the current state of a context in ContextHistory."""
         if not context.is_versioned:
@@ -550,105 +544,7 @@ class ContextDAO:
             description=description,
             log_versions=current_log_versions,
             archived_at=datetime.now(timezone.utc),
-            commit_hash=commit_hash,
-            commit_message=commit_message,
         )
         self.session.add(history)
-        self.session.flush()
-
-    def commit(
-        self,
-        context_id: int,
-        commit_hash: str,
-        commit_message: Optional[str] = None,
-    ) -> None:
-        """
-        Create a new version of a context, linked to a project commit.
-
-        Args:
-            context_id: The ID of the context to commit.
-            commit_hash: The commit hash from the project version.
-            commit_message: An optional message for the commit.
-        """
-        context = self.session.query(Context).filter_by(id=context_id).one_or_none()
-        if context and context.is_versioned:
-            self.archive_context_state(
-                context,
-                name=context.name,
-                description=context.description,
-                commit_hash=commit_hash,
-                commit_message=commit_message,
-            )
-            context.version += 1
-            context.updated_at = datetime.now(timezone.utc)
-
-    def rollback(
-        self,
-        context_id: int,
-        version: Optional[int] = None,
-        commit_hash: Optional[str] = None,
-    ) -> None:
-        """
-        Rollback a context to a specific version.
-
-        Args:
-            context_id: The ID of the context to rollback.
-            version: The version number to rollback to.
-            commit_hash: The commit hash to rollback to.
-        """
-        context = self.session.query(Context).filter_by(id=context_id).one_or_none()
-        if not context or not context.is_versioned:
-            raise ValueError("Context is not versioned.")
-
-        history_query = self.session.query(ContextHistory).filter_by(
-            context_id=context_id,
-        )
-        if version:
-            history_query = history_query.filter_by(version=version)
-        elif commit_hash:
-            history_query = history_query.filter_by(commit_hash=commit_hash)
-        else:
-            raise ValueError("Either version or commit_hash must be provided.")
-
-        context_history = history_query.one_or_none()
-        if not context_history:
-            raise ValueError("Specified version not found.")
-
-        # Restore logs
-        for log_event_id, log_versions in context_history.log_versions.items():
-            for key, log_version in log_versions.items():
-                log_history = (
-                    self.session.query(LogHistory)
-                    .filter_by(
-                        log_event_id=int(log_event_id),
-                        key=key,
-                        version=log_version,
-                    )
-                    .one_or_none()
-                )
-                if log_history:
-                    # Find the current log and update it
-                    current_log = (
-                        self.session.query(Log)
-                        .filter_by(log_event_id=int(log_event_id), key=key)
-                        .one_or_none()
-                    )
-                    if current_log:
-                        current_log.value = log_history.value
-                        current_log.inferred_type = log_history.inferred_type
-                        current_log.updated_at = datetime.now(timezone.utc)
-                    else:
-                        # If log was deleted, recreate it
-                        new_log = Log(
-                            log_event_id=int(log_event_id),
-                            key=key,
-                            value=log_history.value,
-                            version=log_version,
-                            inferred_type=log_history.inferred_type,
-                        )
-                        self.session.add(new_log)
-
-        # Update context version
-        context.version = context_history.version
-        context.updated_at = datetime.now(timezone.utc)
+        self.session.flush()  # so we get an ID
         self.session.commit()
