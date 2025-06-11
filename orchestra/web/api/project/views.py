@@ -1142,7 +1142,6 @@ def admin_duplicate_project(
                 "name": ctx.name,
                 "description": ctx.description,
                 "is_versioned": ctx.is_versioned,
-                "version": ctx.version,
                 "allow_duplicates": ctx.allow_duplicates,
                 "created_at": datetime.now(timezone.utc),
                 "updated_at": datetime.now(timezone.utc),
