@@ -1,18 +1,10 @@
-import hashlib
-from datetime import datetime, timezone
 from typing import List, Optional
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
-from orchestra.db.models.orchestra_models import (
-    Context,
-    ContextHistory,
-    Project,
-    ProjectVersion,
-)
+from orchestra.db.models.orchestra_models import Project
 
 
 class ProjectDAO:
@@ -20,11 +12,9 @@ class ProjectDAO:
         self,
         session: Session,
         organization_member_dao: OrganizationMemberDAO,
-        context_dao: ContextDAO,
     ):
         self.session = session
         self.organization_member_dao = organization_member_dao
-        self.context_dao = context_dao
 
     def _get_project(
         self,
@@ -49,7 +39,6 @@ class ProjectDAO:
         name: str,
         user_id: Optional[str] = None,
         organization_id: Optional[int] = None,
-        is_versioned: bool = False,
     ) -> None:
 
         if user_id is None and organization_id is None:
@@ -60,7 +49,6 @@ class ProjectDAO:
                 name=name,
                 user_id=user_id,
                 organization_id=organization_id,
-                is_versioned=is_versioned,
             ),
         )
 
@@ -175,87 +163,3 @@ class ProjectDAO:
         """
         projects = self.filter_by_user_access(user_id=user_id, name=name)
         return projects[0][0] if projects else None
-
-    def commit(self, project_id: int, commit_message: Optional[str] = None) -> str:
-        """
-        Create a new version of a project.
-
-        Args:
-            project_id: The ID of the project to commit.
-            commit_message: An optional message for the commit.
-
-        Returns:
-            The commit hash of the new version.
-        """
-        project = self.session.query(Project).filter_by(id=project_id).one_or_none()
-        if not project or not project.is_versioned:
-            raise ValueError("Project is not versioned.")
-
-        # Generate commit hash
-        commit_hash = hashlib.sha256(
-            f"{project_id}{datetime.now(timezone.utc)}".encode(),
-        ).hexdigest()
-
-        # Create project version
-        project_version = ProjectVersion(
-            project_id=project_id,
-            commit_hash=commit_hash,
-            commit_message=commit_message,
-        )
-        self.session.add(project_version)
-
-        # Increment project version
-        project.version += 1
-        project.updated_at = datetime.now(timezone.utc)
-
-        # Commit all versioned contexts in the project
-        contexts = (
-            self.session.query(Context)
-            .filter_by(project_id=project_id, is_versioned=True)
-            .all()
-        )
-        for context in contexts:
-            self.context_dao.commit(context.id, commit_hash, commit_message)
-
-        self.session.commit()
-        return commit_hash
-
-    def rollback(self, project_id: int, commit_hash: str) -> None:
-        """
-        Rollback a project to a specific version.
-
-        Args:
-            project_id: The ID of the project to rollback.
-            commit_hash: The commit hash to rollback to.
-        """
-        project = self.session.query(Project).filter_by(id=project_id).one_or_none()
-        if not project or not project.is_versioned:
-            raise ValueError("Project is not versioned.")
-
-        project_version = (
-            self.session.query(ProjectVersion)
-            .filter_by(project_id=project_id, commit_hash=commit_hash)
-            .one_or_none()
-        )
-        if not project_version:
-            raise ValueError(
-                f"Commit hash {commit_hash} not found for project {project_id}.",
-            )
-
-        # Find all context histories for this project and commit hash
-        context_histories = (
-            self.session.query(ContextHistory)
-            .join(Context)
-            .filter(
-                Context.project_id == project_id,
-                ContextHistory.commit_hash == commit_hash,
-            )
-            .all()
-        )
-
-        for ch in context_histories:
-            self.context_dao.rollback(context_id=ch.context_id, version=ch.version)
-
-        project.version = project_version.id  # Or some other way to track the version
-        project.updated_at = datetime.now(timezone.utc)
-        self.session.commit()
