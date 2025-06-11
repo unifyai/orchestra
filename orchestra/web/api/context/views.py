@@ -624,7 +624,7 @@ def add_logs_to_context(
         for row in logs:
             field_name = row[0].key
             value = row[0].value
-            version = row[0].version
+            param_version = row[0].param_version
 
             # Skip if field already exists in this context
             if field_name not in existing_field_names:
@@ -634,7 +634,7 @@ def add_logs_to_context(
                     value=value,
                     context_id=context_id,
                     mutable=False,
-                    field_category="param" if version is not None else "entry",
+                    field_category="param" if param_version is not None else "entry",
                 )
                 # Add to set to prevent duplicate creation in this batch
                 existing_field_names.add(field_name)
