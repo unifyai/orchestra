@@ -1,5 +1,4 @@
 import json
-import logging
 import os
 from datetime import datetime, timezone
 from typing import Dict, Optional
@@ -19,8 +18,6 @@ from orchestra.web.api.query.views import create_query_model
 from orchestra.web.api.utils.gcp import send_pubsub_msg
 from orchestra.web.api.utils.http_responses import internal_endpoint_not_found
 from orchestra.web.lifetime import get_engine
-
-logger = logging.getLogger(__name__)
 
 
 def telemetry_to_pub_sub(
@@ -182,15 +179,6 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
         if not os.environ.get("ON_PREM") and status_code == 200:
             users_dao.recharge_credit(user_id, -cost)
             session.commit()  # Ensure credit deduction is committed
-
-            logger.info(
-                f"Checking auto-recharge eligibility - "
-                f"User: {user_id}, "
-                f"Credits after deduction: {user.credits}, "
-                f"Autorecharge enabled: {user.autorecharge}, "
-                f"Threshold: {user.autorecharge_threshold}, "
-                f"Autorecharge qty: {user.autorecharge_qty}",
-            )
 
             if (
                 user.autorecharge
