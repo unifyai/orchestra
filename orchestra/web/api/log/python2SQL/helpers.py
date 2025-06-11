@@ -253,6 +253,11 @@ def unify_inferred_types(t1: str, t2: str) -> str:
     return precedence[max(i1, i2)]
 
 
+def _safe_float(col):
+    """Return FLOAT or SQL NULL if the JSONB literal is 'null'."""
+    return cast(func.nullif(cast(col, String), "null"), Float)
+
+
 def cast_expr(expr, from_type: str, to_type: str):
     """
     Casts SQLAlchemy `expr` from `from_type` to the unified final type
@@ -404,11 +409,11 @@ def _build_subquery_for_identifier(
             else_=None,
         ).label("str_value"),
         case(
-            (log_alias.inferred_type == "int", cast(log_alias.value, Integer)),
+            (log_alias.inferred_type == "int", _safe_float(log_alias.value)),
             else_=None,
         ).label("int_value"),
         case(
-            (log_alias.inferred_type == "float", cast(log_alias.value, Float)),
+            (log_alias.inferred_type == "float", _safe_float(log_alias.value)),
             else_=None,
         ).label("float_value"),
         case(
@@ -473,14 +478,14 @@ def _build_subquery_for_identifier(
         case(
             (
                 derived_log_alias.inferred_type == "int",
-                cast(derived_log_alias.value, Integer),
+                _safe_float(derived_log_alias.value),
             ),
             else_=None,
         ).label("int_value"),
         case(
             (
                 derived_log_alias.inferred_type == "float",
-                cast(derived_log_alias.value, Float),
+                _safe_float(derived_log_alias.value),
             ),
             else_=None,
         ).label("float_value"),

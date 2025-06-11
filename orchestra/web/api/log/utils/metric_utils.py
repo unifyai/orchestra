@@ -628,115 +628,161 @@ def _compute_metric_for_key_grouped(
     # 5) Start building the query with the aggregator key
     X = aliased(agg_logs_subq)
 
+    # JSONB literal null (inline, not parameterised)
+    json_null = literal_column("'null'::jsonb", type_=JSONB)
+
     # Cast expression for the aggregator value
     cast_expr = case(
         (
             X.c.inferred_type == "list",
-            func.jsonb_array_length(cast(X.c.value, JSONB)).cast(Float),
+            case(
+                (X.c.value.is_(None), None),
+                (X.c.value == json_null, None),
+                else_=func.jsonb_array_length(cast(X.c.value, JSONB)).cast(Float),
+            ),
         ),
         (
             X.c.inferred_type == "dict",
-            select(func.count())
-            .select_from(func.jsonb_object_keys(cast(X.c.value, JSONB)))
-            .scalar_subquery()
-            .cast(Float),
+            case(
+                (X.c.value.is_(None), None),
+                (X.c.value == json_null, None),
+                else_=select(func.count())
+                .select_from(func.jsonb_object_keys(cast(X.c.value, JSONB)))
+                .scalar_subquery()
+                .cast(Float),
+            ),
         ),
         (
             X.c.inferred_type == "bool",
-            X.c.value.cast(BOOLEAN).cast(INTEGER).cast(Float),
+            case(
+                (X.c.value.is_(None), None),
+                (X.c.value == json_null, None),
+                else_=X.c.value.cast(BOOLEAN).cast(INTEGER).cast(Float),
+            ),
         ),
         (
             X.c.inferred_type == "str",
-            func.length(cast(X.c.value, JSONB)[0].astext).cast(Float),
+            case(
+                (X.c.value.is_(None), None),
+                (X.c.value == json_null, None),
+                else_=func.length(cast(X.c.value, JSONB)[0].astext).cast(Float),
+            ),
         ),
         (
             X.c.inferred_type == "datetime",
-            func.extract("epoch", cast(cast(X.c.value, String), TIMESTAMP)).cast(Float),
+            func.extract(
+                "epoch",
+                func.cast(
+                    func.nullif(cast(X.c.value, String), "null"),
+                    TIMESTAMP,
+                ),
+            ).cast(Float),
         ),
         (
             X.c.inferred_type == "time",
             # Extract seconds using time-specific casting
-            func.mod(
-                func.extract(
-                    "epoch",
-                    func.cast(
-                        func.concat(
-                            "2000-01-01 ",
-                            func.trim(func.cast(X.c.value, String), '"'),
+            case(
+                (X.c.value.is_(None), None),
+                (X.c.value == json_null, None),
+                else_=func.mod(
+                    func.extract(
+                        "epoch",
+                        func.cast(
+                            func.concat(
+                                "2000-01-01 ",
+                                func.trim(func.cast(X.c.value, String), '"'),
+                            ),
+                            TIMESTAMP,
                         ),
-                        TIMESTAMP,
                     ),
-                ),
-                86400,
-            ).cast(Float),
+                    86400,
+                ).cast(Float),
+            ),
         ),
         (
             X.c.inferred_type == "date",
             # Extract epoch using date-specific casting
-            func.extract(
-                "epoch",
-                func.cast(func.trim(func.cast(X.c.value, String), '"'), Date),
-            ).cast(Float),
+            case(
+                (X.c.value.is_(None), None),
+                (X.c.value == json_null, None),
+                else_=func.extract(
+                    "epoch",
+                    func.cast(
+                        func.nullif(func.cast(X.c.value, String), "null"),
+                        Date,
+                    ),
+                ).cast(Float),
+            ),
         ),
         (
             X.c.inferred_type == "timedelta",
             # Parse ISO 8601 duration format (e.g., "P1DT6H") to seconds
-            # This extracts days, hours, minutes, seconds separately and converts to total seconds
-            (
-                # Days component (86400 seconds per day)
-                func.coalesce(
-                    func.cast(
-                        func.substring(
-                            func.trim(func.cast(X.c.value, String), '"'),
-                            "P([0-9]+)D",
-                        ),
-                        Float,
+            case(
+                (X.c.value.is_(None), None),
+                (X.c.value == json_null, None),
+                else_=(
+                    func.coalesce(
+                        func.cast(
+                            func.substring(
+                                func.trim(func.cast(X.c.value, String), '"'),
+                                "P([0-9]+)D",
+                            ),
+                            Float,
+                        )
+                        * 86400,
+                        0,
                     )
-                    * 86400,
-                    0,
-                )
-                +
-                # Hours component (3600 seconds per hour)
-                func.coalesce(
-                    func.cast(
-                        func.substring(
-                            func.trim(func.cast(X.c.value, String), '"'),
-                            "T([0-9]+)H",
-                        ),
-                        Float,
+                    + func.coalesce(
+                        func.cast(
+                            func.substring(
+                                func.trim(func.cast(X.c.value, String), '"'),
+                                "T([0-9]+)H",
+                            ),
+                            Float,
+                        )
+                        * 3600,
+                        0,
                     )
-                    * 3600,
-                    0,
-                )
-                +
-                # Minutes component (60 seconds per minute)
-                func.coalesce(
-                    func.cast(
-                        func.substring(
-                            func.trim(func.cast(X.c.value, String), '"'),
-                            "T[0-9]*H?([0-9]+)M",
-                        ),
-                        Float,
+                    + func.coalesce(
+                        func.cast(
+                            func.substring(
+                                func.trim(func.cast(X.c.value, String), '"'),
+                                "T[0-9]*H?([0-9]+)M",
+                            ),
+                            Float,
+                        )
+                        * 60,
+                        0,
                     )
-                    * 60,
-                    0,
-                )
-                +
-                # Seconds component
-                func.coalesce(
-                    func.cast(
-                        func.substring(
-                            func.trim(func.cast(X.c.value, String), '"'),
-                            "T[0-9]*H?[0-9]*M?([0-9.]+)S",
+                    + func.coalesce(
+                        func.cast(
+                            func.substring(
+                                func.trim(func.cast(X.c.value, String), '"'),
+                                "T[0-9]*H?[0-9]*M?([0-9.]+)S",
+                            ),
+                            Float,
                         ),
-                        Float,
-                    ),
-                    0,
-                )
-            ).cast(Float),
+                        0,
+                    )
+                ).cast(Float),
+            ),
         ),
-        (X.c.inferred_type == "float", X.c.value.cast(Float)),
-        (X.c.inferred_type == "int", X.c.value.cast(Float)),
+        (
+            X.c.inferred_type == "float",
+            case(
+                (X.c.value.is_(None), None),
+                (X.c.value == json_null, None),
+                else_=func.cast(func.nullif(cast(X.c.value, String), "null"), Float),
+            ),
+        ),
+        (
+            X.c.inferred_type == "int",
+            case(
+                (X.c.value.is_(None), None),
+                (X.c.value == json_null, None),
+                else_=func.cast(func.nullif(cast(X.c.value, String), "null"), Float),
+            ),
+        ),
         else_=literal(0, type_=Float),
     ).label("value_as_float")
 
@@ -973,115 +1019,161 @@ def compute_metric_for_key(
     X = aliased(logs_or_derived_subq)
     # columns: X.c.log_event_id, X.c.value, X.c.inferred_type
 
+    # JSONB literal null (inline, not parameterised)
+    json_null = literal_column("'null'::jsonb", type_=JSONB)
+
     # interpret X.c.value depending on X.c.inferred_type.
     cast_expr = case(
         (
             X.c.inferred_type == "list",
-            func.jsonb_array_length(cast(X.c.value, JSONB)).cast(Float),
+            case(
+                (X.c.value.is_(None), None),
+                (X.c.value == json_null, None),
+                else_=func.jsonb_array_length(cast(X.c.value, JSONB)).cast(Float),
+            ),
         ),
         (
             X.c.inferred_type == "dict",
-            select(func.count())
-            .select_from(func.jsonb_object_keys(cast(X.c.value, JSONB)))
-            .scalar_subquery()
-            .cast(Float),
+            case(
+                (X.c.value.is_(None), None),
+                (X.c.value == json_null, None),
+                else_=select(func.count())
+                .select_from(func.jsonb_object_keys(cast(X.c.value, JSONB)))
+                .scalar_subquery()
+                .cast(Float),
+            ),
         ),
         (
             X.c.inferred_type == "bool",
-            X.c.value.cast(BOOLEAN).cast(INTEGER).cast(Float),
+            case(
+                (X.c.value.is_(None), None),
+                (X.c.value == json_null, None),
+                else_=X.c.value.cast(BOOLEAN).cast(INTEGER).cast(Float),
+            ),
         ),
         (
             X.c.inferred_type == "str",
-            func.length(cast(X.c.value, JSONB)[0].astext).cast(Float),
+            case(
+                (X.c.value.is_(None), None),
+                (X.c.value == json_null, None),
+                else_=func.length(cast(X.c.value, JSONB)[0].astext).cast(Float),
+            ),
         ),
         (
             X.c.inferred_type == "datetime",
-            func.extract("epoch", cast(cast(X.c.value, String), TIMESTAMP)).cast(Float),
+            func.extract(
+                "epoch",
+                func.cast(
+                    func.nullif(cast(X.c.value, String), "null"),
+                    TIMESTAMP,
+                ),
+            ).cast(Float),
         ),
         (
             X.c.inferred_type == "time",
             # Extract seconds using time-specific casting
-            func.mod(
-                func.extract(
-                    "epoch",
-                    func.cast(
-                        func.concat(
-                            "2000-01-01 ",
-                            func.trim(func.cast(X.c.value, String), '"'),
+            case(
+                (X.c.value.is_(None), None),
+                (X.c.value == json_null, None),
+                else_=func.mod(
+                    func.extract(
+                        "epoch",
+                        func.cast(
+                            func.concat(
+                                "2000-01-01 ",
+                                func.trim(func.cast(X.c.value, String), '"'),
+                            ),
+                            TIMESTAMP,
                         ),
-                        TIMESTAMP,
                     ),
-                ),
-                86400,
-            ).cast(Float),
+                    86400,
+                ).cast(Float),
+            ),
         ),
         (
             X.c.inferred_type == "date",
             # Extract epoch using date-specific casting
-            func.extract(
-                "epoch",
-                func.cast(func.trim(func.cast(X.c.value, String), '"'), Date),
-            ).cast(Float),
+            case(
+                (X.c.value.is_(None), None),
+                (X.c.value == json_null, None),
+                else_=func.extract(
+                    "epoch",
+                    func.cast(
+                        func.nullif(func.cast(X.c.value, String), "null"),
+                        Date,
+                    ),
+                ).cast(Float),
+            ),
         ),
         (
             X.c.inferred_type == "timedelta",
             # Parse ISO 8601 duration format (e.g., "P1DT6H") to seconds
-            # This extracts days, hours, minutes, seconds separately and converts to total seconds
-            (
-                # Days component (86400 seconds per day)
-                func.coalesce(
-                    func.cast(
-                        func.substring(
-                            func.trim(func.cast(X.c.value, String), '"'),
-                            "P([0-9]+)D",
-                        ),
-                        Float,
+            case(
+                (X.c.value.is_(None), None),
+                (X.c.value == json_null, None),
+                else_=(
+                    func.coalesce(
+                        func.cast(
+                            func.substring(
+                                func.trim(func.cast(X.c.value, String), '"'),
+                                "P([0-9]+)D",
+                            ),
+                            Float,
+                        )
+                        * 86400,
+                        0,
                     )
-                    * 86400,
-                    0,
-                )
-                +
-                # Hours component (3600 seconds per hour)
-                func.coalesce(
-                    func.cast(
-                        func.substring(
-                            func.trim(func.cast(X.c.value, String), '"'),
-                            "T([0-9]+)H",
-                        ),
-                        Float,
+                    + func.coalesce(
+                        func.cast(
+                            func.substring(
+                                func.trim(func.cast(X.c.value, String), '"'),
+                                "T([0-9]+)H",
+                            ),
+                            Float,
+                        )
+                        * 3600,
+                        0,
                     )
-                    * 3600,
-                    0,
-                )
-                +
-                # Minutes component (60 seconds per minute)
-                func.coalesce(
-                    func.cast(
-                        func.substring(
-                            func.trim(func.cast(X.c.value, String), '"'),
-                            "T[0-9]*H?([0-9]+)M",
-                        ),
-                        Float,
+                    + func.coalesce(
+                        func.cast(
+                            func.substring(
+                                func.trim(func.cast(X.c.value, String), '"'),
+                                "T[0-9]*H?([0-9]+)M",
+                            ),
+                            Float,
+                        )
+                        * 60,
+                        0,
                     )
-                    * 60,
-                    0,
-                )
-                +
-                # Seconds component
-                func.coalesce(
-                    func.cast(
-                        func.substring(
-                            func.trim(func.cast(X.c.value, String), '"'),
-                            "T[0-9]*H?[0-9]*M?([0-9.]+)S",
+                    + func.coalesce(
+                        func.cast(
+                            func.substring(
+                                func.trim(func.cast(X.c.value, String), '"'),
+                                "T[0-9]*H?[0-9]*M?([0-9.]+)S",
+                            ),
+                            Float,
                         ),
-                        Float,
-                    ),
-                    0,
-                )
-            ).cast(Float),
+                        0,
+                    )
+                ).cast(Float),
+            ),
         ),
-        (X.c.inferred_type == "float", X.c.value.cast(Float)),
-        (X.c.inferred_type == "int", X.c.value.cast(Float)),
+        (
+            X.c.inferred_type == "float",
+            case(
+                (X.c.value.is_(None), None),
+                (X.c.value == json_null, None),
+                else_=func.cast(func.nullif(cast(X.c.value, String), "null"), Float),
+            ),
+        ),
+        (
+            X.c.inferred_type == "int",
+            case(
+                (X.c.value.is_(None), None),
+                (X.c.value == json_null, None),
+                else_=func.cast(func.nullif(cast(X.c.value, String), "null"), Float),
+            ),
+        ),
         else_=literal(0, type_=Float),
     ).label("value_as_float")
 
