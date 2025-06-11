@@ -1276,7 +1276,7 @@ def admin_duplicate_project(
                     "log_event_id": log_event_id_map[log.log_event_id],
                     "key": log.key,
                     "value": log.value,
-                    "version": log.version,
+                    "param_version": log.param_version,
                     "inferred_type": log.inferred_type,
                     "created_at": datetime.now(timezone.utc),
                     "updated_at": datetime.now(timezone.utc),
