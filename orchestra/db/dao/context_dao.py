@@ -476,12 +476,69 @@ class ContextDAO:
             self.session.rollback()
             raise e
 
+    def commit(self, context_id: int, commit_message: Optional[str] = None) -> str:
+        """
+        Create a new version of a single context.
+        """
+        context = self.session.query(Context).filter_by(id=context_id).one_or_none()
+        if not context or not context.is_versioned:
+            raise ValueError("Context is not versioned.")
+
+        # 1. Generate a unique commit hash
+        commit_hash = hashlib.sha256(
+            f"context_{context_id}{datetime.now(timezone.utc)}".encode(),
+        ).hexdigest()
+
+        # 2. Create a snapshot for the context
+        self.create_version_snapshot(
+            context=context,
+            commit_hash=commit_hash,
+            commit_message=commit_message,
+            project_version=None,  # This is a context-only commit
+        )
+        context.updated_at = datetime.now(timezone.utc)
+        self.session.commit()
+        return commit_hash
+
+    def rollback(self, context_id: int, commit_hash: str) -> None:
+        """
+        Orchestrates the rollback of a context in two phases:
+        1. Restore the state from the version snapshot.
+        2. Clean up any orphaned data from the previous state.
+        This ensures the operation is atomic and safe.
+        """
+        try:
+            context_version = (
+                self.session.query(ContextVersion)
+                .filter_by(context_id=context_id, commit_hash=commit_hash)
+                .one_or_none()
+            )
+            if not context_version:
+                raise ValueError(
+                    f"Commit hash {commit_hash} not found for context {context_id}.",
+                )
+
+            context = self.session.query(Context).filter_by(id=context_id).one()
+
+            # Phase 1: Restore the state.
+            self.rollback_to_version(context_id, context_version.id)
+            context.updated_at = datetime.now(timezone.utc)
+            self.session.commit()
+
+            # Phase 2: Garbage collection in a new transaction.
+            delete_orphaned_log_events(self.session, context.project_id)
+            self.session.commit()
+
+        except Exception as e:
+            self.session.rollback()
+            raise e
+
     def create_version_snapshot(
         self,
         context: Context,
-        project_version: ProjectVersion,
         commit_hash: str,
         commit_message: Optional[str] = None,
+        project_version: Optional[ProjectVersion] = None,
     ) -> None:
         """Creates a snapshot of the context's current state."""
         if not context.is_versioned:
@@ -490,7 +547,7 @@ class ContextDAO:
         # 1. Create a ContextVersion record
         context_version = ContextVersion(
             context_id=context.id,
-            project_version_id=project_version.id,
+            project_version_id=project_version.id if project_version else None,
             name=context.name,
             description=context.description,
             commit_hash=commit_hash,
