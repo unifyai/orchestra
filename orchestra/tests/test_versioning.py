@@ -117,8 +117,10 @@ async def test_rollback_with_structural_changes(client: AsyncClient):
 
     commit1_res = await client.post(
         f"/v0/project/{project_name}/commit",
+        json={"commit_message": "Initial commit"},
         headers=HEADERS,
     )
+    assert commit1_res.status_code == 200, commit1_res.json()
     commit1_hash = commit1_res.json()["commit_hash"]
 
     # --- Version 2: Delete log B, add log C ---
@@ -126,7 +128,15 @@ async def test_rollback_with_structural_changes(client: AsyncClient):
     log_b_id = next(log["id"] for log in logs_v1 if log["entries"]["log_key"] == "B")
 
     # Use the delete helper to remove log B
-    await _delete_logs(client, [log_b_id])
+    res = await _delete_logs(
+        client,
+        log_ids=[
+            ([log_b_id], None),
+        ],
+        project_name=project_name,
+        context=context_name,
+    )
+    assert res.status_code == 200, res.json()
 
     # Add log C
     await _create_log(
@@ -143,6 +153,7 @@ async def test_rollback_with_structural_changes(client: AsyncClient):
 
     commit2_res = await client.post(
         f"/v0/project/{project_name}/commit",
+        json={"commit_message": "Second commit"},
         headers=HEADERS,
     )
 
@@ -216,6 +227,7 @@ async def test_rollback_with_multiple_contexts(client: AsyncClient):
 
     commit1_res = await client.post(
         f"/v0/project/{project_name}/commit",
+        json={"commit_message": "Initial commit"},
         headers=HEADERS,
     )
     commit1_hash = commit1_res.json()["commit_hash"]
