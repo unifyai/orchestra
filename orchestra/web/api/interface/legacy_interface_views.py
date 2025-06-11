@@ -3,7 +3,6 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
-from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.legacy_interface_dao import LegacyInterfaceDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
@@ -63,8 +62,7 @@ def create_interface(
     session: Session = Depends(get_db_session),
 ):
     organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = ProjectDAO(session, organization_member_dao)
     interface_dao = LegacyInterfaceDAO(session)
     temp_interface_dao = TempInterfaceDAO(session)
 
@@ -143,8 +141,7 @@ def update_interface(
     session: Session = Depends(get_db_session),
 ):
     organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = ProjectDAO(session, organization_member_dao)
     interface_dao = LegacyInterfaceDAO(session)
     temp_interface_dao = TempInterfaceDAO(session)
 
@@ -242,8 +239,7 @@ def get_interfaces(
     session: Session = Depends(get_db_session),
 ):
     organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = ProjectDAO(session, organization_member_dao)
     interface_dao = LegacyInterfaceDAO(session)
     temp_interface_dao = TempInterfaceDAO(session)
 
@@ -354,8 +350,7 @@ def delete_interface(
     session: Session = Depends(get_db_session),
 ):
     organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = ProjectDAO(session, organization_member_dao)
     interface_dao = LegacyInterfaceDAO(session)
     temp_interface_dao = TempInterfaceDAO(session)
 
