@@ -199,6 +199,7 @@ class ProjectDAO:
         # Create project version
         project_version = ProjectVersion(
             project_id=project_id,
+            version=project.version,
             commit_hash=commit_hash,
             commit_message=commit_message,
         )
@@ -256,6 +257,6 @@ class ProjectDAO:
         for ch in context_histories:
             self.context_dao.rollback(context_id=ch.context_id, version=ch.version)
 
-        project.version = project_version.id  # Or some other way to track the version
+        project.version = project_version.version
         project.updated_at = datetime.now(timezone.utc)
         self.session.commit()
