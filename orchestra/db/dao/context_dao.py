@@ -1,3 +1,4 @@
+import hashlib
 import re
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -35,7 +36,6 @@ def delete_orphaned_log_events(session: Session, project_id: int) -> None:
         ),
         {"project_id": project_id},
     )
-    session.commit()
 
 
 class ContextDAO:
@@ -532,6 +532,36 @@ class ContextDAO:
         except Exception as e:
             self.session.rollback()
             raise e
+
+    def get_commit_history(self, context_id: int) -> List[dict]:
+        """
+        Retrieves the combined commit history for a versioned context,
+        including context-only and project-level commits.
+        """
+        context = self.session.query(Context).filter_by(id=context_id).one_or_none()
+        if not context or not context.is_versioned:
+            raise ValueError("Context is not versioned.")
+
+        # Query all versions for this context
+        versions = (
+            self.session.query(ContextVersion)
+            .filter_by(context_id=context_id)
+            .order_by(ContextVersion.archived_at.desc())
+            .all()
+        )
+
+        history = []
+        for v in versions:
+            history.append(
+                {
+                    "commit_hash": v.commit_hash,
+                    "commit_message": v.commit_message,
+                    "created_at": v.archived_at.isoformat(),
+                    "type": "project" if v.project_version_id else "context",
+                },
+            )
+
+        return history
 
     def create_version_snapshot(
         self,
