@@ -63,8 +63,8 @@ def create_context_artifacts(
     Creates one or more artifacts associated to a context within a project.
     """
     organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
     context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     context_artifact_dao = ContextArtifactDAO(session)
 
     try:
@@ -125,8 +125,8 @@ def delete_context_artifact(
     Deletes an artifact from a context within a project.
     """
     organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
     context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     artifact_dao = ArtifactDAO(session)
 
     try:
@@ -187,8 +187,8 @@ def list_context_artifacts(
     Returns the key-value pairs of all artifacts in a context.
     """
     organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
     context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     context_artifact_dao = ContextArtifactDAO(session)
 
     try:

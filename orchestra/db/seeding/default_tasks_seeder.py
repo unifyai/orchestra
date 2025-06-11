@@ -6,7 +6,6 @@ from typing import Dict
 
 from sqlalchemy.orm import Session
 
-from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.interface_dao import InterfaceDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
@@ -34,8 +33,7 @@ class DefaultTasksSeeder:
             Dictionary containing the IDs of created/fetched entities
         """
         organization_member_dao = OrganizationMemberDAO(session)
-        context_dao = ContextDAO(session)
-        project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+        project_dao = ProjectDAO(session, organization_member_dao)
         interface_dao = InterfaceDAO(session)
         tab_dao = TabDAO(session)
         tile_dao = TileDAO(session)
