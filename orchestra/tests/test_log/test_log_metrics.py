@@ -1262,3 +1262,143 @@ async def test_get_logs_metric_time_date_timedelta(client: AsyncClient):
                     or "days" in result.lower()
                     or "seconds" in result.lower()
                 ), f"Timedelta variance/std result should follow ISO format or mention time units"
+
+
+@pytest.mark.anyio
+async def test_get_logs_metric_with_mixed_null_float_derived_column(
+    client: AsyncClient,
+):
+    """
+    Test the get_logs_metric endpoint with a derived column that has both null and float values.
+
+    This test creates:
+    1. A derived column based on existing columns that results in mixed null/float values
+    2. Calls the metrics endpoint with all field names including the derived column
+    3. Ensures no exceptions are thrown and the call succeeds
+    """
+    project_name = "test-mixed-null-float-derived"
+    await _create_project(client, project_name)
+
+    # Create logs with mixed temperature values - some null, some valid
+    log_entries = [
+        # Log 1: Valid temperature
+        {"temperature": 25.0, "location": "indoor", "humidity": 60},
+        # Log 2: Null temperature
+        {"temperature": None, "location": "outdoor", "humidity": 45},
+        # Log 3: Missing temperature field entirely
+        {"location": "basement", "humidity": 70},
+        # Log 4: Another valid temperature
+        {"temperature": 30.0, "location": "attic", "humidity": 55},
+        # Log 5: Zero temperature (valid)
+        {"temperature": 0.0, "location": "freezer", "humidity": 80},
+        # Log 6: Null temperature again
+        {"temperature": None, "location": "garage", "humidity": 50},
+    ]
+
+    # Create all the logs
+    log_ids = []
+    for entry in log_entries:
+        response = await _create_log(client, project_name, entries=entry)
+        assert response.status_code == 200
+        log_ids.append(response.json()["log_event_ids"][0])
+
+    # Create a derived column that will have mixed null/float values
+    # This equation will result in float values for valid temperatures and null for null/missing temperatures
+    derived_key = "temp_fahrenheit"
+    equation = "{log:temperature} * 9 / 5 + 32"  # Celsius to Fahrenheit conversion
+    referenced_logs = {"log": log_ids}
+
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        derived_key,
+        equation,
+        referenced_logs,
+    )
+    assert response.status_code == 200
+
+    # Verify the derived column has mixed null/float values as expected
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+
+    # Get all field names from the logs
+    all_field_names = set()
+    for log in logs:
+        # Add base entry field names
+        all_field_names.update(log["entries"].keys())
+        # Add derived entry field names
+        all_field_names.update(log["derived_entries"].keys())
+
+    # Convert to list for the API call
+    all_fields_list = list(all_field_names)
+
+    # Test the metrics endpoint with all field names including the derived column
+    # This should not throw an exception even though the derived column has mixed null/float values
+    try:
+        response = await client.get(
+            f"/v0/logs/metric/mean?project={project_name}",
+            params={"key": json.dumps(all_fields_list)},
+            headers=HEADERS,
+        )
+
+        # If we get here, no exception was thrown - this is what we want
+        assert (
+            response.status_code == 200
+        ), f"Expected 200 status code, got {response.status_code}: {response.text}"
+
+        result = response.json()
+        assert isinstance(result, dict), "Expected dictionary result for multiple keys"
+
+        # Verify that all requested fields are in the result
+        assert set(result.keys()) == set(
+            all_fields_list,
+        ), f"Expected keys {all_fields_list}, got {result.keys()}"
+
+        # Verify the derived column has a float result (not null)
+        assert (
+            derived_key in result
+        ), f"Derived key '{derived_key}' should be in results"
+        derived_result = result[derived_key]
+        assert isinstance(
+            derived_result,
+            (int, float),
+        ), f"Derived column result should be numeric, got {type(derived_result)}: {derived_result}"
+
+        # The mean of [77.0, 86.0, 32.0] should be approximately 65.0
+        expected_mean = (77.0 + 86.0 + 32.0) / 3
+        assert (
+            abs(derived_result - expected_mean) < 0.001
+        ), f"Expected derived mean ~{expected_mean}, got {derived_result}"
+
+        # Test passed - no exception was thrown
+
+    except Exception as e:
+        # If any exception is thrown, the test should fail
+        assert (
+            False
+        ), f"Metrics endpoint threw an exception when it shouldn't have: {type(e).__name__}: {str(e)}"
+
+    # Also test with individual metrics to ensure robustness
+    for metric in ["min", "max", "sum", "count"]:
+        try:
+            response = await client.get(
+                f"/v0/logs/metric/{metric}?project={project_name}",
+                params={"key": json.dumps(all_fields_list)},
+                headers=HEADERS,
+            )
+            assert (
+                response.status_code == 200
+            ), f"Expected 200 for {metric}, got {response.status_code}"
+
+            result = response.json()
+            assert isinstance(result, dict), f"Expected dictionary result for {metric}"
+            assert derived_key in result, f"Derived key should be in {metric} results"
+
+        except Exception as e:
+            assert (
+                False
+            ), f"Metrics endpoint threw an exception for {metric}: {type(e).__name__}: {str(e)}"
