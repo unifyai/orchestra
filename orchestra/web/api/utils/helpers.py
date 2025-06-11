@@ -1,6 +1,7 @@
 import inspect
 import json
 import logging
+import os
 import uuid
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, time, timedelta, timezone
@@ -15,7 +16,6 @@ from anthropic import Anthropic
 from openai import OpenAI
 
 from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
-from orchestra.lib.billing import get_appropriate_stripe_key
 from orchestra.lib.time import month_end_utc
 
 oai_func = OpenAI(api_key="").chat.completions.create
@@ -119,10 +119,10 @@ def check_litellm_supported_args(kwargs, provider_endpoint):
 
 def recharge_and_generate_invoice(user, users_dao):
     try:
-        # Use intelligent key selection - prefer test keys in test environments
-        stripe_key = get_appropriate_stripe_key()
+        # Configure Stripe API key
+        stripe_key = os.environ.get("STRIPE_SECRET_KEY")
         if not stripe_key:
-            logging.error("No valid Stripe API key found")
+            logging.error("STRIPE_SECRET_KEY environment variable not set")
             return None
 
         stripe.api_key = stripe_key
