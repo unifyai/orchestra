@@ -1407,7 +1407,7 @@ def update_logs(
                     )
 
                 # Compute the version based on whether we're handling params or entries.
-                version = None
+                param_version = None
                 if data_type == "params":
                     existing = log_dao.filter(
                         key=k,
@@ -1415,9 +1415,13 @@ def update_logs(
                         project_id=project_id,
                     )
                     if existing:
-                        version = existing[0][0].version
+                        param_version = existing[0][0].param_version
                     else:
-                        version = log_dao.get_next_param_version(project_id, ctx_id, k)
+                        param_version = log_dao.get_next_param_version(
+                            project_id,
+                            ctx_id,
+                            k,
+                        )
 
                 # Add to the batch update list
                 # If we have multiple contexts, create an update for each context
@@ -1428,7 +1432,7 @@ def update_logs(
                                 "log_event_id": log_id,
                                 "key": k,
                                 "value": v,
-                                "version": version,
+                                "param_version": param_version,
                                 "explicit_types": explicit_types,
                                 "field_types": field_types,
                                 "context_id": context_id,
@@ -1441,7 +1445,7 @@ def update_logs(
                             "log_event_id": log_id,
                             "key": k,
                             "value": v,
-                            "version": version,
+                            "param_version": param_version,
                             "explicit_types": explicit_types,
                             "field_types": field_types,
                             "context_id": ctx_id,
@@ -1545,17 +1549,6 @@ def update_logs(
                     context_dao.session.query(Context).filter_by(id=context_id).first()
                 )
                 if ctx_obj and ctx_obj.is_versioned and updates_by_log_id:
-                    # Generate a summary of updated logs
-                    log_count = len(updates_by_log_id)
-                    update_desc = f"Updated {log_count} logs"
-
-                    # archive state once and increment version
-                    context_dao.archive_context_state(
-                        ctx_obj,
-                        name="update",
-                        description=update_desc,
-                    )
-                    ctx_obj.version += 1
                     ctx_obj.updated_at = datetime.now(timezone.utc)
         # Commit all changes at once
         if updates_by_log_id:
@@ -1564,17 +1557,6 @@ def update_logs(
         # Original single context behavior
         ctx_obj = context_dao.session.query(Context).filter_by(id=ctx_id).first()
         if ctx_obj and ctx_obj.is_versioned and updates_by_log_id:
-            # Generate a summary of updated logs
-            log_count = len(updates_by_log_id)
-            update_desc = f"Updated {log_count} logs"
-
-            # archive state once and increment version
-            context_dao.archive_context_state(
-                ctx_obj,
-                name="update",
-                description=update_desc,
-            )
-            ctx_obj.version += 1
             ctx_obj.updated_at = datetime.now(timezone.utc)
             context_dao.session.commit()
 
@@ -2012,14 +1994,7 @@ def delete_logs(
         context_obj = (
             context_dao.session.query(Context).filter_by(id=context_id).first()
         )
-        if context_obj and context_obj.is_versioned:
-            context_dao.archive_context_state(
-                context_obj,
-                name="delete",
-                description="; ".join(context_description),
-            )
-            context_obj.version += 1
-            context_obj.updated_at = datetime.now(timezone.utc)
+        context_obj.updated_at = datetime.now(timezone.utc)
 
     # Handle cases where some logs or entries were not found
     if not_found_logs:
