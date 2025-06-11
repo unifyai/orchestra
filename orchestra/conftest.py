@@ -433,12 +433,11 @@ def large_log_dataset(_engine_session: Engine):
 
     # Initialize DAOs
     organization_member_dao = OrganizationMemberDAO(session=session)
-    context_dao = ContextDAO(session=session)
     project_dao = ProjectDAO(
         session=session,
         organization_member_dao=organization_member_dao,
-        context_dao=context_dao,
     )
+    context_dao = ContextDAO(session=session)
     field_type_dao = FieldTypeDAO(session=session)
     log_event_dao = LogEventDAO(session=session)
     log_dao = LogDAO(session=session, context_dao=context_dao)
