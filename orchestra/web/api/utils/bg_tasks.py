@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from typing import Dict, Optional
@@ -18,6 +19,8 @@ from orchestra.web.api.query.views import create_query_model
 from orchestra.web.api.utils.gcp import send_pubsub_msg
 from orchestra.web.api.utils.http_responses import internal_endpoint_not_found
 from orchestra.web.lifetime import get_engine
+
+logger = logging.getLogger(__name__)
 
 
 def telemetry_to_pub_sub(
@@ -180,29 +183,55 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
             users_dao.recharge_credit(user_id, -cost)
             session.commit()  # Ensure credit deduction is committed
 
+            logger.info(
+                f"Checking auto-recharge eligibility - "
+                f"User: {user_id}, "
+                f"Credits after deduction: {user.credits}, "
+                f"Autorecharge enabled: {user.autorecharge}, "
+                f"Threshold: {user.autorecharge_threshold}, "
+                f"Autorecharge qty: {user.autorecharge_qty}",
+            )
+
             if (
                 user.autorecharge
                 and user.credits <= user.autorecharge_threshold
                 and user.autorecharge_qty > 0
             ):
-                print(
-                    f"[BG-TASK] AUTO-RECHARGE TRIGGERED! User: {user_id}, "
-                    f"Credits: {user.credits} <= {user.autorecharge_threshold}, "
-                    f"Recharging: {user.autorecharge_qty}",
+                logger.info(
+                    f"Auto-recharge triggered - "
+                    f"User: {user_id}, "
+                    f"Current credits: {user.credits}, "
+                    f"Threshold: {user.autorecharge_threshold}, "
+                    f"Recharge amount: {user.autorecharge_qty}",
                 )
 
                 # Queue auto-recharge for monthly invoicing (replaces immediate Stripe call)
                 queue_auto_recharge(session, user, int(user.autorecharge_qty))
-                print(f"[BG-TASK] Auto-recharge queued for user {user_id}")
+                logger.info(f"Auto-recharge queued for user {user_id}")
 
                 # Credit user immediately (they pay later via monthly invoice)
                 users_dao.recharge_credit(user_id, int(user.autorecharge_qty))
                 session.commit()
-                print(
-                    f"[BG-TASK] Credits added - User: {user_id}, "
+                logger.info(
+                    f"Credits added to user {user_id} - "
                     f"Amount: {user.autorecharge_qty}, "
                     f"New balance: {user.credits + user.autorecharge_qty}",
                 )
+            else:
+                if not user.autorecharge:
+                    logger.debug(
+                        f"Auto-recharge not triggered - User {user_id} has autorecharge disabled",
+                    )
+                elif user.credits > user.autorecharge_threshold:
+                    logger.debug(
+                        f"Auto-recharge not triggered - User {user_id} credits ({user.credits}) "
+                        f"above threshold ({user.autorecharge_threshold})",
+                    )
+                elif user.autorecharge_qty <= 0:
+                    logger.debug(
+                        f"Auto-recharge not triggered - User {user_id} has invalid "
+                        f"autorecharge quantity: {user.autorecharge_qty}",
+                    )
 
             telemetry_to_pub_sub(
                 user_id,
