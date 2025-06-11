@@ -629,7 +629,6 @@ class ProjectVersion(Base):
         nullable=False,
         index=True,
     )
-    version = Column(Integer, nullable=False)
     commit_hash = Column(String, nullable=False, unique=True)
     commit_message = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
