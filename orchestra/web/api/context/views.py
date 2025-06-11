@@ -17,7 +17,6 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.context.schema import (
     AddLogsToContextRequest,
     ContextCreateRequest,
-    ContextRollbackRequest,
     RenameContextRequest,
 )
 from orchestra.web.api.log.views import _get_logs_query
@@ -84,8 +83,8 @@ def create_context(
     or as an object with name and description fields.
     """
     organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
     context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     try:
         project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
@@ -194,8 +193,8 @@ def get_contexts(
     Returns information about each context including its versioning status and current version.
     """
     organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
     context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
     try:
         project = project_dao.get_by_user_and_name(
@@ -274,8 +273,8 @@ def get_context(
     Get information about a specific context including its versioning status and current version.
     """
     organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
     context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     try:
         project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
@@ -301,87 +300,6 @@ def get_context(
         }
     except IndexError as e:
         raise not_found(str(e))
-
-
-@router.post(
-    "/project/{project_name:path}/contexts/{context_name:path}/rollback",
-    responses={
-        200: {
-            "description": "Successful Response",
-            "content": {
-                "application/json": {
-                    "example": {"info": "Context rolled back successfully!"},
-                },
-            },
-        },
-        404: {
-            "description": "Project, Context or Version Not Found",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Project, context or version not found.",
-                    },
-                },
-            },
-        },
-        400: {
-            "description": "Bad Request",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": "Context is not versioned.",
-                    },
-                },
-            },
-        },
-    },
-)
-def rollback_context(
-    request_fastapi: Request,
-    request: ContextRollbackRequest,
-    project_name: str = Path(
-        description="Name of the project to create context in.",
-        example="my_project",
-    ),
-    context_name: str = Path(
-        description="Name of the context to rollback.",
-        example="my_context",
-    ),
-    session=Depends(get_db_session),
-):
-    """
-    Rolls back a context to a specific version.
-    """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    try:
-        project = project_dao.get_by_user_and_name(
-            user_id=request_fastapi.state.user_id,
-            name=project_name,
-        )
-        if not project:
-            raise IndexError("Project not found")
-        project_id = project.id
-
-        context = context_dao.filter(
-            project_id=project_id,
-            name=context_name,
-        )
-        if not context:
-            raise IndexError("Context not found")
-        context_id = context[0][0].id
-
-        context_dao.rollback(
-            context_id=context_id,
-            version=request.version,
-            commit_hash=request.commit_hash,
-        )
-        return {"info": "Context rolled back successfully!"}
-    except IndexError as e:
-        raise not_found(str(e))
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.delete(
@@ -434,8 +352,8 @@ def delete_context(
     within the context, but will remove their association with this context.
     """
     organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
     context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     # Protect the built-in Tasks context in Unity project
     if project_name == "Unity" and context_name == "Tasks":
         raise HTTPException(
@@ -508,8 +426,8 @@ def add_logs_to_context(
     If copy=False (default), the existing logs will be associated with the context.
     """
     organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
     context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
     log_dao = LogDAO(session, context_dao)
     try:
@@ -701,8 +619,8 @@ async def rename_context(
 ):
     """Rename an existing context within a project."""
     organization_member_dao = OrganizationMemberDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao)
     context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
     # Protect the built-in Tasks context in Unity project
     if project_name == "Unity" and context_name == "Tasks":

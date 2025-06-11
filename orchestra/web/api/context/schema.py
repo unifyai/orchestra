@@ -72,8 +72,3 @@ class RenameContextRequest(BaseModel):
             "example": "experiment2/trial3",
         },
     )
-
-
-class ContextRollbackRequest(BaseModel):
-    version: Optional[int] = None
-    commit_hash: Optional[str] = None
