@@ -1,5 +1,6 @@
 """Shared billing utilities for Orchestra."""
 
+import logging
 import os
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -14,6 +15,8 @@ from orchestra.db.models.orchestra_models import (
 )
 from orchestra.db.models.orchestra_models import Users as User
 from orchestra.lib.time import month_end_utc
+
+logger = logging.getLogger(__name__)
 
 # Stripe product configuration for Unify Credits
 # This ensures consistent 1:1 pricing (1 credit = $1) throughout the system
@@ -34,14 +37,21 @@ def queue_auto_recharge(session: Session, user: User, credits: int) -> None:
         user: User object to recharge
         credits: Number of credits to recharge
     """
-    print(
-        f"[AUTO-RECHARGE] Queueing auto-recharge - User ID: {user.id}, "
+    logger.info(
+        f"Queueing auto-recharge - User ID: {user.id}, "
         f"Credits: {credits}, "
         f"Stripe Customer ID: {user.stripe_customer_id}",
     )
 
     now = datetime.now(timezone.utc)
     invoice_group = month_end_utc(now)
+
+    logger.info(
+        f"Creating recharge record - "
+        f"Type: {RECHARGE_TYPE_AUTO}, "
+        f"Status: {RechargeStatus.PENDING_INVOICE}, "
+        f"Invoice group: {invoice_group}",
+    )
 
     # Create the database record first
     recharge = Recharge(
@@ -55,33 +65,31 @@ def queue_auto_recharge(session: Session, user: User, credits: int) -> None:
 
     session.add(recharge)
 
-    print(
-        f"[AUTO-RECHARGE] Auto-recharge record created for user {user.id}: "
+    logger.info(
+        f"Auto-recharge record created for user {user.id}: "
         f"${credits:.2f} ({credits} credits), "
         f"Invoice group: {invoice_group}",
     )
 
     # Now create the Stripe invoice item if user has a Stripe customer ID
     if user.stripe_customer_id:
-        print(f"[AUTO-RECHARGE] Creating Stripe invoice item for user {user.id}")
+        logger.info(f"Creating Stripe invoice item for user {user.id}")
 
         try:
             # Configure Stripe API key
             stripe_key = os.environ.get("STRIPE_SECRET_KEY")
             if not stripe_key:
-                print(
-                    "[AUTO-RECHARGE] ERROR: STRIPE_SECRET_KEY environment variable not set!",
+                logger.error(
+                    "STRIPE_SECRET_KEY environment variable not set - cannot create Stripe invoice item",
                 )
                 return
 
             stripe.api_key = stripe_key
-            print(
-                f"[AUTO-RECHARGE] Stripe API key configured (key prefix: {stripe_key[:10]}...)",
-            )
+            logger.info("Stripe API key configured successfully")
 
             # Create Stripe invoice item
-            print(
-                f"[AUTO-RECHARGE] Calling Stripe API - Customer: {user.stripe_customer_id}, "
+            logger.info(
+                f"Calling Stripe API - Customer: {user.stripe_customer_id}, "
                 f"Amount: ${credits} ({credits * 100} cents)",
             )
 
@@ -97,26 +105,34 @@ def queue_auto_recharge(session: Session, user: User, credits: int) -> None:
                 },
             )
 
-            print(
-                f"[AUTO-RECHARGE] SUCCESS: Stripe invoice item created - "
+            logger.info(
+                f"Stripe invoice item created successfully - "
                 f"Invoice Item ID: {invoice_item.id}, "
                 f"Customer: {invoice_item.customer}, "
                 f"Amount: {invoice_item.amount} cents",
             )
 
         except stripe.error.StripeError as e:
-            print(
-                f"[AUTO-RECHARGE] STRIPE ERROR: {type(e).__name__} - "
+            logger.error(
+                f"Stripe API error creating invoice item for auto-recharge - "
+                f"User: {user.id}, "
+                f"Type: {type(e).__name__}, "
                 f"Message: {str(e)}, "
-                f"Code: {getattr(e, 'code', 'N/A')}",
+                f"Code: {getattr(e, 'code', 'N/A')}, "
+                f"Param: {getattr(e, 'param', 'N/A')}",
             )
             # Don't raise - we still want the recharge record in the database
 
         except Exception as e:
-            print(
-                f"[AUTO-RECHARGE] UNEXPECTED ERROR: {type(e).__name__} - "
+            logger.error(
+                f"Unexpected error creating Stripe invoice item for auto-recharge - "
+                f"User: {user.id}, "
+                f"Type: {type(e).__name__}, "
                 f"Message: {str(e)}",
             )
             # Don't raise - we still want the recharge record in the database
     else:
-        print(f"[AUTO-RECHARGE] WARNING: User {user.id} has no Stripe customer ID")
+        logger.warning(
+            f"User {user.id} has no Stripe customer ID - "
+            f"cannot create Stripe invoice item for auto-recharge",
+        )
