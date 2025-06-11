@@ -192,6 +192,7 @@ class ProjectDAO:
 
         project_version = ProjectVersion(
             project_id=project_id,
+            version=project.version,
             commit_hash=commit_hash,
             commit_message=commit_message,
         )
