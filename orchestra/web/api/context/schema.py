@@ -1,6 +1,6 @@
 """Schema models for context management endpoints."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -77,3 +77,18 @@ class RenameContextRequest(BaseModel):
 class ContextRollbackRequest(BaseModel):
     version: Optional[int] = None
     commit_hash: Optional[str] = None
+
+
+class ContextCommit(BaseModel):
+    commit_message: Optional[str] = None
+
+
+class ContextRollback(BaseModel):
+    commit_hash: str
+
+
+class ContextCommitHistory(BaseModel):
+    commit_hash: str
+    commit_message: Optional[str] = None
+    created_at: str
+    type: Literal["project", "context"]
