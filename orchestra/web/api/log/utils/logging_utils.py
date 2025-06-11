@@ -910,7 +910,7 @@ def create_logs_internal(
                 project_id=project_id,
             )
             if existing_param:
-                version = existing_param[0][0].version
+                version = existing_param[0][0].param_version
             else:
                 version = log_dao.get_next_param_version(project_id, context_id, k)
 
@@ -921,7 +921,7 @@ def create_logs_internal(
                     "log_event_id": log_event_id,
                     "key": k,
                     "value": v,
-                    "version": version,
+                    "param_version": version,
                     "explicit_types": params_explicit_types,
                     "context_id": context_id,
                 },
@@ -1051,7 +1051,7 @@ def _build_unified_logs_subquery(
             Log.key.label("key"),
             Log.value.label("value"),
             Log.inferred_type.label("inferred_type"),
-            Log.version.label("param_version"),
+            Log.param_version.label("param_version"),
             cast(None, Integer).label("context_version"),
             Log.updated_at.label("updated_at"),
             LogEvent.created_at.label("created_at"),
@@ -1082,7 +1082,7 @@ def _build_unified_logs_subquery(
             Log.key.label("key"),
             Log.value.label("value"),
             Log.inferred_type.label("inferred_type"),
-            Log.version.label("param_version"),
+            Log.param_version.label("param_version"),
             cast(None, Integer).label("context_version"),
             Log.updated_at.label("updated_at"),
             LogEvent.created_at.label("created_at"),
