@@ -1,5 +1,6 @@
 import io
-from unittest.mock import MagicMock
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
@@ -61,29 +62,29 @@ async def test_edit_photo_with_url_success(
     mock_photo_services_factory,
 ):
     replicate_mock, bucket_mock = mock_photo_services_factory
-    form_data = {
-        "prompt": "Make it winter",
-        "input_image_url": "https://example.com/summer.jpg",
-        "aspect_ratio": "match_input_image",
-        "output_format": "jpg",
-        "safety_tolerance": "2.0",
+    # When sending multipart/form-data with httpx, all form fields must
+    # be in the `files` dictionary as (None, value) tuples.
+    files_payload = {
+        "prompt": (None, "Make it winter"),
+        "input_image_url": (None, "https://example.com/summer.jpg"),
+        "aspect_ratio": (None, "match_input_image"),
+        "output_format": (None, "jpg"),
+        "safety_tolerance": (None, "2.0"),
+        # An empty file part is not needed if other fields are present
+        # "input_image_file": (None, b"", "application/octet-stream")
     }
-    # Pass an empty file part to force multipart/form-data content type
-    files = {"input_image_file": (None, b"", "application/octet-stream")}
 
     resp = await client.post(
         "/v0/assistant/photo/edit",
-        data=form_data,
-        files=files,  # Must send files to trigger multipart parsing
+        files=files_payload,  # data parameter is not used for multipart
         headers=HEADERS,
     )
-
     assert resp.status_code == 201, resp.text
     data = resp.json()["info"]
     assert data["url"] == "https://replicate.delivery/pbxt/mock-edited-url"
     replicate_mock.edit_photo.assert_called_once_with(
-        prompt=form_data["prompt"],
-        input_image=form_data["input_image_url"],
+        prompt="Make it winter",
+        input_image="https://example.com/summer.jpg",
         aspect_ratio="match_input_image",
         output_format="jpg",
         safety_tolerance=2.0,
@@ -98,19 +99,19 @@ async def test_edit_photo_with_file_success(
     mock_photo_services_factory,
 ):
     replicate_mock, bucket_mock = mock_photo_services_factory
-    form_data = {
-        "prompt": "Add a cat",
-        "aspect_ratio": "match_input_image",
-        "output_format": "jpg",
-        "safety_tolerance": "2.0",
-    }
     file_content = b"fake image data"
-    files = {"input_image_file": ("test.jpg", io.BytesIO(file_content), "image/jpeg")}
+    # All form fields and the file are placed in the 'files' dictionary.
+    files_payload = {
+        "prompt": (None, "Add a cat"),
+        "aspect_ratio": (None, "match_input_image"),
+        "output_format": (None, "jpg"),
+        "safety_tolerance": (None, "2.0"),
+        "input_image_file": ("test.jpg", io.BytesIO(file_content), "image/jpeg"),
+    }
 
     resp = await client.post(
         "/v0/assistant/photo/edit",
-        data=form_data,
-        files=files,
+        files=files_payload,  # data parameter is not used for multipart
         headers=HEADERS,
     )
 
@@ -124,11 +125,11 @@ async def test_edit_photo_with_file_success(
         "image/jpeg",
     )
     replicate_mock.edit_photo.assert_called_once_with(
-        prompt=form_data["prompt"],
+        prompt="Add a cat",
         input_image="https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_image.jpg",
-        aspect_ratio=form_data["aspect_ratio"],
-        output_format=form_data["output_format"],
-        safety_tolerance=float(form_data["safety_tolerance"]),
+        aspect_ratio="match_input_image",
+        output_format="jpg",
+        safety_tolerance=2.0,
     )
     bucket_mock.delete_assistant_photo.assert_called_once_with(
         "gs://mock-bucket/_temp/test-user/temp_image.jpg",
@@ -137,32 +138,33 @@ async def test_edit_photo_with_file_success(
 
 @pytest.mark.anyio
 async def test_edit_photo_invalid_input(client: AsyncClient):
-    # Base form data required to pass initial validation
-    base_form_data = {
-        "prompt": "test",
-        "aspect_ratio": "1:1",
-        "output_format": "webp",
-        "safety_tolerance": "2.0",
+    # Base form fields to be included in the multipart request
+    base_fields = {
+        "prompt": (None, "test"),
+        "aspect_ratio": (None, "1:1"),
+        "output_format": (None, "webp"),
+        "safety_tolerance": (None, "2.0"),
     }
 
-    # Test with no input image provided
-    # We send an empty file part and no URL
+    # Test with no input image provided (neither URL nor file)
     resp_none = await client.post(
         "/v0/assistant/photo/edit",
-        data=base_form_data,
-        files={"input_image_file": (None, b"", "application/octet-stream")},
+        files=base_fields,
         headers=HEADERS,
     )
     assert resp_none.status_code == 400
     assert "Provide either" in resp_none.json()["detail"]
 
     # Test with both URL and file provided
-    form_data_both = {**base_form_data, "input_image_url": "http://a.com/b.jpg"}
-    files_both = {"input_image_file": ("test.jpg", io.BytesIO(b"data"), "image/jpeg")}
+    file_content = b"fake image data"
+    fields_with_both = {
+        **base_fields,
+        "input_image_url": (None, "http://a.com/b.jpg"),
+        "input_image_file": ("test.jpg", io.BytesIO(file_content), "image/jpeg"),
+    }
     resp_both = await client.post(
         "/v0/assistant/photo/edit",
-        data=form_data_both,
-        files=files_both,
+        files=fields_with_both,
         headers=HEADERS,
     )
     assert resp_both.status_code == 400
