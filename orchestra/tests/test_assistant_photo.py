@@ -5,8 +5,8 @@ import pytest
 from httpx import AsyncClient
 
 from orchestra.db.dao.users_dao import UsersDAO as OriginalUsersDAO
+from orchestra.services.replicate_service import ReplicateAPIError
 from orchestra.services.replicate_service import (
-    ReplicateAPIError,
     ReplicateService as OriginalReplicateService,
 )
 from orchestra.tests.utils import HEADERS
