@@ -373,6 +373,17 @@ async def test_project_rollback_ignores_context_commits(client: AsyncClient):
     logs_v_context = await fetch_logs(client, project_name, context=context_name)
     assert logs_v_context[0]["entries"]["val"] == "B"
 
+    # --- Rollback and Verify ---
+    await client.post(
+        f"/v0/project/{project_name}/contexts/{context_name}/commit",
+        json={"commit_message": "context only"},
+        headers=HEADERS,
+    )
+
+    # --- Current state is now (value: "B") ---
+    logs_v_context = await fetch_logs(client, project_name, context=context_name)
+    assert logs_v_context[0]["entries"]["val"] == "B"
+
     # --- Rollback PROJECT to v1 ---
     await client.post(
         f"/v0/project/{project_name}/rollback",
