@@ -24,9 +24,6 @@ def mock_services_factory(fastapi_app):
     )
     replicate_mock.edit_photo.return_value = "https://replicate.example.com/edited.jpg"
 
-    # Use a context manager for all patches.
-    # The send_pubsub_msg patch is critical to prevent middleware from failing
-    # when it encounters unserializable MagicMock objects during logging.
     with patch("orchestra.web.api.assistant.views.UsersDAO") as MockUsersDAO, patch(
         "orchestra.web.api.utils.production_traffic_middleware.send_pubsub_msg",
     ):
@@ -68,7 +65,8 @@ async def test_generate_photo_success(client: AsyncClient, mock_services_factory
     assert data["url"] == "https://replicate.example.com/generated.jpg"
 
     # Verify correct calls were made
-    users_dao_mock.get_user_with_id.assert_called_once_with(user_id)
+    # FIX: Use keyword argument `id` to match the method signature and avoid mock ambiguity.
+    users_dao_mock.get_user_with_id.assert_called_once_with(id=user_id)
     replicate_mock.generate_photo.assert_called_once_with(
         prompt=payload["prompt"],
         aspect_ratio="1:1",
@@ -211,7 +209,8 @@ async def test_edit_photo_success(client: AsyncClient, mock_services_factory):
     assert data["url"] == "https://replicate.example.com/edited.jpg"
 
     # Verify correct calls were made
-    users_dao_mock.get_user_with_id.assert_called_once_with(user_id)
+    # FIX: Use keyword argument `id` to match the method signature and avoid mock ambiguity.
+    users_dao_mock.get_user_with_id.assert_called_once_with(id=user_id)
     replicate_mock.edit_photo.assert_called_once_with(
         prompt=payload["prompt"],
         input_image=payload["input_image"],
