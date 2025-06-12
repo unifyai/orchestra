@@ -365,3 +365,71 @@ class AssistantPhotoUploadResponse(BaseModel):
         description="GCS URL of the uploaded photo",
         example="gs://your-bucket-name/user_id/image_uuid.jpg",
     )
+
+
+class PhotoGenerateRequest(BaseModel):
+    prompt: str = Field(..., description="Text prompt for image generation.")
+    aspect_ratio: Optional[str] = Field(
+        "1:1",
+        description="Aspect ratio of the generated image.",
+    )
+    output_format: Optional[str] = Field(
+        "webp",
+        description="Format of the output image.",
+    )
+    output_quality: Optional[int] = Field(
+        80,
+        description="Quality of the output image (1-100).",
+    )
+    safety_tolerance: Optional[float] = Field(
+        2.0,
+        description="Safety tolerance for generation.",
+    )
+    prompt_upsampling: Optional[bool] = Field(
+        True,
+        description="Whether to use prompt upsampling.",
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "prompt": "A majestic lion in a field of lavender, photorealistic.",
+                "aspect_ratio": "16:9",
+            },
+        }
+
+
+class PhotoEditRequest(BaseModel):
+    prompt: str = Field(..., description="Text prompt for editing the image.")
+    input_image: HttpUrl = Field(..., description="URL of the input image to edit.")
+    aspect_ratio: Optional[str] = Field(
+        "match_input_image",
+        description="Aspect ratio of the edited image.",
+    )
+    output_format: Optional[str] = Field(
+        "jpg",
+        description="Format of the output image.",
+    )
+    safety_tolerance: Optional[float] = Field(
+        2.0,
+        description="Safety tolerance for editing.",
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "prompt": "Make it look like an oil painting.",
+                "input_image": "https://example.com/image.png",
+            },
+        }
+
+
+class PhotoCreationResponse(BaseModel):
+    url: HttpUrl = Field(..., description="URL of the generated or edited image.")
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "url": "https://replicate.delivery/pbxt/...",
+            },
+        }
