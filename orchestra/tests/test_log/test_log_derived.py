@@ -1090,6 +1090,215 @@ async def test_create_static_entries_with_flag(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_division_by_zero_safeguarding_all_operators(client: AsyncClient):
+    """
+    Test that division by zero is properly safeguarded for all arithmetic operators
+    that involve division: regular division (/), modulo (%), and floor division (//).
+
+    This test verifies that when the denominator contains zero values, the operations
+    return NULL instead of throwing division by zero errors.
+    """
+    project_name = "test_division_by_zero_safeguarding"
+    await _create_project(client, project_name, user=1)
+
+    # Create logs with various numerator and denominator values, including zeros
+    log_entries = [
+        # Case 1: Normal division (non-zero denominator)
+        {"numerator": 10, "denominator": 2, "case": "normal"},
+        # Case 2: Division by zero
+        {"numerator": 15, "denominator": 0, "case": "div_by_zero"},
+        # Case 3: Zero divided by non-zero (should work normally)
+        {"numerator": 0, "denominator": 5, "case": "zero_numerator"},
+        # Case 4: Another normal case
+        {"numerator": 21, "denominator": 7, "case": "normal_2"},
+        # Case 5: Another division by zero case
+        {"numerator": 8, "denominator": 0, "case": "div_by_zero_2"},
+        # Case 6: Larger numbers for testing
+        {"numerator": 100, "denominator": 3, "case": "large_normal"},
+    ]
+
+    # Create all the logs
+    log_ids = []
+    for entry in log_entries:
+        response = await _create_log(client, project_name, entries=entry)
+        assert response.status_code == 200
+        log_ids.append(response.json()["log_event_ids"][0])
+
+    # Test 1: Regular division (/) with zero safeguarding
+    division_key = "regular_division"
+    division_equation = "{log:numerator} / {log:denominator}"
+    referenced_logs = {"log": log_ids}
+
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        division_key,
+        division_equation,
+        referenced_logs,
+    )
+    assert response.status_code == 200, f"Regular division failed: {response.text}"
+
+    # Test 2: Modulo (%) with zero safeguarding
+    modulo_key = "modulo_operation"
+    modulo_equation = "{log:numerator} % {log:denominator}"
+
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        modulo_key,
+        modulo_equation,
+        referenced_logs,
+    )
+    assert response.status_code == 200, f"Modulo operation failed: {response.text}"
+
+    # Test 3: Floor division (//) with zero safeguarding
+    floor_div_key = "floor_division"
+    floor_div_equation = "{log:numerator} // {log:denominator}"
+
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        floor_div_key,
+        floor_div_equation,
+        referenced_logs,
+    )
+    assert response.status_code == 200, f"Floor division failed: {response.text}"
+
+    # Verify the results
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+
+    # Check each log's derived entries
+    for log in logs:
+        case_type = log["entries"]["case"]
+        numerator = log["entries"]["numerator"]
+        denominator = log["entries"]["denominator"]
+
+        if denominator == 0:
+            # Division by zero cases should result in NULL values (keys exist but values are None)
+            assert (
+                division_key in log["derived_entries"]
+            ), f"Division key should exist for case {case_type}"
+            assert (
+                log["derived_entries"][division_key] is None
+            ), f"Division by zero should result in None for case {case_type}"
+
+            assert (
+                modulo_key in log["derived_entries"]
+            ), f"Modulo key should exist for case {case_type}"
+            assert (
+                log["derived_entries"][modulo_key] is None
+            ), f"Modulo by zero should result in None for case {case_type}"
+
+            assert (
+                floor_div_key in log["derived_entries"]
+            ), f"Floor division key should exist for case {case_type}"
+            assert (
+                log["derived_entries"][floor_div_key] is None
+            ), f"Floor division by zero should result in None for case {case_type}"
+        else:
+            # Non-zero denominator cases should have valid results
+            assert (
+                division_key in log["derived_entries"]
+            ), f"Regular division should have result for case {case_type}"
+            assert (
+                modulo_key in log["derived_entries"]
+            ), f"Modulo should have result for case {case_type}"
+            assert (
+                floor_div_key in log["derived_entries"]
+            ), f"Floor division should have result for case {case_type}"
+
+            # Verify the values are not None and mathematically correct
+            actual_division = log["derived_entries"][division_key]
+            actual_modulo = log["derived_entries"][modulo_key]
+            actual_floor_div = log["derived_entries"][floor_div_key]
+
+            assert (
+                actual_division is not None
+            ), f"Division result should not be None for case {case_type}"
+            assert (
+                actual_modulo is not None
+            ), f"Modulo result should not be None for case {case_type}"
+            assert (
+                actual_floor_div is not None
+            ), f"Floor division result should not be None for case {case_type}"
+
+            # Verify the mathematical correctness
+            expected_division = numerator / denominator
+            expected_modulo = numerator % denominator
+            expected_floor_div = numerator // denominator
+
+            assert (
+                abs(actual_division - expected_division) < 0.0001
+            ), f"Division result incorrect for case {case_type}: expected {expected_division}, got {actual_division}"
+            assert (
+                actual_modulo == expected_modulo
+            ), f"Modulo result incorrect for case {case_type}: expected {expected_modulo}, got {actual_modulo}"
+            assert (
+                actual_floor_div == expected_floor_div
+            ), f"Floor division result incorrect for case {case_type}: expected {expected_floor_div}, got {actual_floor_div}"
+
+    # Additional test: Complex equation with conditional logic
+    # This tests a more realistic scenario like the one mentioned in the user's description
+    complex_key = "conditional_division"
+    complex_equation = (
+        "{log:numerator} / {log:denominator} if {log:denominator} != 0 else 999.0"
+    )
+
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        complex_key,
+        complex_equation,
+        referenced_logs,
+    )
+    assert (
+        response.status_code == 200
+    ), f"Complex conditional division failed: {response.text}"
+
+    # Verify the complex equation results
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+
+    print(logs)
+
+    for log in logs:
+        case_type = log["entries"]["case"]
+        numerator = log["entries"]["numerator"]
+        denominator = log["entries"]["denominator"]
+
+        assert (
+            complex_key in log["derived_entries"]
+        ), f"Complex conditional division should always have a result for case {case_type}"
+
+        actual_result = log["derived_entries"][complex_key]
+
+        if denominator == 0:
+            # Should use the else value (999)
+            assert (
+                actual_result == 999
+            ), f"Complex division should return 999 for zero denominator in case {case_type}, got {actual_result}"
+        else:
+            # Should compute the actual division
+            expected_result = numerator / denominator
+            assert (
+                abs(actual_result - expected_result) < 0.0001
+            ), f"Complex division result incorrect for case {case_type}: expected {expected_result}, got {actual_result}"
+
+    print(
+        f"Successfully tested division by zero safeguarding for all operators: /, %, //",
+    )
+
+
+@pytest.mark.anyio
 async def test_derived_embedding_and_filtering(client: AsyncClient):
     """
     Create an 'embedding' derived column once, then reuse it from filters.
