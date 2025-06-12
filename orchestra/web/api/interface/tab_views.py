@@ -701,7 +701,7 @@ def delete_tab(
     # First delete all tiles associated with this tab
     tiles = tile_dao.list_tiles_by_tab(tab_id=tab.id)
     for tile in tiles:
-        tile_dao.delete_tile_by_name(tab_id=tab.id, name=tile.name)
+        tile_dao.delete_tile(tab_id=tab.id, name=tile.name)
 
     # Delete the tab
     if tab_id:
