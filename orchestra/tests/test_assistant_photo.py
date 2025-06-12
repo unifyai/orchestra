@@ -16,27 +16,28 @@ def mock_services_factory(fastapi_app):
     Mocks ReplicateService (via dependency injection) and UsersDAO (via patching).
     The mocks are automatically applied to every test in this module.
     Yields mock instances for test-specific configuration.
+    Also patches send_pubsub_msg to prevent middleware errors.
     """
-    # 1. Mock ReplicateService, which is injected via Depends()
     replicate_mock = MagicMock(spec=OriginalReplicateService)
     replicate_mock.generate_photo.return_value = (
         "https://replicate.example.com/generated.jpg"
     )
     replicate_mock.edit_photo.return_value = "https://replicate.example.com/edited.jpg"
 
-    # 2. Patch UsersDAO, which is instantiated directly in the view
-    with patch("orchestra.web.api.assistant.views.UsersDAO") as MockUsersDAO:
+    # Use a context manager for all patches.
+    # The send_pubsub_msg patch is critical to prevent middleware from failing
+    # when it encounters unserializable MagicMock objects during logging.
+    with patch("orchestra.web.api.assistant.views.UsersDAO") as MockUsersDAO, patch(
+        "orchestra.web.api.utils.production_traffic_middleware.send_pubsub_msg",
+    ):
         users_dao_mock = MockUsersDAO.return_value
 
-        # 3. Apply ReplicateService mock to the FastAPI app's dependency overrides
         fastapi_app.dependency_overrides[
             OriginalReplicateService
         ] = lambda: replicate_mock
 
-        # 4. Yield the mocks for use within tests
         yield replicate_mock, users_dao_mock
 
-        # 5. Clean up the dependency override after tests are done
         fastapi_app.dependency_overrides.pop(OriginalReplicateService, None)
 
 
@@ -118,7 +119,7 @@ async def test_generate_photo_insufficient_credits(
 @pytest.mark.anyio
 @patch("orchestra.web.api.assistant.views.settings.photo_generation_cost", 0.1)
 @patch("orchestra.web.api.assistant.views.settings.is_staging", False)
-async def test_generate_photo_fails(
+async def test_generate_photo_replicate_fails(
     client: AsyncClient,
     mock_services_factory,
 ):
