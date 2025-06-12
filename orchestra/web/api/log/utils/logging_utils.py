@@ -39,7 +39,6 @@ from orchestra.db.models.orchestra_models import (
     Log,
     LogEvent,
     LogEventContext,
-    LogHistory,
     Project,
 )
 from orchestra.settings import settings
@@ -118,11 +117,12 @@ def log_chat_completion_event(
     try:
         # Initialize DAOs
         organization_member_dao = OrganizationMemberDAO(session=session)
+        context_dao = ContextDAO(session=session)
         project_dao = ProjectDAO(
             session=session,
             organization_member_dao=organization_member_dao,
+            context_dao=context_dao,
         )
-        context_dao = ContextDAO(session=session)
         field_type_dao = FieldTypeDAO(session=session)
         log_event_dao = LogEventDAO(session=session)
         log_dao = LogDAO(session=session, context_dao=context_dao)
@@ -244,9 +244,11 @@ def _apply_post_filters(
                 base_q = base_q.filter(
                     tuple_(
                         ul_table.c.log_event_id,
-                        ul_table.c.context_version
-                        if "context_version" in ul_table.c
-                        else ul_table.c.param_version,
+                        (
+                            ul_table.c.context_version
+                            if "context_version" in ul_table.c
+                            else ul_table.c.param_version
+                        ),
                     ).in_(allowed_pairs),
                 )
             except Exception as e:
@@ -267,9 +269,11 @@ def _apply_post_filters(
                 base_q = base_q.filter(
                     ~tuple_(
                         ul_table.c.log_event_id,
-                        ul_table.c.context_version
-                        if "context_version" in ul_table.c
-                        else ul_table.c.param_version,
+                        (
+                            ul_table.c.context_version
+                            if "context_version" in ul_table.c
+                            else ul_table.c.param_version
+                        ),
                     ).in_(excluded_pairs),
                 )
             except Exception as e:
@@ -905,7 +909,7 @@ def create_logs_internal(
                 project_id=project_id,
             )
             if existing_param:
-                version = existing_param[0][0].version
+                version = existing_param[0][0].param_version
             else:
                 version = log_dao.get_next_param_version(project_id, context_id, k)
 
@@ -916,7 +920,7 @@ def create_logs_internal(
                     "log_event_id": log_event_id,
                     "key": k,
                     "value": v,
-                    "version": version,
+                    "param_version": version,
                     "explicit_types": params_explicit_types,
                     "context_id": context_id,
                 },
@@ -992,13 +996,6 @@ def create_logs_internal(
                     detail=f"Duplicate log detected in context '{context_obj.name}' which doesn't allow duplicates. Log event ID: {log_event_id}",
                 )
     if context_obj and context_obj.is_versioned:
-        # archive the new state
-        context_dao.archive_context_state(
-            context_obj,
-            name="create",
-            description=f"Created {total_logs} new LogEvents",
-        )
-        context_obj.version += 1
         context_obj.updated_at = datetime.now(timezone.utc)
         context_dao.session.commit()
 
@@ -1039,36 +1036,38 @@ def _build_unified_logs_subquery(
         return query
 
     if return_versions:
-        # get latest version + all history logs
-        base_logs_q_current = session.query(
-            Log.id.label("id"),
-            Log.log_event_id.label("log_event_id"),
-            Log.key.label("key"),
-            Log.value.label("value"),
-            Log.inferred_type.label("inferred_type"),
-            Log.version.label("param_version"),
-            cast(None, Integer).label("context_version"),
-            Log.updated_at.label("updated_at"),
-            LogEvent.created_at.label("created_at"),
-            literal("current").label("source_type"),
-        ).join(LogEvent, LogEvent.id == Log.log_event_id)
-        base_logs_q_current = _apply_event_filter(base_logs_q_current, Log)
+        pass
+        # TODO(yusha): implement this with the new LogVersion table
+        # # get latest version + all history logs
+        # base_logs_q_current = session.query(
+        #     Log.id.label("id"),
+        #     Log.log_event_id.label("log_event_id"),
+        #     Log.key.label("key"),
+        #     Log.value.label("value"),
+        #     Log.inferred_type.label("inferred_type"),
+        #     Log.param_version.label("param_version"),
+        #     cast(None, Integer).label("context_version"),
+        #     Log.updated_at.label("updated_at"),
+        #     LogEvent.created_at.label("created_at"),
+        #     literal("current").label("source_type"),
+        # ).join(LogEvent, LogEvent.id == Log.log_event_id)
+        # base_logs_q_current = _apply_event_filter(base_logs_q_current, Log)
 
-        base_logs_q_history = session.query(
-            LogHistory.id.label("id"),
-            LogHistory.log_event_id.label("log_event_id"),
-            LogHistory.key.label("key"),
-            LogHistory.value.label("value"),
-            LogHistory.inferred_type.label("inferred_type"),
-            cast(None, Integer).label("param_version"),
-            LogHistory.version.label("context_version"),
-            LogHistory.archived_at.label("updated_at"),
-            LogEvent.created_at.label("created_at"),
-            literal("history").label("source_type"),
-        ).join(LogEvent, LogEvent.id == LogHistory.log_event_id)
-        base_logs_q_history = _apply_event_filter(base_logs_q_history, LogHistory)
+        # base_logs_q_history = session.query(
+        #     LogVersion.id.label("id"),
+        #     LogVersion.log_event_id.label("log_event_id"),
+        #     LogVersion.key.label("key"),
+        #     LogVersion.value.label("value"),
+        #     LogVersion.inferred_type.label("inferred_type"),
+        #     cast(None, Integer).label("param_version"),
+        #     LogVersion.context_version.label("context_version"),
+        #     LogVersion.updated_at.label("updated_at"),
+        #     LogEvent.created_at.label("created_at"),
+        #     literal("history").label("source_type"),
+        # ).join(LogEvent, LogEvent.id == LogVersion.log_event_id)
+        # base_logs_q_history = _apply_event_filter(base_logs_q_history, LogVersion)
 
-        base_logs_q = base_logs_q_current.union_all(base_logs_q_history)
+        # base_logs_q = base_logs_q_current.union_all(base_logs_q_history)
     else:
         # get only the latest version of the logs
         base_logs_q = session.query(
@@ -1077,7 +1076,7 @@ def _build_unified_logs_subquery(
             Log.key.label("key"),
             Log.value.label("value"),
             Log.inferred_type.label("inferred_type"),
-            Log.version.label("param_version"),
+            Log.param_version.label("param_version"),
             cast(None, Integer).label("context_version"),
             Log.updated_at.label("updated_at"),
             LogEvent.created_at.label("created_at"),
@@ -1338,7 +1337,6 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
             and_(
                 JSONLogHistory.log_event_id == filtered_logs_subq.c.log_event_id,
                 JSONLogHistory.key == filtered_logs_subq.c.key,
-                JSONLogHistory.version == filtered_logs_subq.c.context_version,
                 filtered_logs_subq.c.source_type == "history",
             ),
         )

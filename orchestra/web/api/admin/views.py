@@ -13,6 +13,7 @@ from google.cloud.storage import Client
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
+from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.credit_card_fingerprint import CreditCardFingerprintDAO
 from orchestra.db.dao.custom_router_dao import CustomRouterDAO
 from orchestra.db.dao.datapoint_dao import DatapointDAO
@@ -1234,7 +1235,8 @@ def write_files(
     The files will be stored at <user-id>/<project>/<path>
     """
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     project = project_dao.get_by_user_and_name(
         user_id=request.user_id,
         name=request.project,
@@ -1311,7 +1313,8 @@ def get_files(
     Returns a flat list of file paths and contents.
     """
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     project_obj = project_dao.get_by_user_and_name(
         user_id=user_id,
         name=project,
@@ -1397,7 +1400,8 @@ def get_file_contents(
     Get the contents of a specific file in the bucket.
     """
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     project_obj = project_dao.get_by_user_and_name(
         user_id=user_id,
         name=project,
@@ -1480,7 +1484,8 @@ def delete_file_or_folder(
     If the path points to a folder, all contents will be deleted recursively.
     """
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     project_obj = project_dao.get_by_user_and_name(
         user_id=user_id,
         name=project,
@@ -1678,13 +1683,17 @@ def migrate_users_to_billing_compliance(
                 results["users_amount_updated"].append(
                     {
                         "user_id": user_id,
-                        "old_amount": float(original_autorecharge_qty)
-                        if original_autorecharge_qty is not None
-                        else None,
+                        "old_amount": (
+                            float(original_autorecharge_qty)
+                            if original_autorecharge_qty is not None
+                            else None
+                        ),
                         "new_amount": 25.0,
-                        "reason": f"Amount below minimum (${original_autorecharge_qty:.2f} < $25.00)"
-                        if original_autorecharge_qty is not None
-                        else "Amount was None, set to minimum $25.00",
+                        "reason": (
+                            f"Amount below minimum (${original_autorecharge_qty:.2f} < $25.00)"
+                            if original_autorecharge_qty is not None
+                            else "Amount was None, set to minimum $25.00"
+                        ),
                         "autorecharge_enabled": original_autorecharge,
                     },
                 )
@@ -1695,9 +1704,11 @@ def migrate_users_to_billing_compliance(
                     {
                         "user_id": user_id,
                         "autorecharge_enabled": original_autorecharge,
-                        "autorecharge_amount": float(original_autorecharge_qty)
-                        if original_autorecharge_qty is not None
-                        else None,
+                        "autorecharge_amount": (
+                            float(original_autorecharge_qty)
+                            if original_autorecharge_qty is not None
+                            else None
+                        ),
                         "spending": total_spending,
                         "billing_eligible": can_enable_billing,
                     },

@@ -160,10 +160,10 @@ def create_logs(
     """
     # Instantiate DAOs with shared session
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
     log_event_dao = LogEventDAO(session)
-    context_dao = ContextDAO(session)
     log_dao = LogDAO(session, context_dao)
 
     # check if the project exists
@@ -447,9 +447,9 @@ def create_from_logs(
     """
     # Instantiate DAOs with shared session
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
-    field_type_dao = FieldTypeDAO(session)
     context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    field_type_dao = FieldTypeDAO(session)
     log_dao = LogDAO(session, context_dao)
 
     user_id = request_fastapi.state.user_id
@@ -788,9 +788,9 @@ def update_derived_log(
     """
     # Instantiate DAOs with shared session
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
-    field_type_dao = FieldTypeDAO(session)
     context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    field_type_dao = FieldTypeDAO(session)
     derived_log_dao = DerivedLogDAO(session)
 
     user_id = request_fastapi.state.user_id
@@ -1080,10 +1080,10 @@ def update_logs(
     """
     # Instantiate DAOs with shared session
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
     log_event_dao = LogEventDAO(session)
-    context_dao = ContextDAO(session)
     log_dao = LogDAO(session, context_dao)
     derived_log_dao = DerivedLogDAO(session)
 
@@ -1407,7 +1407,7 @@ def update_logs(
                     )
 
                 # Compute the version based on whether we're handling params or entries.
-                version = None
+                param_version = None
                 if data_type == "params":
                     existing = log_dao.filter(
                         key=k,
@@ -1415,9 +1415,13 @@ def update_logs(
                         project_id=project_id,
                     )
                     if existing:
-                        version = existing[0][0].version
+                        param_version = existing[0][0].param_version
                     else:
-                        version = log_dao.get_next_param_version(project_id, ctx_id, k)
+                        param_version = log_dao.get_next_param_version(
+                            project_id,
+                            ctx_id,
+                            k,
+                        )
 
                 # Add to the batch update list
                 # If we have multiple contexts, create an update for each context
@@ -1428,7 +1432,7 @@ def update_logs(
                                 "log_event_id": log_id,
                                 "key": k,
                                 "value": v,
-                                "version": version,
+                                "param_version": param_version,
                                 "explicit_types": explicit_types,
                                 "field_types": field_types,
                                 "context_id": context_id,
@@ -1441,7 +1445,7 @@ def update_logs(
                             "log_event_id": log_id,
                             "key": k,
                             "value": v,
-                            "version": version,
+                            "param_version": param_version,
                             "explicit_types": explicit_types,
                             "field_types": field_types,
                             "context_id": ctx_id,
@@ -1545,17 +1549,6 @@ def update_logs(
                     context_dao.session.query(Context).filter_by(id=context_id).first()
                 )
                 if ctx_obj and ctx_obj.is_versioned and updates_by_log_id:
-                    # Generate a summary of updated logs
-                    log_count = len(updates_by_log_id)
-                    update_desc = f"Updated {log_count} logs"
-
-                    # archive state once and increment version
-                    context_dao.archive_context_state(
-                        ctx_obj,
-                        name="update",
-                        description=update_desc,
-                    )
-                    ctx_obj.version += 1
                     ctx_obj.updated_at = datetime.now(timezone.utc)
         # Commit all changes at once
         if updates_by_log_id:
@@ -1564,17 +1557,6 @@ def update_logs(
         # Original single context behavior
         ctx_obj = context_dao.session.query(Context).filter_by(id=ctx_id).first()
         if ctx_obj and ctx_obj.is_versioned and updates_by_log_id:
-            # Generate a summary of updated logs
-            log_count = len(updates_by_log_id)
-            update_desc = f"Updated {log_count} logs"
-
-            # archive state once and increment version
-            context_dao.archive_context_state(
-                ctx_obj,
-                name="update",
-                description=update_desc,
-            )
-            ctx_obj.version += 1
             ctx_obj.updated_at = datetime.now(timezone.utc)
             context_dao.session.commit()
 
@@ -1651,10 +1633,10 @@ def delete_logs(
     """
     # Instantiate DAOs with shared session
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
     log_event_dao = LogEventDAO(session)
-    context_dao = ContextDAO(session)
     log_dao = LogDAO(session, context_dao)
 
     if body.source_type not in ("all", "base", "derived"):
@@ -2012,14 +1994,7 @@ def delete_logs(
         context_obj = (
             context_dao.session.query(Context).filter_by(id=context_id).first()
         )
-        if context_obj and context_obj.is_versioned:
-            context_dao.archive_context_state(
-                context_obj,
-                name="delete",
-                description="; ".join(context_description),
-            )
-            context_obj.version += 1
-            context_obj.updated_at = datetime.now(timezone.utc)
+        context_obj.updated_at = datetime.now(timezone.utc)
 
     # Handle cases where some logs or entries were not found
     if not_found_logs:
@@ -2284,9 +2259,9 @@ def get_logs(
     """
     # Instantiate DAOs with shared session
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
-    field_type_dao = FieldTypeDAO(session)
     context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    field_type_dao = FieldTypeDAO(session)
 
     try:
         project_id = project_dao.get_by_user_and_name(
@@ -2665,9 +2640,9 @@ def get_logs_latest_timestamp(
     """
     # Instantiate DAOs with shared session
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
-    field_type_dao = FieldTypeDAO(session)
     context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    field_type_dao = FieldTypeDAO(session)
 
     return _get_logs_query(
         request_fastapi,
@@ -2765,9 +2740,9 @@ def get_logs_metric(
     """
     # Instantiate DAOs with shared session
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
-    field_type_dao = FieldTypeDAO(session)
     context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    field_type_dao = FieldTypeDAO(session)
 
     # Handle old usage if request body is not provided
     if request is None:
@@ -3027,9 +3002,9 @@ def get_log_groups(
     """
     # Instantiate DAOs with shared session
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
-    field_type_dao = FieldTypeDAO(session)
     context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    field_type_dao = FieldTypeDAO(session)
 
     # Get filtered logs using _get_logs_query
     # raw_rows is a list of:
@@ -3132,9 +3107,9 @@ def rename_field(
     """
     # Instantiate DAOs with shared session
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
-    field_type_dao = FieldTypeDAO(session)
     context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    field_type_dao = FieldTypeDAO(session)
     log_dao = LogDAO(session, context_dao)
 
     try:
@@ -3297,9 +3272,9 @@ def join_logs(
     """
     # Instantiate DAOs with shared session
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
-    field_type_dao = FieldTypeDAO(session)
     context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    field_type_dao = FieldTypeDAO(session)
 
     # Validate input parameters
     user_id = request_fastapi.state.user_id
@@ -3450,9 +3425,9 @@ def get_fields(
     """
     # Instantiate DAOs with shared session
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
-    field_type_dao = FieldTypeDAO(session)
     context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    field_type_dao = FieldTypeDAO(session)
 
     try:
         user_id = request_fastapi.state.user_id
@@ -3550,9 +3525,9 @@ def create_fields(
     """
     # Instantiate DAOs with shared session
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
-    field_type_dao = FieldTypeDAO(session)
     context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    field_type_dao = FieldTypeDAO(session)
 
     # Validate project
     try:
@@ -3633,10 +3608,10 @@ def delete_fields(
     """
     # Instantiate DAOs with shared session
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
     log_event_dao = LogEventDAO(session)
-    context_dao = ContextDAO(session)
 
     # Check if this is the protected Unity/Tasks context
     if request.project == "Unity" and request.context == "Tasks":
@@ -4002,10 +3977,10 @@ async def process_traffic_logs(
     # Instantiate DAOs with shared session
     organization_dao = OrganizationDAO(session)
     organization_member_dao = OrganizationMemberDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
     log_event_dao = LogEventDAO(session)
-    context_dao = ContextDAO(session)
     log_dao = LogDAO(session, context_dao)
     try:
         from google.cloud import pubsub_v1

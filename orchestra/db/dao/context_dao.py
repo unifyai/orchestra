@@ -1,6 +1,7 @@
+import hashlib
 import re
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Union
+from typing import List, Optional
 
 from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -8,13 +9,14 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
     Context,
-    ContextHistory,
+    ContextVersion,
     JSONLog,
     Log,
     LogEvent,
     LogEventContext,
+    LogVersion,
+    ProjectVersion,
 )
-from orchestra.web.api.context.schema import ContextCreateRequest
 
 
 def delete_orphaned_log_events(session: Session, project_id: int) -> None:
@@ -34,7 +36,6 @@ def delete_orphaned_log_events(session: Session, project_id: int) -> None:
         ),
         {"project_id": project_id},
     )
-    session.commit()
 
 
 class ContextDAO:
@@ -59,7 +60,6 @@ class ContextDAO:
             created_at=ts,
             updated_at=ts,
             is_versioned=is_versioned,
-            version=1,
             allow_duplicates=allow_duplicates,
         )
 
@@ -125,18 +125,6 @@ class ContextDAO:
         else:
             raise ValueError(f"Context with id {id} not found")
 
-    def increment_version(self, id: int) -> None:
-        """Increment the version of a context if it is versioned."""
-        context = self.session.query(Context).filter_by(id=id).one_or_none()
-        if context and context.is_versioned:
-            # 1) Archive current state before incrementing
-            self.archive_context_state(context)
-
-            # 2) Now increment
-            context.version += 1
-            context.updated_at = datetime.now(timezone.utc)
-            self.session.commit()
-
     def delete(self, id: int) -> None:
         try:
             context = self.session.query(Context).filter_by(id=id).one()
@@ -196,7 +184,6 @@ class ContextDAO:
                 created_at=ts,
                 updated_at=ts,
                 is_versioned=is_versioned,
-                version=1,
                 allow_duplicates=allow_duplicates,
             )
 
@@ -225,7 +212,6 @@ class ContextDAO:
                             created_at=ts,
                             updated_at=ts,
                             is_versioned=False,
-                            version=1,
                             allow_duplicates=allow_duplicates,
                         )
                         .returning(Context.id)
@@ -299,9 +285,6 @@ class ContextDAO:
                 )
                 self.session.add(association)
 
-            # Increment version if context is versioned
-            self.increment_version(context_id)
-
             self.session.commit()
         except Exception as e:
             self.session.rollback()
@@ -311,7 +294,7 @@ class ContextDAO:
         context = self.session.query(Context).filter_by(id=context_id).one_or_none()
         return context and context.is_versioned
 
-    def get_context_id(self, project_id: int, body: Union[ContextCreateRequest, None]):
+    def get_context_id(self, project_id: int, body):
         if body:
             allow_duplicates = getattr(body, "allow_duplicates", True)
             return self.get_or_create(
@@ -329,31 +312,6 @@ class ContextDAO:
                 description="default context",
                 is_versioned=False,
             )
-
-    def build_log_versions_map(self, context: Context) -> Dict[str, Dict[str, int]]:
-        """
-        For each log_event in the context, gather each log key and store
-        the current context.version as that log's version. We store a map:
-
-            {
-                "<log_event_id>": {
-                    "<field_key>": <context.version>,
-                    ...
-                },
-                ...
-            }
-        """
-        result = {}
-        for le in context.log_events:
-            log_rows = self.session.query(Log).filter_by(log_event_id=le.id).all()
-            # we store context.version as the version integer for each key in that log
-            row_map = {}
-            for row in log_rows:
-                row_map[row.key] = context.version
-            if row_map:
-                result[str(le.id)] = row_map
-
-        return result
 
     def check_for_duplicates(self, context_id: int, log_event_id: int) -> bool:
         """
@@ -470,7 +428,7 @@ class ContextDAO:
                         log_event_id=new_log_event.id,
                         key=original_log.key,
                         value=original_log.value,
-                        version=original_log.version,
+                        param_version=original_log.param_version,
                         inferred_type=original_log.inferred_type,
                     )
                     new_logs.append(new_log)
@@ -496,7 +454,6 @@ class ContextDAO:
                                 log_event_id=new_log_event.id,
                                 key=original_json_log.key,
                                 value=original_json_log.value,
-                                version=original_json_log.version,
                             )
                             new_json_logs.append(new_json_log)
 
@@ -512,11 +469,6 @@ class ContextDAO:
                     context_id=context_id,
                 )
                 self.session.add(association)
-
-            # Increment version if context is versioned
-            if context.is_versioned:
-                self.increment_version(context_id)
-
             # Commit all changes
             self.session.commit()
 
@@ -524,27 +476,199 @@ class ContextDAO:
             self.session.rollback()
             raise e
 
-    def archive_context_state(
+    def commit(self, context_id: int, commit_message: Optional[str] = None) -> str:
+        """
+        Create a new version of a single context.
+        """
+        context = self.session.query(Context).filter_by(id=context_id).one_or_none()
+        if not context or not context.is_versioned:
+            raise ValueError("Context is not versioned.")
+
+        # 1. Generate a unique commit hash
+        commit_hash = hashlib.sha256(
+            f"context_{context_id}{datetime.now(timezone.utc)}".encode(),
+        ).hexdigest()
+
+        # 2. Create a snapshot for the context
+        self.create_version_snapshot(
+            context=context,
+            commit_hash=commit_hash,
+            commit_message=commit_message,
+            project_version=None,  # This is a context-only commit
+        )
+        context.updated_at = datetime.now(timezone.utc)
+        self.session.commit()
+        return commit_hash
+
+    def rollback(self, context_id: int, commit_hash: str) -> None:
+        """
+        Orchestrates the rollback of a context in two phases:
+        1. Restore the state from the version snapshot.
+        2. Clean up any orphaned data from the previous state.
+        This ensures the operation is atomic and safe.
+        """
+        try:
+            context_version = (
+                self.session.query(ContextVersion)
+                .filter_by(context_id=context_id, commit_hash=commit_hash)
+                .one_or_none()
+            )
+            if not context_version:
+                raise ValueError(
+                    f"Commit hash {commit_hash} not found for context {context_id}.",
+                )
+
+            context = self.session.query(Context).filter_by(id=context_id).one()
+
+            # Phase 1: Restore the state.
+            self.rollback_to_version(context_id, context_version.id)
+            context.updated_at = datetime.now(timezone.utc)
+            self.session.commit()
+
+            # Phase 2: Garbage collection in a new transaction.
+            delete_orphaned_log_events(self.session, context.project_id)
+            self.session.commit()
+
+        except Exception as e:
+            self.session.rollback()
+            raise e
+
+    def get_commit_history(self, context_id: int) -> List[dict]:
+        """
+        Retrieves the combined commit history for a versioned context,
+        including context-only and project-level commits.
+        """
+        context = self.session.query(Context).filter_by(id=context_id).one_or_none()
+        if not context or not context.is_versioned:
+            raise ValueError("Context is not versioned.")
+
+        # Query all versions for this context
+        versions = (
+            self.session.query(ContextVersion)
+            .filter_by(context_id=context_id)
+            .order_by(ContextVersion.archived_at.desc())
+            .all()
+        )
+
+        history = []
+        for v in versions:
+            history.append(
+                {
+                    "commit_hash": v.commit_hash,
+                    "commit_message": v.commit_message,
+                    "created_at": v.archived_at.isoformat(),
+                    "type": "project" if v.project_version_id else "context",
+                },
+            )
+
+        return history
+
+    def create_version_snapshot(
         self,
         context: Context,
-        name: str,
-        description: str,
+        commit_hash: str,
+        commit_message: Optional[str] = None,
+        project_version: Optional[ProjectVersion] = None,
     ) -> None:
-        """Archive the current state of a context in ContextHistory."""
+        """Creates a snapshot of the context's current state."""
         if not context.is_versioned:
             return
 
-        # build the log_versions map for all logs in this context
-        current_log_versions = self.build_log_versions_map(context)
-
-        history = ContextHistory(
+        # 1. Create a ContextVersion record
+        context_version = ContextVersion(
             context_id=context.id,
-            version=context.version,
-            name=name,
-            description=description,
-            log_versions=current_log_versions,
-            archived_at=datetime.now(timezone.utc),
+            project_version_id=project_version.id if project_version else None,
+            name=context.name,
+            description=context.description,
+            commit_hash=commit_hash,
+            commit_message=commit_message,
         )
-        self.session.add(history)
-        self.session.flush()  # so we get an ID
-        self.session.commit()
+        self.session.add(context_version)
+        self.session.flush()  # Flush to get the context_version.id
+
+        # 2. Get all current logs for the context
+        logs_to_version = (
+            self.session.query(Log)
+            .join(LogEvent, Log.log_event_id == LogEvent.id)
+            .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
+            .filter(LogEventContext.context_id == context.id)
+            .all()
+        )
+
+        if not logs_to_version:
+            return
+
+        # 3. Create a snapshot of each log
+        log_versions = [
+            LogVersion(
+                context_version_id=context_version.id,
+                log_event_id=log.log_event_id,
+                key=log.key,
+                value=log.value,
+                param_version=log.param_version,
+                inferred_type=log.inferred_type,
+                created_at=log.created_at,
+                updated_at=log.updated_at,
+            )
+            for log in logs_to_version
+        ]
+
+        # 4. Bulk insert the log snapshots for efficiency
+        self.session.bulk_save_objects(log_versions)
+
+    def rollback_to_version(self, context_id: int, context_version_id: int) -> None:
+        """
+        Helper method to prepare the rollback.
+        This method only prepares the operations and does NOT commit.
+        """
+        log_versions_to_restore = (
+            self.session.query(LogVersion)
+            .filter_by(context_version_id=context_version_id)
+            .all()
+        )
+        context = self.session.query(Context).filter_by(id=context_id).one()
+
+        self.session.query(LogEventContext).filter_by(context_id=context_id).delete(
+            synchronize_session=False,
+        )
+
+        grouped_lvs = {}
+        if log_versions_to_restore:
+            for lv in log_versions_to_restore:
+                grouped_lvs.setdefault(lv.log_event_id, []).append(lv)
+
+        for original_log_event_id, lvs in grouped_lvs.items():
+            new_log_event = LogEvent(project_id=context.project_id)
+            self.session.add(new_log_event)
+            self.session.flush()
+
+            self.session.add(
+                LogEventContext(log_event_id=new_log_event.id, context_id=context_id),
+            )
+
+            new_logs = []
+            new_json_logs = []
+            for lv in lvs:
+                new_logs.append(
+                    Log(
+                        log_event_id=new_log_event.id,
+                        key=lv.key,
+                        value=lv.value,
+                        param_version=lv.param_version,
+                        inferred_type=lv.inferred_type,
+                        created_at=lv.created_at,
+                        updated_at=lv.updated_at,
+                    ),
+                )
+                if isinstance(lv.value, (dict, list)):
+                    new_json_logs.append(
+                        JSONLog(
+                            log_event_id=new_log_event.id,
+                            key=lv.key,
+                            value=lv.value,
+                        ),
+                    )
+            if new_logs:
+                self.session.bulk_save_objects(new_logs)
+            if new_json_logs:
+                self.session.bulk_save_objects(new_json_logs)

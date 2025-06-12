@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from fastapi import Depends, HTTPException, Request
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import and_, asc, cast, desc, exists, func, select, tuple_
+from sqlalchemy import and_, asc, cast, desc, exists, func, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql.selectable import Subquery
@@ -19,7 +19,6 @@ from orchestra.db.models.orchestra_models import (
     Log,
     LogEvent,
     LogEventContext,
-    LogHistory,
 )
 
 from ..python2SQL import build_sql_query, str_filter_exp_to_dict
@@ -48,6 +47,7 @@ __all__ = [
 #####################
 # GroupBy Utils     #
 #####################
+
 
 # Sorting configuration modes
 class SortType(str, Enum):
@@ -90,7 +90,7 @@ def _get_distinct_group_values(
     """
     if is_param:
         # For parameters, use only base logs with version
-        value_col = Log.version
+        value_col = Log.param_version
         subquery = (
             session.query(
                 value_col.label("value"),
@@ -177,7 +177,7 @@ def _get_log_event_ids_for_group_value(
             session.query(Log.log_event_id)
             .filter(Log.log_event_id.in_(log_event_ids))
             .filter(Log.key == group_key)
-            .filter(Log.version == group_value)
+            .filter(Log.param_version == group_value)
         )
     elif group_key == "derived_entries":
         # For derived entries, only search derived logs
@@ -217,14 +217,14 @@ def _get_params_for_log_events(
     query = (
         session.query(Log)
         .filter(Log.log_event_id.in_(select(log_event_ids)))
-        .filter(Log.version.isnot(None))
+        .filter(Log.param_version.isnot(None))
     )
 
     params = {}
     for log in query.all():
         if log.key not in params:
             params[log.key] = {}
-        params[log.key][log.version] = log.value
+        params[log.key][log.param_version] = log.value
 
     return params
 
@@ -352,66 +352,68 @@ def _get_all_filtered_log_event_ids(
 
     # Handle ID filtering differently based on return_versions
     if return_versions:
-        if from_ids:
-            try:
-                # Validate from_ids format for versioned logs
-                from_ids = json.loads(from_ids)
-                if not isinstance(from_ids, list):
-                    raise ValueError(
-                        "from_ids must be a list when return_versions is True",
-                    )
-                for item in from_ids:
-                    if (
-                        not isinstance(item, dict)
-                        or "id" not in item
-                        or "version" not in item
-                    ):
-                        raise ValueError(
-                            "Each item in from_ids must have 'id' and 'version' keys",
-                        )
-                allowed_pairs = [(item["id"], item["version"]) for item in from_ids]
-                # Apply filtering at the Log/LogHistory level since we need version info
-                filtered_logs_q = filtered_logs_q.filter(
-                    tuple_(
-                        LogHistory.log_event_id,
-                        LogHistory.context_version,
-                    ).in_(allowed_pairs),
-                )
-            except ValueError as e:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid from_ids format for versioned logs: {str(e)}",
-                )
-        if exclude_ids:
-            try:
-                # Validate exclude_ids format for versioned logs
-                exclude_ids = json.loads(exclude_ids)
-                if not isinstance(exclude_ids, list):
-                    raise ValueError(
-                        "exclude_ids must be a list when return_versions is True",
-                    )
-                for item in exclude_ids:
-                    if (
-                        not isinstance(item, dict)
-                        or "id" not in item
-                        or "version" not in item
-                    ):
-                        raise ValueError(
-                            "Each item in exclude_ids must have 'id' and 'version' keys",
-                        )
-                excluded_pairs = [(item["id"], item["version"]) for item in exclude_ids]
-                # Apply filtering at the Log/LogHistory level since we need version info
-                filtered_logs_q = filtered_logs_q.filter(
-                    ~tuple_(
-                        LogHistory.log_event_id,
-                        LogHistory.context_version,
-                    ).in_(excluded_pairs),
-                )
-            except ValueError as e:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid exclude_ids format for versioned logs: {str(e)}",
-                )
+        pass
+        # TODO(yusha): implement this with the new LogVersion table
+        # if from_ids:
+        #     try:
+        #         # Validate from_ids format for versioned logs
+        #         from_ids = json.loads(from_ids)
+        #         if not isinstance(from_ids, list):
+        #             raise ValueError(
+        #                 "from_ids must be a list when return_versions is True",
+        #             )
+        #         for item in from_ids:
+        #             if (
+        #                 not isinstance(item, dict)
+        #                 or "id" not in item
+        #                 or "version" not in item
+        #             ):
+        #                 raise ValueError(
+        #                     "Each item in from_ids must have 'id' and 'version' keys",
+        #                 )
+        #         allowed_pairs = [(item["id"], item["version"]) for item in from_ids]
+        #         # Apply filtering at the Log/LogHistory level since we need version info
+        #         filtered_logs_q = filtered_logs_q.filter(
+        #             tuple_(
+        #                 LogVersion.log_event_id,
+        #                 LogVersion.context_version,
+        #             ).in_(allowed_pairs),
+        #         )
+        #     except ValueError as e:
+        #         raise HTTPException(
+        #             status_code=400,
+        #             detail=f"Invalid from_ids format for versioned logs: {str(e)}",
+        #         )
+        # if exclude_ids:
+        #     try:
+        #         # Validate exclude_ids format for versioned logs
+        #         exclude_ids = json.loads(exclude_ids)
+        #         if not isinstance(exclude_ids, list):
+        #             raise ValueError(
+        #                 "exclude_ids must be a list when return_versions is True",
+        #             )
+        #         for item in exclude_ids:
+        #             if (
+        #                 not isinstance(item, dict)
+        #                 or "id" not in item
+        #                 or "version" not in item
+        #             ):
+        #                 raise ValueError(
+        #                     "Each item in exclude_ids must have 'id' and 'version' keys",
+        #                 )
+        #         excluded_pairs = [(item["id"], item["version"]) for item in exclude_ids]
+        #         # Apply filtering at the Log/LogHistory level since we need version info
+        #         filtered_logs_q = filtered_logs_q.filter(
+        #             ~tuple_(
+        #                 LogVersion.log_event_id,
+        #                 LogVersion.context_version,
+        #             ).in_(excluded_pairs),
+        #         )
+        #     except ValueError as e:
+        #         raise HTTPException(
+        #             status_code=400,
+        #             detail=f"Invalid exclude_ids format for versioned logs: {str(e)}",
+        #         )
     else:
         # For non-versioned queries, use simple log_event_id filtering
         if from_ids:
@@ -805,9 +807,11 @@ def _handle_group_depth_level(
                     session.query(
                         base_alias.c.log_event_id.label("log_event_id"),
                         base_alias.c.inferred_type.label("inferred_type"),
-                        base_alias.c.value.label("group_key_value")
-                        if prefix != "params"
-                        else base_alias.c.param_version.label("group_key_value"),
+                        (
+                            base_alias.c.value.label("group_key_value")
+                            if prefix != "params"
+                            else base_alias.c.param_version.label("group_key_value")
+                        ),
                         agg_alias.c.value.label("agg_val"),
                     )
                     .join(
@@ -1092,9 +1096,11 @@ def _build_grouped_data(
                 session.query(
                     base_alias.c.log_event_id.label("log_event_id"),
                     base_alias.c.inferred_type.label("inferred_type"),
-                    base_alias.c.value.label("group_key_value")
-                    if prefix != "params"
-                    else base_alias.c.param_version.label("group_key_value"),
+                    (
+                        base_alias.c.value.label("group_key_value")
+                        if prefix != "params"
+                        else base_alias.c.param_version.label("group_key_value")
+                    ),
                     agg_alias.c.value.label("agg_val"),
                 )
                 .join(
@@ -1206,9 +1212,9 @@ def _build_grouped_data(
             groups_only=groups_only,
             return_timestamps=return_timestamps,
             return_versions=return_versions,
-            parent_group_key="&".join([parent_group_key, raw_key])
-            if parent_group_key
-            else raw_key,
+            parent_group_key=(
+                "&".join([parent_group_key, raw_key]) if parent_group_key else raw_key
+            ),
         )
 
         # Add to group list instead of directly to result_dict
@@ -1252,9 +1258,9 @@ def _build_grouped_data(
             groups_only=groups_only,
             return_timestamps=return_timestamps,
             return_versions=return_versions,
-            parent_group_key="&".join([parent_group_key, raw_key])
-            if parent_group_key
-            else raw_key,
+            parent_group_key=(
+                "&".join([parent_group_key, raw_key]) if parent_group_key else raw_key
+            ),
         )
         # Add null group to the group list
         group_list.append({"key": "null", "value": null_sub})

@@ -595,6 +595,7 @@ class Project(Base):
     name = Column(String, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
+    is_versioned = Column(Boolean, nullable=False, server_default="f")
     contexts = relationship("Context", back_populates="project", passive_deletes=True)
     interfaces = relationship(
         "Interface",
@@ -614,6 +615,25 @@ class Project(Base):
         UniqueConstraint("user_id", "name"),
         UniqueConstraint("organization_id", "name"),
     )
+
+
+class ProjectVersion(Base):
+    """Model class for storing historical versions of projects."""
+
+    __tablename__ = "project_version"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    commit_hash = Column(String, nullable=False, unique=True)
+    commit_message = Column(String, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    # Relationship to its ContextVersions
+    context_versions = relationship("ContextVersion", back_populates="project_version")
 
 
 class LogEventContext(Base):
@@ -650,7 +670,6 @@ class Context(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
     is_versioned = Column(Boolean, nullable=False, server_default="f")
-    version = Column(Integer, nullable=False, server_default="1")
     allow_duplicates = Column(Boolean, nullable=False, server_default="t")
 
     project = relationship("Project", back_populates="contexts")
@@ -667,10 +686,10 @@ class Context(Base):
     )
 
 
-class ContextHistory(Base):
+class ContextVersion(Base):
     """Model class for storing historical versions of contexts."""
 
-    __tablename__ = "context_history"
+    __tablename__ = "context_version"
 
     id = Column(Integer, primary_key=True)
     context_id = Column(
@@ -679,16 +698,26 @@ class ContextHistory(Base):
         nullable=False,
         index=True,
     )
-    version = Column(Integer, nullable=False)
-    log_versions = Column(
-        JSONB,
-        nullable=False,
-        server_default=text("'{}'"),
-        comment="Stores {log_event_id: {field_key: version_int}}",
+    project_version_id = Column(
+        Integer,
+        ForeignKey("project_version.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
     )
     name = Column(String, nullable=True)
     description = Column(String, nullable=True)
     archived_at = Column(TIMESTAMP, server_default=func.now())
+    commit_hash = Column(String, nullable=False)
+    commit_message = Column(String, nullable=True)
+
+    # Relationship to its ProjectVersion
+    project_version = relationship("ProjectVersion", back_populates="context_versions")
+    # Relationship to its LogVersion snapshots
+    log_versions = relationship(
+        "LogVersion",
+        back_populates="context_version",
+        cascade="all, delete-orphan",
+    )
 
 
 class ContextArtifact(Base):
@@ -790,29 +819,36 @@ class Log(Base):
     )
     key = Column(String, nullable=False, index=True)
     value = Column(JSONB)
-    version = Column(Integer)
+    param_version = Column(Integer)
     inferred_type = Column(String)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
-    __table_args__ = (UniqueConstraint("log_event_id", "key", "version"),)
+    __table_args__ = (UniqueConstraint("log_event_id", "key", "param_version"),)
 
 
-class LogHistory(Base):
-    __tablename__ = "log_history"
+class LogVersion(Base):
+    """Model class for storing historical versions of logs (snapshots)."""
+
+    __tablename__ = "log_version"
 
     id = Column(Integer, primary_key=True)
-    log_event_id = Column(
+    context_version_id = Column(
         Integer,
-        ForeignKey("log_event.id", ondelete="CASCADE"),
+        ForeignKey("context_version.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
+    # --- Snapshot fields (a copy of the Log table's data) ---
+    log_event_id = Column(Integer, nullable=False, index=True)
     key = Column(String, nullable=False)
     value = Column(JSONB)
-    version = Column(Integer, nullable=False)
+    param_version = Column(Integer)
     inferred_type = Column(String)
-    description = Column(String)
-    archived_at = Column(TIMESTAMP, server_default=func.now())
+    created_at = Column(TIMESTAMP)
+    updated_at = Column(TIMESTAMP)
+
+    # Relationship back to the ContextVersion
+    context_version = relationship("ContextVersion", back_populates="log_versions")
 
 
 class ParamVersion(Base):

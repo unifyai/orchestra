@@ -14,11 +14,9 @@ from orchestra.db.models.orchestra_models import (
     Context,
     FieldType,
     JSONLog,
-    JSONLogHistory,
     Log,
     LogEvent,
     LogEventContext,
-    LogHistory,
     ParamVersion,
 )
 from orchestra.services.bucket_service import BucketService
@@ -199,95 +197,6 @@ class LogDAO:
         self.bucket_service = BucketService()
         self.context_dao = context_dao
 
-    def _create_log_history(
-        self,
-        log_event_id: int,
-        key: str,
-        value: Any,
-        version: int,
-        inferred_type: Optional[str],
-        description: str,
-        created_at: Optional[datetime] = None,
-        updated_at: Optional[datetime] = None,
-    ) -> LogHistory:
-        """Helper method to create a LogHistory entry."""
-        log_history = LogHistory(
-            log_event_id=log_event_id,
-            key=key,
-            value=value,
-            version=version,
-            inferred_type=inferred_type,
-            description=description,
-            archived_at=datetime.now(timezone.utc),
-        )
-        if created_at:
-            log_history.created_at = created_at
-        if updated_at:
-            log_history.updated_at = updated_at
-        self.session.add(log_history)
-        return log_history
-
-    def _create_json_log_history(
-        self,
-        log_event_id: int,
-        key: str,
-        value: Any,
-        version: int,
-        description: str,
-    ) -> JSONLogHistory:
-        """Helper method to create a JSONLogHistory entry."""
-        json_log_history = JSONLogHistory(
-            log_event_id=log_event_id,
-            key=key,
-            value=value,
-            version=version,
-            description=description,
-            archived_at=datetime.now(timezone.utc),
-        )
-        self.session.add(json_log_history)
-        return json_log_history
-
-    def _handle_versioned_history(
-        self,
-        context_id: Optional[int],
-        log_event_id: int,
-        key: str,
-        value: Any,
-        inferred_type: Optional[str] = None,
-        description: str = "",
-        json_value: Any = None,
-    ) -> Optional[Context]:
-        """Helper method to handle versioned history creation for both Log and JSONLog entries."""
-        if context_id is None:
-            return None
-
-        context = self.session.query(Context).filter_by(id=context_id).first()
-        if not context or not context.is_versioned:
-            return None
-
-        # Create regular log history
-        self._create_log_history(
-            log_event_id=log_event_id,
-            key=key,
-            value=value,
-            version=context.version,
-            inferred_type=inferred_type,
-            description=description,
-        )
-
-        # Create JSON log history if json_value is provided
-        if json_value is not None:
-            self._create_json_log_history(
-                log_event_id=log_event_id,
-                key=key,
-                value=json_value,
-                version=context.version,
-                description=description,
-            )
-
-        context.updated_at = datetime.now(timezone.utc)
-        return context
-
     def upload_image_to_bucket(self, image_base64: str) -> str:
         """Upload image to bucket and return the URL."""
         try:
@@ -448,7 +357,7 @@ class LogDAO:
             cast_values = [cast(literal(val), JSONB) for val in value]
             query = query.where(Log.value.in_(cast_values))
         if version:
-            query = query.where(Log.version.in_(version))
+            query = query.where(Log.param_version.in_(version))
         if inferred_type:
             query = query.where(Log.inferred_type.in_(inferred_type))
         if project_id:
@@ -518,52 +427,6 @@ class LogDAO:
                 .update({"key": new_field_name}, synchronize_session=False)
             )
 
-            # Update LogHistory table
-            log_history_update = (
-                self.session.query(LogHistory)
-                .filter(
-                    LogHistory.log_event_id.in_(log_event_ids),
-                    LogHistory.key == old_field_name,
-                )
-                .update({"key": new_field_name}, synchronize_session=False)
-            )
-
-            # Update JSONLogHistory table
-            json_log_history_update = (
-                self.session.query(JSONLogHistory)
-                .filter(
-                    JSONLogHistory.log_event_id.in_(log_event_ids),
-                    JSONLogHistory.key == old_field_name,
-                )
-                .update({"key": new_field_name}, synchronize_session=False)
-            )
-
-            # If this is a versioned context, create history entries for the rename
-            if context_id:
-                context = self.session.query(Context).filter_by(id=context_id).first()
-                if context and context.is_versioned:
-                    # Get all affected logs to create history entries
-                    affected_logs = (
-                        self.session.query(Log)
-                        .filter(
-                            Log.log_event_id.in_(log_event_ids),
-                            Log.key == new_field_name,
-                        )
-                        .all()
-                    )
-
-                    for log in affected_logs:
-                        self._create_log_history(
-                            log_event_id=log.log_event_id,
-                            key=new_field_name,
-                            value=log.value,
-                            version=context.version,
-                            inferred_type=log.inferred_type,
-                            description=f"Renamed field from {old_field_name} to {new_field_name}",
-                            created_at=log.created_at,
-                            updated_at=log.updated_at,
-                        )
-
             self.session.commit()
 
         except Exception as e:
@@ -572,29 +435,7 @@ class LogDAO:
 
     def delete(self, id: int):
         try:
-            # First get the log and check if it belongs to a versioned context
             log = self.session.query(Log).filter_by(id=id).one()
-
-            # Check if this log is part of a versioned context
-            log_event_context = (
-                self.session.query(LogEventContext)
-                .filter_by(
-                    log_event_id=log.log_event_id,
-                )
-                .first()
-            )
-
-            if log_event_context:
-                # Handle versioned history
-                self._handle_versioned_history(
-                    context_id=log_event_context.context_id,
-                    log_event_id=log.log_event_id,
-                    key=log.key,
-                    value=log.value,
-                    inferred_type=log.inferred_type,
-                    description=f"Deleted entry with key {log.key}",
-                )
-
             # Proceed with log deletion
             json_log = (
                 self.session.query(JSONLog)
@@ -623,7 +464,7 @@ class LogDAO:
                 - log_event_id: int
                 - key: str
                 - value: Any (optional)
-                - version: int (optional)
+                - param_version: int (optional)
                 - explicit_types: Dict (optional)
                 - context_id: int (optional)
             context_obj: Optional Context object. When provided, enforces that all entries
@@ -639,9 +480,6 @@ class LogDAO:
         if not entries:
             return []
 
-        # Compute versioning status once using the passed context object
-        is_versioned = bool(context_obj and context_obj.is_versioned)
-
         # Enforce one-context-per-batch requirement when context_obj is provided
         if context_obj:
             for entry in entries:
@@ -652,13 +490,10 @@ class LogDAO:
                     )
 
         # Start transaction
-        history_entries: list[dict] = []
-        json_history_entries: list[dict] = []
         rows_json: list[dict] = []
         rows_log_versioned: list[dict] = []
         rows_log_versioned_pk2val: dict[tuple[int, str, int], Any] = {}
         rows_json_pk2val: dict[tuple[int, str], Any] = {}
-        contexts_to_update: set[int] = set()
         pending_log_rows: list[dict] = []
 
         try:
@@ -670,7 +505,7 @@ class LogDAO:
                 log_event_id = entry.get("log_event_id")
                 key = entry.get("key")
                 value = entry.get("value")
-                version = entry.get("version")
+                param_version = entry.get("param_version")
                 explicit_types = entry.get("explicit_types", {})
                 key_explicit_type = explicit_types.get(key, {})
                 inferred_type = key_explicit_type.get("type")
@@ -711,36 +546,6 @@ class LogDAO:
                     value = self.upload_image_to_bucket(value)
                 if inferred_type == "datetime" and isinstance(value, str):
                     value = normalize_timestamp(value)
-                # Handle versioned history
-                if is_versioned and context_obj is not None:
-                    # Create history entry
-                    history_entries.append(
-                        {
-                            "log_event_id": log_event_id,
-                            "key": key,
-                            "value": value,
-                            "version": context_obj.version,
-                            "inferred_type": inferred_type,
-                            "description": f"Created entry with key {key}",
-                            "archived_at": now,
-                        },
-                    )
-
-                    # If JSON, also create JSON history
-                    if isinstance(value, (dict, list)):
-                        json_history_entries.append(
-                            {
-                                "log_event_id": log_event_id,
-                                "key": key,
-                                "value": value,
-                                "version": context_obj.version,
-                                "description": f"Created entry with key {key}",
-                                "archived_at": now,
-                            },
-                        )
-
-                    # Mark context for update
-                    contexts_to_update.add(context_obj.id)
 
                 # Collect JSON-typed entries so we can insert them in one statement after the loop
                 if isinstance(value, (dict, list)):
@@ -759,14 +564,14 @@ class LogDAO:
                     )
 
                 # Create Log entry
-                if version is not None:
-                    pk_v = (log_event_id, key, version)
+                if param_version is not None:
+                    pk_v = (log_event_id, key, param_version)
                     if (
                         pk_v in rows_log_versioned_pk2val
                         and rows_log_versioned_pk2val[pk_v] != value
                     ):
                         raise OverwriteError(
-                            f"Conflicting values for key '{key}', version {version} "
+                            f"Conflicting values for key '{key}', param_version {param_version} "
                             "in same batch",
                         )
                     rows_log_versioned_pk2val[pk_v] = value
@@ -775,7 +580,7 @@ class LogDAO:
                             "log_event_id": log_event_id,
                             "key": key,
                             "value": value,
-                            "version": version,
+                            "param_version": param_version,
                             "inferred_type": inferred_type,
                             "created_at": now,
                             "updated_at": now,
@@ -787,7 +592,7 @@ class LogDAO:
                             "log_event_id": log_event_id,
                             "key": key,
                             "value": value,
-                            "version": None,
+                            "param_version": None,
                             "inferred_type": inferred_type,
                             "created_at": now,
                             "updated_at": now,
@@ -807,18 +612,18 @@ class LogDAO:
                     self.session.query(Log)
                     .filter(Log.log_event_id.in_([pk[0] for pk in pks_v]))
                     .filter(Log.key.in_([pk[1] for pk in pks_v]))
-                    .filter(Log.version.in_([pk[2] for pk in pks_v]))
+                    .filter(Log.param_version.in_([pk[2] for pk in pks_v]))
                     .with_for_update()
                     .all()
                 )
                 for row in rows_to_check:
                     intended = rows_log_versioned_pk2val[
-                        (row.log_event_id, row.key, row.version)
+                        (row.log_event_id, row.key, row.param_version)
                     ]
                     if row.value != intended:
                         raise OverwriteError(
                             f"Cannot overwrite existing value for key "
-                            f"'{row.key}', version {row.version}",
+                            f"'{row.key}', param_version {row.param_version}",
                         )
 
                 stmt_v = (
@@ -849,19 +654,6 @@ class LogDAO:
                     pg_insert(JSONLog).values(rows_json).on_conflict_do_nothing()
                 )
                 self.session.execute(stmt_json)
-
-            # Create history entries for versioned contexts
-            for entry in history_entries:
-                log_history = LogHistory(**entry)
-                self.session.add(log_history)
-
-            for entry in json_history_entries:
-                json_log_history = JSONLogHistory(**entry)
-                self.session.add(json_log_history)
-
-            # Update timestamps on contexts
-            if context_obj and context_obj.id in contexts_to_update:
-                context_obj.updated_at = now
 
             self.session.commit()
 
@@ -934,7 +726,7 @@ class LogDAO:
                 - log_event_id: int
                 - key: str
                 - value: Any
-                - version: int (optional)
+                - param_version: int (optional)
                 - explicit_types: Dict (optional)
                 - context_id: int (optional)
             overwrite: Whether to allow overwriting existing values
@@ -996,38 +788,19 @@ class LogDAO:
                 for json_log in existing_json_logs
             }
 
-            # Process all context IDs at once
-            context_ids = [
-                update.get("context_id")
-                for update in update_groups.values()
-                if update.get("context_id") is not None
-            ]
-            context_map = {}
-            if context_ids:
-                contexts = (
-                    self.session.query(Context)
-                    .filter(Context.id.in_(context_ids))
-                    .all()
-                )
-                context_map = {context.id: context for context in contexts}
-
-            # Collect history entries to create and contexts to update
-            history_entries = []
-            json_history_entries = []
-            contexts_to_update = set()
             log_event_ids_to_update = set()
 
             # Collect rows for batch operations and conflict detection
             rows_log = []
             rows_json = []
-            rows_log_pk2val = {}  # Maps (log_event_id, key, version) to value
+            rows_log_pk2val = {}  # Maps (log_event_id, key, param_version) to value
             rows_json_pk2val = {}  # Maps (log_event_id, key) to value
 
             # Process each update
             for group_key, update in update_groups.items():
                 log_event_id, key = group_key
                 value = update.get("value")
-                version = update.get("version")
+                param_version = update.get("param_version")
                 explicit_types = update.get("explicit_types", {})
                 key_explicit_type = explicit_types.get(key, {})
                 inferred_type = key_explicit_type.get("type")
@@ -1074,12 +847,6 @@ class LogDAO:
                 # Check if log exists
                 existing_log = existing_log_map.get(group_key)
 
-                # Check for context versioning
-                context = (
-                    context_map.get(context_id) if context_id is not None else None
-                )
-                is_versioned = context and context.is_versioned
-
                 if existing_log:
                     # Check if overwrite is allowed
                     if not update.get("overwrite", overwrite):
@@ -1087,62 +854,31 @@ class LogDAO:
 
                     # Check if field is immutable
                     if key in field_types and context_id is not None:
-                        if not is_versioned:
-                            field_info = field_types.get(key)
-                            if field_info and not field_info.get("mutable", False):
-                                raise ImmutableFieldError
+                        field_info = field_types.get(key)
+                        if field_info and not field_info.get("mutable", False):
+                            raise ImmutableFieldError
 
                     # Update existing log
                     existing_log.value = json_value
-                    existing_log.version = version
+                    existing_log.param_version = param_version
                     existing_log.inferred_type = inferred_type
                     existing_log.updated_at = now
 
-                    # Handle versioned history
-                    if is_versioned:
-                        # Create history entry for current value before updating
-                        history_entries.append(
-                            {
-                                "log_event_id": log_event_id,
-                                "key": key,
-                                "value": existing_log.value,
-                                "version": context.version,
-                                "inferred_type": existing_log.inferred_type,
-                                "description": f"Updated entry with key {key}",
-                                "archived_at": now,
-                            },
-                        )
-                        contexts_to_update.add(context_id)
                 else:
                     # Prepare for batch upsert
-                    log_pk = (log_event_id, key, version)
+                    log_pk = (log_event_id, key, param_version)
                     rows_log_pk2val[log_pk] = json_value
                     rows_log.append(
                         {
                             "log_event_id": log_event_id,
                             "key": key,
                             "value": json_value,
-                            "version": version,
+                            "param_version": param_version,
                             "inferred_type": inferred_type,
                             "created_at": now,
                             "updated_at": now,
                         },
                     )
-
-                    # Handle versioned history for new logs
-                    if is_versioned:
-                        history_entries.append(
-                            {
-                                "log_event_id": log_event_id,
-                                "key": key,
-                                "value": json_value,
-                                "version": context.version,
-                                "inferred_type": inferred_type,
-                                "description": f"Created entry with key {key}",
-                                "archived_at": now,
-                            },
-                        )
-                        contexts_to_update.add(context_id)
 
                 # Handle JSON logs for dict/list values
                 if isinstance(value, (dict, list)):
@@ -1155,23 +891,6 @@ class LogDAO:
                             "value": json_value,
                         },
                     )
-
-                    # Create JSON history if versioned and there's an actual change
-                    if is_versioned and (
-                        overwrite
-                        or group_key not in existing_json_log_map
-                        or existing_json_log_map[group_key].value != json_value
-                    ):
-                        json_history_entries.append(
-                            {
-                                "log_event_id": log_event_id,
-                                "key": key,
-                                "value": json_value,
-                                "version": context.version,
-                                "description": f"{'Updated' if group_key in existing_json_log_map else 'Created'} JSON entry with key {key}",
-                                "archived_at": now,
-                            },
-                        )
 
                 # Track log events to update timestamps
                 log_event_ids_to_update.add(log_event_id)
@@ -1189,7 +908,7 @@ class LogDAO:
                         self.session.query(Log)
                         .filter(Log.log_event_id.in_(log_event_ids_check))
                         .filter(Log.key.in_(keys_check))
-                        .filter(Log.version.in_(versions_check))
+                        .filter(Log.param_version.in_(versions_check))
                         .with_for_update()
                         .all()
                     )
@@ -1198,7 +917,7 @@ class LogDAO:
                         pk = (
                             existing_log.log_event_id,
                             existing_log.key,
-                            existing_log.version,
+                            existing_log.param_version,
                         )
                         intended_value = rows_log_pk2val.get(pk)
                         if (
@@ -1239,7 +958,7 @@ class LogDAO:
                 stmt = pg_insert(Log).values(rows_log)
                 if overwrite:
                     stmt = stmt.on_conflict_do_update(
-                        index_elements=["log_event_id", "key", "version"],
+                        index_elements=["log_event_id", "key", "param_version"],
                         set_={
                             "value": pg_insert(Log).excluded.value,
                             "updated_at": func.now(),
@@ -1260,21 +979,6 @@ class LogDAO:
                 else:
                     stmt_json = stmt_json.on_conflict_do_nothing()
                 self.session.execute(stmt_json)
-
-            # Create history entries
-            for entry in history_entries:
-                log_history = LogHistory(**entry)
-                self.session.add(log_history)
-
-            for entry in json_history_entries:
-                json_log_history = JSONLogHistory(**entry)
-                self.session.add(json_log_history)
-
-            # Update context timestamps
-            for context_id in contexts_to_update:
-                context = context_map.get(context_id)
-                if context:
-                    context.updated_at = now
 
             # Update log event timestamps
             for log_event_id in log_event_ids_to_update:
