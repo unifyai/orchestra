@@ -1,5 +1,5 @@
 import io
-from unittest.mock import MagicMock
+from unittest.mock import ANY, MagicMock
 
 import pytest
 from httpx import AsyncClient
@@ -133,6 +133,7 @@ async def test_edit_photo_with_file_success(
 
     bucket_mock.upload_temp_assistant_photo_file.assert_called_once_with(
         file_content,
+        ANY,
         "image/jpeg",
     )
     replicate_mock.edit_photo.assert_called_once_with(
