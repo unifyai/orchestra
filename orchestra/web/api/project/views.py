@@ -14,13 +14,11 @@ from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.derived_log_dao import DerivedLogDAO
 from orchestra.db.dao.favorite_project_dao import FavoriteProjectDAO
 from orchestra.db.dao.interface_dao import InterfaceDAO
-from orchestra.db.dao.legacy_interface_dao import LegacyInterfaceDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.tab_dao import TabDAO
-from orchestra.db.dao.temp_interface_dao import TempInterfaceDAO
 from orchestra.db.dao.tile_dao import TileDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
@@ -28,14 +26,12 @@ from orchestra.db.models.orchestra_models import (
     DerivedLog,
     FavoriteProject,
     FieldType,
-    Interface,
     JSONLog,
     Log,
     LogEvent,
     LogEventContext,
     Organization,
     Project,
-    TempInterface,
 )
 from orchestra.settings import settings
 from orchestra.web.api.project.schema import (
@@ -1022,7 +1018,7 @@ def admin_share_project(
                             "logs_copied": 100,
                             "json_logs_copied": 50,
                             "derived_logs_copied": 15,
-                            "legacy_interfaces_copied": 3,
+                            "interfaces_copied": 3,
                             "tabs_copied": 2,
                             "tiles_copied": 10,
                             "table_tiles_copied": 5,
@@ -1072,7 +1068,13 @@ def admin_duplicate_project(
     - JSON Logs
     - Derived Logs
     - Interfaces
-    - Temp Interfaces
+    - Tabs
+    - Tiles
+    - Table Tiles
+    - Plot Tiles
+    - Editor Tiles
+    - View Tiles
+    - Terminal Tiles
 
     The duplicate is a separate project where changes in one do not affect the other.
     """
@@ -1082,8 +1084,6 @@ def admin_duplicate_project(
     auth_user_dao = AuthUserDAO(session)
     log_event_dao = LogEventDAO(session)
     derived_log_dao = DerivedLogDAO(session)
-    legacy_interface_dao = LegacyInterfaceDAO(session)
-    temp_interface_dao = TempInterfaceDAO(session)
     interface_dao = InterfaceDAO(session)
     tab_dao = TabDAO(session)
     tile_dao = TileDAO(session)
@@ -1138,8 +1138,6 @@ def admin_duplicate_project(
         "logs_copied": 0,
         "json_logs_copied": 0,
         "derived_logs_copied": 0,
-        "legacy_interfaces_copied": 0,
-        "temp_interfaces_copied": 0,
         "interfaces_copied": 0,
         "tabs_copied": 0,
         "tiles_copied": 0,
@@ -1394,47 +1392,7 @@ def admin_duplicate_project(
 
         stats["derived_logs_copied"] = len(derived_log_values)
 
-    # 12. Duplicate Interfaces using bulk insert
-    interfaces = legacy_interface_dao.get_interfaces(project_id=source_project.id)
-    interface_values = []
-
-    for intf in interfaces:
-        interface_values.append(
-            {
-                "project_id": new_project.id,
-                "name": intf.name,
-                "items": intf.items,
-                "new_counter": intf.new_counter,
-                "context": intf.context,
-            },
-        )
-
-    if interface_values:
-        stmt = sqlalchemy.insert(Interface).values(interface_values)
-        session.execute(stmt)
-        stats["legacy_interfaces_copied"] = len(interface_values)
-
-    # 13. Duplicate Temp Interfaces using bulk insert
-    temp_interfaces = temp_interface_dao.get_interfaces(project_id=source_project.id)
-    temp_interface_values = []
-
-    for ti in temp_interfaces:
-        temp_interface_values.append(
-            {
-                "project_id": new_project.id,
-                "name": ti.name,
-                "new_counter": ti.new_counter,
-                "items": ti.items,
-                "context": ti.context,
-            },
-        )
-
-    if temp_interface_values:
-        stmt = sqlalchemy.insert(TempInterface).values(temp_interface_values)
-        session.execute(stmt)
-        stats["temp_interfaces_copied"] = len(temp_interface_values)
-
-    # 14. Duplicate Interfaces, Tabs, Tiles and specialized tile types
+    # 12. Duplicate Interfaces, Tabs, Tiles and specialized tile types
     # Use the DAO methods to duplicate the hierarchical data
 
     # Duplicate interfaces
@@ -1461,7 +1419,7 @@ def admin_duplicate_project(
             stats["editor_tiles_copied"] = tile_result["editor_tile_count"]
             stats["terminal_tiles_copied"] = tile_result["terminal_tile_count"]
 
-    # 15. Commit all changes
+    # 13. Commit all changes
     session.commit()
 
     return {
