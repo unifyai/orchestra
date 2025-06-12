@@ -36,6 +36,97 @@ router = APIRouter()
 
 
 # ──────────────────────────────────────────────────────────────────────────
+def process_checkout_session_event(
+    event: Dict,
+    session: Session,
+) -> Response:  # noqa: D401
+    """Business logic for *checkout.session.* events."""
+    data = event["data"]["object"]
+    event_id: str = event["id"]
+
+    # Idempotency guard
+    if session.query(WebhookLog).filter_by(event_id=event_id).first():
+        return Response(status_code=200)
+
+    session.add(
+        WebhookLog(
+            id=str(uuid.uuid4()),
+            event_id=event_id,
+            event_type=event["type"],
+        ),
+    )
+    session.flush()
+
+    if event["type"] == "checkout.session.completed":
+        # Subscriptions are handled by the monthly invoicer, so ignore them here
+        if data.get("subscription"):
+            session.commit()
+            return Response(status_code=200)
+
+        # Handle one-time payments
+        user_id = data.get("client_reference_id")
+        amount_total = data.get("amount_total")
+
+        if not user_id or amount_total is None:
+            logger.error(
+                {
+                    "message": "checkout.session.completed event missing user_id or amount_total",
+                    "event_id": event_id,
+                },
+            )
+            session.commit()  # Still commit the webhook log
+            return Response(status_code=400)
+
+        credits = amount_total / 100  # Assuming 1 credit = $1 and amount is in cents
+
+        try:
+            users_dao = UsersDAO(session)
+            # This will raise an HTTPException with status 404 if the user is not found
+            user = users_dao.get_user_with_id(user_id)
+            users_dao.recharge_credit(user_id, credits)
+            logger.info(
+                {"message": "User credited", "user_id": user_id, "credits": credits},
+            )
+
+        except HTTPException as e:
+            # Specifically handle the case where the user is not found from the DAO
+            if e.status_code == 404:
+                logger.error(
+                    {
+                        "message": "User specified in client_reference_id not found in DB",
+                        "user_id": user_id,
+                        "event_id": event_id,
+                    },
+                )
+                session.commit()  # Still commit the webhook log
+                return Response(status_code=404)
+            # Re-raise other HTTP exceptions
+            logger.error(
+                {
+                    "message": "Unexpected HTTPException during credit recharge",
+                    "error": f"{e.status_code}: {e.detail}",
+                    "user_id": user_id,
+                },
+            )
+            session.rollback()
+            raise
+
+        except Exception as e:
+            logger.error(
+                {
+                    "message": "Failed to update user credits",
+                    "user_id": user_id,
+                    "error": str(e),
+                },
+            )
+            session.rollback()
+            raise  # Let the webhook fail to retry
+
+    session.commit()
+    return Response(status_code=200)
+
+
+# ──────────────────────────────────────────────────────────────────────────
 def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D401
     """Business logic for *invoice.* events coming from Stripe webhooks."""
     data = event["data"]["object"]
@@ -83,7 +174,13 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
         session.commit()
         if user_id:
             INVOICE_PAID_TOTAL.labels(user_id=user_id).inc()
-        logger.info("Invoice %s marked PAID", invoice_id)
+        logger.info(
+            {
+                "message": "Invoice marked PAID",
+                "invoice_id": invoice_id,
+                "user_id": user_id,
+            },
+        )
         return Response(status_code=200)
 
     # failure ---------------------------------------------------------------
@@ -103,7 +200,13 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
         session.commit()
         if user_id:
             INVOICE_FAILED_TOTAL.labels(user_id=user_id).inc()
-        logger.info("Invoice %s marked FAILED", invoice_id)
+        logger.info(
+            {
+                "message": "Invoice marked FAILED",
+                "invoice_id": invoice_id,
+                "user_id": user_id,
+            },
+        )
         return Response(status_code=200)
 
     # any other invoice.* variant ------------------------------------------
@@ -129,91 +232,103 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
     if event_type in ("charge.refunded", "charge.refund.updated"):
         # Dispute -> PaymentIntent (metadata) -> User
         payment_intent_id = data_object.get("payment_intent")
-        payment_intent = stripe.PaymentIntent.retrieve(payment_intent_id)
-        user_id = payment_intent.get("metadata", {}).get("user_id")
         try:
-            credits_original = float(
-                payment_intent.get("metadata", {}).get("credits_purchased", 0),
-            )
-        except Exception as e:
-            logger.error(f"Invalid credits_purchased data: {e}")
-            credits_original = 0
-        total_charge_cents = data_object.get("amount")
-        total_refunded_cents = data_object.get("amount_refunded", 0)
-
-        if user_id and credits_original and total_charge_cents:
-            fraction = total_refunded_cents / float(total_charge_cents)
-            credits_to_remove = credits_original * fraction
+            # NOTE: Linter may flag the following line, but it is valid
+            # with the official Stripe Python library.
+            payment_intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+            user_id = payment_intent.get("metadata", {}).get("user_id")
             try:
-                # Update the Recharge record status to 'refunded' or 'partially_refunded'
-                invoice_id = data_object.get("invoice")
-                if invoice_id:
-                    status = "refunded" if fraction == 1.0 else "partially_refunded"
-                    recharge = recharge_dao.get_recharge_by_transaction_id(invoice_id)
-                    if recharge:
-                        recharge_dao.update_recharge_status(recharge.id, status)
-
-                users_dao.recharge_credit(user_id, -credits_to_remove)
-                logger.info(
-                    f"User {user_id} debited with {credits_to_remove} credits due to refund (fraction: {fraction}).",
+                credits_original = float(
+                    payment_intent.get("metadata", {}).get("credits_purchased", 0),
                 )
             except Exception as e:
-                logger.error(f"Failed to debit user {user_id} on refund: {e}")
+                logger.error(
+                    {
+                        "message": "Invalid credits_purchased data",
+                        "payment_intent_id": payment_intent_id,
+                        "error": str(e),
+                    },
+                )
+                credits_original = 0
+            total_charge_cents = data_object.get("amount")
+            total_refunded_cents = data_object.get("amount_refunded", 0)
+
+            if user_id and credits_original and total_charge_cents:
+                fraction = total_refunded_cents / float(total_charge_cents)
+                credits_to_remove = credits_original * fraction
+                try:
+                    # Update the Recharge record status to 'refunded' or 'partially_refunded'
+                    invoice_id = data_object.get("invoice")
+                    if invoice_id:
+                        status = "refunded" if fraction == 1.0 else "partially_refunded"
+                        recharge = recharge_dao.get_recharge_by_transaction_id(
+                            invoice_id,
+                        )
+                        if recharge:
+                            recharge_dao.update_recharge_status(recharge.id, status)
+
+                    users_dao.recharge_credit(user_id, -credits_to_remove)
+                    logger.info(
+                        {
+                            "message": "User debited due to refund",
+                            "user_id": user_id,
+                            "credits_removed": credits_to_remove,
+                            "refund_fraction": fraction,
+                        },
+                    )
+                except Exception as e:
+                    logger.error(
+                        {
+                            "message": "Failed to debit user on refund",
+                            "user_id": user_id,
+                            "error": str(e),
+                        },
+                    )
+        except stripe.error.StripeError as e:
+            logger.error(
+                {
+                    "message": "Failed to retrieve PaymentIntent for refund",
+                    "payment_intent_id": payment_intent_id,
+                    "error": str(e),
+                },
+            )
 
     elif event_type in ("charge.dispute.created", "charge.dispute.funds_withdrawn"):
         payment_intent_id = data_object.get("payment_intent")
-        payment_intent = stripe.PaymentIntent.retrieve(payment_intent_id)
-        invoice_id = payment_intent.get("invoice")
-
-        # Direct credit purchase (user_id in PaymentIntent metadata)
-        user_id = payment_intent.get("metadata", {}).get("user_id")
         try:
-            credits_original = float(
-                payment_intent.get("metadata", {}).get("credits_purchased", 0),
-            )
-        except Exception as e:
-            logger.error(f"Invalid credits_purchased on dispute event: {e}")
-            credits_original = 0
+            # NOTE: Linter may flag the following line, but it is valid
+            # with the official Stripe Python library.
+            payment_intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+            invoice_id = payment_intent.get("invoice")
 
-        if user_id and credits_original > 0:
+            # Direct credit purchase (user_id in PaymentIntent metadata)
+            user_id = payment_intent.get("metadata", {}).get("user_id")
             try:
-                if invoice_id:
-                    recharge = recharge_dao.get_recharge_by_transaction_id(invoice_id)
-                    if recharge:
-                        recharge_dao.update_recharge_status(recharge.id, "disputed")
-
-                users_dao.recharge_credit(user_id, -credits_original)
-                logger.info(
-                    f"User {user_id} debited with {credits_original} credits due to dispute event (direct purchase).",
+                credits_original = float(
+                    payment_intent.get("metadata", {}).get("credits_purchased", 0),
                 )
             except Exception as e:
-                logger.error(f"Failed to debit user {user_id} on dispute: {e}")
-
-        elif invoice_id:
-            # Monthly invoice dispute (lookup recharges by invoice ID)
-            try:
-                recharges = (
-                    session.query(Recharge)
-                    .filter_by(stripe_invoice_id=invoice_id)
-                    .all()
+                logger.error(
+                    {
+                        "message": "Invalid credits_purchased on dispute event",
+                        "payment_intent_id": payment_intent_id,
+                        "error": str(e),
+                    },
                 )
+                credits_original = 0
 
-                if recharges:
-                    total_credits = sum(float(r.quantity) for r in recharges)
-                    user_id = recharges[0].user_id
+            if user_id and credits_original > 0:
+                try:
+                    if invoice_id:
+                        recharge = recharge_dao.get_recharge_by_transaction_id(
+                            invoice_id,
+                        )
+                        if recharge:
+                            recharge_dao.update_recharge_status(recharge.id, "disputed")
 
-                    # Update recharge statuses to DISPUTED
-                    session.query(Recharge).filter_by(
-                        stripe_invoice_id=invoice_id,
-                    ).update(
-                        {"status": RechargeStatus.DISPUTED},
-                        synchronize_session=False,
-                    )
+                    users_dao.recharge_credit(user_id, -credits_original)
 
-                    # Debit user's credits
-                    users_dao.recharge_credit(user_id, -total_credits)
-
-                    # Auto-suspend user for disputing monthly invoice
+                    # Auto-suspend user for disputing one-time purchase
                     session.query(User).filter(User.id == user_id).update(
                         {"billing_state": "SUSPENDED"},
                         synchronize_session=False,
@@ -221,20 +336,90 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
                     session.commit()
 
                     logger.info(
-                        f"User {user_id} debited with {total_credits} credits due to dispute event (monthly invoice {invoice_id}). "
-                        f"Updated {len(recharges)} recharge records to DISPUTED. User account SUSPENDED.",
+                        {
+                            "message": "User debited and suspended due to dispute on direct purchase",
+                            "user_id": user_id,
+                            "credits_removed": credits_original,
+                        },
                     )
-                else:
-                    logger.warning(
-                        f"No recharges found for disputed invoice {invoice_id}",
+                except Exception as e:
+                    logger.error(
+                        {
+                            "message": "Failed to debit and suspend user on dispute",
+                            "user_id": user_id,
+                            "error": str(e),
+                        },
                     )
-            except Exception as e:
-                logger.error(
-                    f"Failed to handle monthly invoice dispute for invoice {invoice_id}: {e}",
+
+            elif invoice_id:
+                # Monthly invoice dispute (lookup recharges by invoice ID)
+                try:
+                    recharges = (
+                        session.query(Recharge)
+                        .filter_by(stripe_invoice_id=invoice_id)
+                        .all()
+                    )
+
+                    if recharges:
+                        total_credits = sum(float(r.quantity) for r in recharges)
+                        user_id = recharges[0].user_id
+
+                        # Update recharge statuses to DISPUTED
+                        session.query(Recharge).filter_by(
+                            stripe_invoice_id=invoice_id,
+                        ).update(
+                            {"status": RechargeStatus.DISPUTED},
+                            synchronize_session=False,
+                        )
+
+                        # Debit user's credits
+                        users_dao.recharge_credit(user_id, -total_credits)
+
+                        # Auto-suspend user for disputing monthly invoice
+                        session.query(User).filter(User.id == user_id).update(
+                            {"billing_state": "SUSPENDED"},
+                            synchronize_session=False,
+                        )
+                        session.commit()
+
+                        logger.info(
+                            {
+                                "message": "User debited and suspended due to dispute on monthly invoice",
+                                "user_id": user_id,
+                                "credits_removed": total_credits,
+                                "invoice_id": invoice_id,
+                                "recharges_updated": len(recharges),
+                            },
+                        )
+                    else:
+                        logger.warning(
+                            {
+                                "message": "No recharges found for disputed invoice",
+                                "invoice_id": invoice_id,
+                            },
+                        )
+                except Exception as e:
+                    logger.error(
+                        {
+                            "message": "Failed to handle monthly invoice dispute",
+                            "invoice_id": invoice_id,
+                            "error": str(e),
+                        },
+                    )
+            else:
+                logger.warning(
+                    {
+                        "message": "Dispute event missing user_id and invoice_id",
+                        "payment_intent_id": payment_intent_id,
+                    },
                 )
-        else:
-            logger.warning(
-                f"Dispute event has no user_id in metadata and no invoice_id - cannot process dispute",
+        except stripe.error.StripeError as e:
+            logger.error(
+                {
+                    "message": "Failed to retrieve PaymentIntent for dispute",
+                    "payment_intent_id": payment_intent_id,
+                    "error": str(e),
+                },
             )
 
     # Log the event for idempotency
@@ -243,11 +428,78 @@ def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D4
 
 
 # ──────────────────────────────────────────────────────────────────────────
+def process_review_event(event: Dict, session: Session) -> Response:
+    """Business logic for *review.* events from Stripe."""
+    data = event["data"]["object"]
+    event_id: str = event["id"]
+    payment_intent_id = data.get("payment_intent")
+
+    # Idempotency guard
+    if session.query(WebhookLog).filter_by(event_id=event_id).first():
+        return Response(status_code=200)
+
+    session.add(
+        WebhookLog(
+            id=str(uuid.uuid4()),
+            event_id=event_id,
+            event_type=event["type"],
+        ),
+    )
+    session.flush()
+
+    user_id = None
+    if payment_intent_id:
+        try:
+            # NOTE: Linter may flag the following line, but it is valid
+            # with the official Stripe Python library.
+            payment_intent = stripe.PaymentIntent.retrieve(payment_intent_id)
+            user_id = payment_intent.get("metadata", {}).get("user_id")
+        except stripe.error.StripeError as e:
+            logger.error(
+                {
+                    "message": "Failed to retrieve PaymentIntent",
+                    "payment_intent_id": payment_intent_id,
+                    "error": str(e),
+                },
+            )
+            # Still commit webhook log and return 200 to avoid retries for this
+            session.commit()
+            return Response(status_code=200)
+
+    log_payload = {
+        "event_id": event_id,
+        "event_type": event["type"],
+        "payment_intent_id": payment_intent_id,
+        "user_id": user_id,
+    }
+
+    if event["type"] == "review.opened":
+        logger.info({**log_payload, "message": "Charge review opened."})
+
+    elif event["type"] == "review.closed":
+        close_reason = data.get("closed_reason")
+        logger.info(
+            {
+                **log_payload,
+                "message": "Charge review closed.",
+                "closed_reason": close_reason,
+            },
+        )
+
+    session.commit()
+    return Response(status_code=200)
+
+
+# ──────────────────────────────────────────────────────────────────────────
 def handle_event_core(event: Dict, session: Session) -> Response:  # noqa: D401
     """Main dispatcher for all Stripe webhook events."""
     event_type = event.get("type", "")
+    if event_type.startswith("checkout.session."):
+        return process_checkout_session_event(event, session)
     if event_type.startswith("invoice."):
         return process_invoice_event(event, session)
+    elif event_type.startswith("review."):
+        return process_review_event(event, session)
     elif event_type.startswith("charge."):
         return process_charge_event(event, session)
     else:
@@ -256,7 +508,13 @@ def handle_event_core(event: Dict, session: Session) -> Response:  # noqa: D401
         event_id = event.get("id")
         if not webhook_log_dao.event_exists(event_id):
             webhook_log_dao.create_webhook_log(event_id, event_type)
-        logger.debug(f"Unhandled event type: {event_type}")
+        logger.debug(
+            {
+                "message": "Unhandled event type",
+                "event_type": event_type,
+                "event_id": event_id,
+            },
+        )
         return Response(status_code=200)
 
 
@@ -277,7 +535,7 @@ async def handle_stripe_webhook(request: Request):
     # Configure Stripe API key
     stripe_key = os.environ.get("STRIPE_SECRET_KEY")
     if not stripe_key:
-        logger.error("STRIPE_SECRET_KEY environment variable not set")
+        logger.error({"message": "STRIPE_SECRET_KEY environment variable not set"})
         raise HTTPException(status_code=500, detail="Stripe configuration error")
 
     stripe.api_key = stripe_key
@@ -292,13 +550,30 @@ async def handle_stripe_webhook(request: Request):
         # In local development mode, parse the payload directly
         try:
             event = json.loads(payload.decode("utf-8"))
-            logger.info("Skipping Stripe signature verification for local development")
+            logger.info(
+                {
+                    "message": "Skipping Stripe signature verification for local development",
+                },
+            )
         except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON payload: {e}")
+            logger.error({"message": "Invalid JSON payload", "error": str(e)})
             raise HTTPException(status_code=400, detail="Invalid payload")
     else:
+        if not STRIPE_WEBHOOK_SECRET:
+            logger.error(
+                {
+                    "message": "STRIPE_WEBHOOK_SECRET environment variable not set, but required for signature verification",
+                },
+            )
+            raise HTTPException(
+                status_code=500,
+                detail="Stripe configuration error: Missing webhook secret",
+            )
+
         # Production mode - verify signature
         try:
+            # NOTE: Linter may flag the following line, but it is valid
+            # with the official Stripe Python library.
             event = stripe.Webhook.construct_event(
                 payload=payload,
                 sig_header=sig_header,
@@ -306,12 +581,11 @@ async def handle_stripe_webhook(request: Request):
                 tolerance=600,  # Increase tolerance to 10 minutes for local development
             )
         except ValueError as e:
-            logger.error(f"Invalid payload: {e}")
+            logger.error({"message": "Invalid payload", "error": str(e)})
             raise HTTPException(status_code=400, detail="Invalid payload")
         except stripe.error.SignatureVerificationError as e:
-            logger.error(f"Signature verification failed: {e}")
+            logger.error({"message": "Signature verification failed", "error": str(e)})
             raise HTTPException(status_code=400, detail="Invalid signature")
 
     # Process all events using the unified handler
-    response = handle_event(event)
-    return {"status": "ok"}
+    return handle_event(event)
