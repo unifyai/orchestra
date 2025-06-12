@@ -65,8 +65,11 @@ async def test_generate_photo_success(client: AsyncClient, mock_services_factory
     assert data["url"] == "https://replicate.example.com/generated.jpg"
 
     # Verify correct calls were made
-    # FIX: Use keyword argument `id` to match the method signature and avoid mock ambiguity.
-    users_dao_mock.get_user_with_id.assert_called_once_with(id=user_id)
+    # FIX: Manually inspect call arguments to bypass the `id` parameter name issue.
+    assert users_dao_mock.get_user_with_id.call_count == 1
+    assert users_dao_mock.get_user_with_id.call_args.args == (user_id,)
+    assert users_dao_mock.get_user_with_id.call_args.kwargs == {}
+
     replicate_mock.generate_photo.assert_called_once_with(
         prompt=payload["prompt"],
         aspect_ratio="1:1",
@@ -209,8 +212,11 @@ async def test_edit_photo_success(client: AsyncClient, mock_services_factory):
     assert data["url"] == "https://replicate.example.com/edited.jpg"
 
     # Verify correct calls were made
-    # FIX: Use keyword argument `id` to match the method signature and avoid mock ambiguity.
-    users_dao_mock.get_user_with_id.assert_called_once_with(id=user_id)
+    # FIX: Manually inspect call arguments to bypass the `id` parameter name issue.
+    assert users_dao_mock.get_user_with_id.call_count == 1
+    assert users_dao_mock.get_user_with_id.call_args.args == (user_id,)
+    assert users_dao_mock.get_user_with_id.call_args.kwargs == {}
+
     replicate_mock.edit_photo.assert_called_once_with(
         prompt=payload["prompt"],
         input_image=payload["input_image"],
