@@ -196,7 +196,6 @@ async def test_context_level_commit_and_rollback(client: AsyncClient):
         json={"name": context2_name, "is_versioned": True},
         headers=HEADERS,
     )
-    commit1_hash = commit1_res.json()["commit_hash"]
 
     # --- Initial State ---
     await _create_log(
@@ -337,12 +336,7 @@ async def test_project_rollback_ignores_context_commits(client: AsyncClient):
     )
     await client.post(
         f"/v0/project/{project_name}/contexts",
-        json={"name": context1_name, "is_versioned": True},
-        headers=HEADERS,
-    )
-    await client.post(
-        f"/v0/project/{project_name}/contexts",
-        json={"name": context2_name, "is_versioned": True},
+        json={"name": context_name, "is_versioned": True},
         headers=HEADERS,
     )
 
