@@ -214,6 +214,43 @@ class BucketService:
             logging.error(f"Failed to upload assistant photo to GCS: {str(e)}")
             raise Exception(f"Failed to upload assistant photo: {str(e)}")
 
+    def upload_temp_assistant_photo_file(
+        self,
+        file_content: bytes,
+        user_id: str,
+        content_type: str,
+    ) -> Tuple[str, str]:
+        """
+        Uploads a temporary photo to a '_temp' subfolder in the assistant images bucket.
+        This is used for operations like image editing where a public URL is needed temporarily.
+        Args:
+            file_content: Raw bytes of the image file.
+            user_id: ID of the user, for path organization.
+            content_type: MIME type of the image.
+        Returns:
+            A tuple of (public_url, gcs_url) for the temporary file.
+        Raises:
+            Exception: If upload fails.
+        """
+        try:
+            extension = (
+                content_type.split("/")[-1]
+                if content_type and "/" in content_type
+                else "jpg"
+            )
+            file_name = self._generate_unique_filename(file_content)
+            object_path = f"_temp/{user_id}/{file_name}.{extension}"
+
+            blob = self.assistant_images_bucket.blob(object_path)
+            blob.upload_from_string(file_content, content_type=content_type)
+            gcs_url = f"gs://{self.assistant_images_bucket_name}/{object_path}"
+            public_url = blob.public_url
+
+            return public_url, gcs_url
+        except exceptions.GoogleAPIError as e:
+            logging.error(f"Failed to upload temporary photo to GCS: {str(e)}")
+            raise Exception(f"Failed to upload temporary photo: {str(e)}")
+
     def delete_assistant_photo(self, gcs_url: str) -> bool:
         """
         Delete an assistant's profile photo from GCS using its GCS URL.

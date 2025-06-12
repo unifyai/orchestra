@@ -161,6 +161,10 @@ class Settings(BaseSettings):
     cartesia_api_key: Optional[str] = os.environ.get("CARTESIA_API_KEY")
     cartesia_api_version: Optional[str] = os.environ.get("CARTESIA_API_VERSION")
 
+    # Assistant cost settings
+    assistant_creation_cost: float = 10.0
+    photo_generation_cost: float = 0.05
+
     @property
     def db_url(self) -> URL:
         """
