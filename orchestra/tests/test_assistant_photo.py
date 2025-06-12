@@ -25,7 +25,7 @@ def mock_photo_services_factory(fastapi_app):
     )
 
     bucket_mock = MagicMock(spec=OriginalBucketService)
-    bucket_mock.upload_temp_photo_file.return_value = (
+    bucket_mock.upload_temp_assistant_photo_file.return_value = (
         "https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_image.jpg",
         "gs://mock-bucket/_temp/test-user/temp_image.jpg",
     )
@@ -80,7 +80,7 @@ async def test_edit_photo_with_url_success(
         output_format="jpg",
         safety_tolerance=2.0,
     )
-    bucket_mock.upload_temp_photo_file.assert_not_called()
+    bucket_mock.upload_temp_assistant_photo_file.assert_not_called()
     bucket_mock.delete_assistant_photo.assert_not_called()
 
 
@@ -105,7 +105,7 @@ async def test_edit_photo_with_file_success(
     data = resp.json()["info"]
     assert data["url"] == "https://replicate.delivery/pbxt/mock-edited-url"
 
-    bucket_mock.upload_temp_photo_file.assert_called_once_with(
+    bucket_mock.upload_temp_assistant_photo_file.assert_called_once_with(
         file_content,
         "test-user-id-default",  # user_id from HEADERS
         "image/jpeg",
