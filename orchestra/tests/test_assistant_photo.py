@@ -1,0 +1,277 @@
+from decimal import Decimal
+from unittest.mock import MagicMock, patch
+
+import pytest
+from httpx import AsyncClient
+
+from orchestra.db.dao.users_dao import UsersDAO as OriginalUsersDAO
+from orchestra.services.replicate_service import (
+    ReplicateAPIError,
+    ReplicateService as OriginalReplicateService,
+)
+from orchestra.tests.utils import HEADERS
+
+
+# --- Fixtures ---
+@pytest.fixture
+def mock_replicate_service(fastapi_app):
+    """Provides a mock ReplicateService instance and overrides the dependency."""
+    mock_instance = MagicMock(spec=OriginalReplicateService)
+    mock_instance.generate_photo.return_value = (
+        "https://replicate.delivery/mock/generated_image.webp"
+    )
+    mock_instance.edit_photo.return_value = (
+        "https://replicate.delivery/mock/edited_image.jpg"
+    )
+
+    fastapi_app.dependency_overrides[OriginalReplicateService] = lambda: mock_instance
+    yield mock_instance
+    fastapi_app.dependency_overrides.pop(OriginalReplicateService, None)
+
+
+@pytest.fixture
+def mock_users_dao(fastapi_app):
+    """Provides a mock UsersDAO instance and overrides the dependency."""
+    mock_instance = MagicMock(spec=OriginalUsersDAO)
+    # Default user with sufficient credits
+    mock_user = MagicMock()
+    mock_user.credits = Decimal("100.0")
+    mock_instance.get_user_with_id.return_value = mock_user
+    mock_instance.recharge_credit = MagicMock()
+
+    fastapi_app.dependency_overrides[OriginalUsersDAO] = lambda: mock_instance
+    yield mock_instance
+    fastapi_app.dependency_overrides.pop(OriginalUsersDAO, None)
+
+
+# --- Test Cases for /assistant/photo/generate ---
+
+
+@pytest.mark.anyio
+async def test_generate_photo_success(
+    client: AsyncClient,
+    mock_replicate_service: MagicMock,
+    mock_users_dao: MagicMock,
+):
+    """Test successful photo generation with sufficient credits."""
+    payload = {
+        "prompt": "A beautiful sunset over the mountains",
+    }
+    with patch("orchestra.web.api.assistant.views.settings.is_staging", False):
+        resp = await client.post(
+            "/v0/assistant/photo/generate",
+            json=payload,
+            headers=HEADERS,
+        )
+
+    assert resp.status_code == 201
+    data = resp.json()["info"]
+    assert data["url"] == "https://replicate.delivery/mock/generated_image.webp"
+
+    mock_replicate_service.generate_photo.assert_called_once()
+    call_args = mock_replicate_service.generate_photo.call_args[1]
+    assert call_args["prompt"] == "A beautiful sunset over the mountains"
+
+    mock_users_dao.get_user_with_id.assert_called_once()
+    mock_users_dao.recharge_credit.assert_called_once_with(
+        user_id="test-user-id",
+        quantity=-0.05,
+    )
+
+
+@pytest.mark.anyio
+async def test_generate_photo_insufficient_credits(
+    client: AsyncClient,
+    mock_replicate_service: MagicMock,
+    mock_users_dao: MagicMock,
+):
+    """Test photo generation fails with insufficient credits."""
+    mock_user = MagicMock()
+    mock_user.credits = Decimal("0.01")
+    mock_users_dao.get_user_with_id.return_value = mock_user
+
+    payload = {"prompt": "not enough credits prompt"}
+    with patch("orchestra.web.api.assistant.views.settings.is_staging", False):
+        resp = await client.post(
+            "/v0/assistant/photo/generate",
+            json=payload,
+            headers=HEADERS,
+        )
+
+    assert resp.status_code == 402
+    assert "Insufficient credits" in resp.json()["detail"]
+
+    mock_replicate_service.generate_photo.assert_not_called()
+    mock_users_dao.recharge_credit.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_generate_photo_staging_env(
+    client: AsyncClient,
+    mock_replicate_service: MagicMock,
+    mock_users_dao: MagicMock,
+):
+    """Test photo generation bypasses credit check in staging environment."""
+    mock_user = MagicMock()
+    mock_user.credits = Decimal("0.0")
+    mock_users_dao.get_user_with_id.return_value = mock_user
+
+    payload = {"prompt": "staging prompt"}
+    with patch("orchestra.web.api.assistant.views.settings.is_staging", True):
+        resp = await client.post(
+            "/v0/assistant/photo/generate",
+            json=payload,
+            headers=HEADERS,
+        )
+
+    assert resp.status_code == 201
+    mock_users_dao.get_user_with_id.assert_not_called()
+    mock_replicate_service.generate_photo.assert_called_once()
+    mock_users_dao.recharge_credit.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_generate_photo_replicate_api_error(
+    client: AsyncClient,
+    mock_replicate_service: MagicMock,
+    mock_users_dao: MagicMock,
+):
+    """Test handling of Replicate API errors during generation."""
+    mock_replicate_service.generate_photo.side_effect = ReplicateAPIError(
+        status_code=503,
+        detail="Replicate is down",
+    )
+
+    payload = {"prompt": "api error prompt"}
+    with patch("orchestra.web.api.assistant.views.settings.is_staging", False):
+        resp = await client.post(
+            "/v0/assistant/photo/generate",
+            json=payload,
+            headers=HEADERS,
+        )
+
+    assert resp.status_code == 503
+    assert "Replicate is down" in resp.json()["detail"]
+    mock_users_dao.recharge_credit.assert_not_called()
+
+
+# --- Test Cases for /assistant/photo/edit ---
+
+
+@pytest.mark.anyio
+async def test_edit_photo_success(
+    client: AsyncClient,
+    mock_replicate_service: MagicMock,
+    mock_users_dao: MagicMock,
+):
+    """Test successful photo editing with sufficient credits."""
+    payload = {
+        "prompt": "Make it a cubist painting",
+        "input_image": "https://example.com/some_image.png",
+    }
+    with patch("orchestra.web.api.assistant.views.settings.is_staging", False):
+        resp = await client.post(
+            "/v0/assistant/photo/edit",
+            json=payload,
+            headers=HEADERS,
+        )
+
+    assert resp.status_code == 201
+    data = resp.json()["info"]
+    assert data["url"] == "https://replicate.delivery/mock/edited_image.jpg"
+
+    mock_replicate_service.edit_photo.assert_called_once()
+    call_args = mock_replicate_service.edit_photo.call_args[1]
+    assert call_args["prompt"] == "Make it a cubist painting"
+    assert call_args["input_image"] == "https://example.com/some_image.png"
+
+    mock_users_dao.get_user_with_id.assert_called_once()
+    mock_users_dao.recharge_credit.assert_called_once_with(
+        user_id="test-user-id",
+        quantity=-0.05,
+    )
+
+
+@pytest.mark.anyio
+async def test_edit_photo_insufficient_credits(
+    client: AsyncClient,
+    mock_replicate_service: MagicMock,
+    mock_users_dao: MagicMock,
+):
+    """Test photo editing fails with insufficient credits."""
+    mock_user = MagicMock()
+    mock_user.credits = Decimal("0.04")
+    mock_users_dao.get_user_with_id.return_value = mock_user
+
+    payload = {
+        "prompt": "not enough credits",
+        "input_image": "https://example.com/image.png",
+    }
+    with patch("orchestra.web.api.assistant.views.settings.is_staging", False):
+        resp = await client.post(
+            "/v0/assistant/photo/edit",
+            json=payload,
+            headers=HEADERS,
+        )
+
+    assert resp.status_code == 402
+    assert "Insufficient credits" in resp.json()["detail"]
+
+    mock_replicate_service.edit_photo.assert_not_called()
+    mock_users_dao.recharge_credit.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_edit_photo_staging_env(
+    client: AsyncClient,
+    mock_replicate_service: MagicMock,
+    mock_users_dao: MagicMock,
+):
+    """Test photo editing bypasses credit check in staging."""
+    mock_user = MagicMock()
+    mock_user.credits = Decimal("0.0")
+    mock_users_dao.get_user_with_id.return_value = mock_user
+
+    payload = {
+        "prompt": "staging edit",
+        "input_image": "https://example.com/image.png",
+    }
+    with patch("orchestra.web.api.assistant.views.settings.is_staging", True):
+        resp = await client.post(
+            "/v0/assistant/photo/edit",
+            json=payload,
+            headers=HEADERS,
+        )
+
+    assert resp.status_code == 201
+    mock_users_dao.get_user_with_id.assert_not_called()
+    mock_replicate_service.edit_photo.assert_called_once()
+    mock_users_dao.recharge_credit.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_edit_photo_replicate_api_error(
+    client: AsyncClient,
+    mock_replicate_service: MagicMock,
+    mock_users_dao: MagicMock,
+):
+    """Test handling of Replicate API errors during editing."""
+    mock_replicate_service.edit_photo.side_effect = ReplicateAPIError(
+        status_code=500,
+        detail="Internal Server Error at Replicate",
+    )
+
+    payload = {
+        "prompt": "api error edit",
+        "input_image": "https://example.com/image.png",
+    }
+    with patch("orchestra.web.api.assistant.views.settings.is_staging", False):
+        resp = await client.post(
+            "/v0/assistant/photo/edit",
+            json=payload,
+            headers=HEADERS,
+        )
+
+    assert resp.status_code == 500
+    assert "Internal Server Error at Replicate" in resp.json()["detail"]
+    mock_users_dao.recharge_credit.assert_not_called()

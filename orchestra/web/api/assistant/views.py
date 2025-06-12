@@ -25,6 +25,7 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.call_recording_service import CallRecordingService
 from orchestra.services.cartesia_service import CartesiaAPIError, CartesiaService
+from orchestra.services.replicate_service import ReplicateAPIError, ReplicateService
 from orchestra.settings import settings
 from orchestra.web.api.assistant.schema import (
     AssistantCreate,
@@ -32,6 +33,9 @@ from orchestra.web.api.assistant.schema import (
     AssistantRead,
     AssistantUpdate,
     InfoResponse,
+    PhotoCreationResponse,
+    PhotoEditRequest,
+    PhotoGenerateRequest,
     RecordingCreate,
     RecordingInfo,
     VoiceCreate,
@@ -67,6 +71,7 @@ router = APIRouter()
 admin_router = APIRouter()
 
 ASSISTANT_CREATION_COST = Decimal("10.0")
+PHOTO_GENERATION_COST = Decimal("0.05")
 
 
 @router.post(
@@ -1558,6 +1563,137 @@ async def upload_assistant_photo(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Could not upload photo: {str(e)}",
+        )
+
+
+@router.post(
+    "/assistant/photo/generate",
+    response_model=InfoResponse[PhotoCreationResponse],
+    status_code=status.HTTP_201_CREATED,
+    summary="Generate an assistant profile photo from text",
+    description="Generates a new photo using a text prompt via Replicate and returns the image URL. This action will deduct credits.",
+    tags=["Assistants", "Storage"],
+)
+async def generate_assistant_photo(
+    request: Request,
+    payload: PhotoGenerateRequest,
+    session: Session = Depends(get_db_session),
+    replicate_service: ReplicateService = Depends(),
+) -> InfoResponse[PhotoCreationResponse]:
+    """
+    Generate a new assistant profile photo from a text prompt.
+
+    This endpoint uses an AI model to generate an image based on the provided
+    text prompt. The user's account is charged for this operation.
+    """
+    user_id = request.state.user_id
+    users_dao = UsersDAO(session)
+
+    # Pre-check credits if not in staging
+    if not settings.is_staging:
+        user = users_dao.get_user_with_id(user_id)
+        if user.credits < PHOTO_GENERATION_COST:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="Insufficient credits to generate a photo.",
+            )
+
+    try:
+        image_url = replicate_service.generate_photo(
+            prompt=payload.prompt,
+            aspect_ratio=payload.aspect_ratio,
+            output_format=payload.output_format,
+            output_quality=payload.output_quality,
+            safety_tolerance=payload.safety_tolerance,
+            prompt_upsampling=payload.prompt_upsampling,
+        )
+
+        # Deduct credits after successful generation if not in staging
+        if not settings.is_staging:
+            users_dao.recharge_credit(
+                user_id=user_id,
+                quantity=-float(PHOTO_GENERATION_COST),
+            )
+            session.commit()
+
+        return InfoResponse(info=PhotoCreationResponse(url=image_url))
+    except ReplicateAPIError as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=e.status_code,
+            detail=f"Replicate API error: {e.detail}",
+        )
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Error generating photo for user {user_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Could not generate photo: {str(e)}",
+        )
+
+
+@router.post(
+    "/assistant/photo/edit",
+    response_model=InfoResponse[PhotoCreationResponse],
+    status_code=status.HTTP_201_CREATED,
+    summary="Edit an assistant profile photo from text",
+    description="Edits a photo using a text prompt and an input image URL via Replicate, and returns the new image URL. This action will deduct credits.",
+    tags=["Assistants", "Storage"],
+)
+async def edit_assistant_photo(
+    request: Request,
+    payload: PhotoEditRequest,
+    session: Session = Depends(get_db_session),
+    replicate_service: ReplicateService = Depends(),
+) -> InfoResponse[PhotoCreationResponse]:
+    """
+    Edit an assistant profile photo using a text prompt and an input image.
+
+    This endpoint uses an AI model to edit an existing image based on a
+    text prompt. The user's account is charged for this operation.
+    """
+    user_id = request.state.user_id
+    users_dao = UsersDAO(session)
+
+    # Pre-check credits if not in staging
+    if not settings.is_staging:
+        user = users_dao.get_user_with_id(user_id)
+        if user.credits < PHOTO_GENERATION_COST:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="Insufficient credits to edit a photo.",
+            )
+
+    try:
+        image_url = replicate_service.edit_photo(
+            prompt=payload.prompt,
+            input_image=str(payload.input_image),
+            aspect_ratio=payload.aspect_ratio,
+            output_format=payload.output_format,
+            safety_tolerance=payload.safety_tolerance,
+        )
+
+        # Deduct credits after successful edit if not in staging
+        if not settings.is_staging:
+            users_dao.recharge_credit(
+                user_id=user_id,
+                quantity=-float(PHOTO_GENERATION_COST),
+            )
+            session.commit()
+
+        return InfoResponse(info=PhotoCreationResponse(url=image_url))
+    except ReplicateAPIError as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=e.status_code,
+            detail=f"Replicate API error: {e.detail}",
+        )
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Error editing photo for user {user_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Could not edit photo: {str(e)}",
         )
 
 
