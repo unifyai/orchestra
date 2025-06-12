@@ -4,6 +4,8 @@ import uuid
 import pytest
 from httpx import AsyncClient
 
+from orchestra.tests.test_tile import _create_test_tile, _get_tile
+
 # Common headers and data
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
 HEADERS = {
@@ -882,3 +884,128 @@ async def test_restore_tab_checkpoint(client: AsyncClient):
     assert active_data["color"] == "#FF00FF"
     assert active_data["visible"] is False
     assert active_data["order"] == 5
+
+
+@pytest.mark.anyio
+async def test_delete_tab_by_id_with_tiles(client: AsyncClient):
+    """Test deleting a tab by ID and ensuring associated tiles are also deleted"""
+    # Create an interface and tab
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+
+    # Create multiple tiles in the tab
+    tile_ids = []
+    for i in range(3):
+        tile_response = await _create_test_tile(
+            client,
+            tab_id,
+            name=f"test_tile_{i}",
+            tile_type="Table",
+            table_tile_data={
+                "table_type": "basic",
+                "page_number": "1",
+            },
+        )
+        assert tile_response.status_code == 201
+        tile_ids.append(tile_response.json()["id"])
+
+    # Verify tiles exist before deletion
+    for tile_id in tile_ids:
+        get_tile_response = await _get_tile(client, tile_id=tile_id)
+        assert get_tile_response.status_code == 200
+
+    # Delete the tab by ID
+    response = await _delete_tab(client, tab_id=tab_id)
+    assert response.status_code == 204
+
+    # Verify tab is deleted
+    get_tab_response = await _get_tab(client, tab_id=tab_id)
+    assert get_tab_response.status_code == 404
+
+    # Verify all tiles are also deleted
+    for tile_id in tile_ids:
+        get_tile_response = await _get_tile(client, tile_id=tile_id)
+        assert get_tile_response.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_delete_tab_by_interface_and_name_with_tiles(client: AsyncClient):
+    """Test deleting a tab by interface_id and name and ensuring associated tiles are also deleted"""
+    # Create an interface and tab
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+    await _create_test_tab(client, interface_id)
+
+    # Get the tab ID for tile creation
+    get_tab_response = await _get_tab(client, interface_id=interface_id, name=TEST_TAB)
+    assert get_tab_response.status_code == 200
+    tab_id = get_tab_response.json()["id"]
+
+    # Create multiple tiles in the tab with different types
+    tile_ids = []
+
+    # Create a Table tile
+    table_tile_response = await _create_test_tile(
+        client,
+        tab_id,
+        name="table_tile",
+        tile_type="Table",
+        table_tile_data={
+            "table_type": "advanced",
+            "page_number": "2",
+            "selected": "Entries/id_123,Entries/id_456",
+        },
+    )
+    assert table_tile_response.status_code == 201
+    tile_ids.append(table_tile_response.json()["id"])
+
+    # Create a Plot tile
+    plot_tile_response = await _create_test_tile(
+        client,
+        tab_id,
+        name="plot_tile",
+        tile_type="Plot",
+        plot_tile_data={
+            "plot_type": "scatter",
+            "x_axis": "time",
+            "y_axis": "value",
+            "plot_scale_x": "linear",
+        },
+    )
+    assert plot_tile_response.status_code == 201
+    tile_ids.append(plot_tile_response.json()["id"])
+
+    # Create an Editor tile
+    editor_tile_response = await _create_test_tile(
+        client,
+        tab_id,
+        name="editor_tile",
+        tile_type="Editor",
+        editor_tile_data={
+            "file_type": "python",
+            "file_name": "test.py",
+            "content": "print('Hello World')",
+        },
+    )
+    assert editor_tile_response.status_code == 201
+    tile_ids.append(editor_tile_response.json()["id"])
+
+    # Verify tiles exist before deletion
+    for tile_id in tile_ids:
+        get_tile_response = await _get_tile(client, tile_id=tile_id)
+        assert get_tile_response.status_code == 200
+
+    # Delete the tab by interface_id and name
+    response = await _delete_tab(client, interface_id=interface_id, name=TEST_TAB)
+    assert response.status_code == 204
+
+    # Verify tab is deleted
+    get_tab_response = await _get_tab(client, interface_id=interface_id, name=TEST_TAB)
+    assert get_tab_response.status_code == 404
+
+    # Verify all tiles are also deleted
+    for tile_id in tile_ids:
+        get_tile_response = await _get_tile(client, tile_id=tile_id)
+        assert get_tile_response.status_code == 404
