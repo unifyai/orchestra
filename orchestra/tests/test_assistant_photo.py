@@ -65,11 +65,16 @@ async def test_edit_photo_with_url_success(
         "prompt": "Make it winter",
         "input_image_url": "https://example.com/summer.jpg",
     }
+    # Pass an empty file part to force multipart/form-data content type
+    files = {"input_image_file": (None, b"")}
+
     resp = await client.post(
         "/v0/assistant/photo/edit",
         data=form_data,
+        files=files,
         headers=HEADERS,
     )
+
     assert resp.status_code == 201
     data = resp.json()["info"]
     assert data["url"] == "https://replicate.delivery/pbxt/mock-edited-url"
@@ -90,7 +95,13 @@ async def test_edit_photo_with_file_success(
     mock_photo_services_factory,
 ):
     replicate_mock, bucket_mock = mock_photo_services_factory
-    form_data = {"prompt": "Add a cat"}
+    # Explicitly include all form fields, even those with defaults
+    form_data = {
+        "prompt": "Add a cat",
+        "aspect_ratio": "match_input_image",
+        "output_format": "jpg",
+        "safety_tolerance": "2.0",  # Form data values must be strings
+    }
     file_content = b"fake image data"
     files = {"input_image_file": ("test.jpg", io.BytesIO(file_content), "image/jpeg")}
 
@@ -113,9 +124,9 @@ async def test_edit_photo_with_file_success(
     replicate_mock.edit_photo.assert_called_once_with(
         prompt=form_data["prompt"],
         input_image="https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_image.jpg",
-        aspect_ratio="match_input_image",
-        output_format="jpg",
-        safety_tolerance=2.0,
+        aspect_ratio=form_data["aspect_ratio"],
+        output_format=form_data["output_format"],
+        safety_tolerance=float(form_data["safety_tolerance"]),
     )
     bucket_mock.delete_assistant_photo.assert_called_once_with(
         "gs://mock-bucket/_temp/test-user/temp_image.jpg",
@@ -124,25 +135,27 @@ async def test_edit_photo_with_file_success(
 
 @pytest.mark.anyio
 async def test_edit_photo_invalid_input(client: AsyncClient):
-    # Test with no input image
+    # Test with no input image provided
+    # We must send a multipart request to reach the validation logic in the view
     resp_none = await client.post(
         "/v0/assistant/photo/edit",
         data={"prompt": "test"},
+        files={"input_image_file": (None, b"")},  # Force multipart
         headers=HEADERS,
     )
     assert resp_none.status_code == 400
     assert "Provide either" in resp_none.json()["detail"]
 
-    # Test with both URL and file
-    form_data = {
+    # Test with both URL and file provided
+    form_data_both = {
         "prompt": "test",
         "input_image_url": "http://a.com/b.jpg",
     }
-    files = {"input_image_file": ("test.jpg", io.BytesIO(b"data"), "image/jpeg")}
+    files_both = {"input_image_file": ("test.jpg", io.BytesIO(b"data"), "image/jpeg")}
     resp_both = await client.post(
         "/v0/assistant/photo/edit",
-        data=form_data,
-        files=files,
+        data=form_data_both,
+        files=files_both,
         headers=HEADERS,
     )
     assert resp_both.status_code == 400
