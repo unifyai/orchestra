@@ -64,18 +64,21 @@ async def test_edit_photo_with_url_success(
     form_data = {
         "prompt": "Make it winter",
         "input_image_url": "https://example.com/summer.jpg",
+        "aspect_ratio": "match_input_image",
+        "output_format": "jpg",
+        "safety_tolerance": "2.0",
     }
     # Pass an empty file part to force multipart/form-data content type
-    files = {"input_image_file": (None, b"")}
+    files = {"input_image_file": (None, b"", "application/octet-stream")}
 
     resp = await client.post(
         "/v0/assistant/photo/edit",
         data=form_data,
-        files=files,
+        files=files,  # Must send files to trigger multipart parsing
         headers=HEADERS,
     )
 
-    assert resp.status_code == 201
+    assert resp.status_code == 201, resp.text
     data = resp.json()["info"]
     assert data["url"] == "https://replicate.delivery/pbxt/mock-edited-url"
     replicate_mock.edit_photo.assert_called_once_with(
@@ -95,12 +98,11 @@ async def test_edit_photo_with_file_success(
     mock_photo_services_factory,
 ):
     replicate_mock, bucket_mock = mock_photo_services_factory
-    # Explicitly include all form fields, even those with defaults
     form_data = {
         "prompt": "Add a cat",
         "aspect_ratio": "match_input_image",
         "output_format": "jpg",
-        "safety_tolerance": "2.0",  # Form data values must be strings
+        "safety_tolerance": "2.0",
     }
     file_content = b"fake image data"
     files = {"input_image_file": ("test.jpg", io.BytesIO(file_content), "image/jpeg")}
@@ -112,7 +114,7 @@ async def test_edit_photo_with_file_success(
         headers=HEADERS,
     )
 
-    assert resp.status_code == 201
+    assert resp.status_code == 201, resp.text
     data = resp.json()["info"]
     assert data["url"] == "https://replicate.delivery/pbxt/mock-edited-url"
 
@@ -135,22 +137,27 @@ async def test_edit_photo_with_file_success(
 
 @pytest.mark.anyio
 async def test_edit_photo_invalid_input(client: AsyncClient):
+    # Base form data required to pass initial validation
+    base_form_data = {
+        "prompt": "test",
+        "aspect_ratio": "1:1",
+        "output_format": "webp",
+        "safety_tolerance": "2.0",
+    }
+
     # Test with no input image provided
-    # We must send a multipart request to reach the validation logic in the view
+    # We send an empty file part and no URL
     resp_none = await client.post(
         "/v0/assistant/photo/edit",
-        data={"prompt": "test"},
-        files={"input_image_file": (None, b"")},  # Force multipart
+        data=base_form_data,
+        files={"input_image_file": (None, b"", "application/octet-stream")},
         headers=HEADERS,
     )
     assert resp_none.status_code == 400
     assert "Provide either" in resp_none.json()["detail"]
 
     # Test with both URL and file provided
-    form_data_both = {
-        "prompt": "test",
-        "input_image_url": "http://a.com/b.jpg",
-    }
+    form_data_both = {**base_form_data, "input_image_url": "http://a.com/b.jpg"}
     files_both = {"input_image_file": ("test.jpg", io.BytesIO(b"data"), "image/jpeg")}
     resp_both = await client.post(
         "/v0/assistant/photo/edit",

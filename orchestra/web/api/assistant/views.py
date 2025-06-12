@@ -1660,8 +1660,12 @@ async def edit_assistant_photo(
     temp_gcs_url_to_delete: Optional[str] = None
     input_image_for_replicate: Optional[str] = None
 
-    if (input_image_url and input_image_file) or (
-        not input_image_url and not input_image_file
+    # A real file is provided if the UploadFile object exists and has a filename.
+    # Test clients can send an empty file part which creates an object without a filename.
+    is_file_provided = input_image_file and input_image_file.filename
+
+    if (input_image_url and is_file_provided) or (
+        not input_image_url and not is_file_provided
     ):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1669,7 +1673,7 @@ async def edit_assistant_photo(
         )
 
     try:
-        if input_image_file:
+        if is_file_provided:
             if (
                 not input_image_file.content_type
                 or not input_image_file.content_type.startswith(
