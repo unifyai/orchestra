@@ -119,6 +119,7 @@ async def test_edit_photo_with_file_success(
     # httpx needs Content-Type to be unset to create the correct multipart boundary.
     request_headers = HEADERS.copy()
     request_headers.pop("Content-Type", None)
+    request_headers["X-User-ID"] = "test-user-id-default"
 
     resp = await client.post(
         "/v0/assistant/photo/edit",
