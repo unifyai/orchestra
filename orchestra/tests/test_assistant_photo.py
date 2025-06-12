@@ -43,21 +43,22 @@ async def test_generate_photo_success(
     }
     with patch("orchestra.web.api.assistant.views.settings.is_staging", False), patch(
         "orchestra.web.api.assistant.views.UsersDAO",
-    ) as MockUsersDAO, patch(
-        "orchestra.web.api.assistant.views.request",
-    ) as mock_request:
-        mock_request.state.user_id = user_id_for_test
-
+    ) as MockUsersDAO:
         mock_dao_instance = MockUsersDAO.return_value
         mock_user = MagicMock()
         mock_user.credits = Decimal("100.0")
         mock_dao_instance.get_user_with_id.return_value = mock_user
 
-        resp = await client.post(
-            "/v0/assistant/photo/generate",
-            json=payload,
-            headers=HEADERS,
-        )
+        # Patch request.state.user_id to control the user ID in the endpoint
+        with patch(
+            "orchestra.web.api.assistant.views.Request.state",
+        ) as mock_request_state:
+            mock_request_state.user_id = user_id_for_test
+            resp = await client.post(
+                "/v0/assistant/photo/generate",
+                json=payload,
+                headers=HEADERS,
+            )
 
     assert resp.status_code == 201
     data = resp.json()["info"]
@@ -84,21 +85,21 @@ async def test_generate_photo_insufficient_credits(
     payload = {"prompt": "not enough credits prompt"}
     with patch("orchestra.web.api.assistant.views.settings.is_staging", False), patch(
         "orchestra.web.api.assistant.views.UsersDAO",
-    ) as MockUsersDAO, patch(
-        "orchestra.web.api.assistant.views.request",
-    ) as mock_request:
-        mock_request.state.user_id = user_id_for_test
-
+    ) as MockUsersDAO:
         mock_dao_instance = MockUsersDAO.return_value
         mock_user = MagicMock()
         mock_user.credits = Decimal("0.01")
         mock_dao_instance.get_user_with_id.return_value = mock_user
 
-        resp = await client.post(
-            "/v0/assistant/photo/generate",
-            json=payload,
-            headers=HEADERS,
-        )
+        with patch(
+            "orchestra.web.api.assistant.views.Request.state",
+        ) as mock_request_state:
+            mock_request_state.user_id = user_id_for_test
+            resp = await client.post(
+                "/v0/assistant/photo/generate",
+                json=payload,
+                headers=HEADERS,
+            )
 
     assert resp.status_code == 402
     assert "Insufficient credits" in resp.json()["detail"]
@@ -117,22 +118,21 @@ async def test_generate_photo_staging_env(
     payload = {"prompt": "staging prompt"}
     with patch("orchestra.web.api.assistant.views.settings.is_staging", True), patch(
         "orchestra.web.api.assistant.views.UsersDAO",
-    ) as MockUsersDAO, patch(
-        "orchestra.web.api.assistant.views.request",
-    ) as mock_request:
-        mock_request.state.user_id = "test-user-id"
-        mock_dao_instance = MockUsersDAO.return_value
-
-        resp = await client.post(
-            "/v0/assistant/photo/generate",
-            json=payload,
-            headers=HEADERS,
-        )
+    ) as MockUsersDAO:
+        with patch(
+            "orchestra.web.api.assistant.views.Request.state",
+        ) as mock_request_state:
+            mock_request_state.user_id = "test-user-id"
+            resp = await client.post(
+                "/v0/assistant/photo/generate",
+                json=payload,
+                headers=HEADERS,
+            )
 
         assert resp.status_code == 201
         mock_replicate_service.generate_photo.assert_called_once()
-        mock_dao_instance.get_user_with_id.assert_not_called()
-        mock_dao_instance.recharge_credit.assert_not_called()
+        MockUsersDAO.return_value.get_user_with_id.assert_not_called()
+        MockUsersDAO.return_value.recharge_credit.assert_not_called()
 
 
 @pytest.mark.anyio
@@ -148,20 +148,21 @@ async def test_generate_photo_replicate_api_error(
     payload = {"prompt": "api error prompt"}
     with patch("orchestra.web.api.assistant.views.settings.is_staging", False), patch(
         "orchestra.web.api.assistant.views.UsersDAO",
-    ) as MockUsersDAO, patch(
-        "orchestra.web.api.assistant.views.request",
-    ) as mock_request:
-        mock_request.state.user_id = "test-user-id"
+    ) as MockUsersDAO:
         mock_dao_instance = MockUsersDAO.return_value
         mock_user = MagicMock()
         mock_user.credits = Decimal("100.0")
         mock_dao_instance.get_user_with_id.return_value = mock_user
 
-        resp = await client.post(
-            "/v0/assistant/photo/generate",
-            json=payload,
-            headers=HEADERS,
-        )
+        with patch(
+            "orchestra.web.api.assistant.views.Request.state",
+        ) as mock_request_state:
+            mock_request_state.user_id = "test-user-id"
+            resp = await client.post(
+                "/v0/assistant/photo/generate",
+                json=payload,
+                headers=HEADERS,
+            )
 
     assert resp.status_code == 503
     assert "Replicate is down" in resp.json()["detail"]
@@ -184,21 +185,21 @@ async def test_edit_photo_success(
     }
     with patch("orchestra.web.api.assistant.views.settings.is_staging", False), patch(
         "orchestra.web.api.assistant.views.UsersDAO",
-    ) as MockUsersDAO, patch(
-        "orchestra.web.api.assistant.views.request",
-    ) as mock_request:
-        mock_request.state.user_id = user_id_for_test
-
+    ) as MockUsersDAO:
         mock_dao_instance = MockUsersDAO.return_value
         mock_user = MagicMock()
         mock_user.credits = Decimal("100.0")
         mock_dao_instance.get_user_with_id.return_value = mock_user
 
-        resp = await client.post(
-            "/v0/assistant/photo/edit",
-            json=payload,
-            headers=HEADERS,
-        )
+        with patch(
+            "orchestra.web.api.assistant.views.Request.state",
+        ) as mock_request_state:
+            mock_request_state.user_id = user_id_for_test
+            resp = await client.post(
+                "/v0/assistant/photo/edit",
+                json=payload,
+                headers=HEADERS,
+            )
 
     assert resp.status_code == 201
     data = resp.json()["info"]
@@ -229,21 +230,21 @@ async def test_edit_photo_insufficient_credits(
     }
     with patch("orchestra.web.api.assistant.views.settings.is_staging", False), patch(
         "orchestra.web.api.assistant.views.UsersDAO",
-    ) as MockUsersDAO, patch(
-        "orchestra.web.api.assistant.views.request",
-    ) as mock_request:
-        mock_request.state.user_id = user_id_for_test
-
+    ) as MockUsersDAO:
         mock_dao_instance = MockUsersDAO.return_value
         mock_user = MagicMock()
         mock_user.credits = Decimal("0.04")
         mock_dao_instance.get_user_with_id.return_value = mock_user
 
-        resp = await client.post(
-            "/v0/assistant/photo/edit",
-            json=payload,
-            headers=HEADERS,
-        )
+        with patch(
+            "orchestra.web.api.assistant.views.Request.state",
+        ) as mock_request_state:
+            mock_request_state.user_id = user_id_for_test
+            resp = await client.post(
+                "/v0/assistant/photo/edit",
+                json=payload,
+                headers=HEADERS,
+            )
 
     assert resp.status_code == 402
     assert "Insufficient credits" in resp.json()["detail"]
@@ -265,22 +266,21 @@ async def test_edit_photo_staging_env(
     }
     with patch("orchestra.web.api.assistant.views.settings.is_staging", True), patch(
         "orchestra.web.api.assistant.views.UsersDAO",
-    ) as MockUsersDAO, patch(
-        "orchestra.web.api.assistant.views.request",
-    ) as mock_request:
-        mock_request.state.user_id = "test-user-id"
-        mock_dao_instance = MockUsersDAO.return_value
-
-        resp = await client.post(
-            "/v0/assistant/photo/edit",
-            json=payload,
-            headers=HEADERS,
-        )
+    ) as MockUsersDAO:
+        with patch(
+            "orchestra.web.api.assistant.views.Request.state",
+        ) as mock_request_state:
+            mock_request_state.user_id = "test-user-id"
+            resp = await client.post(
+                "/v0/assistant/photo/edit",
+                json=payload,
+                headers=HEADERS,
+            )
 
         assert resp.status_code == 201
         mock_replicate_service.edit_photo.assert_called_once()
-        mock_dao_instance.get_user_with_id.assert_not_called()
-        mock_dao_instance.recharge_credit.assert_not_called()
+        MockUsersDAO.return_value.get_user_with_id.assert_not_called()
+        MockUsersDAO.return_value.recharge_credit.assert_not_called()
 
 
 @pytest.mark.anyio
@@ -299,20 +299,21 @@ async def test_edit_photo_replicate_api_error(
     }
     with patch("orchestra.web.api.assistant.views.settings.is_staging", False), patch(
         "orchestra.web.api.assistant.views.UsersDAO",
-    ) as MockUsersDAO, patch(
-        "orchestra.web.api.assistant.views.request",
-    ) as mock_request:
-        mock_request.state.user_id = "test-user-id"
+    ) as MockUsersDAO:
         mock_dao_instance = MockUsersDAO.return_value
         mock_user = MagicMock()
         mock_user.credits = Decimal("100.0")
         mock_dao_instance.get_user_with_id.return_value = mock_user
 
-        resp = await client.post(
-            "/v0/assistant/photo/edit",
-            json=payload,
-            headers=HEADERS,
-        )
+        with patch(
+            "orchestra.web.api.assistant.views.Request.state",
+        ) as mock_request_state:
+            mock_request_state.user_id = "test-user-id"
+            resp = await client.post(
+                "/v0/assistant/photo/edit",
+                json=payload,
+                headers=HEADERS,
+            )
 
     assert resp.status_code == 500
     assert "Internal Server Error at Replicate" in resp.json()["detail"]
