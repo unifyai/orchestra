@@ -34,7 +34,6 @@ from orchestra.web.api.assistant.schema import (
     AssistantUpdate,
     InfoResponse,
     PhotoCreationResponse,
-    PhotoEditRequest,
     PhotoGenerateRequest,
     RecordingCreate,
     RecordingInfo,
@@ -1634,40 +1633,88 @@ async def generate_assistant_photo(
     response_model=InfoResponse[PhotoCreationResponse],
     status_code=status.HTTP_201_CREATED,
     summary="Edit an assistant profile photo from text",
-    description="Edits a photo using a text prompt and an input image URL via Replicate, and returns the new image URL. This action will deduct credits.",
+    description="Edits a photo using a text prompt and an input image (URL or file) via Replicate, and returns the new image URL. This action will deduct credits.",
     tags=["Assistants", "Storage"],
 )
 async def edit_assistant_photo(
     request: Request,
-    payload: PhotoEditRequest,
     session: Session = Depends(get_db_session),
     replicate_service: ReplicateService = Depends(),
+    bucket_service: BucketService = Depends(),
+    prompt: str = Form(...),
+    input_image_url: Optional[str] = Form(None),
+    input_image_file: Optional[UploadFile] = File(None),
+    aspect_ratio: str = Form("match_input_image"),
+    output_format: str = Form("jpg"),
+    safety_tolerance: float = Form(2.0),
 ) -> InfoResponse[PhotoCreationResponse]:
     """
     Edit an assistant profile photo using a text prompt and an input image.
 
     This endpoint uses an AI model to edit an existing image based on a
-    text prompt. The user's account is charged for this operation.
+    text prompt. The input image can be provided as a public URL or a direct file upload.
+    The user's account is charged for this operation.
     """
     user_id = request.state.user_id
     users_dao = UsersDAO(session)
+    temp_gcs_url_to_delete: Optional[str] = None
+    input_image_for_replicate: Optional[str] = None
 
-    # Pre-check credits if not in staging
-    if not settings.is_staging:
-        user = users_dao.get_user_with_id(user_id)
-        if user.credits < settings.photo_generation_cost:
-            raise HTTPException(
-                status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail="Insufficient credits to edit a photo.",
-            )
+    if (input_image_url and input_image_file) or (
+        not input_image_url and not input_image_file
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Provide either 'input_image_url' or 'input_image_file', but not both.",
+        )
 
     try:
+        if input_image_file:
+            if (
+                not input_image_file.content_type
+                or not input_image_file.content_type.startswith(
+                    "image/",
+                )
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid file type for 'input_image_file'. Only images are allowed.",
+                )
+            file_content = await input_image_file.read()
+            (
+                public_url,
+                gcs_url_for_delete,
+            ) = bucket_service.upload_temp_assistant_photo_file(
+                file_content,
+                user_id,
+                input_image_file.content_type,
+            )
+            input_image_for_replicate = public_url
+            temp_gcs_url_to_delete = gcs_url_for_delete
+        else:
+            input_image_for_replicate = input_image_url
+
+        if not input_image_for_replicate:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No valid image input provided.",
+            )
+
+        # Pre-check credits if not in staging
+        if not settings.is_staging:
+            user = users_dao.get_user_with_id(user_id)
+            if user.credits < settings.photo_generation_cost:
+                raise HTTPException(
+                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                    detail="Insufficient credits to edit a photo.",
+                )
+
         image_url = replicate_service.edit_photo(
-            prompt=payload.prompt,
-            input_image=str(payload.input_image),
-            aspect_ratio=payload.aspect_ratio,
-            output_format=payload.output_format,
-            safety_tolerance=payload.safety_tolerance,
+            prompt=prompt,
+            input_image=input_image_for_replicate,
+            aspect_ratio=aspect_ratio,
+            output_format=output_format,
+            safety_tolerance=safety_tolerance,
         )
 
         # Deduct credits after successful edit if not in staging
@@ -1679,6 +1726,7 @@ async def edit_assistant_photo(
             session.commit()
 
         return InfoResponse(info=PhotoCreationResponse(url=image_url))
+
     except ReplicateAPIError as e:
         session.rollback()
         raise HTTPException(
@@ -1692,6 +1740,17 @@ async def edit_assistant_photo(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Could not edit photo: {str(e)}",
         )
+    finally:
+        if temp_gcs_url_to_delete:
+            try:
+                bucket_service.delete_assistant_photo(temp_gcs_url_to_delete)
+                logging.info(
+                    f"Successfully deleted temporary file {temp_gcs_url_to_delete} for photo edit.",
+                )
+            except Exception as e_cleanup:
+                logging.error(
+                    f"Failed to clean up temporary file {temp_gcs_url_to_delete}: {e_cleanup}",
+                )
 
 
 ##################

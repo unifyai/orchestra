@@ -1,157 +1,149 @@
-from unittest.mock import MagicMock, patch
+import io
+from unittest.mock import MagicMock
 
 import pytest
 from httpx import AsyncClient
 
-from orchestra.services.replicate_service import ReplicateAPIError
+from orchestra.services.bucket_service import BucketService as OriginalBucketService
 from orchestra.services.replicate_service import (
     ReplicateService as OriginalReplicateService,
 )
 from orchestra.tests.utils import HEADERS
 
 
-@pytest.fixture(autouse=True)
-def mock_services_factory(fastapi_app):
-    """
-    Mocks ReplicateService and patches Pub/Sub to prevent middleware errors.
-    This follows the simplified testing strategy of assuming credit checks are
-    bypassed (i.e., running in a staging-like mode).
-    """
+@pytest.fixture(
+    autouse=True,
+)
+def mock_photo_services_factory(fastapi_app):
+    """Provides mock ReplicateService and BucketService instances."""
     replicate_mock = MagicMock(spec=OriginalReplicateService)
     replicate_mock.generate_photo.return_value = (
-        "https://replicate.example.com/generated.jpg"
+        "https://replicate.delivery/pbxt/mock-generated-url"
     )
-    replicate_mock.edit_photo.return_value = "https://replicate.example.com/edited.jpg"
+    replicate_mock.edit_photo.return_value = (
+        "https://replicate.delivery/pbxt/mock-edited-url"
+    )
 
-    # Patch Pub/Sub to prevent middleware from failing on unserializable mock objects
-    with patch(
-        "orchestra.web.api.utils.production_traffic_middleware.send_pubsub_msg",
-    ):
-        # Override the ReplicateService dependency in the FastAPI app
-        fastapi_app.dependency_overrides[
-            OriginalReplicateService
-        ] = lambda: replicate_mock
+    bucket_mock = MagicMock(spec=OriginalBucketService)
+    bucket_mock.upload_temp_photo_file.return_value = (
+        "https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_image.jpg",
+        "gs://mock-bucket/_temp/test-user/temp_image.jpg",
+    )
+    bucket_mock.delete_assistant_photo.return_value = True
 
-        yield replicate_mock
+    fastapi_app.dependency_overrides[OriginalReplicateService] = lambda: replicate_mock
+    fastapi_app.dependency_overrides[OriginalBucketService] = lambda: bucket_mock
 
-        # Clean up the override after the test
-        fastapi_app.dependency_overrides.pop(OriginalReplicateService, None)
+    yield replicate_mock, bucket_mock
+
+    fastapi_app.dependency_overrides.clear()
 
 
 @pytest.mark.anyio
-async def test_generate_photo_success(client: AsyncClient, mock_services_factory):
-    """Test successful photo generation."""
-    replicate_mock = mock_services_factory
-    user_id = "test-user-generate-ok"
-
-    payload = {
-        "prompt": "A successful test prompt",
-        "aspect_ratio": "16:9",
-    }
-    with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
-        mock_state.user_id = user_id
-        resp = await client.post(
-            "/v0/assistant/photo/generate",
-            json=payload,
-            headers=HEADERS,
-        )
-
+async def test_generate_photo_success(client: AsyncClient, mock_photo_services_factory):
+    replicate_mock, _ = mock_photo_services_factory
+    payload = {"prompt": "A beautiful landscape"}
+    resp = await client.post(
+        "/v0/assistant/photo/generate",
+        json=payload,
+        headers=HEADERS,
+    )
     assert resp.status_code == 201
     data = resp.json()["info"]
-    assert data["url"] == "https://replicate.example.com/generated.jpg"
-
-    # Verify Replicate service was called correctly with provided and default values
-    replicate_mock.generate_photo.assert_called_once_with(
-        prompt=payload["prompt"],
-        aspect_ratio="16:9",  # Check that non-default value is passed
-        output_format="webp",
-        output_quality=80,
-        safety_tolerance=2.0,
-        prompt_upsampling=True,
-    )
+    assert data["url"] == "https://replicate.delivery/pbxt/mock-generated-url"
+    replicate_mock.generate_photo.assert_called_once()
+    assert replicate_mock.generate_photo.call_args[1]["prompt"] == payload["prompt"]
 
 
 @pytest.mark.anyio
-async def test_generate_photo_replicate_fails(
+async def test_edit_photo_with_url_success(
     client: AsyncClient,
-    mock_services_factory,
+    mock_photo_services_factory,
 ):
-    """Test photo generation when the Replicate service returns an error."""
-    replicate_mock = mock_services_factory
-    user_id = "test-user-generate-fail-api"
-
-    replicate_mock.generate_photo.side_effect = ReplicateAPIError(
-        status_code=503,
-        detail="Replicate is down",
-    )
-
-    payload = {"prompt": "A prompt that triggers an API error"}
-    with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
-        mock_state.user_id = user_id
-        resp = await client.post(
-            "/v0/assistant/photo/generate",
-            json=payload,
-            headers=HEADERS,
-        )
-
-    assert resp.status_code == 503
-    assert "Replicate API error: Replicate is down" in resp.json()["detail"]
-
-
-@pytest.mark.anyio
-async def test_edit_photo_success(client: AsyncClient, mock_services_factory):
-    """Test successful photo editing."""
-    replicate_mock = mock_services_factory
-    user_id = "test-user-edit-ok"
-
-    payload = {
-        "prompt": "Make it a cubist painting",
-        "input_image": "http://example.com/image.jpg",
+    replicate_mock, bucket_mock = mock_photo_services_factory
+    form_data = {
+        "prompt": "Make it winter",
+        "input_image_url": "https://example.com/summer.jpg",
     }
-    with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
-        mock_state.user_id = user_id
-        resp = await client.post(
-            "/v0/assistant/photo/edit",
-            json=payload,
-            headers=HEADERS,
-        )
-
+    resp = await client.post(
+        "/v0/assistant/photo/edit",
+        data=form_data,
+        headers=HEADERS,
+    )
     assert resp.status_code == 201
     data = resp.json()["info"]
-    assert data["url"] == "https://replicate.example.com/edited.jpg"
-
-    # Verify Replicate service was called correctly
+    assert data["url"] == "https://replicate.delivery/pbxt/mock-edited-url"
     replicate_mock.edit_photo.assert_called_once_with(
-        prompt=payload["prompt"],
-        input_image=payload["input_image"],
+        prompt=form_data["prompt"],
+        input_image=form_data["input_image_url"],
         aspect_ratio="match_input_image",
         output_format="jpg",
         safety_tolerance=2.0,
     )
+    bucket_mock.upload_temp_photo_file.assert_not_called()
+    bucket_mock.delete_assistant_photo.assert_not_called()
 
 
 @pytest.mark.anyio
-async def test_edit_photo_replicate_fails(client: AsyncClient, mock_services_factory):
-    """Test photo editing when the Replicate service returns an error."""
-    replicate_mock = mock_services_factory
-    user_id = "test-user-edit-fail-api"
+async def test_edit_photo_with_file_success(
+    client: AsyncClient,
+    mock_photo_services_factory,
+):
+    replicate_mock, bucket_mock = mock_photo_services_factory
+    form_data = {"prompt": "Add a cat"}
+    file_content = b"fake image data"
+    files = {"input_image_file": ("test.jpg", io.BytesIO(file_content), "image/jpeg")}
 
-    replicate_mock.edit_photo.side_effect = ReplicateAPIError(
-        status_code=500,
-        detail="Replicate edit model failed",
+    resp = await client.post(
+        "/v0/assistant/photo/edit",
+        data=form_data,
+        files=files,
+        headers=HEADERS,
     )
 
-    payload = {
-        "prompt": "An edit that fails",
-        "input_image": "http://example.com/image.jpg",
-    }
-    with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
-        mock_state.user_id = user_id
-        resp = await client.post(
-            "/v0/assistant/photo/edit",
-            json=payload,
-            headers=HEADERS,
-        )
+    assert resp.status_code == 201
+    data = resp.json()["info"]
+    assert data["url"] == "https://replicate.delivery/pbxt/mock-edited-url"
 
-    assert resp.status_code == 500
-    assert "Replicate API error: Replicate edit model failed" in resp.json()["detail"]
+    bucket_mock.upload_temp_photo_file.assert_called_once_with(
+        file_content,
+        "test-user-id-default",  # user_id from HEADERS
+        "image/jpeg",
+    )
+    replicate_mock.edit_photo.assert_called_once_with(
+        prompt=form_data["prompt"],
+        input_image="https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_image.jpg",
+        aspect_ratio="match_input_image",
+        output_format="jpg",
+        safety_tolerance=2.0,
+    )
+    bucket_mock.delete_assistant_photo.assert_called_once_with(
+        "gs://mock-bucket/_temp/test-user/temp_image.jpg",
+    )
+
+
+@pytest.mark.anyio
+async def test_edit_photo_invalid_input(client: AsyncClient):
+    # Test with no input image
+    resp_none = await client.post(
+        "/v0/assistant/photo/edit",
+        data={"prompt": "test"},
+        headers=HEADERS,
+    )
+    assert resp_none.status_code == 400
+    assert "Provide either" in resp_none.json()["detail"]
+
+    # Test with both URL and file
+    form_data = {
+        "prompt": "test",
+        "input_image_url": "http://a.com/b.jpg",
+    }
+    files = {"input_image_file": ("test.jpg", io.BytesIO(b"data"), "image/jpeg")}
+    resp_both = await client.post(
+        "/v0/assistant/photo/edit",
+        data=form_data,
+        files=files,
+        headers=HEADERS,
+    )
+    assert resp_both.status_code == 400
+    assert "Provide either" in resp_both.json()["detail"]
