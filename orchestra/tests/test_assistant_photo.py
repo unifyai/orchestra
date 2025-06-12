@@ -119,7 +119,6 @@ async def test_edit_photo_with_file_success(
     # httpx needs Content-Type to be unset to create the correct multipart boundary.
     request_headers = HEADERS.copy()
     request_headers.pop("Content-Type", None)
-    request_headers["X-User-ID"] = "test-user-id-default"
 
     resp = await client.post(
         "/v0/assistant/photo/edit",
@@ -134,7 +133,6 @@ async def test_edit_photo_with_file_success(
 
     bucket_mock.upload_temp_assistant_photo_file.assert_called_once_with(
         file_content,
-        "test-user-id-default",  # user_id from HEADERS
         "image/jpeg",
     )
     replicate_mock.edit_photo.assert_called_once_with(
