@@ -70,9 +70,6 @@ def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:
 router = APIRouter()
 admin_router = APIRouter()
 
-ASSISTANT_CREATION_COST = Decimal("10.0")
-PHOTO_GENERATION_COST = Decimal("0.05")
-
 
 @router.post(
     "/assistant",
@@ -153,7 +150,7 @@ def create_assistant(
     try:
         if not settings.is_staging:
             user = users_dao.get_user_with_id(user_id)
-            if user.credits < ASSISTANT_CREATION_COST:
+            if user.credits < settings.assistant_creation_cost:
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail="Insufficient credits to create an assistant.",
@@ -393,7 +390,7 @@ def create_assistant(
             # Refresh session before credit operation to ensure connection is valid
             users_dao.recharge_credit(
                 user_id=user_id,
-                quantity=-float(ASSISTANT_CREATION_COST),
+                quantity=-float(settings.assistant_creation_cost),
             )
             session.commit()
         except Exception as e_commit:
@@ -1592,7 +1589,7 @@ async def generate_assistant_photo(
     # Pre-check credits if not in staging
     if not settings.is_staging:
         user = users_dao.get_user_with_id(user_id)
-        if user.credits < PHOTO_GENERATION_COST:
+        if user.credits < settings.photo_generation_cost:
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
                 detail="Insufficient credits to generate a photo.",
@@ -1612,7 +1609,7 @@ async def generate_assistant_photo(
         if not settings.is_staging:
             users_dao.recharge_credit(
                 user_id=user_id,
-                quantity=-float(PHOTO_GENERATION_COST),
+                quantity=-float(settings.photo_generation_cost),
             )
             session.commit()
 
@@ -1658,7 +1655,7 @@ async def edit_assistant_photo(
     # Pre-check credits if not in staging
     if not settings.is_staging:
         user = users_dao.get_user_with_id(user_id)
-        if user.credits < PHOTO_GENERATION_COST:
+        if user.credits < settings.photo_generation_cost:
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
                 detail="Insufficient credits to edit a photo.",
@@ -1677,7 +1674,7 @@ async def edit_assistant_photo(
         if not settings.is_staging:
             users_dao.recharge_credit(
                 user_id=user_id,
-                quantity=-float(PHOTO_GENERATION_COST),
+                quantity=-float(settings.photo_generation_cost),
             )
             session.commit()
 
