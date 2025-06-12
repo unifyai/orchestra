@@ -12,6 +12,7 @@ from sqlalchemy import (
     Text,
     Time,
     and_,
+    case,
     cast,
     func,
     literal,
@@ -322,6 +323,8 @@ def _arithmetic_expr(lval, rval, operand, lval_type, rval_type):
     else:
         lval = cast_expr(lval, lval_type, rval_type)
         rval = cast_expr(rval, rval_type, lval_type)
+        # ──► NEW – make denominator safe for / // %  ◄──
+        safe_rval = func.nullif(rval, 0)  # 0   → NULL
         if operand == "+":
             if lval_type == "str" and rval_type == "str":
                 lval = func.replace(cast(lval, String), '"', "")
@@ -334,13 +337,17 @@ def _arithmetic_expr(lval, rval, operand, lval_type, rval_type):
         elif operand == "*":
             expr = lval * rval
         elif operand == "/":
-            expr = lval / rval
+            # use safe_rval and return NULL when it is NULL
+            expr = case((safe_rval.is_(None), None), else_=lval / safe_rval)
         elif operand == "%":
-            expr = lval % rval
+            expr = case((safe_rval.is_(None), None), else_=lval % safe_rval)
         elif operand == "**":
             expr = func.power(lval, rval)
         elif operand == "//":
-            expr = func.floor(lval / rval)
+            expr = case(
+                (safe_rval.is_(None), None),
+                else_=func.floor(lval / safe_rval),
+            )
         result_type = unify_inferred_types(lval_type, rval_type)
     return expr, result_type
 
@@ -422,6 +429,9 @@ def _handle_arithmetic_operator(
         lval, lval_type = _select_value(lhs, session)
         rval = cast_expr(rval, rval_type, lval_type)
         lval = cast_expr(lval, lval_type, rval_type)
+        # ──► NEW – safe denominator ◄──
+        safe_rval = func.nullif(rval, 0)
+        # --------------------------------
         if operand == "+":
             return lval + rval
         elif operand == "-":
@@ -431,11 +441,14 @@ def _handle_arithmetic_operator(
         elif operand == "/":
             return lval / rval
         elif operand == "%":
-            return lval % rval
+            return case((safe_rval.is_(None), None), else_=lval % safe_rval)
         elif operand == "**":
             return func.power(lval, rval)
         elif operand == "//":
-            return func.floor(lval / rval)
+            return case(
+                (safe_rval.is_(None), None),
+                else_=func.floor(lval / safe_rval),
+            )
 
 
 # Helper function for comparison operators (==, !=, <, >, <=, >=, is, is not)
