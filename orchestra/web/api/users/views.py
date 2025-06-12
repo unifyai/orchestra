@@ -23,7 +23,7 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
-from orchestra.web.api.assistant.views import ASSISTANT_CREATION_COST
+from orchestra.settings import settings
 from orchestra.web.api.users.schema import (
     AccountRequest,
     AssistantHiringApprovalCreateLinkRequest,
@@ -815,7 +815,7 @@ async def claim_assistant_hiring_one_time_link(
 
         users_dao.recharge_credit(
             user_id=user_instance.id,
-            quantity=float(ASSISTANT_CREATION_COST),
+            quantity=float(settings.assistant_creation_cost),
         )
 
         session.commit()

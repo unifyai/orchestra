@@ -2,7 +2,7 @@ import pytest
 from fastapi import status
 from httpx import AsyncClient
 
-from orchestra.web.api.assistant.views import ASSISTANT_CREATION_COST
+from orchestra.settings import settings
 
 from .utils import ADMIN_HEADERS, create_test_user, get_credits
 
@@ -305,7 +305,7 @@ async def test_one_time_approval_links_flow(client: AsyncClient):
     # Verify credits were granted
     credits_after_first_claim = await get_credits(client, user_headers=user_headers)
     expected_credits_after_first_claim = initial_credits + float(
-        ASSISTANT_CREATION_COST,
+        settings.assistant_creation_cost,
     )
     assert (
         credits_after_first_claim == expected_credits_after_first_claim
@@ -394,7 +394,9 @@ async def test_one_time_link_single_benefit_and_multiple_links(client: AsyncClie
 
     # Verify User 1 state after claiming L1
     credits_u1_after_l1 = await get_credits(client, user_headers=user1_headers)
-    assert credits_u1_after_l1 == initial_credits_u1 + float(ASSISTANT_CREATION_COST)
+    assert credits_u1_after_l1 == initial_credits_u1 + float(
+        settings.assistant_creation_cost
+    )
     user1_details_after_l1 = await client.get(
         f"/v0/admin/auth-user/by-user-id?user_id={user1_id}",
         headers=ADMIN_HEADERS,
