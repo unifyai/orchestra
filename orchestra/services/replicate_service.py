@@ -59,7 +59,7 @@ class ReplicateService:
                 detail=f"Request to Replicate API failed: {e}",
             )
 
-    def edit_photo(
+    async def edit_photo(
         self,
         prompt: str,
         input_image: str,
