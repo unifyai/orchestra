@@ -1,7 +1,10 @@
 import logging
 from typing import Any, Dict, Optional
 
+import replicate
 from fastapi import HTTPException, status
+
+from orchestra.settings import settings
 
 
 class ReplicateAPIError(HTTPException):
@@ -59,7 +62,7 @@ class ReplicateService:
                 detail=f"Request to Replicate API failed: {e}",
             )
 
-    async def edit_photo(
+    def edit_photo(
         self,
         prompt: str,
         input_image: str,
