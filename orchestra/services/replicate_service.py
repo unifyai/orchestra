@@ -26,7 +26,7 @@ class ReplicateService:
             replicate_api_key = os.getenv("ORCHESTRA_REPLICATE_API_KEY")
             if not replicate_api_key:
                 raise ValueError(
-                    "ORCHESTRA_REPLICATE_API_KEY environment variable is not set."
+                    "ORCHESTRA_REPLICATE_API_KEY environment variable is not set.",
                 )
 
             # Set the environment variable that the 'replicate' library expects
@@ -59,7 +59,7 @@ class ReplicateService:
         """
         try:
             # Pinned version for model for reproducibility
-            model_version = "black-forest-labs/flux-1.1-pro:1a2c1db0e073c6838a3f8dee7125b3a6e84d416b474709214a1a3e8784d48344"
+            model_version = "black-forest-labs/flux-1.1-pro"
             output: Optional[List[str]] = self.client.run(
                 model_version,
                 input={
@@ -97,7 +97,7 @@ class ReplicateService:
         """
         try:
             # Pinned version for model for reproducibility
-            model_version = "black-forest-labs/flux-kontext-pro:178e63a93645b9508628ec23537449a03b6441b8c85743b1ac6146193f0b8d0e"
+            model_version = "black-forest-labs/flux-kontext-pro"
             output: Optional[List[str]] = self.client.run(
                 model_version,
                 input={
