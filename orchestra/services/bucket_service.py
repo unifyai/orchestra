@@ -243,6 +243,10 @@ class BucketService:
 
             blob = self.assistant_images_bucket.blob(object_path)
             blob.upload_from_string(file_content, content_type=content_type)
+
+            # Make the blob publicly readable so external services like Replicate can access it.
+            blob.make_public()
+
             gcs_url = f"gs://{self.assistant_images_bucket_name}/{object_path}"
             public_url = blob.public_url
 
