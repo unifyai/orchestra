@@ -166,7 +166,7 @@ class Settings(BaseSettings):
 
     # Assistant photo generation
     photo_generation_cost: float = 0.05
-    replicate_api_key: Optional[str] = None # Populated by model_config below
+    replicate_api_key: Optional[str] = None  # Populated by model_config below
 
     @property
     def db_url(self) -> URL:
