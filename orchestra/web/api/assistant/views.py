@@ -1712,7 +1712,7 @@ async def edit_assistant_photo(
                     detail="Insufficient credits to edit a photo.",
                 )
 
-        image_url = await replicate_service.edit_photo(
+        image_url = replicate_service.edit_photo(
             prompt=prompt,
             input_image=input_image_for_replicate,
             aspect_ratio=aspect_ratio,
