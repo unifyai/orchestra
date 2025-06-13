@@ -1,10 +1,8 @@
 import logging
+import os
 from typing import List, Optional
 
-import replicate
 from fastapi import HTTPException, status
-
-from orchestra.settings import settings
 
 
 class ReplicateAPIError(HTTPException):
@@ -20,15 +18,32 @@ class ReplicateService:
     def __init__(self):
         """
         Initializes the Replicate service.
-        The Replicate Python client automatically uses the REPLICATE_API_TOKEN
-        environment variable. We check for its presence in settings.
+        It looks for ORCHESTRA_REPLICATE_API_KEY from the environment and sets the
+        REPLICATE_API_TOKEN environment variable, which the replicate client uses.
         """
-        if (
-            not hasattr(settings, "replicate_api_token")
-            or not settings.replicate_api_token
-        ):
-            raise ValueError("replicate_api_token is not set in settings.")
-        self.client = replicate
+        try:
+            # Get the API key directly from the environment
+            replicate_api_key = os.getenv("ORCHESTRA_REPLICATE_API_KEY")
+            if not replicate_api_key:
+                raise ValueError(
+                    "ORCHESTRA_REPLICATE_API_KEY environment variable is not set."
+                )
+
+            # Set the environment variable that the 'replicate' library expects
+            os.environ["REPLICATE_API_TOKEN"] = replicate_api_key
+
+            import replicate  # Defer import until initialization
+
+            self.client = replicate
+        except ImportError:
+            logging.error(
+                "The 'replicate' library is not installed. Please install it with 'pip install replicate'.",
+            )
+            raise RuntimeError("Replicate library not found.")
+        except ValueError as e:
+            logging.error(f"Replicate service initialization failed: {e}")
+            # Re-raise to be caught by FastAPI's dependency management
+            raise e
 
     def generate_photo(
         self,
