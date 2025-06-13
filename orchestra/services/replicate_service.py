@@ -1,9 +1,6 @@
 import logging
 
-import replicate
 from fastapi import HTTPException, status
-
-from orchestra.settings import settings
 
 
 class ReplicateAPIError(HTTPException):
