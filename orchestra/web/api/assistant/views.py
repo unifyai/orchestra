@@ -1595,7 +1595,7 @@ async def generate_assistant_photo(
             )
 
     try:
-        image_url = replicate_service.generate_photo(
+        image_url = await replicate_service.generate_photo(
             prompt=payload.prompt,
             aspect_ratio=payload.aspect_ratio,
             output_format=payload.output_format,
@@ -1713,7 +1713,7 @@ async def edit_assistant_photo(
                     detail="Insufficient credits to edit a photo.",
                 )
 
-        image_url = replicate_service.edit_photo(
+        image_url = await replicate_service.edit_photo(
             prompt=prompt,
             input_image=input_image_for_replicate,
             aspect_ratio=aspect_ratio,

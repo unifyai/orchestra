@@ -45,7 +45,7 @@ class ReplicateService:
             # Re-raise to be caught by FastAPI's dependency management
             raise e
 
-    def generate_photo(
+    async def generate_photo(
         self,
         prompt: str,
         aspect_ratio: str,
@@ -58,10 +58,9 @@ class ReplicateService:
         Generates a new image from a text prompt using FLUX 1.1 Pro.
         """
         try:
-            # Pinned version for model for reproducibility
-            model_version = "black-forest-labs/flux-1.1-pro"
-            output: Optional[List[str]] = self.client.run(
-                model_version,
+            model_identifier = "black-forest-labs/flux-1.1-pro"
+            output: Optional[List[str]] = await self.client.async_run(
+                model_identifier,
                 input={
                     "prompt": prompt,
                     "aspect_ratio": aspect_ratio,
@@ -84,7 +83,7 @@ class ReplicateService:
                 detail=f"Request to Replicate API failed: {e}",
             )
 
-    def edit_photo(
+    async def edit_photo(
         self,
         prompt: str,
         input_image: str,
@@ -96,10 +95,9 @@ class ReplicateService:
         Edits an image with a text prompt using FLUX Kontext Pro.
         """
         try:
-            # Pinned version for model for reproducibility
-            model_version = "black-forest-labs/flux-kontext-pro"
-            output: Optional[List[str]] = self.client.run(
-                model_version,
+            model_identifier = "black-forest-labs/flux-kontext-pro"
+            output: Optional[List[str]] = await self.client.async_run(
+                model_identifier,
                 input={
                     "prompt": prompt,
                     "input_image": input_image,
