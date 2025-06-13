@@ -143,7 +143,7 @@ async def test_edit_photo_with_file_success(
         output_format="jpg",
         safety_tolerance=2.0,
     )
-    bucket_mock.delete_assistant_photo.assert_awaited_once_with(
+    bucket_mock.delete_assistant_photo.assert_called_once_with(
         "gs://mock-bucket/_temp/test-user/temp_image.jpg",
     )
 
