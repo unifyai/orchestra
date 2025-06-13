@@ -1,5 +1,5 @@
 import io
-from unittest.mock import ANY, AsyncMock, MagicMock
+from unittest.mock import ANY, MagicMock
 
 import pytest
 from httpx import AsyncClient
@@ -17,11 +17,11 @@ from orchestra.tests.utils import HEADERS
 def mock_photo_services_factory(fastapi_app):
     """Provides mock ReplicateService and BucketService instances."""
     replicate_mock = MagicMock(spec=OriginalReplicateService)
-    replicate_mock.generate_photo = AsyncMock(
-        return_value="https://replicate.delivery/pbxt/mock-generated-url",
+    replicate_mock.generate_photo.return_value = (
+        "https://replicate.delivery/pbxt/mock-generated-url"
     )
-    replicate_mock.edit_photo = AsyncMock(
-        return_value="https://replicate.delivery/pbxt/mock-edited-url",
+    replicate_mock.edit_photo.return_value = (
+        "https://replicate.delivery/pbxt/mock-edited-url"
     )
 
     bucket_mock = MagicMock(spec=OriginalBucketService)
@@ -50,8 +50,8 @@ async def test_generate_photo_success(client: AsyncClient, mock_photo_services_f
     )
     assert resp.status_code == 201
     data = resp.json()["info"]
-    assert data["url"] == "https://replicate.delivery/pbxt/mock-generated-url"
-    replicate_mock.generate_photo.assert_awaited_once()
+    assert data == "https://replicate.delivery/pbxt/mock-generated-url"
+    replicate_mock.generate_photo.assert_called_once()
     assert replicate_mock.generate_photo.call_args[1]["prompt"] == payload["prompt"]
 
 
@@ -84,9 +84,9 @@ async def test_edit_photo_with_url_success(
     )
     assert resp.status_code == 201, resp.text
     data = resp.json()["info"]
-    assert data["url"] == "https://replicate.delivery/pbxt/mock-edited-url"
+    assert data == "https://replicate.delivery/pbxt/mock-edited-url"
 
-    replicate_mock.edit_photo.assert_awaited_once_with(
+    replicate_mock.edit_photo.assert_called_once_with(
         prompt="Make it winter",
         input_image="https://example.com/summer.jpg",
         aspect_ratio="match_input_image",
@@ -129,14 +129,14 @@ async def test_edit_photo_with_file_success(
 
     assert resp.status_code == 201, resp.text
     data = resp.json()["info"]
-    assert data["url"] == "https://replicate.delivery/pbxt/mock-edited-url"
+    assert data == "https://replicate.delivery/pbxt/mock-edited-url"
 
     bucket_mock.upload_temp_assistant_photo_file.assert_called_once_with(
         file_content,
         ANY,
         "image/jpeg",
     )
-    replicate_mock.edit_photo.assert_awaited_once_with(
+    replicate_mock.edit_photo.assert_called_once_with(
         prompt="Add a cat",
         input_image="https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_image.jpg",
         aspect_ratio="match_input_image",
