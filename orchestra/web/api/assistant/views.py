@@ -33,7 +33,6 @@ from orchestra.web.api.assistant.schema import (
     AssistantRead,
     AssistantUpdate,
     InfoResponse,
-    PhotoCreationResponse,
     PhotoGenerateRequest,
     RecordingCreate,
     RecordingInfo,
@@ -1564,18 +1563,18 @@ async def upload_assistant_photo(
 
 @router.post(
     "/assistant/photo/generate",
-    response_model=InfoResponse[PhotoCreationResponse],
+    response_model=InfoResponse[str],
     status_code=status.HTTP_201_CREATED,
     summary="Generate an assistant profile photo from text",
     description="Generates a new photo using a text prompt via Replicate and returns the image URL. This action will deduct credits.",
     tags=["Assistants", "Storage"],
 )
-async def generate_assistant_photo(
+def generate_assistant_photo(
     request: Request,
     payload: PhotoGenerateRequest,
     session: Session = Depends(get_db_session),
     replicate_service: ReplicateService = Depends(),
-) -> InfoResponse[PhotoCreationResponse]:
+) -> InfoResponse[str]:
     """
     Generate a new assistant profile photo from a text prompt.
 
@@ -1595,7 +1594,7 @@ async def generate_assistant_photo(
             )
 
     try:
-        image_url = await replicate_service.generate_photo(
+        image_url = replicate_service.generate_photo(
             prompt=payload.prompt,
             aspect_ratio=payload.aspect_ratio,
             output_format=payload.output_format,
@@ -1612,7 +1611,7 @@ async def generate_assistant_photo(
             )
             session.commit()
 
-        return InfoResponse(info=PhotoCreationResponse(url=image_url))
+        return InfoResponse(info=image_url)
     except ReplicateAPIError as e:
         session.rollback()
         raise HTTPException(
@@ -1630,7 +1629,7 @@ async def generate_assistant_photo(
 
 @router.post(
     "/assistant/photo/edit",
-    response_model=InfoResponse[PhotoCreationResponse],
+    response_model=InfoResponse[str],
     status_code=status.HTTP_201_CREATED,
     summary="Edit an assistant profile photo from text",
     description="Edits a photo using a text prompt and an input image (URL or file) via Replicate, and returns the new image URL. This action will deduct credits.",
@@ -1647,7 +1646,7 @@ async def edit_assistant_photo(
     aspect_ratio: str = Form("match_input_image"),
     output_format: str = Form("jpg"),
     safety_tolerance: float = Form(2.0),
-) -> InfoResponse[PhotoCreationResponse]:
+) -> InfoResponse[str]:
     """
     Edit an assistant profile photo using a text prompt and an input image.
 
@@ -1713,7 +1712,7 @@ async def edit_assistant_photo(
                     detail="Insufficient credits to edit a photo.",
                 )
 
-        image_url = await replicate_service.edit_photo(
+        image_url = replicate_service.edit_photo(
             prompt=prompt,
             input_image=input_image_for_replicate,
             aspect_ratio=aspect_ratio,
@@ -1729,7 +1728,7 @@ async def edit_assistant_photo(
             )
             session.commit()
 
-        return InfoResponse(info=PhotoCreationResponse(url=image_url))
+        return InfoResponse(info=image_url)
 
     except ReplicateAPIError as e:
         session.rollback()

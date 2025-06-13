@@ -422,14 +422,3 @@ class PhotoEditRequest(BaseModel):
                 "input_image": "https://example.com/image.png",
             },
         }
-
-
-class PhotoCreationResponse(BaseModel):
-    url: HttpUrl = Field(..., description="URL of the generated or edited image.")
-
-    class Config:
-        schema_extra = {
-            "example": {
-                "url": "https://replicate.delivery/pbxt/...",
-            },
-        }

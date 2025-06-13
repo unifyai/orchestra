@@ -1,8 +1,9 @@
 import logging
-import os
-from typing import List, Optional
 
+import replicate
 from fastapi import HTTPException, status
+
+from orchestra.settings import settings
 
 
 class ReplicateAPIError(HTTPException):
@@ -16,36 +17,12 @@ class ReplicateService:
     """
 
     def __init__(self):
-        """
-        Initializes the Replicate service.
-        It looks for ORCHESTRA_REPLICATE_API_KEY from the environment and sets the
-        REPLICATE_API_TOKEN environment variable, which the replicate client uses.
-        """
-        try:
-            # Get the API key directly from the environment
-            replicate_api_key = os.getenv("ORCHESTRA_REPLICATE_API_KEY")
-            if not replicate_api_key:
-                raise ValueError(
-                    "ORCHESTRA_REPLICATE_API_KEY environment variable is not set.",
-                )
+        api_token = settings.replicate_api_key
+        if not api_token:
+            raise ValueError("REPLICATE_API_TOKEN environment variable is not set.")
+        self.client = replicate.Client(api_token=api_token)
 
-            # Set the environment variable that the 'replicate' library expects
-            os.environ["REPLICATE_API_TOKEN"] = replicate_api_key
-
-            import replicate  # Defer import until initialization
-
-            self.client = replicate
-        except ImportError:
-            logging.error(
-                "The 'replicate' library is not installed. Please install it with 'pip install replicate'.",
-            )
-            raise RuntimeError("Replicate library not found.")
-        except ValueError as e:
-            logging.error(f"Replicate service initialization failed: {e}")
-            # Re-raise to be caught by FastAPI's dependency management
-            raise e
-
-    async def generate_photo(
+    def generate_photo(
         self,
         prompt: str,
         aspect_ratio: str,
@@ -59,7 +36,7 @@ class ReplicateService:
         """
         try:
             model_identifier = "black-forest-labs/flux-1.1-pro"
-            output: Optional[List[str]] = await self.client.async_run(
+            output = self.client.run(
                 model_identifier,
                 input={
                     "prompt": prompt,
@@ -70,20 +47,21 @@ class ReplicateService:
                     "prompt_upsampling": prompt_upsampling,
                 },
             )
-            if not output or not isinstance(output, list) or len(output) == 0:
+            if not output or not isinstance(output, str):
                 raise ReplicateAPIError(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Replicate API did not return an image URL.",
+                    detail=f"Unexpected output type from Replicate: {repr(output)}",
                 )
-            return output[0]
+            return output
+
         except Exception as e:
-            logging.error(f"Replicate generate_photo failed: {e}")
+            logging.error(f"Replicate generate_photo failed: {e}", exc_info=True)
             raise ReplicateAPIError(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=f"Request to Replicate API failed: {e}",
             )
 
-    async def edit_photo(
+    def edit_photo(
         self,
         prompt: str,
         input_image: str,
@@ -96,7 +74,7 @@ class ReplicateService:
         """
         try:
             model_identifier = "black-forest-labs/flux-kontext-pro"
-            output: Optional[List[str]] = await self.client.async_run(
+            output = self.client.run(
                 model_identifier,
                 input={
                     "prompt": prompt,
@@ -106,14 +84,15 @@ class ReplicateService:
                     "safety_tolerance": safety_tolerance,
                 },
             )
-            if not output or not isinstance(output, list) or len(output) == 0:
+            if not output or not isinstance(output, str):
                 raise ReplicateAPIError(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Replicate API did not return an image URL.",
+                    detail=f"Unexpected output from Replicate: {repr(output)}",
                 )
-            return output[0]
+            return output
+
         except Exception as e:
-            logging.error(f"Replicate edit_photo failed: {e}")
+            logging.error(f"Replicate edit_photo failed: {e}", exc_info=True)
             raise ReplicateAPIError(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=f"Request to Replicate API failed: {e}",
