@@ -1033,8 +1033,8 @@ def delete_recording(
     "/assistant/voice",
     response_model=InfoResponse[VoiceRead],
     status_code=status.HTTP_201_CREATED,
-    summary="Register an existing Cartesia voice",
-    description="Registers an existing Cartesia voice (e.g., a preset) in the Orchestra DB. The voice must already exist in Cartesia.",
+    summary="Register voice",
+    description="Register a preset assistant voice.",
     responses={
         200: {
             "description": "Voice created successfully",
@@ -1130,8 +1130,8 @@ def register_cartesia_voice(
     "/assistant/voice/clone",
     response_model=InfoResponse[VoiceRead],
     status_code=status.HTTP_201_CREATED,
-    summary="Clone a new voice",
-    description="Clones a new voice using an audio file, registers it with Cartesia, and saves it to the database.",
+    summary="Clone voice",
+    description="Create a new assistant voice by cloning a voice from an audio file.",
     tags=["Voices"],
 )
 async def clone_voice_endpoint(
@@ -1236,8 +1236,8 @@ async def clone_voice_endpoint(
     "/assistant/voice/localize",
     response_model=InfoResponse[VoiceRead],
     status_code=status.HTTP_201_CREATED,
-    summary="Localize an existing voice",
-    description="Localizes an existing Cartesia voice to a new language, registers the new version with Cartesia, and saves it to the database.",
+    summary="Localize voice",
+    description="Create a new assistant voice by localizing an existing voice to a new language.",
     tags=["Voices"],
 )
 def localize_voice_endpoint(
@@ -1343,8 +1343,8 @@ def localize_voice_endpoint(
     "/assistant/voice",
     response_model=InfoResponse[List[VoiceRead]],
     status_code=status.HTTP_200_OK,
-    summary="List all voices for the user and global presets",
-    description="Returns a list of all voices created or registered by the user, and all globally registered preset voices.",
+    summary="List voices",
+    description="Returns a list of all assistant voices created, and all globally registered preset voices.",
     responses={
         200: {
             "description": "List of voices retrieved successfully",
@@ -1417,8 +1417,8 @@ def list_voices(
     "/assistant/voice/{voice_id}",
     status_code=status.HTTP_200_OK,
     response_model=InfoResponse[str],
-    summary="Delete a user's voice record and from Cartesia if applicable",
-    description="Deletes a specific voice record by its Cartesia ID for the authenticated user. If the voice is not a preset, it will also be deleted from Cartesia.",
+    summary="Delete voice",
+    description="Deletes a specific assistant voice.",
     responses={
         200: {
             "description": "Voice deleted successfully",
@@ -1506,8 +1506,8 @@ def delete_voice(
     "/assistant/photo/upload",
     response_model=InfoResponse[AssistantPhotoUploadResponse],
     status_code=status.HTTP_201_CREATED,
-    summary="Upload an assistant profile photo",
-    description="Uploads a profile photo for an assistant to GCS and returns the GCS URL.",
+    summary="Upload photo",
+    description="Uploads a profile photo for an assistant and return the storage URL.",
     tags=["Assistants", "Storage"],
 )
 async def upload_assistant_photo(
@@ -1565,8 +1565,8 @@ async def upload_assistant_photo(
     "/assistant/photo/generate",
     response_model=InfoResponse[str],
     status_code=status.HTTP_201_CREATED,
-    summary="Generate an assistant profile photo from text",
-    description="Generates a new photo using a text prompt via Replicate and returns the image URL. This action will deduct credits.",
+    summary="Generate photo",
+    description="Generates a new photo using a text prompt and returns the image URL. This action costs credits.",
     tags=["Assistants", "Storage"],
 )
 def generate_assistant_photo(
@@ -1631,8 +1631,8 @@ def generate_assistant_photo(
     "/assistant/photo/edit",
     response_model=InfoResponse[str],
     status_code=status.HTTP_201_CREATED,
-    summary="Edit an assistant profile photo from text",
-    description="Edits a photo using a text prompt and an input image (URL or file) via Replicate, and returns the new image URL. This action will deduct credits.",
+    summary="Edit photo",
+    description="Edits a photo using a text prompt and an input image (URL or file), and returns the image URL. This action costs credits.",
     tags=["Assistants", "Storage"],
 )
 async def edit_assistant_photo(
@@ -1766,8 +1766,8 @@ async def edit_assistant_photo(
     "/assistant/photo/animate",
     response_model=InfoResponse[str],
     status_code=status.HTTP_201_CREATED,
-    summary="Generate an animated video from image and audio",
-    description="Generates an animated video using an input image and audio via Replicate. Inputs can be URLs or file uploads. This action will deduct credits.",
+    summary="Animate photo",
+    description="Generates an animated video of the assistant using an input image and audio. Inputs can be URLs or file uploads. This action costs credits.",
     tags=["Assistants", "Storage", "Video"],
 )
 async def animate_video_endpoint(
