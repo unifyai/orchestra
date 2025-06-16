@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -22,6 +22,7 @@ class FieldTypeDAO:
         field_category: str = "entry",
         enum_values: Optional[List[str]] = None,
         enum_restrict: bool = False,
+        unique: bool = False,
     ) -> None:
         """Upsert approach: insert or do nothing if it exists."""
         # First check if a field with this name exists but with a different category
@@ -55,6 +56,7 @@ class FieldTypeDAO:
             context_id=context_id,
             enum_values=enum_values,
             enum_restrict=enum_restrict,
+            unique=unique,
         )
         # "on_conflict_do_nothing" will skip insertion if (project_id, field_name, context_id) already exists:
         stmt = stmt.on_conflict_do_nothing(
@@ -94,6 +96,7 @@ class FieldTypeDAO:
                     "field_type": field_type.field_type,
                     "field_category": field_type.field_category,
                     "mutable": field_type.mutable,
+                    "unique": field_type.unique,
                     "enum_values": field_type.enum_values,
                     "restrict": field_type.enum_restrict,
                     "created_at": (
@@ -120,6 +123,7 @@ class FieldTypeDAO:
         field_category: str = "entry",
         enum_values: Optional[List[str]] = None,
         enum_restrict: bool = False,
+        unique: bool = False,
     ) -> None:
         """Upsert approach: insert or overwrite the existing field_type."""
         # First check if a field with this name exists but with a different category
@@ -149,6 +153,7 @@ class FieldTypeDAO:
             context_id=context_id,
             enum_values=enum_values,
             enum_restrict=enum_restrict,
+            unique=unique,
         )
         # "on_conflict_do_update" to update existing row if it already exists
         stmt = stmt.on_conflict_do_update(
@@ -159,6 +164,7 @@ class FieldTypeDAO:
                 "mutable": mutable,
                 "enum_values": enum_values,
                 "enum_restrict": enum_restrict,
+                "unique": unique,
             },
         )
         self.session.execute(stmt)
@@ -307,46 +313,76 @@ class FieldTypeDAO:
         self,
         project_id: int,
         context_id: int,
-        fields: Dict[str, Optional[str]],
+        fields: Dict[str, Union[Dict[str, Any], str, None]],
     ) -> None:
         """Create field definitions for a context without creating logs.
 
         Args:
             project_id: The project ID
             context_id: The context ID
-            fields: Dictionary mapping fields names to their types (or None if type is not specified)
+            fields: Dictionary mapping fields names to their definitions.
         """
         from orchestra.web.api.log.python2SQL.constants import STR_TO_SQL_TYPES
+        from orchestra.web.api.log.schema import StandardFieldDefinition
 
         if not fields:
             return
 
         # Prepare values for bulk insertion
         values_to_insert = []
-        for field_name, field_type in fields.items():
+        for field_name, field_info in fields.items():
+            field_type = "NoneType"
+            mutable = False
+            unique = False
+            enum_values = None
+            enum_restrict = False
 
-            if field_type and field_type not in STR_TO_SQL_TYPES:
+            if isinstance(field_info, StandardFieldDefinition):
+                field_type = field_info.type
+                mutable = field_info.mutable
+                unique = field_info.unique
+                if field_type == "enum":
+                    enum_values = field_info.values
+                    enum_restrict = field_info.restrict
+            elif isinstance(field_info, str):
+                field_type = field_info
+
+            if (
+                field_type
+                and field_type not in STR_TO_SQL_TYPES
+                and field_type not in ["enum", "NoneType"]
+            ):
                 raise ValueError(f"Invalid field type: {field_type}")
-            column_type = field_type if field_type is not None else "NoneType"
 
             values_to_insert.append(
                 {
                     "project_id": project_id,
                     "field_name": field_name,
-                    "field_type": column_type,
+                    "field_type": field_type,
                     "field_category": "entry",
-                    "mutable": False,
+                    "mutable": mutable,
+                    "unique": unique,
                     "context_id": context_id,
+                    "enum_values": enum_values,
+                    "enum_restrict": enum_restrict,
                 },
             )
 
-        # Execute bulk insert with on_conflict_do_nothing
-        stmt = pg_insert(FieldType).values(values_to_insert)
-        stmt = stmt.on_conflict_do_nothing(
-            index_elements=["project_id", "field_name", "context_id"],
-        )
-        self.session.execute(stmt)
-        self.session.commit()
+        # Execute bulk insert with on_conflict_do_update
+        if values_to_insert:
+            stmt = pg_insert(FieldType).values(values_to_insert)
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["project_id", "field_name", "context_id"],
+                set_={
+                    "field_type": stmt.excluded.field_type,
+                    "mutable": stmt.excluded.mutable,
+                    "unique": stmt.excluded.unique,
+                    "enum_values": stmt.excluded.enum_values,
+                    "enum_restrict": stmt.excluded.enum_restrict,
+                },
+            )
+            self.session.execute(stmt)
+            self.session.commit()
 
     def bulk_create_field_types(
         self,
@@ -362,6 +398,7 @@ class FieldTypeDAO:
                 - context_id: The context ID
                 - mutable: Optional, defaults to False
                 - field_category: Optional, defaults to "entry"
+                - unique: Optional, defaults to False
 
         Note:
             This method uses PostgreSQL's insert with on_conflict_do_nothing to
@@ -380,6 +417,7 @@ class FieldTypeDAO:
             context_id = data["context_id"]
             mutable = data.get("mutable", False)
             field_category = data.get("field_category", "entry")
+            unique = data.get("unique", False)
 
             # Infer type from the value
             inferred_type = LogDAO.infer_type(field_name, value)
@@ -392,6 +430,7 @@ class FieldTypeDAO:
                     "field_category": field_category,
                     "mutable": mutable,
                     "context_id": context_id,
+                    "unique": unique,
                 },
             )
 
