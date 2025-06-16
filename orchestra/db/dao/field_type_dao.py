@@ -12,6 +12,20 @@ class FieldTypeDAO:
     def __init__(self, session: Session):
         self.session = session
 
+    def get_by_name_and_context(
+        self,
+        project_id: int,
+        field_name: str,
+        context_id: int,
+    ) -> Optional[FieldType]:
+        """Retrieve a single field type by its name and context."""
+        query = select(FieldType).where(
+            FieldType.project_id == project_id,
+            FieldType.field_name == field_name,
+            FieldType.context_id == context_id,
+        )
+        return self.session.execute(query).scalars().first()
+
     def create_field_type_if_absent(
         self,
         project_id: int,
