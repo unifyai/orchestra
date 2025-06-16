@@ -591,3 +591,122 @@ async def test_delete_fields_endpoint(client: AsyncClient):
     for log in logs:
         assert "col1" not in log["entries"]
         assert "col2" not in log["entries"]
+
+
+@pytest.mark.anyio
+async def test_unique_field_constraint(client: AsyncClient):
+    """Test that the unique constraint on fields is enforced."""
+    project_name = "test-unique-field"
+    await _create_project(client, project_name)
+
+    # Create a field with a unique constraint via the /fields endpoint
+    fields_data = {
+        "project": project_name,
+        "fields": {"email": {"type": "str", "unique": True}},
+    }
+    response = await client.post(
+        "/v0/logs/fields",
+        json=fields_data,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Create a log, which should succeed
+    response1 = await _create_log(
+        client,
+        project_name,
+        entries={"email": "test@example.com"},
+    )
+    assert response1.status_code == 200, response1.json()
+
+    # Try to create another log with the same email, which should fail
+    response2 = await _create_log(
+        client,
+        project_name,
+        entries={"email": "test@example.com"},
+    )
+    assert response2.status_code == 400, response2.json()
+    assert "Duplicate entry for unique field" in response2.json()["detail"]
+
+    # Try to create a log with a different email, which should succeed
+    response3 = await _create_log(
+        client,
+        project_name,
+        entries={"email": "another@example.com"},
+    )
+    assert response3.status_code == 200, response3.json()
+
+
+@pytest.mark.anyio
+async def test_unique_field_constraint_on_log_creation(client: AsyncClient):
+    """Test creating a unique field during log creation."""
+    project_name = "test-unique-on-creation"
+    await _create_project(client, project_name)
+
+    # Create a log with a unique field defined in explicit_types
+    entries1 = {
+        "user_id": "user-123",
+        "explicit_types": {"user_id": {"type": "str", "unique": True}},
+    }
+    response1 = await _create_log(client, project_name, entries=entries1)
+    assert response1.status_code == 200, response1.json()
+
+    # Try to create another log with the same user_id, which should fail
+    entries2 = {"user_id": "user-123"}
+    response2 = await _create_log(client, project_name, entries=entries2)
+    assert response2.status_code == 400, response2.json()
+    assert "Duplicate entry for unique field" in response2.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_unique_field_constraint_on_update(client: AsyncClient):
+    """Test that the unique constraint on fields is enforced during update."""
+    project_name = "test-unique-on-update"
+    await _create_project(client, project_name)
+
+    # Create a log with a unique field and another log to be updated
+    await _create_log(
+        client,
+        project_name,
+        entries={
+            "email": "unique@example.com",
+            "explicit_types": {
+                "email": {"type": "str", "unique": True, "mutable": True},
+            },
+        },
+    )
+
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"email": "tobeupdated@example.com"},
+    )
+    assert response.status_code == 200, response.json()
+    log_id_to_update = response.json()["log_event_ids"][0]
+
+    # Try to update the second log to have the same email as the first, should fail
+    update_response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id_to_update],
+            "project": project_name,
+            "entries": {"email": "unique@example.com"},
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert update_response.status_code == 400, update_response.json()
+    assert "Duplicate entry for unique field" in update_response.json()["detail"]
+
+    # Try to update to a new unique email, should succeed
+    update_response_success = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id_to_update],
+            "project": project_name,
+            "entries": {"email": "newunique@example.com"},
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert update_response_success.status_code == 200, update_response_success.json()
