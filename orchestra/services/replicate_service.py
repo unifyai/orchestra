@@ -1,4 +1,5 @@
 import logging
+from typing import Any, Dict, Optional
 
 import replicate
 from fastapi import HTTPException, status
@@ -96,4 +97,44 @@ class ReplicateService:
             raise ReplicateAPIError(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=f"Request to Replicate API failed: {e}",
+            )
+
+    def animate_video(
+        self,
+        image_url: str,
+        audio_url: str,
+        seed: Optional[int] = None,
+        dynamic_scale: Optional[float] = 1.0,
+        min_resolution: Optional[int] = 512,
+        inference_steps: Optional[int] = 25,
+        keep_resolution: Optional[bool] = True,
+    ) -> str:
+        """
+        Generates a video from an image and audio using zsxkib/sonic model.
+        """
+        try:
+            model_identifier = "zsxkib/sonic"
+            model_input: Dict[str, Any] = {
+                "image": image_url,
+                "audio": audio_url,
+                "dynamic_scale": dynamic_scale,
+                "min_resolution": min_resolution,
+                "inference_steps": inference_steps,
+                "keep_resolution": keep_resolution,
+            }
+            if seed is not None:
+                model_input["seed"] = seed
+            output = self.client.run(model_identifier, input=model_input)
+            if not output or not isinstance(output, str):
+                raise ReplicateAPIError(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Unexpected output type from Replicate video animation: {repr(output)}",
+                )
+            return output
+
+        except Exception as e:
+            logging.error(f"Replicate animate_video failed: {e}", exc_info=True)
+            raise ReplicateAPIError(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Request to Replicate API for video animation failed: {e}",
             )
