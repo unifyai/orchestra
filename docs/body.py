@@ -145,17 +145,35 @@ def get_request_code(
         else f"data = {non_file_args}"
     )
     python_example.insert(3, data_line)
-    python_example[-2] = (
-        f'response = requests.request("{route.upper()}", url, json=json_input, headers=headers)'
-        if "json" in content_type
-        else (
-            f'file_path = "{file_args[files[0]]}"\n'
-            'with open(file_path, "rb") as file:\n'
-            '   files = {"file": file}\n'
-            f'   response = requests.request("{route.upper()}", '
-            "url, files=files, data=data, headers=headers)"
-        )
-    )
+
+    # Generate the appropriate Python code based on content type and files
+    if "json" in content_type:
+        python_example[
+            -2
+        ] = f'response = requests.request("{route.upper()}", url, json=json_input, headers=headers)'
+    else:
+        # Handle form data with optional files
+        if files and file_args:
+            # Build the files dictionary dynamically
+            files_code = []
+            for idx, (file_param, file_path) in enumerate(file_args.items()):
+                files_code.append(f'file_path_{idx} = "{file_path}"')
+                files_code.append(f"# Optional: Include {file_param} if needed")
+                files_code.append(
+                    f'# files["{file_param}"] = open(file_path_{idx}, "rb")',
+                )
+
+            files_setup = "\n".join(files_code) + "\nfiles = {}"
+            python_example[-2] = (
+                f"{files_setup}\n"
+                f'response = requests.request("{route.upper()}", '
+                "url, files=files, data=data, headers=headers)"
+            )
+        else:
+            # No files, just form data
+            python_example[
+                -2
+            ] = f'response = requests.request("{route.upper()}", url, data=data, headers=headers)'
 
     return curl_example, python_example
 
