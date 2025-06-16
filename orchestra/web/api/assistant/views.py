@@ -1640,12 +1640,18 @@ async def edit_assistant_photo(
     session: Session = Depends(get_db_session),
     replicate_service: ReplicateService = Depends(),
     bucket_service: BucketService = Depends(),
-    prompt: str = Form(...),
-    input_image_url: Optional[str] = Form(None),
-    input_image_file: Optional[UploadFile] = File(None),
-    aspect_ratio: str = Form("match_input_image"),
-    output_format: str = Form("jpg"),
-    safety_tolerance: float = Form(2.0),
+    prompt: str = Form(
+        ...,
+        example="A photo of a young woman with long brown hair and blue eyes.",
+    ),
+    input_image_url: Optional[str] = Form(
+        None,
+        example="https://example.com/input_image.jpg",
+    ),
+    input_image_file: Optional[UploadFile] = File(None, example="input_image.jpg"),
+    aspect_ratio: str = Form("match_input_image", example="1:1"),
+    output_format: str = Form("jpg", example="jpg"),
+    safety_tolerance: float = Form(2.0, example=2.0),
 ) -> InfoResponse[str]:
     """
     Edit an assistant profile photo using a text prompt and an input image.

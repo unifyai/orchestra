@@ -5,6 +5,7 @@ file_args = {
     "/v0/evaluation": {"post": ["evaluations"]},
     "/v0/assistant/voice/clone": {"post": ["file"]},
     "/v0/assistant/photo/upload": {"post": ["file"]},
+    "/v0/assistant/photo/edit": {"post": ["input_image_file"]},
 }
 
 
