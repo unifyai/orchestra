@@ -669,7 +669,7 @@ def create_from_logs(
                         session.add(embeddings)
                     new_derived_logs.append(
                         DerivedLog(
-                            log_event_id=log_event_id,
+                            log_event_id=le,
                             key=body.key,
                             equation=body.equation,
                             referenced_logs=referenced_logs,
