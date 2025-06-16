@@ -4,6 +4,7 @@ import logging
 import os
 import uuid
 from typing import Optional, Tuple
+import datetime
 
 from google.api_core import exceptions
 from google.cloud import storage
@@ -222,13 +223,13 @@ class BucketService:
     ) -> Tuple[str, str]:
         """
         Uploads a temporary photo to a '_temp' subfolder in the assistant images bucket.
-        This is used for operations like image editing where a public URL is needed temporarily.
+        This is used for operations like image editing or animation where a public URL is needed temporarily.
         Args:
             file_content: Raw bytes of the image file.
             user_id: ID of the user, for path organization.
             content_type: MIME type of the image.
         Returns:
-            A tuple of (public_url, gcs_url) for the temporary file.
+            A tuple of (publicly_accessible_signed_url, gcs_url) for the temporary file.
         Raises:
             Exception: If upload fails.
         """
@@ -244,13 +245,19 @@ class BucketService:
             blob = self.assistant_images_bucket.blob(object_path)
             blob.upload_from_string(file_content, content_type=content_type)
 
-            # Make the blob publicly readable so external services like Replicate can access it.
-            blob.make_public()
+            # Instead of blob.make_public(), generate a signed URL
+            # This is necessary if the bucket has Uniform Bucket-Level Access enabled.
+            # Expiration time: 1 hour (3600 seconds). Adjust as needed.
+            expiration_timedelta = datetime.timedelta(seconds=3600)
+            signed_url = blob.generate_signed_url(
+                version="v4",
+                expiration=expiration_timedelta,
+                method="GET",
+            )
 
-            gcs_url = f"gs://{self.assistant_images_bucket_name}/{object_path}"
-            public_url = blob.public_url
+            gcs_uri = f"gs://{self.assistant_images_bucket_name}/{object_path}"
 
-            return public_url, gcs_url
+            return signed_url, gcs_uri
         except exceptions.GoogleAPIError as e:
             logging.error(f"Failed to upload temporary photo to GCS: {str(e)}")
             raise Exception(f"Failed to upload temporary photo: {str(e)}")
