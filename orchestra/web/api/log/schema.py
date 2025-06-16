@@ -16,6 +16,12 @@ class EnumType(BaseModel):
         }
 
 
+class StandardFieldDefinition(BaseModel):
+    type: str
+    mutable: bool = False
+    unique: bool = False
+
+
 class CreateLogConfig(BaseModel):
     project: str = Field(
         description="Name of the project the stored entries will be associated to.",
@@ -38,9 +44,8 @@ class CreateLogConfig(BaseModel):
         description="Dictionary containing one or more key:value pairs that "
         "will be logged into the platform. Can be either a single dictionary or a list of dictionaries "
         "for batch processing. When using lists for both params and entries, their lengths must match. "
-        "Parameters will be automatically versioned based on their values. "
         "Values must be JSON serializable. If a `explicit_types` dictionary is present, its values "
-        "will override the inferred types of the entries. The explicit_types dictionary can also specify if a field is mutable via a 'mutable' boolean flag. "
+        "will override the inferred types of the entries. The explicit_types dictionary can also specify if a field is mutable via a 'mutable' boolean flag, or unique via a 'unique' boolean flag. "
         "For enum types, use the EnumType model with 'values' list and optional 'restrict' flag. Omit 'values' to create an open enum (auto-seeding).",
         json_schema_extra={
             "examples": [
@@ -48,7 +53,11 @@ class CreateLogConfig(BaseModel):
                     "system-prompt": "...",
                     "function_definition": "...",
                     "explicit_types": {
-                        "system-prompt": {"type": "str", "mutable": True},
+                        "system-prompt": {
+                            "type": "str",
+                            "mutable": True,
+                            "unique": False,
+                        },
                         "category": {
                             "type": "enum",
                             "values": ["A", "B", "C"],
@@ -73,7 +82,7 @@ class CreateLogConfig(BaseModel):
         "will be logged into the platform. Can be either a single dictionary or a list of dictionaries "
         "for batch processing. When using lists for both params and entries, their lengths must match. "
         "Values must be JSON serializable. If a `explicit_types` dictionary is present, "
-        "its values will override the inferred types of the entries. The explicit_types dictionary can also specify if a field is mutable via a 'mutable' boolean flag. "
+        "its values will override the inferred types of the entries. The explicit_types dictionary can also specify if a field is mutable via a 'mutable' boolean flag, or unique via a 'unique' boolean flag. "
         "For enum types, use the EnumType model with 'values' list and optional 'restrict' flag. Omit 'values' to create an open enum (auto-seeding).",
         json_schema_extra={
             "examples": [
@@ -81,7 +90,7 @@ class CreateLogConfig(BaseModel):
                     "input": "...",
                     "score-test-1": "...",
                     "explicit_types": {
-                        "input": {"type": "Image", "mutable": True},
+                        "input": {"type": "Image", "mutable": True, "unique": True},
                         "status": {
                             "type": "enum",
                             "values": ["pending", "completed", "failed"],
@@ -385,9 +394,13 @@ class CreateFieldsRequest(BaseModel):
         description="Optional context path for the fields.",
         example="experiment1/trial1",
     )
-    fields: Dict[str, Optional[str]] = Field(
-        description="Dictionary mapping field names to their types (or None if no type is specified).",
-        example={"score": "int", "response": None},
+    fields: Dict[str, Union[StandardFieldDefinition, EnumType, str, None]] = Field(
+        description="Dictionary mapping field names to their type definitions.",
+        example={
+            "score": "int",
+            "response": None,
+            "email": {"type": "str", "unique": True},
+        },
     )
 
 
