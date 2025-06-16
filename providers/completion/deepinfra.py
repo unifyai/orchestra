@@ -36,7 +36,7 @@ supported_models = {
     "deepseek-r1": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-R1-0528",
         "context_window": 160000,
-        "cost": {"prompt": 0.5, "completion": 2.15},
+        "cost": {"prompt": 0.45, "completion": 2.15},
     },
     "deepseek-v3": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3",
@@ -124,9 +124,9 @@ supported_models = {
         "cost": {"prompt": 0.02, "completion": 0.04},
     },
     "mistral-small": {
-        "endpoint": "mistralai/Mistral-Small-24B-Instruct-2501",
+        "endpoint": "deepinfra/mistralai/Mistral-Small-3.1-24B-Instruct-2503",
         "context_window": 32000,
-        "cost": {"prompt": 0.05, "completion": 0.11},
+        "cost": {"prompt": 0.05, "completion": 0.1},
     },
     "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "deepinfra/mistralai/Mixtral-8x7B-Instruct-v0.1",
@@ -141,7 +141,7 @@ supported_models = {
     "mistral-nemo": {
         "endpoint": "deepinfra/mistralai/Mistral-Nemo-Instruct-2407",
         "context_window": 128000,
-        "cost": {"prompt": 0.01, "completion": 0.029},
+        "cost": {"prompt": 0.01, "completion": 0.027},
     },
     "qwen-3-235b-a22b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen3-235B-A22B",

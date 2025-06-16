@@ -131,7 +131,7 @@ supported_models = {
     "o3": {
         "endpoint": "o3",
         "context_window": 200000,
-        "cost": {"prompt": 10, "completion": 40},
+        "cost": {"prompt": 2, "completion": 8},
     },
     "o4-mini": {
         "endpoint": "o4-mini",
