@@ -331,6 +331,7 @@ async def test_context_as_string(client: AsyncClient):
     assert logs[0]["entries"]["metric"] == 0.95
 
 
+@pytest.mark.anyio
 async def test_get_logs_no_context(client: AsyncClient):
     project_name = "test-project"
     context_name = "test-context"
@@ -375,6 +376,7 @@ async def test_get_logs_no_context(client: AsyncClient):
     assert len(logs) == 0
 
 
+@pytest.mark.anyio
 async def test_get_fields_no_context(client: AsyncClient):
     project_name = "test-project"
     context_name = "test-context"
@@ -1401,3 +1403,51 @@ async def test_rename_context(client: AsyncClient):
     )
     assert conflict.status_code == 400
     assert "already exists" in conflict.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_context_with_sequential_id(client: AsyncClient):
+    """Test that logs in a context with unique_id_column get a sequential ID."""
+    project_name = "sequential-id-project"
+    context_name = "sequential-id-context"
+    unique_id_name = "my_row_id"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Create a context with unique_id_column enabled
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "description": "Context with sequential IDs",
+            "unique_id_column": True,
+            "unique_id_name": unique_id_name,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create multiple logs in this context
+    for i in range(5):
+        log_response = await _create_log(
+            client,
+            project_name,
+            entries={"value": f"log-entry-{i}"},
+            context=context_name,
+        )
+        assert log_response.status_code == 200
+
+    # Fetch the logs from the context
+    logs = await fetch_logs(
+        client,
+        project_name,
+        context=context_name,
+        sort_by=unique_id_name,
+    )
+
+    # Verify the logs and their sequential IDs
+    assert len(logs) == 5
+    for i, log in enumerate(reversed(logs)):
+        assert unique_id_name in log["entries"]
+        assert log["entries"][unique_id_name] == i + 1
