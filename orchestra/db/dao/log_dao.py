@@ -1,6 +1,7 @@
 import base64
 import copy
 import re
+from collections import defaultdict
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
@@ -33,7 +34,7 @@ class ImmutableFieldError(Exception):
 def _is_date_string(value: str) -> bool:
     """
     Check if a string can be parsed as a date in various formats including:
-    - YYYY-MM-DD (ISO 8601)
+    -<y_bin_46>-MM-DD (ISO 8601)
     - MM/DD/YYYY
     - DD/MM/YYYY
     - DD-MM-YYYY
@@ -450,6 +451,76 @@ class LogDAO:
             self.session.rollback()
             raise ValueError
 
+    def _check_uniqueness(self, entries: List[Dict[str, Any]]):
+        unique_field_defs = {}  # (project_id, context_id, key) -> FieldType
+
+        # Collect all project and context IDs from entries
+        all_project_ids = set(e["project_id"] for e in entries if "project_id" in e)
+        if not all_project_ids:
+            return
+
+        # Fetch all unique field definitions for these projects
+        field_types = (
+            self.session.query(FieldType)
+            .filter(
+                FieldType.project_id.in_(all_project_ids),
+                FieldType.unique == True,
+            )
+            .all()
+        )
+
+        for ft in field_types:
+            unique_field_defs[(ft.project_id, ft.context_id, ft.field_name)] = ft
+
+        if not unique_field_defs:
+            return
+
+        batch_unique_values = defaultdict(
+            set,
+        )  # (project, context, key) -> set of values
+
+        entries_to_check_in_db = defaultdict(
+            lambda: defaultdict(lambda: defaultdict(list)),
+        )  # project -> context -> key -> values
+
+        for entry in entries:
+            project_id = entry.get("project_id")
+            context_id = entry.get("context_id")
+            key = entry.get("key")
+            value = entry.get("value")
+
+            if (project_id, context_id, key) in unique_field_defs:
+                # Check for duplicates within the batch
+                if value in batch_unique_values[(project_id, context_id, key)]:
+                    raise ValueError(
+                        f"Duplicate value for unique field '{key}' in batch.",
+                    )
+                batch_unique_values[(project_id, context_id, key)].add(value)
+                entries_to_check_in_db[project_id][context_id][key].append(value)
+
+        # Check against DB
+        for project_id, contexts in entries_to_check_in_db.items():
+            for context_id, keys_and_values in contexts.items():
+                for key, values in keys_and_values.items():
+                    q = (
+                        select(Log.id)
+                        .join(LogEvent, Log.log_event_id == LogEvent.id)
+                        .join(
+                            LogEventContext,
+                            LogEvent.id == LogEventContext.log_event_id,
+                        )
+                        .where(
+                            LogEvent.project_id == project_id,
+                            Log.key == key,
+                            Log.value.in_([literal(v, type_=JSONB) for v in values]),
+                        )
+                    )
+                    if context_id is not None:
+                        q = q.where(LogEventContext.context_id == context_id)
+
+                    if self.session.execute(q.limit(1)).first():
+                        raise ValueError(f"Duplicate entry for unique field '{key}'.")
+
     def bulk_create(
         self,
         entries: List[Dict[str, Any]],
@@ -479,6 +550,8 @@ class LogDAO:
         """
         if not entries:
             return []
+
+        self._check_uniqueness(entries)
 
         # Enforce one-context-per-batch requirement when context_obj is provided
         if context_obj:
@@ -740,6 +813,7 @@ class LogDAO:
         if not updates:
             return
 
+        self._check_uniqueness(updates)
         field_types = field_types or {}
 
         try:

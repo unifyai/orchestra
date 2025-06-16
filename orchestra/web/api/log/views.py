@@ -141,13 +141,15 @@ def create_logs(
     An "explicit_types" dictionary can be passed as part of the `entries`.
     If present, any matching key inside this dictionary will override the
     inferred type of that particular entry. The explicit_types dictionary
-    can also specify if a field is mutable via a 'mutable' boolean flag:
+    can also specify if a field is mutable via a 'mutable' boolean flag
+    and if a field is unique via a 'unique' boolean flag:
 
     ```json
     {
         "field_name": {
             "type": "str",
-            "mutable": false  # Makes the field immutable
+            "mutable": false,  # Makes the field immutable
+            "unique": true     # Makes the field unique
         }
     }
     ```
@@ -201,19 +203,22 @@ def create_logs(
     # Load the Context object once
     context_obj = session.get(Context, context_id)
 
-    # Call the internal implementation with validated project and context
-    event_ids = create_logs_internal(
-        request=request,
-        project_id=project_id,
-        context_id=context_id,
-        context_obj=context_obj,
-        project_dao=project_dao,
-        field_type_dao=field_type_dao,
-        log_event_dao=log_event_dao,
-        log_dao=log_dao,
-        context_dao=context_dao,
-    )
-    return {"info": "Logs created successfully!", "log_event_ids": event_ids}
+    try:
+        # Call the internal implementation with validated project and context
+        event_ids = create_logs_internal(
+            request=request,
+            project_id=project_id,
+            context_id=context_id,
+            context_obj=context_obj,
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            log_event_dao=log_event_dao,
+            log_dao=log_dao,
+            context_dao=context_dao,
+        )
+        return {"info": "Logs created successfully!", "log_event_ids": event_ids}
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 def unify_id_sets_by_subset(alias_id_sets: Dict[str, Set[int]]) -> Dict[str, Set[int]]:
@@ -1388,9 +1393,14 @@ def update_logs(
                             ),
                         )
                 else:
-                    # For new fields, record the field along with its mutability setting.
+                    # For new fields, record the field along with its mutability and uniqueness settings.
                     mutable = (
                         explicit_types.get(k, {}).get("mutable", False)
+                        if explicit_types
+                        else False
+                    )
+                    unique = (
+                        explicit_types.get(k, {}).get("unique", False)
                         if explicit_types
                         else False
                     )
@@ -1401,6 +1411,7 @@ def update_logs(
                             "field_name": k,
                             "value": v,
                             "mutable": mutable,
+                            "unique": unique,
                             "field_category": category,
                             "context_id": ctx_id,
                         },
@@ -1436,6 +1447,7 @@ def update_logs(
                                 "explicit_types": explicit_types,
                                 "field_types": field_types,
                                 "context_id": context_id,
+                                "project_id": project_id,
                                 "overwrite": body.overwrite,
                             },
                         )
@@ -1449,6 +1461,7 @@ def update_logs(
                             "explicit_types": explicit_types,
                             "field_types": field_types,
                             "context_id": ctx_id,
+                            "project_id": project_id,
                             "overwrite": body.overwrite,
                         },
                     )
@@ -3380,6 +3393,7 @@ def join_logs(
                             "data_type": "string",
                             "field_type": "entry",
                             "mutable": "true",
+                            "unique": "false",
                             "created_at": "2025-02-14T10:00:00Z",
                             "artifacts": "",
                         },
@@ -3420,6 +3434,7 @@ def get_fields(
     - data_type: The data type of the field (int, str, etc)
     - field_type: Whether it's an entry, param, or derived_entry
     - mutable: Whether the field can be modified
+    - unique: Whether the field enforces uniqueness
     - created_at: When the field was first created
     - artifacts: For derived entries, contains the equation
     """
@@ -3477,6 +3492,7 @@ def get_fields(
             "data_type": info["field_type"],
             "field_type": info["field_category"],
             "mutable": info["mutable"],
+            "unique": info.get("unique", False),
             "enum_values": info["enum_values"],
             "restrict": info["restrict"],
             "created_at": info["created_at"],

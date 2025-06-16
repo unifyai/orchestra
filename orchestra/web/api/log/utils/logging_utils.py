@@ -806,6 +806,7 @@ def create_logs_internal(
                     field_name,
                     value,
                     mutable=field_info.get("mutable", False),
+                    unique=field_info.get("unique", False),
                     field_category="param" if is_param else "entry",
                     context_id=context_id,
                 )
@@ -820,9 +821,14 @@ def create_logs_internal(
                     detail=f"Type mismatch for field '{field_name}'{batch_info}: expected {expected_type}, got {entered_type}. Value: {str(value)[:100]}",
                 )
         else:
-            # Extract mutable flag from explicit_types if present
+            # Extract mutable and unique flags from explicit_types if present
             mutable = (
                 explicit_types.get(field_name, {}).get("mutable", False)
+                if explicit_types
+                else False
+            )
+            unique = (
+                explicit_types.get(field_name, {}).get("unique", False)
                 if explicit_types
                 else False
             )
@@ -834,6 +840,7 @@ def create_logs_internal(
                 field_name,
                 value,
                 mutable=mutable,
+                unique=unique,
                 field_category="param" if is_param else "entry",
                 context_id=context_id,
             )
@@ -885,6 +892,11 @@ def create_logs_internal(
                     if params_explicit_types
                     else False
                 )
+                unique = (
+                    params_explicit_types.get(k, {}).get("unique", False)
+                    if params_explicit_types
+                    else False
+                )
                 # If in a versioned context, force mutable=True
                 if context_obj and context_obj.is_versioned:
                     mutable = True
@@ -894,6 +906,7 @@ def create_logs_internal(
                         "field_name": k,
                         "value": v,
                         "mutable": mutable,
+                        "unique": unique,
                         "field_category": "param",
                         "context_id": context_id,
                     },
@@ -935,6 +948,11 @@ def create_logs_internal(
                     if entries_explicit_types
                     else False
                 )
+                unique = (
+                    entries_explicit_types.get(k, {}).get("unique", False)
+                    if entries_explicit_types
+                    else False
+                )
                 # If in a versioned context, force mutable=True
                 if context_obj and context_obj.is_versioned:
                     mutable = True
@@ -944,6 +962,7 @@ def create_logs_internal(
                         "field_name": k,
                         "value": v,
                         "mutable": mutable,
+                        "unique": unique,
                         "field_category": "entry",
                         "context_id": context_id,
                     },
