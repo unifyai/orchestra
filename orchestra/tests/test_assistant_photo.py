@@ -220,7 +220,7 @@ async def test_animate_video_with_urls_success(
     request_headers.pop("Content-Type", None)
 
     resp = await client.post(
-        "/v0/assistant/video/animate",
+        "/v0/assistant/photo/animate",
         data=data_payload,
         files={},  # Force multipart
         headers=request_headers,
@@ -280,7 +280,7 @@ async def test_animate_video_with_files_success(
     request_headers.pop("Content-Type", None)
 
     resp = await client.post(
-        "/v0/assistant/video/animate",
+        "/v0/assistant/photo/animate",
         data=data_payload,
         files=files_payload,
         headers=request_headers,
@@ -327,7 +327,7 @@ async def test_animate_video_invalid_input_combinations(client: AsyncClient):
 
     # Both image_url and image_file
     resp = await client.post(
-        "/v0/assistant/video/animate",
+        "/v0/assistant/photo/animate",
         data={"image_url": "http://a.com/img.jpg", "audio_url": "http://a.com/aud.mp3"},
         files={"image_file": ("img.jpg", io.BytesIO(b"img"), "image/jpeg")},
         headers=request_headers,
@@ -337,7 +337,7 @@ async def test_animate_video_invalid_input_combinations(client: AsyncClient):
 
     # Neither image_url nor image_file
     resp = await client.post(
-        "/v0/assistant/video/animate",
+        "/v0/assistant/photo/animate",
         data={"audio_url": "http://a.com/aud.mp3"},
         files={},
         headers=request_headers,
@@ -347,7 +347,7 @@ async def test_animate_video_invalid_input_combinations(client: AsyncClient):
 
     # Both audio_url and audio_file
     resp = await client.post(
-        "/v0/assistant/video/animate",
+        "/v0/assistant/photo/animate",
         data={"image_url": "http://a.com/img.jpg", "audio_url": "http://a.com/aud.mp3"},
         files={"audio_file": ("aud.mp3", io.BytesIO(b"aud"), "audio/mpeg")},
         headers=request_headers,
@@ -357,7 +357,7 @@ async def test_animate_video_invalid_input_combinations(client: AsyncClient):
 
     # Neither audio_url nor audio_file
     resp = await client.post(
-        "/v0/assistant/video/animate",
+        "/v0/assistant/photo/animate",
         data={"image_url": "http://a.com/img.jpg"},
         files={},
         headers=request_headers,

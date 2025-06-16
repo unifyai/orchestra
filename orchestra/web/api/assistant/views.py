@@ -1757,7 +1757,7 @@ async def edit_assistant_photo(
 
 
 @router.post(
-    "/assistant/video/animate",
+    "/assistant/photo/animate",
     response_model=InfoResponse[str],
     status_code=status.HTTP_201_CREATED,
     summary="Generate an animated video from image and audio",
@@ -1923,7 +1923,7 @@ async def animate_video_endpoint(
         if temp_audio_gcs_url:
             try:
                 bucket_service.delete_assistant_photo(
-                    temp_audio_gcs_url
+                    temp_audio_gcs_url,
                 )  # Reusing delete_assistant_photo
                 logging.info(
                     f"Successfully deleted temporary audio file {temp_audio_gcs_url} for video animation.",
