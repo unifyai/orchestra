@@ -651,7 +651,7 @@ def create_from_logs(
             non_null_val = None
             for i, (le, value) in enumerate(computed_values):
                 # Get all log IDs involved in this specific computation
-                involved_log_ids = list(set(ids[i] for ids in resolved_ids.values()))
+                involved_log_ids = list(ids[i] for ids in resolved_ids.values())
                 val = json.loads(json.dumps(value, cls=CustomEncoder))
                 non_null_val = val if val is not None else non_null_val
                 inferred_type = LogDAO.infer_type("", non_null_val)
@@ -661,7 +661,7 @@ def create_from_logs(
                     if isinstance(value, np.ndarray):
                         # add the embedding to the vector index table
                         embeddings = Embedding(
-                            ref_id=le,
+                            ref_id=log_event_id,
                             key=body.key,
                             model=DEFAULT_EMBEDDING_MODEL,
                             vector=value,
@@ -669,7 +669,7 @@ def create_from_logs(
                         session.add(embeddings)
                     new_derived_logs.append(
                         DerivedLog(
-                            log_event_id=le,
+                            log_event_id=log_event_id,
                             key=body.key,
                             equation=body.equation,
                             referenced_logs=referenced_logs,
