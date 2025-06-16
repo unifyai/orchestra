@@ -31,6 +31,14 @@ class ContextCreateRequest(BaseModel):
         description="Whether duplicate log entries are allowed in this context. If False, attempts to add duplicate logs will be ignored.",
         example=True,
     )
+    unique_id_column: bool = Field(
+        default=False,
+        description="Whether to create a unique, sequential ID for each log in this context.",
+    )
+    unique_id_name: str = Field(
+        default="row_id",
+        description="The name of the unique ID column.",
+    )
 
 
 class AddLogsToContextRequest(BaseModel):
