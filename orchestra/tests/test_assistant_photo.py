@@ -28,7 +28,6 @@ def mock_photo_services_factory(fastapi_app):
         "https://replicate.delivery/pbxt/mock-animated-video-url"
     )
 
-
     bucket_mock = MagicMock(spec=OriginalBucketService)
     bucket_mock.upload_temp_assistant_photo_file.return_value = (
         "https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_image.jpg",
@@ -195,15 +194,19 @@ async def test_edit_photo_invalid_input(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_animate_video_with_urls_success(client: AsyncClient, mock_photo_services_factory, dbsession):
+async def test_animate_video_with_urls_success(
+    client: AsyncClient, mock_photo_services_factory, dbsession
+):
     replicate_mock, bucket_mock = mock_photo_services_factory
     # Ensure user has credits if staging is false
     if not settings.is_staging:
         from orchestra.db.dao.users_dao import UsersDAO
-        users_dao = UsersDAO(dbsession)
-        users_dao.recharge_credit("test-user", settings.video_generation_cost * 2) # give enough credits
-        dbsession.commit()
 
+        users_dao = UsersDAO(dbsession)
+        users_dao.recharge_credit(
+            "test-user", settings.video_generation_cost * 2
+        )  # give enough credits
+        dbsession.commit()
 
     data_payload = {
         "image_url": "https://example.com/image.png",
@@ -216,7 +219,7 @@ async def test_animate_video_with_urls_success(client: AsyncClient, mock_photo_s
     resp = await client.post(
         "/v0/assistant/video/animate",
         data=data_payload,
-        files={}, # Force multipart
+        files={},  # Force multipart
         headers=request_headers,
     )
     assert resp.status_code == 201, resp.text
@@ -227,18 +230,22 @@ async def test_animate_video_with_urls_success(client: AsyncClient, mock_photo_s
         audio_url="https://example.com/audio.mp3",
         seed=None,
         dynamic_scale=1.5,
-        min_resolution=512, # default
-        inference_steps=25, # default
-        keep_resolution=True, # default
+        min_resolution=512,  # default
+        inference_steps=25,  # default
+        keep_resolution=True,  # default
     )
     bucket_mock.upload_temp_assistant_photo_file.assert_not_called()
     bucket_mock.delete_assistant_photo.assert_not_called()
 
+
 @pytest.mark.anyio
-async def test_animate_video_with_files_success(client: AsyncClient, mock_photo_services_factory, dbsession):
+async def test_animate_video_with_files_success(
+    client: AsyncClient, mock_photo_services_factory, dbsession
+):
     replicate_mock, bucket_mock = mock_photo_services_factory
     if not settings.is_staging:
         from orchestra.db.dao.users_dao import UsersDAO
+
         users_dao = UsersDAO(dbsession)
         users_dao.recharge_credit("test-user", settings.video_generation_cost * 2)
         dbsession.commit()
@@ -247,10 +254,15 @@ async def test_animate_video_with_files_success(client: AsyncClient, mock_photo_
     audio_content = b"fake audio data"
 
     bucket_mock.upload_temp_assistant_photo_file.side_effect = [
-        ("https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_image.jpg", "gs://mock-bucket/_temp/test-user/temp_image.jpg"),
-        ("https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_audio.mp3", "gs://mock-bucket/_temp/test-user/temp_audio.mp3"),
+        (
+            "https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_image.jpg",
+            "gs://mock-bucket/_temp/test-user/temp_image.jpg",
+        ),
+        (
+            "https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_audio.mp3",
+            "gs://mock-bucket/_temp/test-user/temp_audio.mp3",
+        ),
     ]
-
 
     data_payload = {
         "keep_resolution": False,
@@ -273,22 +285,30 @@ async def test_animate_video_with_files_success(client: AsyncClient, mock_photo_
     assert data == "https://replicate.delivery/pbxt/mock-animated-video-url"
 
     assert bucket_mock.upload_temp_assistant_photo_file.call_count == 2
-    bucket_mock.upload_temp_assistant_photo_file.assert_any_call(image_content, ANY, "image/jpeg")
-    bucket_mock.upload_temp_assistant_photo_file.assert_any_call(audio_content, ANY, "audio/mpeg")
+    bucket_mock.upload_temp_assistant_photo_file.assert_any_call(
+        image_content, ANY, "image/jpeg"
+    )
+    bucket_mock.upload_temp_assistant_photo_file.assert_any_call(
+        audio_content, ANY, "audio/mpeg"
+    )
 
     replicate_mock.animate_video.assert_called_once_with(
         image_url="https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_image.jpg",
         audio_url="https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_audio.mp3",
         seed=None,
-        dynamic_scale=1.0, # default
-        min_resolution=512, # default
-        inference_steps=25, # default
+        dynamic_scale=1.0,  # default
+        min_resolution=512,  # default
+        inference_steps=25,  # default
         keep_resolution=False,
     )
 
     assert bucket_mock.delete_assistant_photo.call_count == 2
-    bucket_mock.delete_assistant_photo.assert_any_call("gs://mock-bucket/_temp/test-user/temp_image.jpg")
-    bucket_mock.delete_assistant_photo.assert_any_call("gs://mock-bucket/_temp/test-user/temp_audio.mp3")
+    bucket_mock.delete_assistant_photo.assert_any_call(
+        "gs://mock-bucket/_temp/test-user/temp_image.jpg"
+    )
+    bucket_mock.delete_assistant_photo.assert_any_call(
+        "gs://mock-bucket/_temp/test-user/temp_audio.mp3"
+    )
 
 
 @pytest.mark.anyio
@@ -336,13 +356,17 @@ async def test_animate_video_invalid_input_combinations(client: AsyncClient):
     assert resp.status_code == 400
     assert "Provide either 'audio_url' or 'audio_file'" in resp.json()["detail"]
 
+
 @pytest.mark.anyio
-async def test_animate_video_insufficient_credits(client: AsyncClient, mock_photo_services_factory, dbsession):
+async def test_animate_video_insufficient_credits(
+    client: AsyncClient, mock_photo_services_factory, dbsession
+):
     if settings.is_staging:
         pytest.skip("Credit check skipped in staging")
 
     replicate_mock, _ = mock_photo_services_factory
     from orchestra.db.dao.users_dao import UsersDAO
+
     users_dao = UsersDAO(dbsession)
     user = users_dao.get_user_with_id("test-user")
     user.credits = settings.video_generation_cost - 1  # Not enough credits

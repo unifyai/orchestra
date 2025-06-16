@@ -1898,7 +1898,7 @@ async def animate_video_endpoint(
             status_code=e.status_code,
             detail=f"Replicate API error: {e.detail}",
         )
-    except HTTPException: # Re-raise if it's already an HTTPException (e.g. from input validation)
+    except HTTPException:  # Re-raise if it's already an HTTPException (e.g. from input validation)
         session.rollback()
         raise
     except Exception as e:
@@ -1922,7 +1922,9 @@ async def animate_video_endpoint(
                 )
         if temp_audio_gcs_url:
             try:
-                bucket_service.delete_assistant_photo(temp_audio_gcs_url) # Reusing delete_assistant_photo
+                bucket_service.delete_assistant_photo(
+                    temp_audio_gcs_url
+                )  # Reusing delete_assistant_photo
                 logging.info(
                     f"Successfully deleted temporary audio file {temp_audio_gcs_url} for video animation.",
                 )
