@@ -1513,22 +1513,27 @@ async def test_get_logs_metric_grouped_with_mixed_null_float_derived_column(
                 dict,
             ), f"Results for key '{key}' should be a dictionary"
 
-        # Verify the derived column has numeric results for groups with valid data
+        # Verify the derived column results
         if derived_key in result:
             derived_results = result[derived_key]
             for group, group_result in derived_results.items():
                 if isinstance(group_result, dict) and "mean" in group_result:
                     # This group has multiple values, check the mean
-                    assert isinstance(
-                        group_result["mean"],
+                    # Mean can be None if all values in the group are None
+                    # or numeric if at least some values are numeric
+                    mean_value = group_result["mean"]
+                    assert mean_value is None or isinstance(
+                        mean_value,
                         (int, float),
-                    ), f"Derived column mean for group {group} should be numeric"
+                    ), f"Derived column mean for group {group} should be numeric or None, got {type(mean_value)}"
                 elif isinstance(group_result, dict) and "shared_value" in group_result:
                     # This group has a single shared value
-                    assert isinstance(
-                        group_result["shared_value"],
+                    # Shared value can be None if the value is None
+                    shared_value = group_result["shared_value"]
+                    assert shared_value is None or isinstance(
+                        shared_value,
                         (int, float),
-                    ), f"Derived column shared_value for group {group} should be numeric"
+                    ), f"Derived column shared_value for group {group} should be numeric or None, got {type(shared_value)}"
 
         # Test passed - no exception was thrown
 
