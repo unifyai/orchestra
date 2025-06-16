@@ -1756,6 +1756,184 @@ async def edit_assistant_photo(
                 )
 
 
+@router.post(
+    "/assistant/photo/animate",
+    response_model=InfoResponse[str],
+    status_code=status.HTTP_201_CREATED,
+    summary="Generate an animated video from image and audio",
+    description="Generates an animated video using an input image and audio via Replicate. Inputs can be URLs or file uploads. This action will deduct credits.",
+    tags=["Assistants", "Storage", "Video"],
+)
+async def animate_video_endpoint(
+    request: Request,
+    session: Session = Depends(get_db_session),
+    replicate_service: ReplicateService = Depends(),
+    bucket_service: BucketService = Depends(),
+    image_url: Optional[str] = Form(None),
+    image_file: Optional[UploadFile] = File(None),
+    audio_url: Optional[str] = Form(None),
+    audio_file: Optional[UploadFile] = File(None),
+    seed: Optional[int] = Form(None),
+    dynamic_scale: Optional[float] = Form(1.0),
+    min_resolution: Optional[int] = Form(512),
+    inference_steps: Optional[int] = Form(25),
+    keep_resolution: Optional[bool] = Form(True),
+) -> InfoResponse[str]:
+    user_id = request.state.user_id
+    users_dao = UsersDAO(session)
+
+    temp_image_gcs_url: Optional[str] = None
+    final_image_url_for_replicate: Optional[str] = None
+    temp_audio_gcs_url: Optional[str] = None
+    final_audio_url_for_replicate: Optional[str] = None
+
+    is_image_file_provided = image_file and image_file.filename
+    is_audio_file_provided = audio_file and audio_file.filename
+
+    # Validate image input
+    if (image_url and is_image_file_provided) or (
+        not image_url and not is_image_file_provided
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Provide either 'image_url' or 'image_file', but not both.",
+        )
+
+    # Validate audio input
+    if (audio_url and is_audio_file_provided) or (
+        not audio_url and not is_audio_file_provided
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Provide either 'audio_url' or 'audio_file', but not both.",
+        )
+
+    try:
+        # Process image input
+        if is_image_file_provided:
+            if not image_file.content_type or not image_file.content_type.startswith(
+                "image/",
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid file type for 'image_file'. Only images are allowed.",
+                )
+            image_content = await image_file.read()
+            (
+                public_img_url,
+                gcs_img_url,
+            ) = bucket_service.upload_temp_assistant_photo_file(
+                image_content,
+                user_id,
+                image_file.content_type,
+            )
+            final_image_url_for_replicate = public_img_url
+            temp_image_gcs_url = gcs_img_url
+        else:
+            final_image_url_for_replicate = image_url
+
+        # Process audio input
+        if is_audio_file_provided:
+            if not audio_file.content_type or not audio_file.content_type.startswith(
+                "audio/",
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid file type for 'audio_file'. Only audio files are allowed.",
+                )
+            audio_content = await audio_file.read()
+            # Reusing upload_temp_assistant_photo_file for audio, path is generic enough
+            (
+                public_audio_url,
+                gcs_audio_url,
+            ) = bucket_service.upload_temp_assistant_photo_file(
+                audio_content,
+                user_id,
+                audio_file.content_type,
+            )
+            final_audio_url_for_replicate = public_audio_url
+            temp_audio_gcs_url = gcs_audio_url
+        else:
+            final_audio_url_for_replicate = audio_url
+
+        if not final_image_url_for_replicate or not final_audio_url_for_replicate:
+            # This case should be caught by earlier validation, but as a safeguard
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Missing valid image or audio input for Replicate.",
+            )
+
+        # Pre-check credits (assuming video_generation_cost is defined in settings)
+        if not settings.is_staging:
+            user = users_dao.get_user_with_id(user_id)
+            if user.credits < settings.video_generation_cost:
+                raise HTTPException(
+                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                    detail="Insufficient credits to generate video.",
+                )
+
+        video_output_url = replicate_service.animate_video(
+            image_url=final_image_url_for_replicate,
+            audio_url=final_audio_url_for_replicate,
+            seed=seed,
+            dynamic_scale=dynamic_scale,
+            min_resolution=min_resolution,
+            inference_steps=inference_steps,
+            keep_resolution=keep_resolution,
+        )
+
+        # Deduct credits after successful generation
+        if not settings.is_staging:
+            users_dao.recharge_credit(
+                user_id=user_id,
+                quantity=-float(settings.video_generation_cost),
+            )
+            session.commit()
+
+        return InfoResponse(info=video_output_url)
+
+    except ReplicateAPIError as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=e.status_code,
+            detail=f"Replicate API error: {e.detail}",
+        )
+    except HTTPException:  # Re-raise if it's already an HTTPException (e.g. from input validation)
+        session.rollback()
+        raise
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Error animating video for user {user_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Could not animate video: {str(e)}",
+        )
+    finally:
+        # Cleanup temporary files from GCS
+        if temp_image_gcs_url:
+            try:
+                bucket_service.delete_assistant_photo(temp_image_gcs_url)
+                logging.info(
+                    f"Successfully deleted temporary image file {temp_image_gcs_url} for video animation.",
+                )
+            except Exception as e_cleanup:
+                logging.error(
+                    f"Failed to clean up temporary image file {temp_image_gcs_url}: {e_cleanup}",
+                )
+        if temp_audio_gcs_url:
+            try:
+                bucket_service.delete_assistant_photo(
+                    temp_audio_gcs_url,
+                )  # Reusing delete_assistant_photo
+                logging.info(
+                    f"Successfully deleted temporary audio file {temp_audio_gcs_url} for video animation.",
+                )
+            except Exception as e_cleanup:
+                logging.error(
+                    f"Failed to clean up temporary audio file {temp_audio_gcs_url}: {e_cleanup}",
+                )
+
+
 ##################
 # Admin endpoints #
 ##################

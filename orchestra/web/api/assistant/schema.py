@@ -422,3 +422,55 @@ class PhotoEditRequest(BaseModel):
                 "input_image": "https://example.com/image.png",
             },
         }
+
+
+class VideoAnimateRequest(BaseModel):
+    """
+    Schema for requesting video animation from an image and audio.
+    File inputs (image_file, audio_file) are handled as Form/File in the endpoint.
+    """
+
+    image_url: Optional[HttpUrl] = Field(
+        None,
+        description="URL of the input portrait image.",
+    )
+    audio_url: Optional[HttpUrl] = Field(
+        None,
+        description="URL of the input audio file (WAV, MP3, etc.).",
+    )
+    seed: Optional[int] = Field(
+        None,
+        description="Random seed for reproducible results. Leave blank for a random seed.",
+    )
+    dynamic_scale: Optional[float] = Field(
+        1.0,
+        description="Controls movement intensity. Increase/decrease for more/less movement.",
+        ge=0.5,
+        le=2.0,
+    )
+    min_resolution: Optional[int] = Field(
+        512,
+        description="Minimum image resolution for processing. Lower values use less memory but may reduce quality.",
+        ge=256,
+        le=1024,
+    )
+    inference_steps: Optional[int] = Field(
+        25,
+        description="Number of diffusion steps. Higher values may improve quality but take longer.",
+        ge=5,
+        le=50,
+    )
+    keep_resolution: Optional[bool] = Field(
+        True,
+        description="If true, output video matches the original image resolution. Otherwise uses the min_resolution after cropping.",
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "image_url": "https://raw.githubusercontent.com/jixiaozhong/Sonic/main/examples/image/anime1.png",
+                "audio_url": "https://raw.githubusercontent.com/jixiaozhong/Sonic/main/examples/wav/talk_female_english_10s.MP3",
+                "dynamic_scale": 1.2,
+                "keep_resolution": True,
+            },
+        }
