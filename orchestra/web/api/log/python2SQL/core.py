@@ -1,4 +1,5 @@
 import random
+import re
 
 from sqlalchemy import literal, select
 from sqlalchemy.sql.selectable import ColumnClause, Subquery
@@ -118,10 +119,15 @@ def build_sql_query(
             else:
                 event_ids = log_event_ids
 
+            # Sanitize the key for use in alias to ensure it's a valid SQL identifier
+            safe_key = re.sub(r"[^a-zA-Z0-9_]", "_", str(key))
+            if not safe_key:
+                safe_key = "key"
+
             return _build_subquery_for_identifier(
                 key,
                 log_event_alias,
-                alias=f"select_{key}",
+                alias=f"select_{safe_key}",
                 log_event_ids=event_ids,
                 session=session,
                 is_derived=is_derived,
