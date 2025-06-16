@@ -96,18 +96,20 @@ def create_context(
             raise IndexError
         project_id = project.id
 
-        # Handle string input for context name
-        context_name = request.name
-        context_description = request.description
-        context_is_versioned = getattr(request, "is_versioned", False)
-        context_allow_duplicates = getattr(request, "allow_duplicates", True)
-
-        # If request is a string, use it as the name with no description
         if isinstance(request, str):
             context_name = request
             context_description = None
             context_is_versioned = False
             context_allow_duplicates = True
+            unique_id_column = False
+            unique_id_name = "row_id"
+        else:
+            context_name = request.name
+            context_description = request.description
+            context_is_versioned = request.is_versioned
+            context_allow_duplicates = request.allow_duplicates
+            unique_id_column = request.unique_id_column
+            unique_id_name = request.unique_id_name
 
         # Validate context name
         if not re.match(r"^[a-zA-Z0-9\_\-/]+$", context_name) or "//" in context_name:
@@ -129,6 +131,8 @@ def create_context(
             description=context_description,
             is_versioned=context_is_versioned,
             allow_duplicates=context_allow_duplicates,
+            unique_id_column=unique_id_column,
+            unique_id_name=unique_id_name,
         )
 
         return {"info": "Context created successfully."}
