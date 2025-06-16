@@ -166,6 +166,7 @@ class Settings(BaseSettings):
 
     # Assistant photo generation
     photo_generation_cost: float = 0.05
+    video_generation_cost: float = 0.25
     replicate_api_key: Optional[str] = None  # Populated by model_config below
 
     @property
