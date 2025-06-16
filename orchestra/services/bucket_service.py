@@ -222,16 +222,16 @@ class BucketService:
         content_type: str,
     ) -> Tuple[str, str]:
         """
-        Uploads a temporary photo to a '_temp' subfolder in the assistant images bucket.
-        This is used for operations like image editing or animation where a public URL is needed temporarily.
+        Uploads a temporary photo/file to a '_temp' subfolder in the assistant images bucket
+        and returns a signed URL for public access, along with its GCS URI.
         Args:
-            file_content: Raw bytes of the image file.
+            file_content: Raw bytes of the file.
             user_id: ID of the user, for path organization.
-            content_type: MIME type of the image.
+            content_type: MIME type of the file.
         Returns:
-            A tuple of (publicly_accessible_signed_url, gcs_url) for the temporary file.
+            A tuple of (publicly_accessible_signed_url, gcs_uri) for the temporary file.
         Raises:
-            Exception: If upload fails.
+            Exception: If upload or URL signing fails.
         """
         try:
             extension = (
@@ -239,16 +239,18 @@ class BucketService:
                 if content_type and "/" in content_type
                 else "jpg"
             )
+            if "audio" in content_type:
+                extension = (
+                    content_type.split("/")[-1] if "/" in content_type else "wav"
+                )
+
             file_name = self._generate_unique_filename(file_content)
             object_path = f"_temp/{user_id}/{file_name}.{extension}"
 
             blob = self.assistant_images_bucket.blob(object_path)
             blob.upload_from_string(file_content, content_type=content_type)
 
-            # Instead of blob.make_public(), generate a signed URL
-            # This is necessary if the bucket has Uniform Bucket-Level Access enabled.
-            # Expiration time: 1 hour (3600 seconds). Adjust as needed.
-            expiration_timedelta = datetime.timedelta(seconds=3600)
+            expiration_timedelta = datetime.timedelta(hours=1)  # URL valid for 1 hour
             signed_url = blob.generate_signed_url(
                 version="v4",
                 expiration=expiration_timedelta,
@@ -259,8 +261,15 @@ class BucketService:
 
             return signed_url, gcs_uri
         except exceptions.GoogleAPIError as e:
-            logging.error(f"Failed to upload temporary photo to GCS: {str(e)}")
-            raise Exception(f"Failed to upload temporary photo: {str(e)}")
+            logging.error(
+                f"Failed to upload temporary file to GCS or sign URL: {str(e)}"
+            )
+            raise Exception(f"Failed to upload temporary file: {str(e)}")
+        except Exception as e:
+            logging.error(
+                f"Unexpected error in upload_temp_assistant_photo_file: {str(e)}"
+            )
+            raise Exception(f"Failed to process temporary file: {str(e)}")
 
     def delete_assistant_photo(self, gcs_url: str) -> bool:
         """
@@ -291,7 +300,7 @@ class BucketService:
             return True
         except exceptions.NotFound:
             logging.warning(f"Assistant photo not found during deletion: {gcs_url}")
-            return True  # Consider not found as a successful deletion from client's perspective
+            return True
         except exceptions.GoogleAPIError as e:
             logging.error(f"Failed to delete assistant photo {gcs_url}: {str(e)}")
             raise Exception(f"Failed to delete assistant photo: {str(e)}")
