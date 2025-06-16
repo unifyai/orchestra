@@ -309,6 +309,14 @@ def _build_subquery_for_identifier(
       - several casted columns (str_value, int_value, float_value, bool_value, jsonb_value)
     """
 
+    # Sanitize the alias to ensure it's a valid SQL identifier
+    if alias:
+        safe_alias = re.sub(r"[^a-zA-Z0-9_]", "_", str(alias))
+        if not safe_alias:
+            safe_alias = "subq"
+    else:
+        safe_alias = None
+
     def extract_json_text(col):
         # This uses the PostgreSQL operator ->> to extract the JSON scalar as text.
         return col.op("#>>")(literal_column("'{}'"))
@@ -350,7 +358,7 @@ def _build_subquery_for_identifier(
                 literal("int").label("inferred_type"),
             )
             .where(log_event_condition)
-            .subquery(name=alias)
+            .subquery(name=safe_alias)
         )
         return subq
 
@@ -375,7 +383,7 @@ def _build_subquery_for_identifier(
                 literal("datetime").label("inferred_type"),
             )
             .where(log_event_condition)
-            .subquery(name=alias)
+            .subquery(name=safe_alias)
         )
         return subq
 
@@ -502,7 +510,7 @@ def _build_subquery_for_identifier(
         derived_log_alias.key == key,
     )
     # Combine base and derived logs with union
-    combined_subq = base_subq.union_all(derived_subq).subquery(name=alias)
+    combined_subq = base_subq.union_all(derived_subq).subquery(name=safe_alias)
 
     # Wrap the combined subquery with vector column support
     return _maybe_vector_column(combined_subq, key, session)
@@ -833,11 +841,17 @@ def _build_subquery_for_base_call(
             outer_base.c.log_event_id == key_expr.c.log_event_id,
         )
 
+    # Sanitize the subquery name to ensure it's a valid SQL identifier
+    # Replace any non-alphanumeric characters with underscores
+    safe_name = re.sub(r"[^a-zA-Z0-9_]", "_", str(key_expr.name))
+    if not safe_name:
+        safe_name = "subq"
+
     filtered_subquery = (
         select(*select_cols)
         .select_from(from_clause)
         .where(key_expr.c.log_event_id.in_(base_ids))
-        .subquery(f"base_call_{key_expr.name}_{random.randint(0, 1000000)}")
+        .subquery(f"base_call_{safe_name}_{random.randint(0, 1000000)}")
     )
     return filtered_subquery
 
