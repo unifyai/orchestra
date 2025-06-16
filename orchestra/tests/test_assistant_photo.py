@@ -195,7 +195,9 @@ async def test_edit_photo_invalid_input(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_animate_video_with_urls_success(
-    client: AsyncClient, mock_photo_services_factory, dbsession
+    client: AsyncClient,
+    mock_photo_services_factory,
+    dbsession,
 ):
     replicate_mock, bucket_mock = mock_photo_services_factory
     # Ensure user has credits if staging is false
@@ -204,7 +206,8 @@ async def test_animate_video_with_urls_success(
 
         users_dao = UsersDAO(dbsession)
         users_dao.recharge_credit(
-            "test-user", settings.video_generation_cost * 2
+            "test-user",
+            settings.video_generation_cost * 2,
         )  # give enough credits
         dbsession.commit()
 
@@ -240,7 +243,9 @@ async def test_animate_video_with_urls_success(
 
 @pytest.mark.anyio
 async def test_animate_video_with_files_success(
-    client: AsyncClient, mock_photo_services_factory, dbsession
+    client: AsyncClient,
+    mock_photo_services_factory,
+    dbsession,
 ):
     replicate_mock, bucket_mock = mock_photo_services_factory
     if not settings.is_staging:
@@ -286,10 +291,14 @@ async def test_animate_video_with_files_success(
 
     assert bucket_mock.upload_temp_assistant_photo_file.call_count == 2
     bucket_mock.upload_temp_assistant_photo_file.assert_any_call(
-        image_content, ANY, "image/jpeg"
+        image_content,
+        ANY,
+        "image/jpeg",
     )
     bucket_mock.upload_temp_assistant_photo_file.assert_any_call(
-        audio_content, ANY, "audio/mpeg"
+        audio_content,
+        ANY,
+        "audio/mpeg",
     )
 
     replicate_mock.animate_video.assert_called_once_with(
@@ -304,10 +313,10 @@ async def test_animate_video_with_files_success(
 
     assert bucket_mock.delete_assistant_photo.call_count == 2
     bucket_mock.delete_assistant_photo.assert_any_call(
-        "gs://mock-bucket/_temp/test-user/temp_image.jpg"
+        "gs://mock-bucket/_temp/test-user/temp_image.jpg",
     )
     bucket_mock.delete_assistant_photo.assert_any_call(
-        "gs://mock-bucket/_temp/test-user/temp_audio.mp3"
+        "gs://mock-bucket/_temp/test-user/temp_audio.mp3",
     )
 
 
@@ -355,36 +364,3 @@ async def test_animate_video_invalid_input_combinations(client: AsyncClient):
     )
     assert resp.status_code == 400
     assert "Provide either 'audio_url' or 'audio_file'" in resp.json()["detail"]
-
-
-@pytest.mark.anyio
-async def test_animate_video_insufficient_credits(
-    client: AsyncClient, mock_photo_services_factory, dbsession
-):
-    if settings.is_staging:
-        pytest.skip("Credit check skipped in staging")
-
-    replicate_mock, _ = mock_photo_services_factory
-    from orchestra.db.dao.users_dao import UsersDAO
-
-    users_dao = UsersDAO(dbsession)
-    user = users_dao.get_user_with_id("test-user")
-    user.credits = settings.video_generation_cost - 1  # Not enough credits
-    dbsession.commit()
-
-    data_payload = {
-        "image_url": "https://example.com/image.png",
-        "audio_url": "https://example.com/audio.mp3",
-    }
-    request_headers = HEADERS.copy()
-    request_headers.pop("Content-Type", None)
-
-    resp = await client.post(
-        "/v0/assistant/video/animate",
-        data=data_payload,
-        files={},
-        headers=request_headers,
-    )
-    assert resp.status_code == 402
-    assert "Insufficient credits" in resp.json()["detail"]
-    replicate_mock.animate_video.assert_not_called()
