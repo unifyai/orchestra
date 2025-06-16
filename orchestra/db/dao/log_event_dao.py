@@ -1,41 +1,24 @@
 from datetime import datetime, timezone
 from typing import List, Optional, Union
 
-from sqlalchemy import select
+from sqlalchemy import Integer, and_, cast, func, select
 from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import LogEvent, LogEventContext, Project
+from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.field_type_dao import FieldTypeDAO
+from orchestra.db.dao.log_dao import LogDAO
+from orchestra.db.models.orchestra_models import (
+    Context,
+    Log,
+    LogEvent,
+    LogEventContext,
+    Project,
+)
 
 
 class LogEventDAO:
     def __init__(self, session: Session):
         self.session = session
-
-    def create(  # noqa: WPS211
-        self,
-        project_id: int,
-        context_id: Optional[int] = None,
-    ) -> Optional[int]:
-
-        ts = datetime.now(timezone.utc)
-        new_log_event = LogEvent(
-            project_id=project_id,
-            created_at=ts,
-            updated_at=ts,
-        )
-
-        self.session.add(new_log_event)
-        self.session.commit()
-
-        if context_id:
-            association = LogEventContext(
-                log_event_id=new_log_event.id,
-                context_id=context_id,
-            )
-            self.session.add(association)
-            self.session.commit()
-
-        return new_log_event.id
 
     def bulk_create(
         self,
@@ -43,16 +26,7 @@ class LogEventDAO:
         count: int,
         context_id: Optional[int] = None,
     ) -> List[int]:
-        """Create multiple LogEvent instances in one operation.
-
-        Args:
-            project_id: The project ID to associate with the log events
-            count: Number of log events to create
-            context_id: Optional context ID to associate with the log events
-
-        Returns:
-            A list of created log event IDs
-        """
+        """Create multiple LogEvent instances in one operation."""
         ts = datetime.now(timezone.utc)
         log_events = [
             LogEvent(
@@ -64,11 +38,12 @@ class LogEventDAO:
         ]
 
         self.session.add_all(log_events)
-        self.session.commit()
+        self.session.flush()  # Flush to get IDs before committing
 
         log_event_ids = [event.id for event in log_events]
 
         if context_id:
+            # Associate logs with context
             associations = [
                 LogEventContext(
                     log_event_id=log_event_id,
@@ -77,8 +52,63 @@ class LogEventDAO:
                 for log_event_id in log_event_ids
             ]
             self.session.add_all(associations)
-            self.session.commit()
 
+            # Check if this context needs a unique sequential ID
+            context = self.session.query(Context).filter_by(id=context_id).one()
+            if context.unique_id_column:
+                field_type_dao = FieldTypeDAO(self.session)
+                field_type = field_type_dao.get_by_name_and_context(
+                    project_id,
+                    context.unique_id_name,
+                    context.id,
+                )
+
+                if field_type:
+                    # Create sequential ID log entries
+                    log_dao = LogDAO(self.session, ContextDAO(self.session))
+
+                    # Get the current max ID before creating any new ones
+                    # This ensures proper sequencing even across multiple API calls
+                    current_max_id = (
+                        self.session.query(
+                            func.coalesce(func.max(cast(Log.value, Integer)), 0),
+                        )
+                        .join(LogEvent, Log.log_event_id == LogEvent.id)
+                        .join(
+                            LogEventContext,
+                            LogEvent.id == LogEventContext.log_event_id,
+                        )
+                        .filter(
+                            and_(
+                                LogEventContext.context_id == context_id,
+                                Log.key == context.unique_id_name,
+                            ),
+                        )
+                        .scalar()
+                    ) or 0
+
+                    # Create sequential IDs for all log events in this batch
+                    sequential_id_logs = []
+                    for i, log_event_id in enumerate(log_event_ids):
+                        new_id = current_max_id + i + 1
+                        sequential_id_logs.append(
+                            {
+                                "project_id": project_id,
+                                "log_event_id": log_event_id,
+                                "key": context.unique_id_name,
+                                "value": new_id,
+                                "context_id": context_id,
+                                "explicit_types": {
+                                    context.unique_id_name: {"type": "integer"},
+                                },
+                            },
+                        )
+
+                    # Create all sequential ID logs in one batch
+                    if sequential_id_logs:
+                        log_dao.bulk_create(sequential_id_logs)
+
+        self.session.commit()
         return log_event_ids
 
     def filter(

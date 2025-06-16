@@ -49,8 +49,12 @@ class ContextDAO:
         description: Optional[str] = None,
         is_versioned: bool = False,
         allow_duplicates: bool = True,
+        unique_id_column: bool = False,
+        unique_id_name: str = "row_id",
     ) -> int:
         """Create a new context using upsert to handle race conditions."""
+        from orchestra.db.dao.field_type_dao import FieldTypeDAO
+
         ts = datetime.now(timezone.utc)
 
         stmt = pg_insert(Context).values(
@@ -61,6 +65,8 @@ class ContextDAO:
             updated_at=ts,
             is_versioned=is_versioned,
             allow_duplicates=allow_duplicates,
+            unique_id_column=unique_id_column,
+            unique_id_name=unique_id_name,
         )
 
         # On conflict, do nothing and return the existing context's id
@@ -73,12 +79,33 @@ class ContextDAO:
 
         if context_id is None:
             # If insert failed due to conflict, retrieve the existing context
-            context = self.filter(project_id=project_id, name=name)
-            if context:
-                context_id = context[0][0].id
+            context_raw = self.filter(project_id=project_id, name=name)
+            if context_raw:
+                context_id = context_raw[0][0].id
             else:
                 raise ValueError(f"Failed to create or retrieve context {name}")
 
+        # If unique_id_column is enabled, ensure the FieldType exists
+        if unique_id_column:
+            field_type_dao = FieldTypeDAO(self.session)
+            # Use the newly added method to check for the field type
+            field_type = field_type_dao.get_by_name_and_context(
+                project_id,
+                unique_id_name,
+                context_id,
+            )
+            if not field_type:
+                # Create the field type for the sequential ID
+                # Note: The 'value' of 0 is just to infer the type as 'integer'
+                field_type_dao.create_field_type_if_absent(
+                    project_id=project_id,
+                    field_name=unique_id_name,
+                    value=0,  # for type inference
+                    context_id=context_id,
+                    field_category="entry",
+                    mutable=False,  # This should be immutable
+                    unique=True,  # This should be unique within the context
+                )
         self.session.commit()
         return context_id
 
