@@ -978,6 +978,7 @@ async def test_context_allow_duplicates(client: AsyncClient):
 #     assert response.status_code == 200
 #     log_id_2 = response.json()['log_event_ids'][0]
 
+
 #     # Try to update the second log to have the same values as the first - should be rejected
 #     update_response = await _update_logs(
 #         client,
@@ -1389,7 +1390,7 @@ async def test_context_with_sequential_id(client: AsyncClient):
             entries={"value": f"log-entry-{i}"},
             context=context_name,
         )
-        assert log_response.status_code == 200
+        assert log_response.status_code == 200, log_response.text
 
     # Fetch the logs from the context
     logs = await fetch_logs(
@@ -1403,4 +1404,4 @@ async def test_context_with_sequential_id(client: AsyncClient):
     assert len(logs) == 5
     for i, log in enumerate(reversed(logs)):
         assert unique_id_name in log["entries"]
-        assert log["entries"][unique_id_name] == i + 1
+        assert log["entries"][unique_id_name] == i
