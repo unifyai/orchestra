@@ -1,9 +1,12 @@
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
+from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.interface_dao import InterfaceDAO
+from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.tab_dao import TabDAO
 from orchestra.db.dao.tile_dao import TileDAO
 from orchestra.db.dependencies import get_db_session
@@ -11,13 +14,18 @@ from orchestra.db.models.orchestra_models import Tab, Tile
 from orchestra.web.api.interface.schema import (
     CreateTileRequest,
     EditorTileSchema,
+    ExportTileTemplateRequest,
+    ImportTileTemplateRequest,
     PlotTileSchema,
     TableTileSchema,
+    TemplateExportResponse,
+    TemplateImportResponse,
     TerminalTileSchema,
     TileSchema,
     UpdateTileRequest,
     ViewTileSchema,
 )
+from orchestra.web.api.interface.template_utils import TemplateConverter
 
 router = APIRouter(prefix="/tile", tags=["tile"])
 
@@ -137,6 +145,7 @@ def _get_tile(
     tab_dao: TabDAO,
     tile_dao: TileDAO,
     for_update: bool = False,
+    only_tile: bool = False,
 ) -> Tuple[Tile, Tab]:
     """Helper function to retrieve a tile by ID or by tab_id and name."""
     tile = None
@@ -150,13 +159,14 @@ def _get_tile(
                 status_code=404,
                 detail=f"Tile with ID {tile_id} not found.",
             )
-        # Get tab to verify access
-        tab = tab_dao.get(tile.tab_id)
-        if not tab:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Tab with ID {tile.tab_id} not found.",
-            )
+        if not only_tile:
+            # Get tab to verify access
+            tab = tab_dao.get(tile.tab_id)
+            if not tab:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Tab with ID {tile.tab_id} not found.",
+                )
     # Get by tab_id and name
     elif tab_id and name:
         # Get tab
@@ -190,7 +200,10 @@ def _get_tile(
             detail="Either tile_id or both tab_id and name must be provided.",
         )
 
-    return tile, tab
+    if only_tile:
+        return tile, None
+    else:
+        return tile, tab
 
 
 @router.post(
@@ -1285,59 +1298,291 @@ async def patch_specialized_tile(
     update_data: Dict[str, Any] = Body(...),
     session: Session = Depends(get_db_session),
 ):
+    """Update the specialized data for a specific tile type."""
+    tab_dao = TabDAO(session)
     tile_dao = TileDAO(session)
-    """
-    Generic endpoint to patch any specialized tile type.
 
-    The tile_type parameter determines which specialized tile type to update.
-    Valid values are: Table, Plot, View, Editor, Terminal
-
-    For Table tiles, valid specialized fields include: table_type, column_context, page_number,
-    column_order, hidden_columns, sorting, grouping, group_sorting, columns_pin_left,
-    columns_pin_right, selected
-
-    For Plot tiles, valid specialized fields include: plot_type, plot_scale_x, plot_scale_y,
-    plot_aggregate, x_axis, y_axis, plot_group_by, plot_group_by_colors, bin_count, regression_line
-
-    For View tiles, valid specialized fields include: base_index
-
-    For Editor tiles, valid specialized fields include: file_name, file_type, content
-
-    For Terminal tiles, valid specialized fields include: shell_type
-    """
-    # Validate the tile type
-    valid_types = ["Table", "Plot", "View", "Editor", "Terminal"]
-    if tile_type not in valid_types:
+    # Validate tile type
+    valid_tile_types = ["Table", "Plot", "View", "Editor", "Terminal"]
+    if tile_type not in valid_tile_types:
         raise HTTPException(
             status_code=400,
-            detail=f"Invalid tile_type. Must be one of {', '.join(valid_types)}",
+            detail=f"Invalid tile_type. Must be one of {', '.join(valid_tile_types)}",
         )
 
-    # Validate we have either tile_id or (tab_id and name)
-    if not tile_id and (not tab_id or not name):
-        raise HTTPException(
-            status_code=400,
-            detail="Must provide either tile_id or both tab_id and name",
-        )
-
-    # Format update data to include the specialized tile key if not already present
-    specialized_key = f"{tile_type.lower()}_tile"
-    if specialized_key not in update_data:
-        # Handle fields at the root level that should be in the specialized tile
-        # This allows for a more flexible API where specialized fields
-        # can be included directly in the update_data
-        update_data = {specialized_key: update_data}
-
-    # Use the patch_tile DAO method with the specified tile_type
-    result = tile_dao.patch_tile(
-        update_data=update_data,
-        id=tile_id,
+    # Get the tile
+    tile, _ = _get_tile(
+        tile_id=tile_id,
         tab_id=tab_id,
         name=name,
-        tile_type=tile_type,
+        checkpoint=False,
+        tab_dao=tab_dao,
+        tile_dao=tile_dao,
     )
 
-    if not result:
-        raise HTTPException(status_code=404, detail=f"{tile_type} tile not found")
+    # Update the specialized tile data
+    try:
+        updated_tile = tile_dao.patch_specialized_tile(
+            id=str(tile.id),
+            tile_type=tile_type,
+            update_data=update_data,
+        )
 
-    return _create_tile_response(result)
+        if not updated_tile:
+            raise HTTPException(
+                status_code=404,
+                detail=f"{tile_type} tile not found",
+            )
+
+        return _create_tile_response(updated_tile)
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to update {tile_type.lower()} tile: {str(e)}",
+        )
+
+
+# Template Endpoints for Tiles
+@router.post(
+    "/export_template",
+    response_model=TemplateExportResponse,
+    responses={
+        200: {
+            "description": "Tile template exported successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "template": {
+                            "name": "Data Table",
+                            "type": "Table",
+                            "position": {"x": 0, "y": 0, "width": 6, "height": 4},
+                            "table_tile": {
+                                "table_type": "Data Table",
+                                "column_order": ["id", "name", "value"],
+                            },
+                        },
+                        "metadata": {"exported_at": "2024-01-01T12:00:00Z"},
+                        "export_stats": {"tiles": 1},
+                    },
+                },
+            },
+        },
+    },
+)
+def export_tile_template(
+    request_fastapi: Request,
+    request: ExportTileTemplateRequest,
+    session: Session = Depends(get_db_session),
+):
+    """Export a tile as a reusable template."""
+    tab_dao = TabDAO(session)
+    tile_dao = TileDAO(session)
+
+    # Get the tile to export
+    tile, _ = _get_tile(
+        tile_id=request.tile_id,
+        tab_id=request.tab_id,
+        name=request.tile_name,
+        checkpoint=request.checkpoint,
+        tab_dao=tab_dao,
+        tile_dao=tile_dao,
+        only_tile=True,
+    )
+
+    # Convert to template
+    template = TemplateConverter.tile_to_template(
+        tile,
+        description=request.description,
+        created_by=request_fastapi.state.user_id,
+        tags=request.tags,
+    )
+
+    # Create metadata
+    from datetime import datetime, timezone
+
+    metadata = {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "exported_by": request_fastapi.state.user_id,
+        "source_tab": request.tab_id,
+        "template_name": request.template_name or tile.name,
+    }
+
+    # Calculate export stats
+    export_stats = {
+        "tiles": 1,
+    }
+
+    return TemplateExportResponse(
+        template=template.model_dump(),
+        metadata=metadata,
+        export_stats=export_stats,
+    )
+
+
+@router.post(
+    "/import_template",
+    response_model=TemplateImportResponse,
+    responses={
+        200: {
+            "description": "Tile template imported successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "success": True,
+                        "import_stats": {"tiles": 1},
+                        "created_ids": {"tile_id": "ghi789"},
+                        "warnings": [],
+                    },
+                },
+            },
+        },
+    },
+)
+def import_tile_template(
+    request_fastapi: Request,
+    request: ImportTileTemplateRequest,
+    session: Session = Depends(get_db_session),
+):
+    """Import a tile template into a tab."""
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    interface_dao = InterfaceDAO(session)
+    tab_dao = TabDAO(session)
+    tile_dao = TileDAO(session)
+
+    # Get target tab
+    tab = None
+    if request.tab_id:
+        tab = tab_dao.get(request.tab_id)
+    elif request.interface_id and request.tab_name:
+        tab = tab_dao.get_by_interface_and_name(
+            interface_id=request.interface_id,
+            name=request.tab_name,
+            is_checkpoint=False,
+        )
+    elif request.interface_name and request.tab_name:
+        # Get project first
+        project = project_dao.get_by_user_and_name(
+            user_id=request_fastapi.state.user_id,
+            name=request.project,
+        )
+        if not project:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Project {request.project} not found or you don't have access.",
+            )
+
+        interface = interface_dao.get_by_project_and_name(
+            project_id=project.id,
+            name=request.interface_name,
+            is_checkpoint=False,
+        )
+        if interface:
+            tab = tab_dao.get_by_interface_and_name(
+                interface_id=str(interface.id),
+                name=request.tab_name,
+                is_checkpoint=False,
+            )
+
+    if not tab:
+        raise HTTPException(
+            status_code=404,
+            detail="Target tab not found.",
+        )
+
+    warnings = []
+
+    # Determine tile name
+    tile_name = request.new_tile_name or request.template.name or "Imported Tile"
+
+    # Check for name conflicts
+    existing_tile = tile_dao.get_by_tab_and_name(
+        tab_id=str(tab.id),
+        name=tile_name,
+        is_checkpoint=False,
+    )
+
+    if existing_tile and not request.overwrite_existing:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Tile with name {tile_name} already exists. Use overwrite_existing=true to replace it.",
+        )
+
+    # If overwriting and tile exists, delete it first
+    if existing_tile and request.overwrite_existing:
+        tile_dao.delete_tile(id=str(existing_tile.id))
+        warnings.append(f"Replaced existing tile '{tile_name}'")
+
+    # Handle position
+    position = request.template.position or {"x": 0, "y": 0, "width": 4, "height": 4}
+
+    # Create the tile
+    tile = tile_dao.create_tile(
+        tab_id=str(tab.id),
+        name=tile_name,
+        type=request.template.type,
+        x_position=position.get("x", 0)
+        if isinstance(position, dict)
+        else getattr(position, "x", 0),
+        y_position=position.get("y", 0)
+        if isinstance(position, dict)
+        else getattr(position, "y", 0),
+        width=position.get("width", 4)
+        if isinstance(position, dict)
+        else getattr(position, "width", 4),
+        height=position.get("height", 4)
+        if isinstance(position, dict)
+        else getattr(position, "height", 4),
+        minW=request.template.minW,
+        minH=request.template.minH,
+        visible=request.template.visible
+        if request.template.visible is not None
+        else True,
+        locked=request.template.locked
+        if request.template.locked is not None
+        else False,
+        moved=request.template.moved if request.template.moved is not None else False,
+        static=request.template.static
+        if request.template.static is not None
+        else False,
+        color=request.template.color,
+        context=request.template.context,
+        table=request.template.table,
+        auto_update=request.template.auto_update,
+        freeze=request.template.freeze,
+        filters=request.template.filters,
+        common_filter=request.template.common_filter,
+        metric=request.template.metric,
+        column_context=request.template.column_context,
+        grouping=request.template.grouping,
+        is_checkpoint=False,
+        # Pass specialized tile data
+        table_tile=request.template.table_tile.model_dump()
+        if request.template.table_tile
+        else None,
+        plot_tile=request.template.plot_tile.model_dump()
+        if request.template.plot_tile
+        else None,
+        view_tile=request.template.view_tile.model_dump()
+        if request.template.view_tile
+        else None,
+        editor_tile=request.template.editor_tile.model_dump()
+        if request.template.editor_tile
+        else None,
+        terminal_tile=request.template.terminal_tile.model_dump()
+        if request.template.terminal_tile
+        else None,
+    )
+
+    created_ids = {"tile_id": str(tile.id)}
+    import_stats = {"tiles": 1}
+
+    return TemplateImportResponse(
+        success=True,
+        validation_result=None,
+        import_stats=import_stats,
+        created_ids=created_ids,
+        warnings=warnings,
+    )
