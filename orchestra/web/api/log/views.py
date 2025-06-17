@@ -3422,6 +3422,7 @@ def join_logs(
                             "unique": "false",
                             "created_at": "2025-02-14T10:00:00Z",
                             "artifacts": "",
+                            "description": "this field is a dummy field",
                         },
                     },
                 },
@@ -3463,6 +3464,7 @@ def get_fields(
     - unique: Whether the field enforces uniqueness
     - created_at: When the field was first created
     - artifacts: For derived entries, contains the equation
+    - description: The description of the field
     """
     # Instantiate DAOs with shared session
     organization_member_dao = OrganizationMemberDAO(session)
