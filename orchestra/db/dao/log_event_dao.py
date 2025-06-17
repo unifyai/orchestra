@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import List, Optional, Union
 
-from sqlalchemy import Integer, and_, cast, func, select
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.context_dao import ContextDAO
@@ -69,10 +69,8 @@ class LogEventDAO:
 
                     # Get the current max ID before creating any new ones
                     # This ensures proper sequencing even across multiple API calls
-                    current_max_id = (
-                        self.session.query(
-                            func.coalesce(func.max(cast(Log.value, Integer)), 0),
-                        )
+                    max_id_query = (
+                        self.session.query(Log.value)
                         .join(LogEvent, Log.log_event_id == LogEvent.id)
                         .join(
                             LogEventContext,
@@ -84,8 +82,14 @@ class LogEventDAO:
                                 Log.key == context.unique_id_name,
                             ),
                         )
-                        .scalar()
-                    ) or 0
+                        .all()
+                    )
+
+                    # Extract max ID from results
+                    current_max_id = -1
+                    for row in max_id_query:
+                        if row[0] is not None and isinstance(row[0], (int, float)):
+                            current_max_id = max(current_max_id, int(row[0]))
 
                     # Create sequential IDs for all log events in this batch
                     sequential_id_logs = []
