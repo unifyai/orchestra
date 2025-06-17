@@ -2,7 +2,7 @@ import logging
 import os
 from contextlib import contextmanager
 
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -151,38 +151,3 @@ def check_account_not_frozen(request: Request):
                 # If there's any other error, allow the request to proceed
                 # rather than blocking legitimate users
                 pass
-
-
-def check_account_not_suspended(request: Request):
-    """
-    DEPRECATED: Use check_account_not_frozen instead which now handles both checks.
-
-    Check if the user's account is suspended due to unpaid invoices.
-
-    This should be called after authentication to prevent suspended users
-    from accessing any endpoints.
-    """
-    from fastapi import HTTPException
-
-    user_id = getattr(request.state, "user_id", None)
-    if user_id:
-        try:
-            with _ro_session() as session:
-                users_dao = UsersDAO(session)
-                user = users_dao.get_user_with_id(user_id)
-                # If user doesn't exist in users table, they can't be suspended
-                # (they don't have billing setup yet)
-                if user and user.billing_state == "SUSPENDED":
-                    raise account_suspended
-        except HTTPException as e:
-            # If it's a 404 "User ID not found", allow the request to proceed
-            # since users without billing setup can't be suspended
-            if e.status_code == 404:
-                pass
-            else:
-                # Re-raise other HTTP exceptions (like account_suspended)
-                raise
-        except Exception:
-            # If there's any other error, allow the request to proceed
-            # rather than blocking legitimate users
-            pass

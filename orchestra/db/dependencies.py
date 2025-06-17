@@ -35,6 +35,7 @@ active_transactions: Dict[int, Any] = {}
 # TTL for query_start_times (in seconds) to prevent memory leaks
 QUERY_START_TIMES_TTL = 60  # 1 minute
 
+
 # Cleanup function for query_start_times to prevent memory leaks
 def cleanup_query_start_times():
     """Remove stale entries from query_start_times to prevent memory leaks."""

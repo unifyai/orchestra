@@ -1904,7 +1904,9 @@ async def animate_video_endpoint(
             status_code=e.status_code,
             detail=f"Replicate API error: {e.detail}",
         )
-    except HTTPException:  # Re-raise if it's already an HTTPException (e.g. from input validation)
+    except (
+        HTTPException
+    ):  # Re-raise if it's already an HTTPException (e.g. from input validation)
         session.rollback()
         raise
     except Exception as e:
