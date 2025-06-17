@@ -42,7 +42,9 @@ from orchestra.web.api.project.schema import (
     ProjectCommitHistory,
     ProjectCommitRequest,
     ProjectConfig,
+    ProjectOut,
     ProjectRollbackRequest,
+    ProjectUpdate,
     ShareProjectRequest,
 )
 from orchestra.web.api.utils.http_responses import not_found
@@ -609,6 +611,16 @@ def delete_favorite(
                 },
             },
         },
+        422: {
+            "description": "Validation Error",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Description must be 256 characters or less.",
+                    },
+                },
+            },
+        },
     },
 )
 def create_project(
@@ -630,16 +642,25 @@ def create_project(
             name=request.name,
         )
         if existing_project:
-            raise ValueError
+            raise ValueError("Project already exists")
         project_dao.create(
             user_id=request_fastapi.state.user_id,
             # TODO: Add organization id when appropriate
             name=request.name,
             is_versioned=request.is_versioned,
+            description=request.description,
         )
 
         return {"info": "Project created successfully!"}
-    except:
+    except ValueError as e:
+        if "Project already exists" in str(e):
+            raise HTTPException(
+                status_code=400,
+                detail="A logging project with this name already exists.",
+            )
+        else:
+            raise HTTPException(status_code=422, detail=str(e))
+    except Exception:
         raise HTTPException(
             status_code=400,
             detail="A logging project with this name already exists.",
@@ -816,7 +837,91 @@ def delete_project(
             "description": "Successful Response",
             "content": {
                 "application/json": {
-                    "example": {"info": "Project renamed successfully!"},
+                    "example": {"info": "Project updated successfully!"},
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project <name> not found.",
+                    },
+                },
+            },
+        },
+        422: {
+            "description": "Validation Error",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Description must be 256 characters or less.",
+                    },
+                },
+            },
+        },
+    },
+)
+def update_project(
+    request_fastapi: Request,
+    request: ProjectUpdate,
+    project: Project = Depends(get_project_or_404),
+    session=Depends(get_db_session),
+):
+    """
+    Updates a project's name and/or description in your account.
+    """
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+
+    # Check if trying to rename the protected Unity project
+    if project.name == "Unity" and request.name is not None:
+        raise HTTPException(
+            status_code=403,
+            detail="The 'Unity' project cannot be renamed.",
+        )
+
+    try:
+        # Update the project with provided fields
+        if request.name is not None:
+            # Rename functionality
+            project_dao.rename(
+                user_id=request_fastapi.state.user_id,
+                name=project.name,
+                new_name=request.name,
+            )
+
+        # Update description if provided
+        if request.description is not None:
+            project_dao.update(
+                id=project.id,
+                description=request.description,
+            )
+
+        return {"info": "Project updated successfully!"}
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception:
+        raise not_found(f"Project {project.name}")
+
+
+@router.get(
+    "/project/{project_name:path}",
+    response_model=ProjectOut,
+    responses={
+        200: {
+            "description": "Project details",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "name": "my-project",
+                        "description": "A sample project for evaluation",
+                        "is_versioned": True,
+                        "created_at": "2023-01-01T00:00:00Z",
+                        "updated_at": "2023-01-02T00:00:00Z",
+                    },
                 },
             },
         },
@@ -832,35 +937,21 @@ def delete_project(
         },
     },
 )
-def rename_project(
+def get_project(
     request_fastapi: Request,
-    request: ProjectConfig,
     project: Project = Depends(get_project_or_404),
     session=Depends(get_db_session),
 ):
     """
-    Renames a project from `name` to `new_name` in your account.
+    Returns detailed information about a specific project.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-
-    # Check if trying to rename the protected Unity project
-    if project.name == "Unity":
-        raise HTTPException(
-            status_code=403,
-            detail="The 'Unity' project cannot be renamed.",
-        )
-    try:
-        # Now rename it
-        project_dao.rename(
-            user_id=request_fastapi.state.user_id,
-            name=project.name,
-            new_name=request.name,
-        )
-    except:
-        raise not_found(f"Project {project.name}")
-    return {"info": "Project renamed successfully!"}
+    return ProjectOut(
+        name=project.name,
+        description=project.description,
+        is_versioned=project.is_versioned,
+        created_at=project.created_at.isoformat() if project.created_at else None,
+        updated_at=project.updated_at.isoformat() if project.updated_at else None,
+    )
 
 
 @router.get(
@@ -1009,7 +1100,7 @@ def admin_share_project(
             "content": {
                 "application/json": {
                     "example": {
-                        "info": "Project duplicated successfully!",
+                        "info": "Project 'source-project' duplicated successfully to 'new-project'!",
                         "details": {
                             "project_id": 123,
                             "contexts_copied": 5,
@@ -1120,6 +1211,7 @@ def admin_duplicate_project(
     project_dao.create(
         user_id=request.to_user_id,
         name=request.new_project_name,
+        description=source_project.description,
     )
     session.flush()  # Flush to get the new project ID
 
