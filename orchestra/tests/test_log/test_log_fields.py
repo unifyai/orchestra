@@ -710,3 +710,54 @@ async def test_unique_field_constraint_on_update(client: AsyncClient):
         headers=HEADERS,
     )
     assert update_response_success.status_code == 200, update_response_success.json()
+
+
+@pytest.mark.anyio
+async def test_field_description_crud(client: AsyncClient):
+    """Test creating fields with descriptions and verifying CRUD operations."""
+    project_name = "test-field-description"
+    await _create_project(client, project_name)
+
+    # Create fields with and without descriptions via POST /logs/fields
+    fields_data = {
+        "project": project_name,
+        "fields": {
+            "field_with_description": {
+                "type": "str",
+                "description": "This field has a description",
+            },
+            "field_without_description": {
+                "type": "int",
+                # No description provided
+            },
+        },
+    }
+
+    response = await client.post(
+        "/v0/logs/fields",
+        json=fields_data,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    assert "Fields created successfully" in response.json()["info"]
+
+    # Fetch fields via GET /logs/fields and verify descriptions
+    fields_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200, fields_response.json()
+    fields = fields_response.json()
+
+    # Verify field with description
+    assert "field_with_description" in fields
+    assert fields["field_with_description"]["data_type"] == "str"
+    assert (
+        fields["field_with_description"]["description"]
+        == "This field has a description"
+    )
+
+    # Verify field without description returns null/None
+    assert "field_without_description" in fields
+    assert fields["field_without_description"]["data_type"] == "int"
+    assert fields["field_without_description"]["description"] is None
