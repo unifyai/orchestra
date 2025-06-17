@@ -20,6 +20,7 @@ from orchestra.web.api.utils.observability import set_user_context
 security = HTTPBearer()
 logger = logging.getLogger(__name__)
 
+
 # READ‑ONLY session for auth dependencies
 @contextmanager
 def _ro_session(autoflush=False, expire_on_commit=False):

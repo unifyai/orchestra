@@ -262,12 +262,12 @@ class BucketService:
             return signed_url, gcs_uri
         except exceptions.GoogleAPIError as e:
             logging.error(
-                f"Failed to upload temporary file to GCS or sign URL: {str(e)}"
+                f"Failed to upload temporary file to GCS or sign URL: {str(e)}",
             )
             raise Exception(f"Failed to upload temporary file: {str(e)}")
         except Exception as e:
             logging.error(
-                f"Unexpected error in upload_temp_assistant_photo_file: {str(e)}"
+                f"Unexpected error in upload_temp_assistant_photo_file: {str(e)}",
             )
             raise Exception(f"Failed to process temporary file: {str(e)}")
 
