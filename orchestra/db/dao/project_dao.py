@@ -26,6 +26,11 @@ class ProjectDAO:
         self.organization_member_dao = organization_member_dao
         self.context_dao = context_dao
 
+    def _validate_description(self, description: Optional[str]) -> None:
+        """Validate description length."""
+        if description is not None and len(description) > 256:
+            raise ValueError("Description cannot exceed 256 characters")
+
     def _get_project(
         self,
         id: Optional[int] = None,
@@ -50,10 +55,13 @@ class ProjectDAO:
         user_id: Optional[str] = None,
         organization_id: Optional[int] = None,
         is_versioned: bool = False,
+        description: Optional[str] = None,
     ) -> None:
 
         if user_id is None and organization_id is None:
             raise ValueError("One of user_id or organization_id must be provided.")
+
+        self._validate_description(description)
 
         self.session.add(
             Project(
@@ -61,6 +69,7 @@ class ProjectDAO:
                 user_id=user_id,
                 organization_id=organization_id,
                 is_versioned=is_versioned,
+                description=description,
             ),
         )
 
@@ -90,7 +99,10 @@ class ProjectDAO:
         name: Optional[str] = None,
         user_id: Optional[str] = None,
         organization_id: Optional[int] = None,
+        description: Optional[str] = None,
     ) -> None:
+        self._validate_description(description)
+
         query = select(Project)
         query = query.where(Project.id == id)
         raw = self.session.execute(query)
@@ -102,14 +114,22 @@ class ProjectDAO:
                 setattr(entry, "user_id", user_id)
             if organization_id:
                 setattr(entry, "organization_id", organization_id)
+            if description is not None:
+                setattr(entry, "description", description)
 
-    def rename(self, user_id: str, name: str, new_name: str):
+    def rename(
+        self,
+        user_id: str,
+        name: str,
+        new_name: str,
+        description: Optional[str] = None,
+    ):
         try:
             project_id = self.filter(user_id=user_id, name=name)[0][0].id
         except:
             raise ValueError
 
-        self.update(id=project_id, name=new_name)
+        self.update(id=project_id, name=new_name, description=description)
 
     def delete(self, id: int):
         try:

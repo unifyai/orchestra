@@ -42,6 +42,11 @@ class ContextDAO:
     def __init__(self, session: Session):
         self.session = session
 
+    def _validate_description(self, description: Optional[str]) -> None:
+        """Validate description length."""
+        if description is not None and len(description) > 256:
+            raise ValueError("Description cannot exceed 256 characters")
+
     def create(
         self,
         project_id: int,
@@ -56,6 +61,8 @@ class ContextDAO:
         from orchestra.db.dao.field_type_dao import FieldTypeDAO
 
         ts = datetime.now(timezone.utc)
+
+        self._validate_description(description)
 
         stmt = pg_insert(Context).values(
             project_id=project_id,
@@ -189,6 +196,7 @@ class ContextDAO:
             The ID of the existing or newly created context
         """
         try:
+            self._validate_description(description)
             # First try to find the context
             contexts = self.filter(project_id=project_id, name=name)
             if contexts:
