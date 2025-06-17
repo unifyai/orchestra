@@ -8,6 +8,7 @@ Integration-style billing tests (matching test_credits pattern).
 5. Pre-paid credits – skip invoicer.
 6. Auto-recharge – queue recharge when credits below threshold.
 """
+
 from __future__ import annotations
 
 import calendar
@@ -1418,9 +1419,11 @@ def test_retroactive_spending_calculation(dbsession: Session):
             local_endpoint_id=None,
             credits=credits,
             query_body='{"messages": [{"role": "user", "content": "historical"}]}',
-            response_body='{"choices": [{"message": {"content": "response"}}]}'
-            if status_code == 200
-            else '{"error": "failed"}',
+            response_body=(
+                '{"choices": [{"message": {"content": "response"}}]}'
+                if status_code == 200
+                else '{"error": "failed"}'
+            ),
             status_code=status_code,
         )
 
@@ -1660,9 +1663,11 @@ def test_spending_calculation_edge_cases(dbsession: Session):
             local_endpoint_id=None,
             credits=credits,
             query_body='{"messages": [{"role": "user", "content": "test"}]}',
-            response_body='{"choices": [{"message": {"content": "response"}}]}'
-            if status_code == 200
-            else '{"error": "failed"}',
+            response_body=(
+                '{"choices": [{"message": {"content": "response"}}]}'
+                if status_code == 200
+                else '{"error": "failed"}'
+            ),
             status_code=status_code,
         )
 

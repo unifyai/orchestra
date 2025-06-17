@@ -1810,13 +1810,13 @@ def test_queue_auto_recharge(
             "recharge": {
                 "created": latest_recharge is not None,
                 "id": latest_recharge.id if latest_recharge else None,
-                "quantity": float(latest_recharge.quantity)
-                if latest_recharge
-                else None,
+                "quantity": (
+                    float(latest_recharge.quantity) if latest_recharge else None
+                ),
                 "status": latest_recharge.status if latest_recharge else None,
-                "invoice_group": str(latest_recharge.invoice_group)
-                if latest_recharge
-                else None,
+                "invoice_group": (
+                    str(latest_recharge.invoice_group) if latest_recharge else None
+                ),
             },
             "notes": [],
         }
