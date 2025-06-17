@@ -145,12 +145,32 @@ def _create_log(client, project_name, user=1, params=None, entries=None, context
         if "explicit_types" not in entries:
             explicit_types_entries = {k: {"mutable": True} for k in entries.keys()}
             entries["explicit_types"] = explicit_types_entries
+        else:
+            # Preserve existing explicit_types but ensure mutable=True for backward compatibility
+            for k in entries.keys():
+                if k != "explicit_types" and k not in entries["explicit_types"]:
+                    entries["explicit_types"][k] = {"mutable": True}
+                elif (
+                    k != "explicit_types"
+                    and "mutable" not in entries["explicit_types"][k]
+                ):
+                    entries["explicit_types"][k]["mutable"] = True
     elif isinstance(entries, list):
         # Handle list of entries
         for entry in entries:
             if "explicit_types" not in entry:
                 explicit_types_entries = {k: {"mutable": True} for k in entry.keys()}
                 entry["explicit_types"] = explicit_types_entries
+            else:
+                # Preserve existing explicit_types but ensure mutable=True for backward compatibility
+                for k in entry.keys():
+                    if k != "explicit_types" and k not in entry["explicit_types"]:
+                        entry["explicit_types"][k] = {"mutable": True}
+                    elif (
+                        k != "explicit_types"
+                        and "mutable" not in entry["explicit_types"][k]
+                    ):
+                        entry["explicit_types"][k]["mutable"] = True
 
     # Handle both single dict and list of dicts for params
     if isinstance(params, dict):
@@ -158,12 +178,32 @@ def _create_log(client, project_name, user=1, params=None, entries=None, context
         if "explicit_types" not in params:
             explicit_types_params = {k: {"mutable": True} for k in params.keys()}
             params["explicit_types"] = explicit_types_params
+        else:
+            # Preserve existing explicit_types but ensure mutable=True for backward compatibility
+            for k in params.keys():
+                if k != "explicit_types" and k not in params["explicit_types"]:
+                    params["explicit_types"][k] = {"mutable": True}
+                elif (
+                    k != "explicit_types"
+                    and "mutable" not in params["explicit_types"][k]
+                ):
+                    params["explicit_types"][k]["mutable"] = True
     elif isinstance(params, list):
         # Handle list of params
         for param in params:
             if "explicit_types" not in param:
                 explicit_types_params = {k: {"mutable": True} for k in param.keys()}
                 param["explicit_types"] = explicit_types_params
+            else:
+                # Preserve existing explicit_types but ensure mutable=True for backward compatibility
+                for k in param.keys():
+                    if k != "explicit_types" and k not in param["explicit_types"]:
+                        param["explicit_types"][k] = {"mutable": True}
+                    elif (
+                        k != "explicit_types"
+                        and "mutable" not in param["explicit_types"][k]
+                    ):
+                        param["explicit_types"][k]["mutable"] = True
 
     return client.post(
         "/v0/logs",
