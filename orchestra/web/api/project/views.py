@@ -34,11 +34,22 @@ from orchestra.db.models.orchestra_models import (
     Project,
 )
 from orchestra.settings import settings
+from orchestra.web.api.interface.schema import (
+    ProjectTemplateSchema,
+    TemplateExportResponse,
+    TemplateImportResponse,
+)
+from orchestra.web.api.interface.template_utils import (
+    TemplateConverter,
+    TemplateValidator,
+)
 from orchestra.web.api.project.schema import (
     DuplicateProjectRequest,
+    ExportProjectTemplateRequest,
     FavoriteProjectIn,
     FavoriteProjectOut,
     FavoriteProjectUpdate,
+    ImportProjectTemplateRequest,
     ProjectCommitHistory,
     ProjectCommitRequest,
     ProjectConfig,
@@ -895,6 +906,332 @@ def list_projects(
         user_id=request_fastapi.state.user_id,
     )
     return [p[0].name for p in raw_projects]
+
+
+# Template Endpoints for Projects
+@router.post(
+    "/project/export_template",
+    response_model=TemplateExportResponse,
+    responses={
+        200: {
+            "description": "Project template exported successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "template": {
+                            "interfaces": [
+                                {
+                                    "name": "Analytics Dashboard",
+                                    "tabs": [
+                                        {
+                                            "name": "Overview",
+                                            "tiles": [
+                                                {
+                                                    "name": "Data Table",
+                                                    "type": "Table",
+                                                    "position": {
+                                                        "x": 0,
+                                                        "y": 0,
+                                                        "width": 6,
+                                                        "height": 4,
+                                                    },
+                                                },
+                                            ],
+                                        },
+                                    ],
+                                },
+                            ],
+                        },
+                        "metadata": {"exported_at": "2024-01-01T12:00:00Z"},
+                        "export_stats": {"interfaces": 1, "tabs": 1, "tiles": 1},
+                    },
+                },
+            },
+        },
+    },
+)
+def export_project_template(
+    request_fastapi: Request,
+    request: ExportProjectTemplateRequest,
+    session: Session = Depends(get_db_session),
+):
+    """Export project interfaces as a reusable template."""
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    interface_dao = InterfaceDAO(session)
+    tab_dao = TabDAO(session)
+
+    # Get the project
+    project = project_dao.get_by_user_and_name(
+        user_id=request_fastapi.state.user_id,
+        name=request.project,
+    )
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {request.project} not found or you don't have access.",
+        )
+
+    # Get interfaces to export
+    interfaces = interface_dao.get_interfaces(
+        project_id=project.id,
+        is_checkpoint=request.checkpoint,
+    )
+
+    # Filter interfaces if specific names are provided
+    if request.interface_names:
+        interfaces = [
+            interface
+            for interface in interfaces
+            if interface.name in request.interface_names
+        ]
+
+    # Convert interfaces to templates
+    interface_templates = []
+    total_tabs = 0
+    total_tiles = 0
+
+    for interface in interfaces:
+        # Get tabs with tiles for this interface
+        tabs = tab_dao.list_tabs(
+            interface_id=interface.id,
+            is_checkpoint=interface.is_checkpoint,
+        )
+
+        # Ensure tabs have their tiles loaded
+        interface.tabs = tabs
+
+        # Convert to template
+        interface_template = TemplateConverter.interface_to_template(
+            interface=interface,
+            description=request.description,
+            created_by=request_fastapi.state.user_id,
+            tags=request.tags,
+        )
+
+        interface_templates.append(interface_template)
+        total_tabs += len(interface_template.tabs)
+        total_tiles += sum(len(tab.tiles) for tab in interface_template.tabs)
+
+    # Create project template
+    project_template = ProjectTemplateSchema(
+        interfaces=interface_templates,
+        description=request.description,
+        created_by=request_fastapi.state.user_id,
+        tags=request.tags,
+    )
+
+    # Create metadata
+    from datetime import datetime, timezone
+
+    metadata = {
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "exported_by": request_fastapi.state.user_id,
+        "source_project": request.project,
+        "template_name": request.template_name or f"{request.project}_template",
+    }
+
+    # Calculate export stats
+    export_stats = {
+        "interfaces": len(interface_templates),
+        "tabs": total_tabs,
+        "tiles": total_tiles,
+    }
+
+    return TemplateExportResponse(
+        template=project_template.model_dump(),
+        metadata=metadata,
+        export_stats=export_stats,
+    )
+
+
+@router.post(
+    "/project/import_template",
+    response_model=TemplateImportResponse,
+    responses={
+        200: {
+            "description": "Project template imported successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "success": True,
+                        "import_stats": {"interfaces": 2, "tabs": 4, "tiles": 10},
+                        "created_ids": {"interface_ids": ["abc123", "def456"]},
+                        "warnings": [],
+                    },
+                },
+            },
+        },
+    },
+)
+def import_project_template(
+    request_fastapi: Request,
+    request: ImportProjectTemplateRequest,
+    session: Session = Depends(get_db_session),
+):
+    """Import a project template into a project."""
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    interface_dao = InterfaceDAO(session)
+    tab_dao = TabDAO(session)
+    tile_dao = TileDAO(session)
+
+    # Get target project
+    project = project_dao.get_by_user_and_name(
+        user_id=request_fastapi.state.user_id,
+        name=request.project,
+    )
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {request.project} not found or you don't have access.",
+        )
+
+    validation_result = None
+    warnings = []
+    created_interface_ids = []
+    import_stats = {"interfaces": 0, "tabs": 0, "tiles": 0}
+
+    # Validate template if requested
+    if request.validate_first:
+        validator = TemplateValidator(session)
+        validation_schema = validator.get_project_validation_schema(
+            user_id=request_fastapi.state.user_id,
+            project_name=request.project,
+        )
+
+    # Import each interface from the project template
+    for interface_data in request.template.interfaces:
+        # Determine interface name with optional prefix
+        interface_name = interface_data.name or "Imported Interface"
+        if request.interface_name_prefix:
+            interface_name = f"{request.interface_name_prefix}{interface_name}"
+
+        # Check for name conflicts
+        existing_interface = interface_dao.get_by_project_and_name(
+            project_id=project.id,
+            name=interface_name,
+            is_checkpoint=False,
+        )
+
+        if existing_interface and not request.overwrite_existing:
+            warnings.append(f"Skipped interface '{interface_name}' - already exists")
+            continue
+
+        # Create the interface
+        interface = interface_dao.create_interface(
+            name=interface_name,
+            project_id=project.id,
+            color=interface_data.color,
+            is_checkpoint=False,
+        )
+
+        created_interface_ids.append(str(interface.id))
+        import_stats["interfaces"] += 1
+
+        # Create tabs and tiles for this interface
+        for tab_data in interface_data.tabs:
+            tab = tab_dao.create_tab(
+                interface_id=str(interface.id),
+                name=tab_data.name or "Imported Tab",
+                visible=tab_data.visible if tab_data.visible is not None else True,
+                active=tab_data.active if tab_data.active is not None else False,
+                order=tab_data.order if tab_data.order is not None else 0,
+                global_context=tab_data.global_context,
+                color=tab_data.color,
+                is_checkpoint=False,
+            )
+            import_stats["tabs"] += 1
+
+            # Create tiles for this tab
+            for tile_data in tab_data.tiles:
+                position = tile_data.position or {
+                    "x": 0,
+                    "y": 0,
+                    "width": 4,
+                    "height": 4,
+                }
+
+                tile = tile_dao.create_tile(
+                    tab_id=str(tab.id),
+                    name=tile_data.name or "Imported Tile",
+                    type=tile_data.type,
+                    x_position=position.get("x", 0)
+                    if isinstance(position, dict)
+                    else getattr(position, "x", 0),
+                    y_position=position.get("y", 0)
+                    if isinstance(position, dict)
+                    else getattr(position, "y", 0),
+                    width=position.get("width", 4)
+                    if isinstance(position, dict)
+                    else getattr(position, "width", 4),
+                    height=position.get("height", 4)
+                    if isinstance(position, dict)
+                    else getattr(position, "height", 4),
+                    minW=tile_data.minW,
+                    minH=tile_data.minH,
+                    visible=tile_data.visible
+                    if tile_data.visible is not None
+                    else True,
+                    locked=tile_data.locked if tile_data.locked is not None else False,
+                    moved=tile_data.moved if tile_data.moved is not None else False,
+                    static=tile_data.static if tile_data.static is not None else False,
+                    color=tile_data.color,
+                    context=tile_data.context,
+                    table=tile_data.table,
+                    auto_update=tile_data.auto_update,
+                    freeze=tile_data.freeze,
+                    filters=tile_data.filters,
+                    common_filter=tile_data.common_filter,
+                    metric=tile_data.metric,
+                    column_context=tile_data.column_context,
+                    grouping=tile_data.grouping,
+                    is_checkpoint=False,
+                    # Pass specialized tile data as dictionaries
+                    table_tile=tile_data.table_tile.model_dump()
+                    if tile_data.table_tile
+                    else None,
+                    plot_tile=tile_data.plot_tile.model_dump()
+                    if tile_data.plot_tile
+                    else None,
+                    view_tile=tile_data.view_tile.model_dump()
+                    if tile_data.view_tile
+                    else None,
+                    editor_tile=tile_data.editor_tile.model_dump()
+                    if tile_data.editor_tile
+                    else None,
+                    terminal_tile=tile_data.terminal_tile.model_dump()
+                    if tile_data.terminal_tile
+                    else None,
+                )
+                import_stats["tiles"] += 1
+
+        # Set active tab if specified
+        active_tab_name = interface_data.active_tab_name
+        if active_tab_name:
+            tabs = tab_dao.list_tabs(
+                interface_id=str(interface.id),
+                is_checkpoint=False,
+            )
+            for tab in tabs:
+                if tab.name == active_tab_name:
+                    interface_dao.update_interface(
+                        id=str(interface.id),
+                        active_tab_id=str(tab.id),
+                    )
+                    break
+
+    created_ids = {"interface_ids": created_interface_ids}
+
+    return TemplateImportResponse(
+        success=True,
+        validation_result=validation_result,
+        import_stats=import_stats,
+        created_ids=created_ids,
+        warnings=warnings,
+    )
 
 
 ###########################

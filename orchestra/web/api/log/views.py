@@ -647,38 +647,64 @@ def create_from_logs(
                 for k, v in body.referenced_logs.items()
                 if k in ph
             }
-            # Iterate over the computed values and resolved IDs
-            non_null_val = None
-            for i, (le, value) in enumerate(computed_values):
-                # Get all log IDs involved in this specific computation
-                involved_log_ids = list(set(ids[i] for ids in resolved_ids.values()))
-                val = json.loads(json.dumps(value, cls=CustomEncoder))
-                non_null_val = val if val is not None else non_null_val
-                inferred_type = LogDAO.infer_type("", non_null_val)
+            # Create index mappings for each alias to track position of log_event_ids
+            # This helps us find corresponding log_event_ids across different aliases
+            alias_to_id_list = {}
+            alias_to_index_map = {}
 
-                # Create a derived entry for each log ID involved in this computation
-                for log_event_id in involved_log_ids:
-                    if isinstance(value, np.ndarray):
-                        # add the embedding to the vector index table
-                        embeddings = Embedding(
-                            ref_id=le,
-                            key=body.key,
-                            model=DEFAULT_EMBEDDING_MODEL,
-                            vector=value,
-                        )
-                        session.add(embeddings)
-                    new_derived_logs.append(
-                        DerivedLog(
-                            log_event_id=log_event_id,
-                            key=body.key,
-                            equation=body.equation,
-                            referenced_logs=referenced_logs,
-                            value=val,
-                            inferred_type=inferred_type,
-                            created_at=datetime.now(timezone.utc),
-                            updated_at=datetime.now(timezone.utc),
-                        ),
-                    )
+            for alias, id_list in resolved_ids.items():
+                alias_to_id_list[alias] = id_list
+                # Create a mapping from log_event_id to its index position for this alias
+                alias_to_index_map[alias] = {
+                    log_id: idx for idx, log_id in enumerate(id_list)
+                }
+
+            # Process each computed value
+            non_null_val = None
+            for computed_log_id, value in computed_values:
+                # Find which alias and index this computed_log_id belongs to
+                source_alias = None
+                source_index = None
+
+                for alias, index_map in alias_to_index_map.items():
+                    if computed_log_id in index_map:
+                        source_alias = alias
+                        source_index = index_map[computed_log_id]
+                        break
+
+                # If we found the source, create derived logs for all corresponding log_event_ids
+                if source_index is not None:
+                    # For each alias, get the log_event_id at the same index position
+                    for alias, id_list in alias_to_id_list.items():
+                        if source_index < len(id_list):
+                            log_event_id = id_list[source_index]
+
+                            val = json.loads(json.dumps(value, cls=CustomEncoder))
+                            non_null_val = val if val is not None else non_null_val
+                            inferred_type = LogDAO.infer_type("", non_null_val)
+
+                            # Create a derived entry for this log ID
+                            if isinstance(value, np.ndarray):
+                                # add the embedding to the vector index table
+                                embeddings = Embedding(
+                                    ref_id=log_event_id,
+                                    key=body.key,
+                                    model=DEFAULT_EMBEDDING_MODEL,
+                                    vector=value,
+                                )
+                                session.add(embeddings)
+                            new_derived_logs.append(
+                                DerivedLog(
+                                    log_event_id=log_event_id,
+                                    key=body.key,
+                                    equation=body.equation,
+                                    referenced_logs=referenced_logs,
+                                    value=val,
+                                    inferred_type=inferred_type,
+                                    created_at=datetime.now(timezone.utc),
+                                    updated_at=datetime.now(timezone.utc),
+                                ),
+                            )
 
             # Bulk insert all new derived logs in one go
             session.bulk_save_objects(new_derived_logs)
