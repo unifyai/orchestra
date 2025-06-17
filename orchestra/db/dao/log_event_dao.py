@@ -99,7 +99,7 @@ class LogEventDAO:
                                 "value": new_id,
                                 "context_id": context_id,
                                 "explicit_types": {
-                                    context.unique_id_name: {"type": "integer"},
+                                    context.unique_id_name: {"type": "int"},
                                 },
                             },
                         )
