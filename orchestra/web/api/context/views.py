@@ -157,11 +157,17 @@ def create_context(
                             "name": "context1",
                             "description": "description1",
                             "is_versioned": True,
+                            "allow_duplicates": True,
+                            "unique_id_column": False,
+                            "unique_id_name": "row_id",
                         },
                         {
                             "name": "context2",
                             "description": "description2",
                             "is_versioned": False,
+                            "allow_duplicates": True,
+                            "unique_id_column": False,
+                            "unique_id_name": "my_id",
                         },
                     ],
                 },
@@ -217,6 +223,10 @@ def get_contexts(
             {
                 "name": context[0].name,
                 "description": context[0].description,
+                "is_versioned": context[0].is_versioned,
+                "allow_duplicates": context[0].allow_duplicates,
+                "unique_id_column": context[0].unique_id_column,
+                "unique_id_name": context[0].unique_id_name,
             }
             for context in existing_contexts
             if context[0].name != ""
@@ -279,6 +289,9 @@ def get_context_commits(
                         "name": "context1",
                         "description": "description1",
                         "is_versioned": True,
+                        "allow_duplicates": True,
+                        "unique_id_column": False,
+                        "unique_id_name": "row_id",
                     },
                 },
             },
@@ -334,6 +347,8 @@ def get_context(
             "description": context[0][0].description,
             "is_versioned": context[0][0].is_versioned,
             "allow_duplicates": context[0][0].allow_duplicates,
+            "unique_id_column": context[0][0].unique_id_column,
+            "unique_id_name": context[0][0].unique_id_name,
         }
     except IndexError as e:
         raise not_found(str(e))
