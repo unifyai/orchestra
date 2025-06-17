@@ -47,6 +47,48 @@ class ProjectConfig(BaseModel):
         description="Whether the project is versioned",
         default=False,
     )
+    description: Optional[str] = Field(
+        None,
+        description="Optional description of the project",
+        max_length=256,
+    )
+
+
+class ProjectUpdate(BaseModel):
+    """Request model for updating a project."""
+
+    name: Optional[str] = Field(
+        None,
+        description="A unique, user-defined name used when referencing  "
+        "the project.",
+        min_length=1,
+        max_length=255,
+        pattern=r"^[a-zA-Z0-9_\-/]+$",
+        json_schema_extra={
+            "example": "eval-project",
+            "pattern": "^[a-zA-Z0-9_\\-/]+$",
+            "pattern_description": "Only letters, numbers, underscores, slashes, and hyphens are allowed",
+        },
+    )
+    is_versioned: Optional[bool] = Field(
+        None,
+        description="Whether the project is versioned",
+    )
+    description: Optional[str] = Field(
+        None,
+        description="Optional description of the project",
+        max_length=256,
+    )
+
+
+class ProjectOut(BaseModel):
+    """Response model for detailed project data."""
+
+    name: str = Field(description="The name of the project")
+    description: Optional[str] = Field(None, description="Description of the project")
+    is_versioned: bool = Field(description="Whether the project is versioned")
+    created_at: Optional[str] = Field(description="When the project was created")
+    updated_at: Optional[str] = Field(description="When the project was last updated")
 
 
 class ShareProjectRequest(BaseModel):
