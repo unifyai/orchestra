@@ -156,8 +156,9 @@ class TileDAO:
             specialized_data = None
             if type == "Table" and table_tile:
                 specialized_data = table_tile.copy()
-                # Remove id if it exists in specialized data
+                # Remove id and tile_id if they exist in specialized data
                 specialized_data.pop("id", None)
+                specialized_data.pop("tile_id", None)
 
                 table_obj = TableTile(tile_id=tile.id, **(specialized_data or {}))
                 self.session.add(table_obj)
@@ -165,8 +166,9 @@ class TileDAO:
 
             elif type == "Plot" and plot_tile:
                 specialized_data = plot_tile.copy()
-                # Remove id if it exists in specialized data
+                # Remove id and tile_id if they exist in specialized data
                 specialized_data.pop("id", None)
+                specialized_data.pop("tile_id", None)
 
                 plot_obj = PlotTile(tile_id=tile.id, **(specialized_data or {}))
                 self.session.add(plot_obj)
@@ -174,8 +176,9 @@ class TileDAO:
 
             elif type == "View" and view_tile:
                 specialized_data = view_tile.copy()
-                # Remove id if it exists in specialized data
+                # Remove id and tile_id if they exist in specialized data
                 specialized_data.pop("id", None)
+                specialized_data.pop("tile_id", None)
 
                 view_obj = ViewTile(tile_id=tile.id, **(specialized_data or {}))
                 self.session.add(view_obj)
@@ -183,8 +186,9 @@ class TileDAO:
 
             elif type == "Editor" and editor_tile:
                 specialized_data = editor_tile.copy()
-                # Remove id if it exists in specialized data
+                # Remove id and tile_id if they exist in specialized data
                 specialized_data.pop("id", None)
+                specialized_data.pop("tile_id", None)
 
                 editor_obj = EditorTile(tile_id=tile.id, **(specialized_data or {}))
                 self.session.add(editor_obj)
@@ -192,8 +196,9 @@ class TileDAO:
 
             elif type == "Terminal" and terminal_tile:
                 specialized_data = terminal_tile.copy()
-                # Remove id if it exists in specialized data
+                # Remove id and tile_id if they exist in specialized data
                 specialized_data.pop("id", None)
+                specialized_data.pop("tile_id", None)
 
                 terminal_obj = TerminalTile(tile_id=tile.id, **(specialized_data or {}))
                 self.session.add(terminal_obj)
@@ -1537,15 +1542,15 @@ class TileDAO:
         # Get the specialized tile based on type
         specialized_tile = None
         if tile_type == "Table":
-            specialized_tile = self.get_table_tile(id=id)
+            specialized_tile = self.get_table_tile(id=tile.table_tile.id)
         elif tile_type == "Plot":
-            specialized_tile = self.get_plot_tile(id=id)
+            specialized_tile = self.get_plot_tile(id=tile.plot_tile.id)
         elif tile_type == "View":
-            specialized_tile = self.get_view_tile(id=id)
+            specialized_tile = self.get_view_tile(id=tile.view_tile.id)
         elif tile_type == "Editor":
-            specialized_tile = self.get_editor_tile(id=id)
+            specialized_tile = self.get_editor_tile(id=tile.editor_tile.id)
         elif tile_type == "Terminal":
-            specialized_tile = self.get_terminal_tile(id=id)
+            specialized_tile = self.get_terminal_tile(id=tile.terminal_tile.id)
         else:
             # Invalid tile type
             return None
@@ -1557,6 +1562,8 @@ class TileDAO:
         specialized_data = None
         if tile_type in update_data:
             specialized_data = update_data[tile_type]
+        else:
+            specialized_data = update_data
 
         # Update the specialized tile
         if specialized_data:
