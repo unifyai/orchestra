@@ -9,6 +9,11 @@ class EnumType(BaseModel):
     type: Literal["enum"]
     values: Optional[List[str]] = None
     restrict: Optional[bool] = False
+    description: Optional[str] = Field(
+        None,
+        max_length=256,
+        description="Optional description for the enum field type",
+    )
 
     class Config:
         schema_extra = {
@@ -20,6 +25,11 @@ class StandardFieldDefinition(BaseModel):
     type: str
     mutable: bool = False
     unique: bool = False
+    description: Optional[str] = Field(
+        None,
+        max_length=256,
+        description="Optional description for the field definition",
+    )
 
 
 class CreateLogConfig(BaseModel):
@@ -57,11 +67,13 @@ class CreateLogConfig(BaseModel):
                             "type": "str",
                             "mutable": True,
                             "unique": False,
+                            "description": "The system prompt used for generation",
                         },
                         "category": {
                             "type": "enum",
                             "values": ["A", "B", "C"],
                             "restrict": True,
+                            "description": "Classification category",
                         },
                         "status": {
                             "type": "enum",
@@ -90,11 +102,17 @@ class CreateLogConfig(BaseModel):
                     "input": "...",
                     "score-test-1": "...",
                     "explicit_types": {
-                        "input": {"type": "Image", "mutable": True, "unique": True},
+                        "input": {
+                            "type": "Image",
+                            "mutable": True,
+                            "unique": True,
+                            "description": "Input image for processing",
+                        },
                         "status": {
                             "type": "enum",
                             "values": ["pending", "completed", "failed"],
                             "restrict": True,
+                            "description": "Processing status",
                         },
                         "tag": {"type": "enum"},  # Open enum with no values
                     },
@@ -181,11 +199,16 @@ class UpdateLogRequest(BaseModel):
                 "system-prompt": "...",
                 "function_definition": "...",
                 "explicit_types": {
-                    "system-prompt": {"type": "str", "mutable": True},
+                    "system-prompt": {
+                        "type": "str",
+                        "mutable": True,
+                        "description": "System prompt for the model",
+                    },
                     "category": {
                         "type": "enum",
                         "values": ["A", "B", "C"],
                         "restrict": False,
+                        "description": "Task category",
                     },
                     "priority": {"type": "enum"},  # Open enum with no values
                 },
@@ -203,11 +226,16 @@ class UpdateLogRequest(BaseModel):
                 "input": "...",
                 "score-test-1": "...",
                 "explicit_types": {
-                    "input": {"type": "Image", "mutable": True},
+                    "input": {
+                        "type": "Image",
+                        "mutable": True,
+                        "description": "Input data for processing",
+                    },
                     "status": {
                         "type": "enum",
                         "values": ["pending", "completed", "failed"],
                         "restrict": True,
+                        "description": "Current processing status",
                     },
                     "label": {"type": "enum"},  # Open enum with no values
                 },
@@ -399,7 +427,11 @@ class CreateFieldsRequest(BaseModel):
         example={
             "score": "int",
             "response": None,
-            "email": {"type": "str", "unique": True},
+            "email": {
+                "type": "str",
+                "unique": True,
+                "description": "User email address",
+            },
         },
     )
 
