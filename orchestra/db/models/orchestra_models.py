@@ -593,6 +593,7 @@ class Project(Base):
         index=True,
     )
     name = Column(String, nullable=False)
+    description = Column(String(256), nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
     is_versioned = Column(Boolean, nullable=False, server_default="f")
@@ -614,6 +615,10 @@ class Project(Base):
     __table_args__ = (
         UniqueConstraint("user_id", "name"),
         UniqueConstraint("organization_id", "name"),
+        sa.CheckConstraint(
+            "char_length(description) <= 256",
+            name="ck_project_description_len",
+        ),
     )
 
 
@@ -666,7 +671,7 @@ class Context(Base):
         index=True,
     )
     name = Column(String, nullable=False)
-    description = Column(String)
+    description = Column(String(256), nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
     is_versioned = Column(Boolean, nullable=False, server_default="f")
@@ -675,7 +680,6 @@ class Context(Base):
     unique_id_name = Column(String, nullable=False, server_default="row_id")
 
     project = relationship("Project", back_populates="contexts")
-    artifacts = relationship("ContextArtifact", back_populates="context")
     log_events = relationship(
         "LogEvent",
         secondary="log_event_context",
@@ -685,6 +689,10 @@ class Context(Base):
 
     __table_args__ = (
         UniqueConstraint("project_id", "name", name="uq_project_context_name"),
+        sa.CheckConstraint(
+            "char_length(description) <= 256",
+            name="ck_context_description_len",
+        ),
     )
 
 
@@ -720,50 +728,6 @@ class ContextVersion(Base):
         back_populates="context_version",
         cascade="all, delete-orphan",
     )
-
-
-class ContextArtifact(Base):
-    """Model class for storing artifacts within contexts."""
-
-    __tablename__ = "context_artifact"
-
-    id = Column(Integer, primary_key=True)
-    context_id = Column(
-        Integer,
-        ForeignKey("context.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    key = Column(String, nullable=False)
-    value = Column(String)
-    created_at = Column(TIMESTAMP, server_default=func.now())
-    updated_at = Column(TIMESTAMP, onupdate=func.now())
-
-    context = relationship("Context", back_populates="artifacts")
-
-    __table_args__ = (
-        UniqueConstraint(
-            "context_id",
-            "key",
-            name="uq_context_artifact_key",
-        ),
-    )
-
-
-class Artifact(Base):
-    __tablename__ = "artifact"
-
-    id = Column(Integer, primary_key=True)
-    project_id = Column(
-        Integer,
-        ForeignKey("project.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    key = Column(String, nullable=False)
-    value = Column(String)
-    created_at = Column(TIMESTAMP, server_default=func.now())
-    updated_at = Column(TIMESTAMP, onupdate=func.now())
 
 
 class LogEvent(Base):
@@ -1042,6 +1006,7 @@ class FieldType(Base):
     unique = Column(Boolean(), nullable=False, server_default="f")  # type: ignore
     enum_values = Column(JSONB, nullable=False, server_default=text("'[]'"))
     enum_restrict = Column(Boolean(), nullable=False, server_default="false")
+    description = Column(String(256), nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
     __table_args__ = (
@@ -1050,6 +1015,10 @@ class FieldType(Base):
             "field_name",
             "context_id",
             name="uq_project_field_name_context_id",
+        ),
+        sa.CheckConstraint(
+            "char_length(description) <= 256",
+            name="ck_field_type_description_len",
         ),
     )
 
