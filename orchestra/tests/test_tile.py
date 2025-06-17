@@ -2018,3 +2018,922 @@ async def test_restore_tile_checkpoint(client: AsyncClient):
     active_data = active_get.json()
     assert active_data["color"] == "#654321"
     assert active_data["table_tile"]["table_type"] == "advanced"
+
+
+@pytest.mark.anyio
+async def test_export_tile_template_with_valid_schema(client: AsyncClient):
+    """Test exporting a tile template with valid schema"""
+    # Create interface, tab, and tile
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    tab_response = await _create_test_tab(client, interface_id, name="export_tile_tab")
+    tab_id = tab_response.json()["id"]
+
+    # Create a complex table tile
+    tile_response = await _create_test_table_tile(
+        client,
+        tab_id,
+        name="export_table_tile",
+        table_type="advanced",
+        page_number="3",
+        column_order='["id", "name", "value", "timestamp"]',
+        hidden_columns='["internal_id", "temp_field"]',
+        sorting='{"timestamp": "desc", "value": "asc"}',
+        group_sorting='{"category": "asc"}',
+        columns_pin_left='["id", "name"]',
+        columns_pin_right='["timestamp"]',
+        selected="row_1,row_3,row_7",
+        width=8,
+        height=6,
+        x=2,
+        y=1,
+        color="#FF0000",
+        visible=True,
+        locked=False,
+    )
+    tile_id = tile_response.json()["id"]
+
+    # Export tile template
+    export_request = {
+        "tile_id": tile_id,
+        "include_metadata": True,
+        "description": "Test table tile template",
+        "tags": ["test", "table", "tile"],
+        "template_name": "Advanced Table Template",
+    }
+
+    response = await client.post(
+        "/v0/tile/export_template",
+        json=export_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    # Verify template structure
+    assert "template" in data
+    assert "metadata" in data
+    assert "export_stats" in data
+
+    template = data["template"]
+    assert template["name"] == "export_table_tile"
+    assert template["type"] == "Table"
+    assert template["position"]["x"] == 2
+    assert template["position"]["y"] == 1
+    assert template["position"]["width"] == 8
+    assert template["position"]["height"] == 6
+    assert template["color"] == "#FF0000"
+    assert template["visible"] is True
+    assert template["locked"] is False
+
+    # Verify specialized table data
+    assert "table_tile" in template
+    table_data = template["table_tile"]
+    assert table_data["table_type"] == "advanced"
+    assert table_data["page_number"] == "3"
+    assert "id" in table_data["column_order"]
+    assert "internal_id" in table_data["hidden_columns"]
+    assert table_data["selected"] == "row_1,row_3,row_7"
+
+    # Verify export stats
+    stats = data["export_stats"]
+    assert stats["tiles"] == 1
+
+
+@pytest.mark.anyio
+async def test_export_tile_template_with_valid_schema_plot_tile(client: AsyncClient):
+    """Test exporting a plot tile template with valid schema"""
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+
+    # Create a complex plot tile
+    tile_response = await _create_test_plot_tile(
+        client,
+        tab_id,
+        name="export_plot_tile",
+        plot_type="scatter",
+        plot_scale_x="log",
+        plot_scale_y="linear",
+        plot_aggregate="mean",
+        x_axis="timestamp",
+        y_axis="value",
+        plot_group_by="category",
+        plot_group_by_colors='{"A": "#FF0000", "B": "#00FF00", "C": "#0000FF"}',
+        bin_count="25",
+        regression_line="true",
+        width=6,
+        height=4,
+        x=0,
+        y=0,
+    )
+    tile_id = tile_response.json()["id"]
+
+    export_request = {
+        "tile_id": tile_id,
+        "include_metadata": True,
+        "description": "Complex scatter plot template",
+    }
+
+    response = await client.post(
+        "/v0/tile/export_template",
+        json=export_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    template = response.json()["template"]
+
+    assert template["name"] == "export_plot_tile"
+    assert template["type"] == "Plot"
+
+    # Verify plot-specific data
+    plot_data = template["plot_tile"]
+    assert plot_data["plot_type"] == "scatter"
+    assert plot_data["plot_scale_x"] == "log"
+    assert plot_data["plot_scale_y"] == "linear"
+    assert plot_data["x_axis"] == "timestamp"
+    assert plot_data["y_axis"] == "value"
+    assert plot_data["regression_line"] == "true"
+    assert "A" in plot_data["plot_group_by_colors"]
+
+
+@pytest.mark.anyio
+async def test_export_tile_template_with_valid_schema_by_tab_and_name(
+    client: AsyncClient,
+):
+    """Test exporting tile template with valid schema using tab_id and name"""
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+
+    await _create_test_editor_tile(
+        client,
+        tab_id,
+        name="named_editor_tile",
+        file_type="python",
+        content="print('export by name test')",
+        file_name="test_script.py",
+    )
+
+    export_request = {
+        "tab_id": tab_id,
+        "tile_name": "named_editor_tile",
+        "include_metadata": True,
+        "description": "Export by tab and name",
+    }
+
+    response = await client.post(
+        "/v0/tile/export_template",
+        json=export_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    template = response.json()["template"]
+
+    print(response.json())
+
+    assert template["name"] == "named_editor_tile"
+    assert template["type"] == "Editor"
+    assert template["description"] == "Export by tab and name"
+    assert "export by name test" in template["editor_tile"]["content"]
+
+
+@pytest.mark.anyio
+async def test_export_tile_template_with_valid_schema_checkpoint(client: AsyncClient):
+    """Test exporting tile template with valid schema from checkpoint"""
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+
+    # Create tile
+    tile_response = await _create_test_view_tile(
+        client,
+        tab_id,
+        name="checkpoint_view_tile",
+        base_index="markdown",
+    )
+    tile_id = tile_response.json()["id"]
+
+    # Create checkpoint
+    checkpoint_response = await _create_tile_checkpoint(client, tile_id=tile_id)
+    assert checkpoint_response.status_code == 200
+
+    # Update original tile after checkpoint
+    await _update_tile(
+        client,
+        tile_id=tile_id,
+        update_data={"view_tile": {"base_index": "html"}},
+    )
+
+    # Export from checkpoint
+    checkpoint_tile_id = checkpoint_response.json()["id"]
+    export_request = {
+        "tile_id": checkpoint_tile_id,
+        "checkpoint": True,
+        "include_metadata": True,
+    }
+
+    response = await client.post(
+        "/v0/tile/export_template",
+        json=export_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    template = response.json()["template"]
+
+    # Should export checkpoint version (original base_index)
+    assert template["view_tile"]["base_index"] == "markdown"
+
+
+@pytest.mark.anyio
+async def test_export_tile_template_with_valid_schema_all_tile_types(
+    client: AsyncClient,
+):
+    """Test exporting templates for all tile types with valid schema"""
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+
+    # Test each tile type
+    tile_configs = [
+        {
+            "create_func": _create_test_table_tile,
+            "kwargs": {"name": "table_export", "table_type": "basic"},
+            "expected_type": "Table",
+            "specialized_field": "table_tile",
+        },
+        {
+            "create_func": _create_test_plot_tile,
+            "kwargs": {"name": "plot_export", "plot_type": "bar"},
+            "expected_type": "Plot",
+            "specialized_field": "plot_tile",
+        },
+        {
+            "create_func": _create_test_view_tile,
+            "kwargs": {"name": "view_export", "base_index": "json"},
+            "expected_type": "View",
+            "specialized_field": "view_tile",
+        },
+        {
+            "create_func": _create_test_editor_tile,
+            "kwargs": {
+                "name": "editor_export",
+                "file_type": "sql",
+                "content": "SELECT * FROM table;",
+            },
+            "expected_type": "Editor",
+            "specialized_field": "editor_tile",
+        },
+        {
+            "create_func": _create_test_terminal_tile,
+            "kwargs": {"name": "terminal_export", "shell_type": "zsh"},
+            "expected_type": "Terminal",
+            "specialized_field": "terminal_tile",
+        },
+    ]
+
+    for config in tile_configs:
+        # Create tile
+        tile_response = await config["create_func"](client, tab_id, **config["kwargs"])
+        tile_id = tile_response.json()["id"]
+
+        # Export template
+        export_request = {
+            "tile_id": tile_id,
+            "include_metadata": True,
+        }
+
+        response = await client.post(
+            "/v0/tile/export_template",
+            json=export_request,
+            headers=HEADERS,
+        )
+
+        assert response.status_code == 200
+        template = response.json()["template"]
+
+        assert template["name"] == config["kwargs"]["name"]
+        assert template["type"] == config["expected_type"]
+        assert config["specialized_field"] in template
+
+
+@pytest.mark.anyio
+async def test_import_tile_template_with_valid_schema(client: AsyncClient):
+    """Test importing a tile template with valid schema"""
+    # Create target tab
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+
+    # Create a valid template
+    template = {
+        "name": "imported_table_tile",
+        "position": {"x": 4, "y": 2, "width": 8, "height": 6},
+        "type": "Table",
+        "visible": True,
+        "locked": False,
+        "moved": False,
+        "static": False,
+        "color": "#FF00FF",
+        "table_tile": {
+            "table_type": "advanced",
+            "page_number": "2",
+            "column_order": '["id", "name", "status"]',
+            "hidden_columns": '["internal_notes"]',
+            "sorting": '{"name": "asc"}',
+            "group_sorting": '{"status": "desc"}',
+            "columns_pin_left": '["id"]',
+            "columns_pin_right": '["status"]',
+            "selected": "row_2,row_4,row_6",
+        },
+    }
+
+    import_request = {
+        "project": TEST_PROJECT,
+        "template": template,
+        "tab_id": tab_id,
+        "validate_first": False,  # Skip validation for v0
+        "auto_sanitize": False,
+        "overwrite_existing": False,
+    }
+
+    response = await client.post(
+        "/v0/tile/import_template",
+        json=import_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["success"] is True
+    assert data["import_stats"]["tiles"] == 1
+
+    # Verify the tile was created
+    created_tile_id = data["created_ids"]["tile_id"]
+    get_response = await _get_tile(client, tile_id=created_tile_id)
+    assert get_response.status_code == 200
+
+    tile_data = get_response.json()
+    assert tile_data["name"] == "imported_table_tile"
+    assert tile_data["type"] == "Table"
+    assert tile_data["position"]["x"] == 4
+    assert tile_data["position"]["y"] == 2
+    assert tile_data["position"]["width"] == 8
+    assert tile_data["position"]["height"] == 6
+    assert tile_data["color"] == "#FF00FF"
+
+    # Verify specialized table data was preserved
+    table_data = tile_data["table_tile"]
+    assert table_data["table_type"] == "advanced"
+    assert table_data["page_number"] == "2"
+    assert "id" in table_data["column_order"]
+    assert "internal_notes" in table_data["hidden_columns"]
+    assert table_data["selected"] == "row_2,row_4,row_6"
+
+
+@pytest.mark.anyio
+async def test_import_tile_template_with_valid_schema_new_name(client: AsyncClient):
+    """Test importing tile template with valid schema and new name override"""
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+
+    template = {
+        "name": "original_tile_name",
+        "position": {"x": 0, "y": 0, "width": 4, "height": 3},
+        "type": "Plot",
+        "plot_tile": {
+            "plot_type": "line",
+            "x_axis": "time",
+            "y_axis": "value",
+        },
+    }
+
+    import_request = {
+        "project": TEST_PROJECT,
+        "template": template,
+        "tab_id": tab_id,
+        "new_tile_name": "overridden_tile_name",
+        "validate_first": False,
+        "auto_sanitize": False,
+    }
+
+    response = await client.post(
+        "/v0/tile/import_template",
+        json=import_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    # Verify tile was created with new name
+    created_tile_id = data["created_ids"]["tile_id"]
+    get_response = await _get_tile(client, tile_id=created_tile_id)
+    tile_data = get_response.json()
+    assert tile_data["name"] == "overridden_tile_name"
+
+
+@pytest.mark.anyio
+async def test_import_tile_template_with_valid_schema_by_interface_and_tab_name(
+    client: AsyncClient,
+):
+    """Test importing tile template with valid schema using interface_id and tab_name"""
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    await _create_test_tab(client, interface_id, name="target_tab")
+
+    template = {
+        "name": "imported_by_tab_name",
+        "position": {"x": 0, "y": 0, "width": 4, "height": 3},
+        "type": "Editor",
+        "editor_tile": {
+            "file_type": "javascript",
+            "content": "console.log('imported by tab name');",
+        },
+    }
+
+    import_request = {
+        "project": TEST_PROJECT,
+        "template": template,
+        "interface_id": interface_id,
+        "tab_name": "target_tab",
+        "validate_first": False,
+        "auto_sanitize": False,
+    }
+
+    response = await client.post(
+        "/v0/tile/import_template",
+        json=import_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["success"] is True
+    assert data["import_stats"]["tiles"] == 1
+
+
+@pytest.mark.anyio
+async def test_import_tile_template_with_valid_schema_overwrite_existing(
+    client: AsyncClient,
+):
+    """Test importing tile template with valid schema and overwrite existing"""
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+
+    # Create existing tile
+    existing_tile_response = await _create_test_table_tile(
+        client,
+        tab_id,
+        name="existing_tile",
+        table_type="basic",
+    )
+
+    template = {
+        "name": "existing_tile",
+        "position": {"x": 0, "y": 0, "width": 6, "height": 4},
+        "type": "Table",
+        "table_tile": {
+            "table_type": "advanced",  # Different type
+            "page_number": "3",
+        },
+    }
+
+    # First try without overwrite
+    import_request = {
+        "project": TEST_PROJECT,
+        "template": template,
+        "tab_id": tab_id,
+        "overwrite_existing": False,
+        "validate_first": False,
+        "auto_sanitize": False,
+    }
+
+    response = await client.post(
+        "/v0/tile/import_template",
+        json=import_request,
+        headers=HEADERS,
+    )
+    assert response.status_code == 409
+    data = response.json()
+    assert "detail" in data
+    assert "already exists" in data["detail"]
+
+    # Now try with overwrite
+    import_request["overwrite_existing"] = True
+
+    response = await client.post(
+        "/v0/tile/import_template",
+        json=import_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_import_tile_template_with_valid_schema_all_tile_types(
+    client: AsyncClient,
+):
+    """Test importing templates for all tile types with valid schema"""
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+
+    # Test templates for each tile type
+    templates = [
+        {
+            "name": "imported_table",
+            "position": {"x": 0, "y": 0, "width": 6, "height": 4},
+            "type": "Table",
+            "table_tile": {
+                "table_type": "advanced",
+                "page_number": "1",
+                "column_order": '["col1", "col2"]',
+            },
+        },
+        {
+            "name": "imported_plot",
+            "position": {"x": 6, "y": 0, "width": 6, "height": 4},
+            "type": "Plot",
+            "plot_tile": {
+                "plot_type": "histogram",
+                "x_axis": "data",
+                "bin_count": "20",
+            },
+        },
+        {
+            "name": "imported_view",
+            "position": {"x": 0, "y": 4, "width": 4, "height": 3},
+            "type": "View",
+            "view_tile": {
+                "base_index": "csv",
+            },
+        },
+        {
+            "name": "imported_editor",
+            "position": {"x": 4, "y": 4, "width": 4, "height": 3},
+            "type": "Editor",
+            "editor_tile": {
+                "file_type": "r",
+                "file_name": "analysis.R",
+                "content": "# R analysis script\ndata <- read.csv('data.csv')\nsummary(data)",
+            },
+        },
+        {
+            "name": "imported_terminal",
+            "position": {"x": 8, "y": 4, "width": 4, "height": 3},
+            "type": "Terminal",
+            "terminal_tile": {
+                "shell_type": "fish",
+            },
+        },
+    ]
+
+    created_tile_ids = []
+
+    for template in templates:
+        import_request = {
+            "project": TEST_PROJECT,
+            "template": template,
+            "tab_id": tab_id,
+            "validate_first": False,
+            "auto_sanitize": False,
+        }
+
+        response = await client.post(
+            "/v0/tile/import_template",
+            json=import_request,
+            headers=HEADERS,
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["success"] is True
+        created_tile_ids.append(data["created_ids"]["tile_id"])
+
+    # Verify all tiles were created correctly
+    assert len(created_tile_ids) == 5
+
+    for i, tile_id in enumerate(created_tile_ids):
+        get_response = await _get_tile(client, tile_id=tile_id)
+        tile_data = get_response.json()
+
+        expected_template = templates[i]
+        assert tile_data["name"] == expected_template["name"]
+        assert tile_data["type"] == expected_template["type"]
+
+        # Verify specialized data
+        if expected_template["type"] == "Editor":
+            assert "R analysis script" in tile_data["editor_tile"]["content"]
+        elif expected_template["type"] == "Terminal":
+            assert tile_data["terminal_tile"]["shell_type"] == "fish"
+
+
+@pytest.mark.anyio
+async def test_import_tile_template_with_valid_schema_complex_positioning(
+    client: AsyncClient,
+):
+    """Test importing tile template with valid schema and complex positioning"""
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+
+    template = {
+        "name": "positioned_tile",
+        "position": {"x": 3.5, "y": 2.25, "width": 7.5, "height": 4.75},
+        "type": "Plot",
+        "minW": 4.0,
+        "minH": 3.0,
+        "visible": True,
+        "locked": True,
+        "moved": True,
+        "static": False,
+        "color": "#FFAA00",
+        "plot_tile": {
+            "plot_type": "area",
+            "x_axis": "timestamp",
+            "y_axis": "cumulative_value",
+            "plot_scale_x": "time",
+            "plot_scale_y": "linear",
+        },
+    }
+
+    import_request = {
+        "project": TEST_PROJECT,
+        "template": template,
+        "tab_id": tab_id,
+        "validate_first": False,
+        "auto_sanitize": False,
+    }
+
+    response = await client.post(
+        "/v0/tile/import_template",
+        json=import_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    # Verify positioning and properties
+    created_tile_id = data["created_ids"]["tile_id"]
+    get_response = await _get_tile(client, tile_id=created_tile_id)
+    tile_data = get_response.json()
+
+    assert tile_data["position"]["x"] == 3.5
+    assert tile_data["position"]["y"] == 2.25
+    assert tile_data["position"]["width"] == 7.5
+    assert tile_data["position"]["height"] == 4.75
+    assert tile_data["minW"] == 4.0
+    assert tile_data["minH"] == 3.0
+    assert tile_data["locked"] is True
+    assert tile_data["moved"] is True
+    assert tile_data["static"] is False
+    assert tile_data["color"] == "#FFAA00"
+
+
+@pytest.mark.anyio
+async def test_export_import_tile_template_with_valid_schema_roundtrip(
+    client: AsyncClient,
+):
+    """Test exporting and then importing a tile template with valid schema (roundtrip)"""
+    # Create interface and tab
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+
+    # Create complex editor tile
+    tile_response = await _create_test_editor_tile(
+        client,
+        tab_id,
+        name="roundtrip_editor",
+        file_type="python",
+        file_name="complex_analysis.py",
+        content="""
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Complex data analysis
+def analyze_data(filepath):
+    df = pd.read_csv(filepath)
+
+    # Statistical analysis
+    stats = df.describe()
+    correlations = df.corr()
+
+    # Visualization
+    plt.figure(figsize=(12, 8))
+    plt.subplot(2, 2, 1)
+    df.hist(bins=50)
+
+    return stats, correlations
+
+if __name__ == "__main__":
+    results = analyze_data("data.csv")
+    print(results)
+        """,
+        width=10,
+        height=8,
+        x=1,
+        y=1,
+        color="#00FFAA",
+    )
+    tile_id = tile_response.json()["id"]
+
+    # Export the tile template
+    export_request = {
+        "tile_id": tile_id,
+        "include_metadata": True,
+        "description": "Complex Python editor roundtrip test",
+        "tags": ["roundtrip", "python", "editor"],
+    }
+
+    export_response = await client.post(
+        "/v0/tile/export_template",
+        json=export_request,
+        headers=HEADERS,
+    )
+
+    assert export_response.status_code == 200
+    exported_template = export_response.json()["template"]
+
+    # Delete the original tile
+    await _delete_tile(client, tile_id=tile_id)
+
+    # Import the template back to the same tab
+    import_request = {
+        "project": TEST_PROJECT,
+        "template": exported_template,
+        "tab_id": tab_id,
+        "validate_first": False,
+        "auto_sanitize": False,
+    }
+
+    import_response = await client.post(
+        "/v0/tile/import_template",
+        json=import_request,
+        headers=HEADERS,
+    )
+
+    assert import_response.status_code == 200
+    import_data = import_response.json()
+
+    assert import_data["success"] is True
+    assert import_data["import_stats"]["tiles"] == 1
+
+    # Verify the imported tile matches the original
+    created_tile_id = import_data["created_ids"]["tile_id"]
+    get_response = await _get_tile(client, tile_id=created_tile_id)
+    imported_tile = get_response.json()
+
+    assert imported_tile["name"] == "roundtrip_editor"
+    assert imported_tile["type"] == "Editor"
+    assert imported_tile["position"]["x"] == 1
+    assert imported_tile["position"]["y"] == 1
+    assert imported_tile["position"]["width"] == 10
+    assert imported_tile["position"]["height"] == 8
+    assert imported_tile["color"] == "#00FFAA"
+
+    # Verify editor content was preserved
+    editor_data = imported_tile["editor_tile"]
+    assert editor_data["file_type"] == "python"
+    assert editor_data["file_name"] == "complex_analysis.py"
+    assert "import pandas as pd" in editor_data["content"]
+    assert "analyze_data" in editor_data["content"]
+    assert "matplotlib.pyplot" in editor_data["content"]
+
+
+@pytest.mark.anyio
+async def test_import_tile_template_with_valid_schema_minimal_template(
+    client: AsyncClient,
+):
+    """Test importing tile template with valid schema containing minimal required fields"""
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+
+    # Minimal template with only required fields
+    minimal_template = {
+        "name": "minimal_tile",
+        "position": {"x": 0, "y": 0, "width": 4, "height": 3},
+        "type": "View",
+        "view_tile": {
+            "base_index": "text",
+        },
+    }
+
+    import_request = {
+        "project": TEST_PROJECT,
+        "template": minimal_template,
+        "tab_id": tab_id,
+        "validate_first": False,
+        "auto_sanitize": False,
+    }
+
+    response = await client.post(
+        "/v0/tile/import_template",
+        json=import_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["success"] is True
+    assert data["import_stats"]["tiles"] == 1
+
+    # Verify minimal tile was created with defaults
+    created_tile_id = data["created_ids"]["tile_id"]
+    get_response = await _get_tile(client, tile_id=created_tile_id)
+    tile_data = get_response.json()
+
+    assert tile_data["name"] == "minimal_tile"
+    assert tile_data["type"] == "View"
+    assert tile_data["visible"] is True  # Default value
+    assert tile_data["locked"] is False  # Default value
+    assert tile_data["view_tile"]["base_index"] == "text"
+
+
+@pytest.mark.anyio
+async def test_export_tile_template_with_valid_schema_no_specialized_data(
+    client: AsyncClient,
+):
+    """Test exporting tile template with valid schema for tile without specialized data"""
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    tab_response = await _create_test_tab(client, interface_id)
+    tab_id = tab_response.json()["id"]
+
+    # Create tile without type (no specialized data)
+    tile_response = await _create_test_tile(
+        client,
+        tab_id,
+        name="generic_tile",
+        width=4,
+        height=3,
+        x=0,
+        y=0,
+        visible=True,
+        color="#CCCCCC",
+    )
+    tile_id = tile_response.json()["id"]
+
+    export_request = {
+        "tile_id": tile_id,
+        "include_metadata": True,
+    }
+
+    response = await client.post(
+        "/v0/tile/export_template",
+        json=export_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    template = response.json()["template"]
+
+    assert template["name"] == "generic_tile"
+    assert template["type"] is None
+    assert template["color"] == "#CCCCCC"
+
+    # Should not have any specialized tile data fields
+    assert "table_tile" not in template or template["table_tile"] is None
+    assert "plot_tile" not in template or template["plot_tile"] is None
+    assert "view_tile" not in template or template["view_tile"] is None
+    assert "editor_tile" not in template or template["editor_tile"] is None
+    assert "terminal_tile" not in template or template["terminal_tile"] is None
