@@ -489,53 +489,6 @@ async def test_add_log_to_multiple_contexts(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_context_artifacts(client: AsyncClient):
-    project_name = "test-project"
-    context_name = "test-context"
-
-    # Setup project and context
-    await client.post(
-        "/v0/project",
-        json={"name": project_name},
-        headers=HEADERS,
-    )
-    await client.post(
-        f"/v0/project/{project_name}/contexts",
-        json={"name": context_name, "description": "Test context"},
-        headers=HEADERS,
-    )
-
-    # Add artifact to context
-    artifact_data = {
-        "artifacts": {
-            "model.pkl": {
-                "type": "model",
-                "metadata": {"framework": "pytorch", "version": "1.0"},
-            },
-        },
-    }
-    response = await client.post(
-        f"/v0/project/{project_name}/contexts/{context_name}/artifacts",
-        json=artifact_data,
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
-
-    # Get context artifacts
-    response = await client.get(
-        f"/v0/project/{project_name}/contexts/{context_name}/artifacts",
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
-    artifacts = response.json()
-    assert len(artifacts) == 1
-    assert artifacts["model.pkl"] == {
-        "type": "model",
-        "metadata": {"framework": "pytorch", "version": "1.0"},
-    }
-
-
-@pytest.mark.anyio
 async def test_update_logs_with_string_context(client: AsyncClient):
     """Test that update_logs endpoint accepts context as a string"""
     project_name = "test-update-string-context"

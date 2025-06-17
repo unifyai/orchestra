@@ -36,10 +36,36 @@ async def test_create_project(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_create_project_with_description(client: AsyncClient):
+    url = "/v0/project"
+    project_data = {
+        "name": "test-project-with-desc",
+        "description": "This is a test project with a description",
+    }
+    response = await client.post(url, json=project_data, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Project created successfully!"
+
+
+@pytest.mark.anyio
+async def test_create_project_description_too_long(client: AsyncClient):
+    url = "/v0/project"
+    # Create a description longer than 256 characters
+    long_description = "a" * 257
+    project_data = {
+        "name": "test-project-long-desc",
+        "description": long_description,
+    }
+    response = await client.post(url, json=project_data, headers=HEADERS)
+    assert response.status_code == 422, response.json()
+
+
+@pytest.mark.anyio
 async def test_create_existing_project(client: AsyncClient):
     url = "/v0/project"
     project_data = {
         "name": "existing-project",
+        "description": "Original description",
     }
 
     # Create the project first
@@ -61,7 +87,7 @@ async def test_delete_project(client: AsyncClient):
     # Create a project first to delete it
     create_response = await client.post(
         "/v0/project",
-        json={"name": "test-project"},
+        json={"name": "test-project", "description": "Project to be deleted"},
         headers=HEADERS,
     )
     assert create_response.status_code == 200
@@ -81,44 +107,129 @@ async def test_delete_nonexistent_project(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_rename_project(client: AsyncClient):
+async def test_update_project_name(client: AsyncClient):
     create_url = "/v0/project"
-    rename_url = "/v0/project/test-project"
-    project_data = {"name": "test-project"}
+    update_url = "/v0/project/test-project"
+    project_data = {"name": "test-project", "description": "Original description"}
 
     # Create a project to rename
     respose = await client.post(create_url, json=project_data, headers=HEADERS)
 
     # Rename the project
     rename_data = {"name": "renamed-project"}
-    response = await client.patch(rename_url, json=rename_data, headers=HEADERS)
+    response = await client.patch(update_url, json=rename_data, headers=HEADERS)
     print(response)
     assert response.status_code == 200
-    assert response.json()["info"] == "Project renamed successfully!"
+    assert response.json()["info"] == "Project updated successfully!"
 
 
 @pytest.mark.anyio
-async def test_rename_nonexistent_project(client: AsyncClient):
+async def test_update_project_description(client: AsyncClient):
+    create_url = "/v0/project"
+    update_url = "/v0/project/test-project-desc"
+    project_data = {"name": "test-project-desc", "description": "Original description"}
+
+    # Create a project to update
+    response = await client.post(create_url, json=project_data, headers=HEADERS)
+    assert response.status_code == 200
+
+    # Update the project description
+    update_data = {"description": "Updated description"}
+    response = await client.patch(update_url, json=update_data, headers=HEADERS)
+    assert response.status_code == 200
+    assert response.json()["info"] == "Project updated successfully!"
+
+
+@pytest.mark.anyio
+async def test_update_project_description_too_long(client: AsyncClient):
+    create_url = "/v0/project"
+    update_url = "/v0/project/test-project-desc-long"
+    project_data = {
+        "name": "test-project-desc-long",
+        "description": "Original description",
+    }
+
+    # Create a project to update
+    response = await client.post(create_url, json=project_data, headers=HEADERS)
+    assert response.status_code == 200
+
+    # Try to update with description that's too long
+    long_description = "a" * 257
+    update_data = {"description": long_description}
+    response = await client.patch(update_url, json=update_data, headers=HEADERS)
+    assert response.status_code == 422, response.json()
+
+
+@pytest.mark.anyio
+async def test_update_project_name_and_description(client: AsyncClient):
+    create_url = "/v0/project"
+    update_url = "/v0/project/test-project-both"
+    project_data = {"name": "test-project-both", "description": "Original description"}
+
+    # Create a project to update
+    response = await client.post(create_url, json=project_data, headers=HEADERS)
+    assert response.status_code == 200
+
+    # Update both name and description
+    update_data = {"name": "renamed-project-both", "description": "Updated description"}
+    response = await client.patch(update_url, json=update_data, headers=HEADERS)
+    assert response.status_code == 200
+    assert response.json()["info"] == "Project updated successfully!"
+
+
+@pytest.mark.anyio
+async def test_update_nonexistent_project(client: AsyncClient):
     url = "/v0/project/nonexistent-project"
-    project_data = {"name": "renamed-project"}
+    project_data = {"name": "updated-project", "description": "New description"}
     response = await client.patch(url, json=project_data, headers=HEADERS)
     assert response.status_code == 404
     assert response.json()["detail"] == "Project nonexistent-project not found."
 
 
 @pytest.mark.anyio
+async def test_get_project_details(client: AsyncClient):
+    # Create a project with description
+    create_url = "/v0/project"
+    project_data = {
+        "name": "detailed-project",
+        "description": "This project has detailed information",
+    }
+    create_response = await client.post(create_url, json=project_data, headers=HEADERS)
+    assert create_response.status_code == 200
+
+    # Get project details
+    detail_url = "/v0/project/detailed-project"
+    response = await client.get(detail_url, headers=HEADERS)
+    assert response.status_code == 200
+
+    project_details = response.json()
+    assert project_details["name"] == "detailed-project"
+    assert project_details["description"] == "This project has detailed information"
+    assert "created_at" in project_details
+    assert "updated_at" in project_details
+    assert "is_versioned" in project_details
+
+
+@pytest.mark.anyio
 async def test_list_projects(client: AsyncClient):
-    # Add two projects first
-    await client.post("/v0/project", json={"name": "project_a"}, headers=HEADERS)
+    # Add two projects first - one with description, one without
+    await client.post(
+        "/v0/project",
+        json={"name": "project_a", "description": "Project A description"},
+        headers=HEADERS,
+    )
     await client.post("/v0/project", json={"name": "project_b"}, headers=HEADERS)
 
-    # List the projects
+    # List the projects - should still return simple list format
     url = "/v0/projects"
     response = await client.get(url, headers=HEADERS)
     assert response.status_code == 200
     projects = response.json()
     assert "project_a" in projects
     assert "project_b" in projects
+    # Verify it's still a simple list, not detailed objects
+    assert isinstance(projects, list)
+    assert all(isinstance(project, str) for project in projects)
 
 
 @pytest.mark.anyio
@@ -318,7 +429,13 @@ async def test_share_project(client: AsyncClient):
     project_name = "shared_test_project"
     interface_name = "shared_test_interface"
     context_name = "shared_test_context"
-    _ = await _create_project(client, project_name)
+    # Create project with description to test sharing preserves it
+    create_response = await client.post(
+        "/v0/project",
+        json={"name": project_name, "description": "Shared project description"},
+        headers=HEADERS,
+    )
+    assert create_response.status_code == 200
 
     # create a new context in the project
     _ = await _create_context(client, project_name, context_name, "test description")
@@ -469,13 +586,21 @@ async def test_duplicate_project(client: AsyncClient):
     target_user_id = data["id"]
     source_user_id = str(os.getenv("AUTH_ACCOUNT_USER_ID"))
 
-    # Create a source project with contexts
+    # Create a source project with contexts and description
     source_project_name = "new_source_project_with_new_interfaces"
     target_project_name = "new_duplicated_project_with_new_interfaces"
     context_name = "new_test_context_with_new_interfaces"
 
-    # Create project and its components
-    await _create_project(client, source_project_name)
+    # Create project with description to test duplication preserves it
+    create_response = await client.post(
+        "/v0/project",
+        json={
+            "name": source_project_name,
+            "description": "Source project with interfaces for duplication testing",
+        },
+        headers=HEADERS,
+    )
+    assert create_response.status_code == 200
     await _create_context(client, source_project_name, context_name, "test description")
 
     # Create a log in the source project (to test later that updates don't affect duplicate)
@@ -680,6 +805,19 @@ async def test_duplicate_project(client: AsyncClient):
     )
     assert response.status_code == 200, response.json()
     assert target_project_name in response.json()
+
+    # 1b) Verify the duplicated project has the same description
+    detail_response = await client.get(
+        f"/v0/project/{target_project_name}",
+        headers=target_headers,
+    )
+    assert detail_response.status_code == 200, detail_response.json()
+    project_details = detail_response.json()
+    assert project_details["name"] == target_project_name
+    assert (
+        project_details["description"]
+        == "Source project with interfaces for duplication testing"
+    )
 
     # 2) Verify the target user can access the project's contexts
     response = await client.get(
