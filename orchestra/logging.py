@@ -324,9 +324,11 @@ def setup_logging(log_level: str = "INFO"):
                 loki_handler = logging_loki.LokiHandler(
                     url=f"{settings.loki_url}/loki/api/v1/push",
                     tags={"service": "orchestra", "environment": settings.environment},
-                    auth=(settings.loki_username, settings.loki_password)
-                    if settings.loki_username
-                    else None,
+                    auth=(
+                        (settings.loki_username, settings.loki_password)
+                        if settings.loki_username
+                        else None
+                    ),
                     version="1",
                 )
                 loki_handler.setLevel(numeric_level)
