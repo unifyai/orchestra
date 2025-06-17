@@ -3523,6 +3523,7 @@ def get_fields(
             "restrict": info["restrict"],
             "created_at": info["created_at"],
             "artifacts": derived_equations.get(key, ""),
+            "description": info.get("description", ""),
         }
         for key, info in types.items()
     }
