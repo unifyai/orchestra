@@ -5,9 +5,7 @@ from fastapi.routing import APIRouter
 
 from orchestra.web.api import (  # noqa: WPS235
     admin,
-    artifact,
     context,
-    context_artifact,
     credits,
     custom_api_keys,
     custom_endpoints,
@@ -168,18 +166,8 @@ api_router.include_router(
 
 # Benchmarking)
 api_router.include_router(
-    context_artifact.router,
-    tags=["Context Artifacts"],
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(
     context.router,
     tags=["Contexts"],
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(
-    artifact.router,
-    tags=["Project Artifacts"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
