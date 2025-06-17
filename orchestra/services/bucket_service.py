@@ -8,6 +8,7 @@ from typing import Optional, Tuple
 
 from google.api_core import exceptions
 from google.cloud import storage
+from google.oauth2 import service_account
 
 from orchestra.web.api.utils.gcp import parse_gcs_url
 
@@ -15,12 +16,25 @@ from orchestra.web.api.utils.gcp import parse_gcs_url
 class BucketService:
     def __init__(self):
         """Initialize the bucket service with GCP credentials and bucket configuration."""
+
+        self.credentials_path = os.getenv("ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON")
+        if not self.credentials_path:
+            raise ValueError(
+                "Missing required GCP credentials key (ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON)",
+            )
+
         self.project_id = os.getenv("ORCHESTRA_VERTEXAI_PROJECT")
         if not self.project_id:
             raise ValueError(
                 "Missing required GCP project ID configuration (ORCHESTRA_VERTEXAI_PROJECT)",
             )
-        self.storage_client = storage.Client(project=self.project_id)
+
+        self.credentials = service_account.Credentials.from_service_account_file(
+            self.credentials_path
+        )
+        self.storage_client = storage.Client(
+            project=self.project_id, credentials=self.credentials
+        )
 
         # Generic bucket
         self.bucket_name = os.getenv("ORCHESTRA_GCP_BUCKET_NAME")
@@ -262,12 +276,12 @@ class BucketService:
             return signed_url, gcs_uri
         except exceptions.GoogleAPIError as e:
             logging.error(
-                f"Failed to upload temporary file to GCS or sign URL: {str(e)}"
+                f"Failed to upload temporary file to GCS or sign URL: {str(e)}",
             )
             raise Exception(f"Failed to upload temporary file: {str(e)}")
         except Exception as e:
             logging.error(
-                f"Unexpected error in upload_temp_assistant_photo_file: {str(e)}"
+                f"Unexpected error in upload_temp_assistant_photo_file: {str(e)}",
             )
             raise Exception(f"Failed to process temporary file: {str(e)}")
 
