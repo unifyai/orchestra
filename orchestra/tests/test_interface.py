@@ -1013,3 +1013,780 @@ async def test_restore_interface_checkpoint(client: AsyncClient):
     active_data = active_get.json()
     assert active_data["color"] == "#00FF00"
     assert active_data["name"] == "updated-interface-name"
+
+
+@pytest.mark.anyio
+async def test_export_interface_template_with_valid_schema(client: AsyncClient):
+    """Test exporting an interface template with valid schema"""
+    # Create an interface with tabs and tiles
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    # Create tabs with different properties
+    tab1_response = await client.post(
+        "/v0/tab/",
+        headers=HEADERS,
+        json={
+            "interface_id": interface_id,
+            "name": "data_tab",
+            "visible": True,
+            "active": True,
+            "order": 0,
+            "color": "#FF0000",
+        },
+    )
+    assert tab1_response.status_code == 201
+    tab1_id = tab1_response.json()["id"]
+
+    tab2_response = await client.post(
+        "/v0/tab/",
+        headers=HEADERS,
+        json={
+            "interface_id": interface_id,
+            "name": "viz_tab",
+            "visible": True,
+            "active": False,
+            "order": 1,
+            "color": "#00FF00",
+        },
+    )
+    assert tab2_response.status_code == 201
+    tab2_id = tab2_response.json()["id"]
+
+    # Create tiles in tabs
+    from orchestra.tests.test_tile import (
+        _create_test_plot_tile,
+        _create_test_table_tile,
+    )
+
+    await _create_test_table_tile(
+        client,
+        tab1_id,
+        name="summary_table",
+        table_type="advanced",
+    )
+    await _create_test_plot_tile(
+        client,
+        tab1_id,
+        name="trend_chart",
+        plot_type="line",
+    )
+    await _create_test_plot_tile(
+        client,
+        tab2_id,
+        name="scatter_plot",
+        plot_type="scatter",
+    )
+
+    # Export interface template
+    export_request = {
+        "interface_id": interface_id,
+        "include_metadata": True,
+        "description": "Test interface template",
+        "tags": ["test", "interface"],
+        "template_name": "Test Interface Template",
+    }
+
+    response = await client.post(
+        "/v0/interfaces/export_template",
+        json=export_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    # Verify template structure
+    assert "template" in data
+    assert "metadata" in data
+    assert "export_stats" in data
+
+    template = data["template"]
+    assert template["name"] == TEST_INTERFACE
+    assert template["template_version"] == "1.0"
+    assert template["description"] == "Test interface template"
+    assert "test" in template["tags"]
+    assert len(template["tabs"]) == 2
+
+    # Verify tabs are exported correctly
+    tab_names = [tab["name"] for tab in template["tabs"]]
+    assert "data_tab" in tab_names
+    assert "viz_tab" in tab_names
+
+    # Verify tiles are exported
+    total_tiles = sum(len(tab["tiles"]) for tab in template["tabs"])
+    assert total_tiles == 3
+
+    # Verify export stats
+    stats = data["export_stats"]
+    assert stats["tabs"] == 2
+    assert stats["tiles"] == 3
+
+
+@pytest.mark.anyio
+async def test_export_interface_template_with_valid_schema_by_project_and_name(
+    client: AsyncClient,
+):
+    """Test exporting interface template with valid schema using project and name"""
+    await _create_test_interface(client)
+
+    export_request = {
+        "project": TEST_PROJECT,
+        "interface_name": TEST_INTERFACE,
+        "include_metadata": True,
+        "description": "Export by project and name",
+    }
+
+    response = await client.post(
+        "/v0/interfaces/export_template",
+        json=export_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    template = data["template"]
+    assert template["name"] == TEST_INTERFACE
+    assert template["description"] == "Export by project and name"
+
+
+@pytest.mark.anyio
+async def test_export_interface_template_with_valid_schema_checkpoint(
+    client: AsyncClient,
+):
+    """Test exporting interface template with valid schema from checkpoint"""
+    # Create interface and add content
+    interface_response = await _create_test_interface(client, color="#FF0000")
+    interface_id = interface_response.json()["id"]
+
+    # Create checkpoint
+    checkpoint_response = await _create_interface_checkpoint(
+        client,
+        interface_id=interface_id,
+    )
+    assert checkpoint_response.status_code == 200
+
+    # Update original interface after checkpoint
+    await _update_interface(
+        client,
+        interface_id=interface_id,
+        update_data={"color": "#00FF00"},
+    )
+
+    # Export from checkpoint
+    checkpoint_interface_id = checkpoint_response.json()["id"]
+    export_request = {
+        "interface_id": checkpoint_interface_id,
+        "checkpoint": True,
+        "include_metadata": True,
+    }
+
+    response = await client.post(
+        "/v0/interfaces/export_template",
+        json=export_request,
+        headers=HEADERS,
+    )
+
+    print(response.json())
+
+    assert response.status_code == 200
+    data = response.json()
+
+    # Should export checkpoint version (original color)
+    template = data["template"]
+    assert template["color"] == "#FF0000"  # Original color from checkpoint
+
+
+@pytest.mark.anyio
+async def test_export_interface_template_with_valid_schema_empty_interface(
+    client: AsyncClient,
+):
+    """Test exporting interface template with valid schema from empty interface"""
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    export_request = {
+        "interface_id": interface_id,
+        "include_metadata": True,
+    }
+
+    response = await client.post(
+        "/v0/interfaces/export_template",
+        json=export_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    template = data["template"]
+    assert template["name"] == TEST_INTERFACE
+    assert len(template["tabs"]) == 0
+
+    stats = data["export_stats"]
+    assert stats["tabs"] == 0
+    assert stats["tiles"] == 0
+
+
+@pytest.mark.anyio
+async def test_import_interface_template_with_valid_schema(client: AsyncClient):
+    """Test importing an interface template with valid schema"""
+    # Create a valid template
+    template = {
+        "name": "imported_interface",
+        "color": "#FF00FF",
+        "tabs": [
+            {
+                "name": "imported_tab",
+                "visible": True,
+                "active": True,
+                "order": 0,
+                "color": "#00FFFF",
+                "tiles": [
+                    {
+                        "name": "imported_table",
+                        "position": {"x": 0, "y": 0, "width": 6, "height": 4},
+                        "type": "Table",
+                        "visible": True,
+                        "table_tile": {
+                            "table_type": "advanced",
+                            "page_number": "1",
+                        },
+                    },
+                    {
+                        "name": "imported_plot",
+                        "position": {"x": 6, "y": 0, "width": 6, "height": 4},
+                        "type": "Plot",
+                        "visible": True,
+                        "plot_tile": {
+                            "plot_type": "scatter",
+                            "x_axis": "x",
+                            "y_axis": "y",
+                        },
+                    },
+                ],
+            },
+        ],
+        "template_version": "1.0",
+        "description": "Test import template",
+        "tags": ["imported", "test"],
+    }
+
+    import_request = {
+        "project": TEST_PROJECT,
+        "template": template,
+        "validate_first": False,  # Skip validation for v0
+        "auto_sanitize": False,
+        "overwrite_existing": False,
+    }
+
+    response = await client.post(
+        "/v0/interfaces/import_template",
+        json=import_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["success"] is True
+    assert data["import_stats"]["interfaces"] == 1
+    assert data["import_stats"]["tabs"] == 1
+    assert data["import_stats"]["tiles"] == 2
+
+    # Verify the interface was created
+    created_interface_id = data["created_ids"]["interface_id"]
+    get_response = await _get_interface(client, interface_id=created_interface_id)
+    assert get_response.status_code == 200
+
+    interface_data = get_response.json()
+    assert interface_data["name"] == "imported_interface"
+    assert interface_data["color"] == "#FF00FF"
+    assert len(interface_data["tabs"]) == 1
+
+    # Verify tab was created correctly
+    tab = interface_data["tabs"][0]
+    assert tab["name"] == "imported_tab"
+    assert tab["color"] == "#00FFFF"
+    assert tab["active"] is True
+    assert len(tab["tiles"]) == 2
+
+    # Verify tiles were created correctly
+    tile_names = [tile["name"] for tile in tab["tiles"]]
+    assert "imported_table" in tile_names
+    assert "imported_plot" in tile_names
+
+
+@pytest.mark.anyio
+async def test_import_interface_template_with_valid_schema_new_name(
+    client: AsyncClient,
+):
+    """Test importing interface template with valid schema and new name override"""
+    template = {
+        "name": "original_name",
+        "tabs": [
+            {
+                "name": "test_tab",
+                "tiles": [],
+            },
+        ],
+        "template_version": "1.0",
+    }
+
+    import_request = {
+        "project": TEST_PROJECT,
+        "template": template,
+        "new_interface_name": "overridden_name",
+        "validate_first": False,
+        "auto_sanitize": False,
+    }
+
+    response = await client.post(
+        "/v0/interfaces/import_template",
+        json=import_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    # Verify interface was created with new name
+    created_interface_id = data["created_ids"]["interface_id"]
+    get_response = await _get_interface(client, interface_id=created_interface_id)
+    interface_data = get_response.json()
+    assert interface_data["name"] == "overridden_name"
+
+
+@pytest.mark.anyio
+async def test_import_interface_template_with_valid_schema_overwrite_existing(
+    client: AsyncClient,
+):
+    """Test importing interface template with valid schema and overwrite existing"""
+    # Create existing interface
+    existing_response = await _create_test_interface(
+        client,
+        name="existing_interface",
+        color="#FF0000",
+    )
+
+    template = {
+        "name": "existing_interface",
+        "color": "#00FF00",  # Different color
+        "tabs": [
+            {
+                "name": "new_tab",
+                "tiles": [],
+            },
+        ],
+        "template_version": "1.0",
+    }
+
+    # First try without overwrite
+    import_request = {
+        "project": TEST_PROJECT,
+        "template": template,
+        "overwrite_existing": False,
+        "validate_first": False,
+        "auto_sanitize": False,
+    }
+
+    response = await client.post(
+        "/v0/interfaces/import_template",
+        json=import_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 409
+    data = response.json()
+    assert "detail" in data
+    assert "already exists" in data["detail"]
+
+    # Now try with overwrite
+    import_request["overwrite_existing"] = True
+
+    response = await client.post(
+        "/v0/interfaces/import_template",
+        json=import_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_import_interface_template_with_valid_schema_complex_structure(
+    client: AsyncClient,
+):
+    """Test importing interface template with valid schema containing complex structure"""
+    template = {
+        "name": "complex_interface",
+        "color": "#FF0000",
+        "tabs": [
+            {
+                "name": "dashboard_tab",
+                "visible": True,
+                "active": True,
+                "order": 0,
+                "tiles": [
+                    {
+                        "name": "data_table",
+                        "position": {"x": 0, "y": 0, "width": 8, "height": 6},
+                        "type": "Table",
+                        "visible": True,
+                        "table_tile": {
+                            "table_type": "advanced",
+                            "page_number": "1",
+                            "column_order": '["col1", "col2", "col3"]',
+                            "sorting": '{"col1": "asc"}',
+                            "selected": "row1,row2",
+                        },
+                    },
+                    {
+                        "name": "trend_chart",
+                        "position": {"x": 8, "y": 0, "width": 4, "height": 6},
+                        "type": "Plot",
+                        "visible": True,
+                        "plot_tile": {
+                            "plot_type": "line",
+                            "x_axis": "timestamp",
+                            "y_axis": "value",
+                            "plot_scale_x": "time",
+                            "plot_scale_y": "linear",
+                            "plot_group_by": "category",
+                        },
+                    },
+                ],
+            },
+            {
+                "name": "analysis_tab",
+                "visible": True,
+                "active": False,
+                "order": 1,
+                "tiles": [
+                    {
+                        "name": "code_editor",
+                        "position": {"x": 0, "y": 0, "width": 6, "height": 8},
+                        "type": "Editor",
+                        "visible": True,
+                        "editor_tile": {
+                            "file_type": "python",
+                            "file_name": "analysis.py",
+                            "content": "import pandas as pd\nprint('Analysis code')",
+                        },
+                    },
+                    {
+                        "name": "terminal",
+                        "position": {"x": 6, "y": 0, "width": 6, "height": 4},
+                        "type": "Terminal",
+                        "visible": True,
+                        "terminal_tile": {
+                            "shell_type": "bash",
+                        },
+                    },
+                    {
+                        "name": "markdown_view",
+                        "position": {"x": 6, "y": 4, "width": 6, "height": 4},
+                        "type": "View",
+                        "visible": True,
+                        "view_tile": {
+                            "base_index": "markdown",
+                        },
+                    },
+                ],
+            },
+        ],
+        "active_tab_name": "dashboard_tab",
+        "template_version": "1.0",
+        "description": "Complex interface with multiple tile types",
+        "tags": ["complex", "dashboard", "analysis"],
+    }
+
+    import_request = {
+        "project": TEST_PROJECT,
+        "template": template,
+        "validate_first": False,
+        "auto_sanitize": False,
+    }
+
+    response = await client.post(
+        "/v0/interfaces/import_template",
+        json=import_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["success"] is True
+    assert data["import_stats"]["interfaces"] == 1
+    assert data["import_stats"]["tabs"] == 2
+    assert data["import_stats"]["tiles"] == 5
+
+    # Verify the complex structure was imported correctly
+    created_interface_id = data["created_ids"]["interface_id"]
+    get_response = await _get_interface(client, interface_id=created_interface_id)
+    interface_data = get_response.json()
+
+    assert interface_data["name"] == "complex_interface"
+    assert len(interface_data["tabs"]) == 2
+
+    # Verify active tab is set correctly
+    active_tab = next((tab for tab in interface_data["tabs"] if tab["active"]), None)
+    assert active_tab is not None
+    assert active_tab["name"] == "dashboard_tab"
+
+    # Verify tile types and specialized data
+    dashboard_tab = next(
+        (tab for tab in interface_data["tabs"] if tab["name"] == "dashboard_tab"),
+        None,
+    )
+    assert len(dashboard_tab["tiles"]) == 2
+
+    analysis_tab = next(
+        (tab for tab in interface_data["tabs"] if tab["name"] == "analysis_tab"),
+        None,
+    )
+    assert len(analysis_tab["tiles"]) == 3
+
+    # Verify specialized tile data was preserved
+    for tile in analysis_tab["tiles"]:
+        if tile["type"] == "Editor":
+            assert "editor_tile" in tile
+            assert tile["editor_tile"]["file_type"] == "python"
+            assert "Analysis code" in tile["editor_tile"]["content"]
+        elif tile["type"] == "Terminal":
+            assert "terminal_tile" in tile
+            assert tile["terminal_tile"]["shell_type"] == "bash"
+        elif tile["type"] == "View":
+            assert "view_tile" in tile
+            assert tile["view_tile"]["base_index"] == "markdown"
+
+
+@pytest.mark.anyio
+async def test_export_import_interface_template_with_valid_schema_roundtrip(
+    client: AsyncClient,
+):
+    """Test exporting and then importing an interface template with valid schema (roundtrip)"""
+    # Create complex interface structure
+    interface_response = await _create_test_interface(client, color="#FF00FF")
+    interface_id = interface_response.json()["id"]
+
+    # Create tabs and tiles
+    tab_response = await client.post(
+        "/v0/tab/",
+        headers=HEADERS,
+        json={
+            "interface_id": interface_id,
+            "name": "roundtrip_tab",
+            "visible": True,
+            "active": True,
+            "order": 0,
+            "color": "#00FF00",
+        },
+    )
+    tab_id = tab_response.json()["id"]
+
+    from orchestra.tests.test_tile import (
+        _create_test_editor_tile,
+        _create_test_table_tile,
+    )
+
+    await _create_test_table_tile(
+        client,
+        tab_id,
+        name="roundtrip_table",
+        table_type="advanced",
+        page_number="2",
+    )
+    await _create_test_editor_tile(
+        client,
+        tab_id,
+        name="roundtrip_editor",
+        file_type="javascript",
+        content="console.log('roundtrip test');",
+    )
+
+    # Export the interface template
+    export_request = {
+        "interface_id": interface_id,
+        "include_metadata": True,
+        "description": "Roundtrip test template",
+        "tags": ["roundtrip", "test"],
+    }
+
+    export_response = await client.post(
+        "/v0/interfaces/export_template",
+        json=export_request,
+        headers=HEADERS,
+    )
+
+    assert export_response.status_code == 200
+    exported_template = export_response.json()["template"]
+
+    print(exported_template)
+
+    # Delete the original interface
+    await _delete_interface(client, interface_id=interface_id)
+
+    # Import the template back
+    import_request = {
+        "project": TEST_PROJECT,
+        "template": exported_template,
+        "validate_first": False,
+        "auto_sanitize": False,
+    }
+
+    import_response = await client.post(
+        "/v0/interfaces/import_template",
+        json=import_request,
+        headers=HEADERS,
+    )
+
+    assert import_response.status_code == 200
+    import_data = import_response.json()
+
+    assert import_data["success"] is True
+    assert import_data["import_stats"]["interfaces"] == 1
+    assert import_data["import_stats"]["tabs"] == 1
+    assert import_data["import_stats"]["tiles"] == 2
+
+    print(import_data)
+
+    # Verify the imported interface matches the original
+    created_interface_id = import_data["created_ids"]["interface_id"]
+    get_response = await _get_interface(client, interface_id=created_interface_id)
+    imported_interface = get_response.json()
+
+    assert imported_interface["name"] == TEST_INTERFACE
+    assert imported_interface["color"] == "#FF00FF"
+    assert len(imported_interface["tabs"]) == 1
+
+    tab = imported_interface["tabs"][0]
+    assert tab["name"] == "roundtrip_tab"
+    assert tab["color"] == "#00FF00"
+    assert len(tab["tiles"]) == 2
+
+    # Verify tile data was preserved
+    tile_names = [tile["name"] for tile in tab["tiles"]]
+    assert "roundtrip_table" in tile_names
+    assert "roundtrip_editor" in tile_names
+
+    editor_tile = next(
+        (tile for tile in tab["tiles"] if tile["type"] == "Editor"),
+        None,
+    )
+    assert editor_tile is not None
+    assert "roundtrip test" in editor_tile["editor_tile"]["content"]
+
+
+@pytest.mark.anyio
+async def test_import_interface_template_with_valid_schema_empty_template(
+    client: AsyncClient,
+):
+    """Test importing interface template with valid schema containing empty template"""
+    empty_template = {
+        "name": "empty_interface",
+        "tabs": [],
+        "template_version": "1.0",
+        "description": "Empty interface template",
+    }
+
+    import_request = {
+        "project": TEST_PROJECT,
+        "template": empty_template,
+        "validate_first": False,
+        "auto_sanitize": False,
+    }
+
+    response = await client.post(
+        "/v0/interfaces/import_template",
+        json=import_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["success"] is True
+    assert data["import_stats"]["interfaces"] == 1
+    assert data["import_stats"]["tabs"] == 0
+    assert data["import_stats"]["tiles"] == 0
+
+    # Verify empty interface was created
+    created_interface_id = data["created_ids"]["interface_id"]
+    get_response = await _get_interface(client, interface_id=created_interface_id)
+    interface_data = get_response.json()
+
+    assert interface_data["name"] == "empty_interface"
+    assert len(interface_data["tabs"]) == 0
+
+
+@pytest.mark.anyio
+async def test_export_interface_template_with_valid_schema_multiple_active_tabs(
+    client: AsyncClient,
+):
+    """Test exporting interface template with valid schema handling multiple tabs with active states"""
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    # Create multiple tabs, set one as active
+    tab1_response = await client.post(
+        "/v0/tab/",
+        headers=HEADERS,
+        json={
+            "interface_id": interface_id,
+            "name": "tab_1",
+            "active": True,
+            "order": 0,
+        },
+    )
+    tab1_id = tab1_response.json()["id"]
+
+    tab2_response = await client.post(
+        "/v0/tab/",
+        headers=HEADERS,
+        json={
+            "interface_id": interface_id,
+            "name": "tab_2",
+            "active": False,
+            "order": 1,
+        },
+    )
+
+    # Update interface to set active tab
+    await _update_interface(
+        client,
+        interface_id=interface_id,
+        update_data={"active_tab_id": tab1_id},
+    )
+
+    export_request = {
+        "interface_id": interface_id,
+        "include_metadata": True,
+    }
+
+    response = await client.post(
+        "/v0/interfaces/export_template",
+        json=export_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    template = response.json()["template"]
+
+    # Verify active tab is correctly identified by name
+    assert template["active_tab_name"] == "tab_1"
+
+    # Verify tab active states
+    tab1_template = next(
+        (tab for tab in template["tabs"] if tab["name"] == "tab_1"),
+        None,
+    )
+    tab2_template = next(
+        (tab for tab in template["tabs"] if tab["name"] == "tab_2"),
+        None,
+    )
+
+    assert tab1_template["active"] is True
+    assert tab2_template["active"] is False
