@@ -1,6 +1,9 @@
-from typing import Optional
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
+
+# Import the template schemas from interface module
+from orchestra.web.api.interface.schema import ProjectTemplateSchema
 
 
 class FavoriteProjectIn(BaseModel):
@@ -120,3 +123,27 @@ class ProjectCommitHistory(BaseModel):
     commit_hash: str
     commit_message: Optional[str] = None
     created_at: str
+
+
+class ExportProjectTemplateRequest(BaseModel):
+    """Request to export a project template."""
+
+    project: str
+    interface_names: Optional[List[str]] = None  # If None, export all interfaces
+    checkpoint: bool = False
+    # Common template fields
+    include_metadata: bool = True
+    description: Optional[str] = None
+    tags: List[str] = []
+    template_name: Optional[str] = None
+
+
+class ImportProjectTemplateRequest(BaseModel):
+    """Request to import a project template."""
+
+    project: str
+    template: ProjectTemplateSchema  # Properly typed template instead of dict
+    validate_first: bool = True
+    auto_sanitize: bool = True
+    overwrite_existing: bool = False
+    interface_name_prefix: Optional[str] = None  # Prefix for imported interface names
