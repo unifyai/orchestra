@@ -771,6 +771,7 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient):
 
     # Get all actual group objects from the 'group' list
     group_items = group_obj.get("group", [])
+
     # For each group, compute the average derived_temp among its logs (if any).
     def compute_mean_derived_temp(logs_list):
         vals = []

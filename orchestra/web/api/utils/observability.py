@@ -44,6 +44,7 @@ TABLE_QUERY_DURATION = Histogram(
     buckets=(0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0),
 )
 
+
 # Helper functions for context management
 def set_user_context(
     user_id: Optional[str] = None,

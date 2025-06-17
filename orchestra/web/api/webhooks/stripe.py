@@ -5,6 +5,7 @@ The module exposes:
 • handle_event(event)                    – convenience wrapper that opens
                                            its own DB session
 """
+
 from __future__ import annotations
 
 import json

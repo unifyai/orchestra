@@ -5,6 +5,7 @@ Revises: daaf1b9415a5
 Create Date: 2025-03-21 01:01:10.532356
 
 """
+
 from alembic import op
 
 # revision identifiers, used by Alembic.
