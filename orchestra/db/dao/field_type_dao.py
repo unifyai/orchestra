@@ -12,6 +12,18 @@ class FieldTypeDAO:
     def __init__(self, session: Session):
         self.session = session
 
+    def _validate_description(self, description: Optional[str]) -> None:
+        """Validate description length does not exceed 256 characters.
+
+        Args:
+            description: The description to validate
+
+        Raises:
+            ValueError: If description exceeds 256 characters
+        """
+        if description is not None and len(description) > 256:
+            raise ValueError("Description cannot exceed 256 characters")
+
     def get_by_name_and_context(
         self,
         project_id: int,
@@ -37,8 +49,11 @@ class FieldTypeDAO:
         enum_values: Optional[List[str]] = None,
         enum_restrict: bool = False,
         unique: bool = False,
+        description: Optional[str] = None,
     ) -> None:
         """Upsert approach: insert or do nothing if it exists."""
+        self._validate_description(description)
+
         # First check if a field with this name exists but with a different category
         existing = (
             self.session.query(FieldType)
@@ -71,6 +86,7 @@ class FieldTypeDAO:
             enum_values=enum_values,
             enum_restrict=enum_restrict,
             unique=unique,
+            description=description,
         )
         # "on_conflict_do_nothing" will skip insertion if (project_id, field_name, context_id) already exists:
         stmt = stmt.on_conflict_do_nothing(
@@ -113,6 +129,7 @@ class FieldTypeDAO:
                     "unique": field_type.unique,
                     "enum_values": field_type.enum_values,
                     "restrict": field_type.enum_restrict,
+                    "description": field_type.description,
                     "created_at": (
                         field_type.created_at.isoformat()
                         if field_type.created_at
@@ -138,8 +155,11 @@ class FieldTypeDAO:
         enum_values: Optional[List[str]] = None,
         enum_restrict: bool = False,
         unique: bool = False,
+        description: Optional[str] = None,
     ) -> None:
         """Upsert approach: insert or overwrite the existing field_type."""
+        self._validate_description(description)
+
         # First check if a field with this name exists but with a different category
         existing = (
             self.session.query(FieldType)
@@ -168,6 +188,7 @@ class FieldTypeDAO:
             enum_values=enum_values,
             enum_restrict=enum_restrict,
             unique=unique,
+            description=description,
         )
         # "on_conflict_do_update" to update existing row if it already exists
         stmt = stmt.on_conflict_do_update(
@@ -179,6 +200,7 @@ class FieldTypeDAO:
                 "enum_values": enum_values,
                 "enum_restrict": enum_restrict,
                 "unique": unique,
+                "description": description,
             },
         )
         self.session.execute(stmt)
@@ -328,6 +350,7 @@ class FieldTypeDAO:
         project_id: int,
         context_id: int,
         fields: Dict[str, Union[Dict[str, Any], str, None]],
+        description: Optional[str] = None,
     ) -> None:
         """Create field definitions for a context without creating logs.
 
@@ -342,6 +365,9 @@ class FieldTypeDAO:
         if not fields:
             return
 
+        # Validate the global description parameter
+        self._validate_description(description)
+
         # Prepare values for bulk insertion
         values_to_insert = []
         for field_name, field_info in fields.items():
@@ -350,11 +376,15 @@ class FieldTypeDAO:
             unique = False
             enum_values = None
             enum_restrict = False
+            field_description = None
 
             if isinstance(field_info, StandardFieldDefinition):
                 field_type = field_info.type
                 mutable = field_info.mutable
                 unique = field_info.unique
+                field_description = getattr(field_info, "description", None)
+                # Validate individual field description
+                self._validate_description(field_description)
                 if field_type == "enum":
                     enum_values = field_info.values
                     enum_restrict = field_info.restrict
@@ -379,6 +409,7 @@ class FieldTypeDAO:
                     "context_id": context_id,
                     "enum_values": enum_values,
                     "enum_restrict": enum_restrict,
+                    "description": field_description or description,
                 },
             )
 
@@ -393,6 +424,7 @@ class FieldTypeDAO:
                     "unique": stmt.excluded.unique,
                     "enum_values": stmt.excluded.enum_values,
                     "enum_restrict": stmt.excluded.enum_restrict,
+                    "description": stmt.excluded.description,
                 },
             )
             self.session.execute(stmt)
@@ -401,6 +433,7 @@ class FieldTypeDAO:
     def bulk_create_field_types(
         self,
         field_types_data: list[dict],
+        description: Optional[str] = None,
     ) -> None:
         """Efficiently insert multiple field types at once using a bulk operation.
 
@@ -422,6 +455,9 @@ class FieldTypeDAO:
         if not field_types_data:
             return
 
+        # Validate the global description parameter
+        self._validate_description(description)
+
         # Prepare values for bulk insertion
         values_to_insert = []
         for data in field_types_data:
@@ -432,6 +468,10 @@ class FieldTypeDAO:
             mutable = data.get("mutable", False)
             field_category = data.get("field_category", "entry")
             unique = data.get("unique", False)
+            field_description = data.get("description", description)
+
+            # Validate individual field description
+            self._validate_description(field_description)
 
             # Infer type from the value
             inferred_type = LogDAO.infer_type(field_name, value)
@@ -445,6 +485,7 @@ class FieldTypeDAO:
                     "mutable": mutable,
                     "context_id": context_id,
                     "unique": unique,
+                    "description": field_description,
                 },
             )
 
