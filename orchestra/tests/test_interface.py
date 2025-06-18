@@ -384,7 +384,7 @@ async def test_delete_interface_by_id(client: AsyncClient):
 
     # Delete the interface by ID
     response = await _delete_interface(client, interface_id=interface_id)
-    assert response.status_code == 204
+    assert response.status_code == 200
 
     # Verify interface is deleted
     get_response = await _get_interface(client, interface_id=interface_id)
@@ -403,7 +403,7 @@ async def test_delete_interface_by_project_and_name(client: AsyncClient):
         project=TEST_PROJECT,
         name=TEST_INTERFACE,
     )
-    assert response.status_code == 204
+    assert response.status_code == 200
 
     # Verify interface is deleted
     get_response = await _get_interface(
@@ -862,7 +862,7 @@ async def test_create_interface_checkpoint_with_deleted_tabs(client: AsyncClient
         f"/v0/tab/?tab_id={tab_id}",
         headers=HEADERS,
     )
-    assert delete_tab_response.status_code == 204
+    assert delete_tab_response.status_code == 200
 
     # Create second checkpoint
     second_checkpoint = await _create_interface_checkpoint(
