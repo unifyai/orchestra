@@ -105,7 +105,7 @@ admin_router = APIRouter()
                     "example": {
                         "info": "Logs created successfully!",
                         "log_event_ids": [101, 102, 103],
-                        "row_ids": [0, 1, 2],
+                        "row_ids": {"name": "row_id", "ids": [0, 1, 2]},
                     },
                 },
             },
