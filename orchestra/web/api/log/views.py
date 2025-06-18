@@ -2214,7 +2214,7 @@ def get_logs(
         description="The fields which cannot be returned from the search. None of the listed fields will be returned, even if the fields are valid as per the filtering expression etc. This argument *cannot* be set if `from_fields` is set.",
         example="score&response",
     ),
-    limit: Optional[int] = Query(None, ge=1, le=200),
+    limit: Optional[int] = Query(None, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     group_by: Optional[List[str]] = Query(
         None,
@@ -2670,7 +2670,7 @@ def get_logs_latest_timestamp(
         "*cannot* be set if `from_fields` is set.",
         example="score&response",
     ),
-    limit: Optional[int] = Query(None, ge=1, le=200),
+    limit: Optional[int] = Query(None, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     session=Depends(get_db_session),
     randomize: bool = Query(
