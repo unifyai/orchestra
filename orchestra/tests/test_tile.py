@@ -1084,7 +1084,7 @@ async def test_delete_tile_by_id(client: AsyncClient):
 
     # Delete the tile by ID
     response = await _delete_tile(client, tile_id=tile_id)
-    assert response.status_code == 204
+    assert response.status_code == 200
 
     # Verify tile is deleted
     get_response = await _get_tile(client, tile_id=tile_id)
@@ -1103,7 +1103,7 @@ async def test_delete_tile_by_tab_and_name(client: AsyncClient):
 
     # Delete the tile by tab_id and name
     response = await _delete_tile(client, tab_id=tab_id, name=TEST_TILE)
-    assert response.status_code == 204
+    assert response.status_code == 200
 
     # Verify tile is deleted
     get_response = await _get_tile(client, tab_id=tab_id, name=TEST_TILE)
