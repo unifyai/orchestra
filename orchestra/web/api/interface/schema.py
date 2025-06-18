@@ -46,6 +46,7 @@ class PlotTileSchema(BaseModel):
     plot_group_by_colors: Optional[str] = None
     bin_count: Optional[str] = None
     regression_line: Optional[str] = None
+    plot_show_latest: Optional[str] = None
 
 
 class ViewTileSchema(BaseModel):
@@ -343,6 +344,7 @@ class Item(BaseModel):
     plot_group_by_colors: Optional[str] = None
     bin_count: Optional[str] = None
     regression_line: Optional[str] = None
+    plot_show_latest: Optional[str] = None
     file_name: Optional[str] = None
     file_type: Optional[str] = None
     content: Optional[str] = None

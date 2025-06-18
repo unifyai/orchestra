@@ -899,6 +899,7 @@ class TileDAO:
         plot_group_by_colors: Optional[str] = None,
         bin_count: Optional[str] = None,
         regression_line: Optional[str] = None,
+        plot_show_latest: Optional[str] = None,
         is_checkpoint: bool = False,
     ) -> PlotTile:
         """Create a new plot tile."""
@@ -946,6 +947,7 @@ class TileDAO:
                 plot_group_by_colors=plot_group_by_colors,
                 bin_count=bin_count,
                 regression_line=regression_line,
+                plot_show_latest=plot_show_latest,
             )
             self.session.add(plot_tile)
 
@@ -986,6 +988,7 @@ class TileDAO:
         plot_group_by_colors: Optional[str] = None,
         bin_count: Optional[str] = None,
         regression_line: Optional[str] = None,
+        plot_show_latest: Optional[str] = None,
     ) -> Optional[PlotTile]:
         """
         Update plot tile by ID or by tab_id and name.
@@ -1024,6 +1027,8 @@ class TileDAO:
             plot_tile.bin_count = bin_count
         if regression_line is not None:
             plot_tile.regression_line = regression_line
+        if plot_show_latest is not None:
+            plot_tile.plot_show_latest = plot_show_latest
 
         self.session.commit()
         return plot_tile
@@ -1809,6 +1814,7 @@ class TileDAO:
                     plot_group_by_colors=source_tile.plot_tile.plot_group_by_colors,
                     bin_count=source_tile.plot_tile.bin_count,
                     regression_line=source_tile.plot_tile.regression_line,
+                    plot_show_latest=source_tile.plot_show_latest,
                 )
             else:
                 # Create new specialized tile
@@ -1826,6 +1832,7 @@ class TileDAO:
                     plot_group_by_colors=source_tile.plot_tile.plot_group_by_colors,
                     bin_count=source_tile.plot_tile.bin_count,
                     regression_line=source_tile.plot_tile.regression_line,
+                    plot_show_latest=source_tile.plot_show_latest,
                     is_checkpoint=True,
                 )
 
@@ -2249,6 +2256,7 @@ class TileDAO:
                                 "plot_group_by_colors": pt.plot_group_by_colors,
                                 "bin_count": pt.bin_count,
                                 "regression_line": pt.regression_line,
+                                "plot_show_latest": pt.plot_show_latest,
                             },
                         )
                     else:
@@ -2266,6 +2274,7 @@ class TileDAO:
                                 "plot_group_by_colors": pt.plot_group_by_colors,
                                 "bin_count": pt.bin_count,
                                 "regression_line": pt.regression_line,
+                                "plot_show_latest": pt.plot_show_latest,
                             },
                         )
 

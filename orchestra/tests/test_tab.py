@@ -1513,6 +1513,7 @@ async def test_import_tab_template_with_valid_schema_complex_tiles(client: Async
                     "plot_group_by_colors": '{"A": "#FF0000", "B": "#00FF00"}',
                     "bin_count": "50",
                     "regression_line": "true",
+                    "plot_show_latest": "false",
                 },
             },
             {

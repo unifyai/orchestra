@@ -477,6 +477,7 @@ class TemplateConverter:
                 "plot_group_by_colors": tile.plot_tile.plot_group_by_colors,
                 "bin_count": tile.plot_tile.bin_count,
                 "regression_line": tile.plot_tile.regression_line,
+                "plot_show_latest": tile.plot_show_latest,
             }
 
         if tile.view_tile:

@@ -282,6 +282,7 @@ async def _create_test_plot_tile(
     plot_group_by_colors=None,
     bin_count=None,
     regression_line=None,
+    plot_show_latest=None,
     **kwargs,
 ):
     """Create a test plot tile with appropriate defaults.
@@ -300,6 +301,7 @@ async def _create_test_plot_tile(
         plot_group_by_colors: Group by colors
         bin_count: Bin count for histograms
         regression_line: Regression line settings
+        plot_show_latest: Sample logs randomly or latest first
         **kwargs: Additional arguments to pass to _create_test_tile
     """
 
@@ -314,6 +316,7 @@ async def _create_test_plot_tile(
         "plot_group_by_colors": plot_group_by_colors,
         "bin_count": bin_count,
         "regression_line": regression_line,
+        "plot_show_latest": plot_show_latest,
     }
 
     # Remove None values
@@ -2126,6 +2129,7 @@ async def test_export_tile_template_with_valid_schema_plot_tile(client: AsyncCli
         plot_group_by_colors='{"A": "#FF0000", "B": "#00FF00", "C": "#0000FF"}',
         bin_count="25",
         regression_line="true",
+        plot_show_latest="false",
         width=6,
         height=4,
         x=0,
@@ -2159,6 +2163,7 @@ async def test_export_tile_template_with_valid_schema_plot_tile(client: AsyncCli
     assert plot_data["x_axis"] == "timestamp"
     assert plot_data["y_axis"] == "value"
     assert plot_data["regression_line"] == "true"
+    assert plot_data["plot_show_latest"] == "false"
     assert "A" in plot_data["plot_group_by_colors"]
 
 

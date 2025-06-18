@@ -1379,6 +1379,7 @@ class PlotTile(Base):
     plot_group_by_colors = Column(String(), nullable=True)
     bin_count = Column(String(), nullable=True)
     regression_line = Column(String(), nullable=True)
+    plot_show_latest = Column(String(), nullable=True)
 
     # Relationships
     tile = relationship("Tile", back_populates="plot_tile")

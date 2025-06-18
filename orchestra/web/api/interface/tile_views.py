@@ -72,6 +72,7 @@ def _create_tile_response(tile: Tile) -> TileSchema:
             plot_group_by_colors=tile.plot_tile.plot_group_by_colors,
             bin_count=tile.plot_tile.bin_count,
             regression_line=tile.plot_tile.regression_line,
+            plot_show_latest=tile.plot_show_latest,
         )
 
     if hasattr(tile, "view_tile") and tile.view_tile:
@@ -569,6 +570,7 @@ def get_tile(
                                 "plot_group_by_colors": None,
                                 "bin_count": 10,
                                 "regression_line": False,
+                                "plot_show_latest": False,
                             },
                             "view_tile": None,
                             "editor_tile": None,
