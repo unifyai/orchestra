@@ -652,9 +652,8 @@ def create_tab_checkpoint(
 
 @router.delete(
     "/",
-    status_code=204,
     responses={
-        204: {
+        200: {
             "description": "Tab deleted successfully",
             "content": {
                 "application/json": {
@@ -728,6 +727,8 @@ def delete_tab(
 
     if not success:
         raise HTTPException(status_code=500, detail="Failed to delete tab.")
+
+    return {"info": "Tab deleted successfully!"}
 
 
 @router.get(

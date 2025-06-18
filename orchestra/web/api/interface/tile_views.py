@@ -1029,9 +1029,8 @@ def get_tile_checkpoint(
 
 @router.delete(
     "/",
-    status_code=204,
     responses={
-        204: {
+        200: {
             "description": "Tile deleted successfully",
             "content": {
                 "application/json": {
@@ -1085,6 +1084,8 @@ def delete_tile(
 
     if not success:
         raise HTTPException(status_code=500, detail="Failed to delete tile.")
+
+    return {"info": "Tile deleted successfully!"}
 
 
 @router.patch(
