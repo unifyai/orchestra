@@ -5,15 +5,26 @@ from pydantic import BaseModel, Field, model_validator
 from orchestra.web.api.context.schema import ContextCreateRequest
 
 
+class RowIDs(BaseModel):
+    name: str = Field(
+        description="Name of the unique ID column for the rows.",
+        example="row_id",
+    )
+    ids: List[int] = Field(
+        description="List of sequential row IDs corresponding to each log event, "
+        "providing a consistent ordering mechanism for the created logs.",
+        example=[1001, 1002, 1003],
+    )
+
+
 class CreateLogsResponse(BaseModel):
     log_event_ids: List[int] = Field(
         description="List of created log event IDs in the order they were created.",
         example=[123, 124, 125],
     )
-    row_ids: List[int] = Field(
-        description="List of sequential row IDs corresponding to each log event, "
-        "providing a consistent ordering mechanism for the created logs.",
-        example=[1001, 1002, 1003],
+    row_ids: RowIDs = Field(
+        description="Object containing the name of the unique ID column and the corresponding row IDs.",
+        example={"name": "row_id", "ids": [1001, 1002, 1003]},
     )
 
 
