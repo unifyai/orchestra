@@ -1019,7 +1019,13 @@ def create_logs_internal(
         context_obj.updated_at = datetime.now(timezone.utc)
         context_dao.session.commit()
 
-    return {"log_event_ids": log_event_ids, "row_ids": row_ids}
+    # Build row_ids payload with unique ID column name
+    row_ids_payload = {
+        "name": context_obj.unique_id_name,
+        "ids": row_ids,
+    }
+
+    return {"log_event_ids": log_event_ids, "row_ids": row_ids_payload}
 
 
 # TODO(yusha): refactor get_logs_query to make it modular
