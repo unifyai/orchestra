@@ -851,10 +851,11 @@ def create_logs_internal(
     total_logs = max(entries_len, params_len)
 
     # Bulk create all log events in one operation
-    log_event_ids = log_event_dao.bulk_create(
+    log_event_ids, row_ids = log_event_dao.bulk_create(
         project_id=project_id,
         context_id=context_id,
         count=total_logs,
+        return_row_ids=True,
     )
 
     # Prepare collections for bulk operations
@@ -1018,7 +1019,7 @@ def create_logs_internal(
         context_obj.updated_at = datetime.now(timezone.utc)
         context_dao.session.commit()
 
-    return log_event_ids
+    return {"log_event_ids": log_event_ids, "row_ids": row_ids}
 
 
 # TODO(yusha): refactor get_logs_query to make it modular

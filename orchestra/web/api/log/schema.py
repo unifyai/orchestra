@@ -5,6 +5,18 @@ from pydantic import BaseModel, Field, model_validator
 from orchestra.web.api.context.schema import ContextCreateRequest
 
 
+class CreateLogsResponse(BaseModel):
+    log_event_ids: List[int] = Field(
+        description="List of created log event IDs in the order they were created.",
+        example=[123, 124, 125],
+    )
+    row_ids: List[int] = Field(
+        description="List of sequential row IDs corresponding to each log event, "
+        "providing a consistent ordering mechanism for the created logs.",
+        example=[1001, 1002, 1003],
+    )
+
+
 class EnumType(BaseModel):
     type: Literal["enum"]
     values: Optional[List[str]] = None
