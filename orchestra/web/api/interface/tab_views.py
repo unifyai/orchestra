@@ -1053,12 +1053,12 @@ def import_tab_template(
     tab = tab_dao.create_tab(
         interface_id=str(interface.id),
         name=tab_name,
-        visible=request.template.visible
-        if request.template.visible is not None
-        else True,
-        active=request.template.active
-        if request.template.active is not None
-        else False,
+        visible=(
+            request.template.visible if request.template.visible is not None else True
+        ),
+        active=(
+            request.template.active if request.template.active is not None else False
+        ),
         order=request.template.order if request.template.order is not None else 0,
         global_context=request.template.global_context,
         color=request.template.color,
@@ -1076,18 +1076,26 @@ def import_tab_template(
             tab_id=str(tab.id),
             name=tile_data.name or "Imported Tile",
             type=tile_data.type,
-            x_position=position.get("x", 0)
-            if isinstance(position, dict)
-            else getattr(position, "x", 0),
-            y_position=position.get("y", 0)
-            if isinstance(position, dict)
-            else getattr(position, "y", 0),
-            width=position.get("width", 4)
-            if isinstance(position, dict)
-            else getattr(position, "width", 4),
-            height=position.get("height", 4)
-            if isinstance(position, dict)
-            else getattr(position, "height", 4),
+            x_position=(
+                position.get("x", 0)
+                if isinstance(position, dict)
+                else getattr(position, "x", 0)
+            ),
+            y_position=(
+                position.get("y", 0)
+                if isinstance(position, dict)
+                else getattr(position, "y", 0)
+            ),
+            width=(
+                position.get("width", 4)
+                if isinstance(position, dict)
+                else getattr(position, "width", 4)
+            ),
+            height=(
+                position.get("height", 4)
+                if isinstance(position, dict)
+                else getattr(position, "height", 4)
+            ),
             minW=tile_data.minW,
             minH=tile_data.minH,
             visible=tile_data.visible if tile_data.visible is not None else True,
@@ -1106,17 +1114,19 @@ def import_tab_template(
             grouping=tile_data.grouping,
             is_checkpoint=False,
             # Pass specialized tile data
-            table_tile=tile_data.table_tile.model_dump()
-            if tile_data.table_tile
-            else None,
+            table_tile=(
+                tile_data.table_tile.model_dump() if tile_data.table_tile else None
+            ),
             plot_tile=tile_data.plot_tile.model_dump() if tile_data.plot_tile else None,
             view_tile=tile_data.view_tile.model_dump() if tile_data.view_tile else None,
-            editor_tile=tile_data.editor_tile.model_dump()
-            if tile_data.editor_tile
-            else None,
-            terminal_tile=tile_data.terminal_tile.model_dump()
-            if tile_data.terminal_tile
-            else None,
+            editor_tile=(
+                tile_data.editor_tile.model_dump() if tile_data.editor_tile else None
+            ),
+            terminal_tile=(
+                tile_data.terminal_tile.model_dump()
+                if tile_data.terminal_tile
+                else None
+            ),
         )
         import_stats["tiles"] += 1
 
