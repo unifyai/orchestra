@@ -104,7 +104,8 @@ admin_router = APIRouter()
                 "application/json": {
                     "example": {
                         "info": "Logs created successfully!",
-                        "log_event_ids": [1, 2, 3],
+                        "log_event_ids": [101, 102, 103],
+                        "row_ids": [0, 1, 2],
                     },
                 },
             },
@@ -205,7 +206,7 @@ def create_logs(
 
     try:
         # Call the internal implementation with validated project and context
-        event_ids = create_logs_internal(
+        result = create_logs_internal(
             request=request,
             project_id=project_id,
             context_id=context_id,
@@ -216,7 +217,11 @@ def create_logs(
             log_dao=log_dao,
             context_dao=context_dao,
         )
-        return {"info": "Logs created successfully!", "log_event_ids": event_ids}
+        return {
+            "info": "Logs created successfully!",
+            "log_event_ids": result["log_event_ids"],
+            "row_ids": result["row_ids"],
+        }
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 

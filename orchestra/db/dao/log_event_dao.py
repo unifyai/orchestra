@@ -25,7 +25,8 @@ class LogEventDAO:
         project_id: int,
         count: int,
         context_id: Optional[int] = None,
-    ) -> List[int]:
+        return_row_ids: bool = False,
+    ) -> Union[List[int], tuple[List[int], List[Optional[int]]]]:
         """Create multiple LogEvent instances in one operation."""
         ts = datetime.now(timezone.utc)
         log_events = [
@@ -41,6 +42,7 @@ class LogEventDAO:
         self.session.flush()  # Flush to get IDs before committing
 
         log_event_ids = [event.id for event in log_events]
+        row_ids = [None] * count  # Initialize with None values
 
         if context_id:
             # Associate logs with context
@@ -95,6 +97,9 @@ class LogEventDAO:
                     sequential_id_logs = []
                     for i, log_event_id in enumerate(log_event_ids):
                         new_id = current_max_id + i + 1
+                        row_ids[
+                            i
+                        ] = new_id  # Store the sequential ID for this log event
                         sequential_id_logs.append(
                             {
                                 "project_id": project_id,
@@ -113,7 +118,11 @@ class LogEventDAO:
                         log_dao.bulk_create(sequential_id_logs)
 
         self.session.commit()
-        return log_event_ids
+
+        if return_row_ids:
+            return (log_event_ids, row_ids)
+        else:
+            return log_event_ids
 
     def filter(
         self,
