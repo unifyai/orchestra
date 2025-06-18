@@ -361,7 +361,7 @@ async def test_delete_tab_by_id(client: AsyncClient):
 
     # Delete the tab by ID
     response = await _delete_tab(client, tab_id=tab_id)
-    assert response.status_code == 204
+    assert response.status_code == 200
 
     # Verify tab is deleted
     get_response = await _get_tab(client, tab_id=tab_id)
@@ -378,7 +378,7 @@ async def test_delete_tab_by_interface_and_name(client: AsyncClient):
 
     # Delete the tab by interface_id and name
     response = await _delete_tab(client, interface_id=interface_id, name=TEST_TAB)
-    assert response.status_code == 204
+    assert response.status_code == 200
 
     # Verify tab is deleted
     get_response = await _get_tab(client, interface_id=interface_id, name=TEST_TAB)
@@ -721,7 +721,7 @@ async def test_create_tab_checkpoint_with_deleted_tiles(client: AsyncClient):
         f"/v0/tile/?tile_id={tile_id}",
         headers=HEADERS,
     )
-    assert delete_tile_response.status_code == 204
+    assert delete_tile_response.status_code == 200
 
     # Create second checkpoint
     second_checkpoint = await _create_tab_checkpoint(client, tab_id=tab_id)
@@ -918,7 +918,7 @@ async def test_delete_tab_by_id_with_tiles(client: AsyncClient):
 
     # Delete the tab by ID
     response = await _delete_tab(client, tab_id=tab_id)
-    assert response.status_code == 204
+    assert response.status_code == 200
 
     # Verify tab is deleted
     get_tab_response = await _get_tab(client, tab_id=tab_id)
@@ -999,7 +999,7 @@ async def test_delete_tab_by_interface_and_name_with_tiles(client: AsyncClient):
 
     # Delete the tab by interface_id and name
     response = await _delete_tab(client, interface_id=interface_id, name=TEST_TAB)
-    assert response.status_code == 204
+    assert response.status_code == 200
 
     # Verify tab is deleted
     get_tab_response = await _get_tab(client, interface_id=interface_id, name=TEST_TAB)

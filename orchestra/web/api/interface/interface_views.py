@@ -861,9 +861,8 @@ def get_interface_checkpoint(
 
 @router.delete(
     "/",
-    status_code=204,
     responses={
-        204: {
+        200: {
             "description": "Interface deleted successfully",
             "content": {
                 "application/json": {
@@ -947,6 +946,8 @@ def delete_interface(
 
     if not success:
         raise HTTPException(status_code=500, detail="Failed to delete interface.")
+
+    return {"info": "Interface deleted successfully!"}
 
 
 # Template Endpoints
