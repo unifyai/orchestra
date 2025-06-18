@@ -30,10 +30,11 @@ class BucketService:
             )
 
         self.credentials = service_account.Credentials.from_service_account_file(
-            self.credentials_path
+            self.credentials_path,
         )
         self.storage_client = storage.Client(
-            project=self.project_id, credentials=self.credentials
+            project=self.project_id,
+            credentials=self.credentials,
         )
 
         # Generic bucket

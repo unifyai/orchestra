@@ -1523,30 +1523,38 @@ def import_tile_template(
         tab_id=str(tab.id),
         name=tile_name,
         type=request.template.type,
-        x_position=position.get("x", 0)
-        if isinstance(position, dict)
-        else getattr(position, "x", 0),
-        y_position=position.get("y", 0)
-        if isinstance(position, dict)
-        else getattr(position, "y", 0),
-        width=position.get("width", 4)
-        if isinstance(position, dict)
-        else getattr(position, "width", 4),
-        height=position.get("height", 4)
-        if isinstance(position, dict)
-        else getattr(position, "height", 4),
+        x_position=(
+            position.get("x", 0)
+            if isinstance(position, dict)
+            else getattr(position, "x", 0)
+        ),
+        y_position=(
+            position.get("y", 0)
+            if isinstance(position, dict)
+            else getattr(position, "y", 0)
+        ),
+        width=(
+            position.get("width", 4)
+            if isinstance(position, dict)
+            else getattr(position, "width", 4)
+        ),
+        height=(
+            position.get("height", 4)
+            if isinstance(position, dict)
+            else getattr(position, "height", 4)
+        ),
         minW=request.template.minW,
         minH=request.template.minH,
-        visible=request.template.visible
-        if request.template.visible is not None
-        else True,
-        locked=request.template.locked
-        if request.template.locked is not None
-        else False,
+        visible=(
+            request.template.visible if request.template.visible is not None else True
+        ),
+        locked=(
+            request.template.locked if request.template.locked is not None else False
+        ),
         moved=request.template.moved if request.template.moved is not None else False,
-        static=request.template.static
-        if request.template.static is not None
-        else False,
+        static=(
+            request.template.static if request.template.static is not None else False
+        ),
         color=request.template.color,
         context=request.template.context,
         table=request.template.table,
@@ -1559,21 +1567,31 @@ def import_tile_template(
         grouping=request.template.grouping,
         is_checkpoint=False,
         # Pass specialized tile data
-        table_tile=request.template.table_tile.model_dump()
-        if request.template.table_tile
-        else None,
-        plot_tile=request.template.plot_tile.model_dump()
-        if request.template.plot_tile
-        else None,
-        view_tile=request.template.view_tile.model_dump()
-        if request.template.view_tile
-        else None,
-        editor_tile=request.template.editor_tile.model_dump()
-        if request.template.editor_tile
-        else None,
-        terminal_tile=request.template.terminal_tile.model_dump()
-        if request.template.terminal_tile
-        else None,
+        table_tile=(
+            request.template.table_tile.model_dump()
+            if request.template.table_tile
+            else None
+        ),
+        plot_tile=(
+            request.template.plot_tile.model_dump()
+            if request.template.plot_tile
+            else None
+        ),
+        view_tile=(
+            request.template.view_tile.model_dump()
+            if request.template.view_tile
+            else None
+        ),
+        editor_tile=(
+            request.template.editor_tile.model_dump()
+            if request.template.editor_tile
+            else None
+        ),
+        terminal_tile=(
+            request.template.terminal_tile.model_dump()
+            if request.template.terminal_tile
+            else None
+        ),
     )
 
     created_ids = {"tile_id": str(tile.id)}

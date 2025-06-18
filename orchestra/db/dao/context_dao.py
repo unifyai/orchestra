@@ -112,6 +112,7 @@ class ContextDAO:
                     field_category="entry",
                     mutable=False,  # This should be immutable
                     unique=True,  # This should be unique within the context
+                    description=f"Sequential row ID",
                 )
         self.session.commit()
         return context_id

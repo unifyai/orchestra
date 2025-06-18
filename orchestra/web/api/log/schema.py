@@ -22,8 +22,20 @@ class EnumType(BaseModel):
 
 
 class StandardFieldDefinition(BaseModel):
+    """
+    Defines a standard field with type information and behavioral flags.
+
+    The `type` field specifies the data type of the field.
+    The `mutable` flag controls whether the field can later be modified via update endpoints.
+    The `unique` flag controls whether the field can only have one value per log.
+    The `description` field provides an optional human-readable description of the field.
+    """
+
     type: str
-    mutable: bool = False
+    mutable: bool = Field(
+        default=False,
+        description="If true, entries under this field can be updated via update endpoints; otherwise they are immutable after creation (default false).",
+    )
     unique: bool = False
     description: Optional[str] = Field(
         None,
@@ -413,6 +425,14 @@ class GetLogsMetricRequest(BaseModel):
 
 
 class CreateFieldsRequest(BaseModel):
+    """
+    Request model for creating fields in a project context.
+
+    Fields can be defined with various properties including mutability. The `mutable` flag
+    determines whether field values can be updated after creation via update endpoints.
+    Immutable fields (mutable=False) provide data integrity guarantees once set.
+    """
+
     project: str = Field(
         description="Name of the project the fields belong to.",
         example="eval-project",
@@ -431,6 +451,11 @@ class CreateFieldsRequest(BaseModel):
                 "type": "str",
                 "unique": True,
                 "description": "User email address",
+            },
+            "comment": {
+                "type": "str",
+                "mutable": True,
+                "description": "User comment",
             },
         },
     )
