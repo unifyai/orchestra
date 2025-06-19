@@ -272,7 +272,11 @@ def cast_expr(expr, from_type: str, to_type: str):
 
     if final_type == "str":
         # Strings might still have quotes, so remove them via `replace()`
-        return func.replace(cast(expr, String), '"', "")
+        return func.replace(
+            cast(expr, String),
+            literal('"', type_=String),
+            literal("", type_=String),
+        )
     elif final_type == "float":
         return cast(expr, Float)
     elif final_type == "int":
