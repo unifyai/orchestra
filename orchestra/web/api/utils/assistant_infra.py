@@ -3,13 +3,12 @@ import requests
 COMMS_URL = "https://unity-comms-app-262420637606.us-central1.run.app"
 
 
-def create_phone_number():
+def create_phone_number(country: str = "US"):
     """
     Create a phone number for the user by making a POST request to the comms endpoint.
 
     Args:
-        first_name (str): User's first name
-        last_name (str): User's last name
+        country (str): The country code for phone number provisioning (e.g., "US", "GB").
 
     Returns:
         JSON response from the phone creation endpoint
@@ -19,6 +18,7 @@ def create_phone_number():
         json={
             "voice_url": "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/twilio-call-webhook",
             "sms_url": "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/twilio-msg-webhook",
+            "country": country,
         },
     ).json()
 

@@ -32,6 +32,7 @@ class AssistantDAO:
         email: Optional[str] = None,
         whatsapp_sid: Optional[str] = None,
         voice_id: Optional[str] = None,
+        country: Optional[str] = None,
     ) -> Assistant:
         """
         Create a new Assistant for the given user.
@@ -51,6 +52,7 @@ class AssistantDAO:
             email=email,
             whatsapp_sid=whatsapp_sid,
             voice_id=voice_id,
+            country=country,
         )
         self.session.add(assistant)
         self.session.flush()
@@ -109,6 +111,7 @@ class AssistantDAO:
         email: Optional[str] = None,
         whatsapp_sid: Optional[str] = None,
         voice_id: Optional[str] = None,
+        country: Optional[str] = None,
     ) -> Optional[Assistant]:
         """
         Update configuration for an existing Assistant.
@@ -132,6 +135,8 @@ class AssistantDAO:
             assistant.whatsapp_sid = whatsapp_sid
         if voice_id is not None:
             assistant.voice_id = voice_id
+        if country is not None:
+            assistant.country = country
         self.session.add(assistant)
         return assistant
 
