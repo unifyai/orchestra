@@ -2246,7 +2246,7 @@ def ensure_jsonb(expr):
     """
     # For Python literals / bind params, wrap with to_jsonb (handles any type)
     if isinstance(expr, BindParameter):
-        return func.to_jsonb(literal(expr.value))
+        return literal(expr.value, type_=JSONB)
 
     # If expression is already JSON/JSONB, leave as-is
     try:
@@ -2448,11 +2448,7 @@ def _handle_dict_get(
             [value_expr.label("value"), literal(result_type).label("inferred_type")],
         )
 
-        return (
-            select(*select_cols)
-            .select_from(container_sql)
-            .subquery("dict_get_subquery")
-        )
+        return select(*select_cols).select_from(container_sql).subquery()
     else:
         # For non-subquery containers (literals or direct SQL expressions)
         if default_sql is not None:
@@ -2476,7 +2472,7 @@ def _handle_dict_get(
                     literal(result_type).label("inferred_type"),
                 )
                 .select_from(ids_subq)
-                .subquery("dict_get_subquery")
+                .subquery()
             )
         else:
             # If no log_event_ids, just return the expression
