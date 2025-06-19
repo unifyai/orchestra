@@ -111,6 +111,9 @@ def create_context(
             unique_id_column = request.unique_id_column
             unique_id_name = request.unique_id_name
 
+        # Normalize context name: remove leading slash to treat '/exp1/name1' the same as 'exp1/name1'
+        context_name = context_name.lstrip("/")
+
         # Validate context name
         if not re.match(r"^[a-zA-Z0-9\_\-/]+$", context_name) or "//" in context_name:
             raise HTTPException(
@@ -335,6 +338,9 @@ def get_context(
             raise IndexError("Project not found")
         project_id = project.id
 
+        # Normalize context name: remove leading slash to treat '/exp1/name1' the same as 'exp1/name1'
+        context_name = context_name.lstrip("/")
+
         context = context_dao.filter(
             project_id=project_id,
             name=context_name,
@@ -406,6 +412,9 @@ def delete_context(
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    # Normalize context name: remove leading slash to treat '/exp1/name1' the same as 'exp1/name1'
+    context_name = context_name.lstrip("/")
+
     # Protect the built-in Tasks context in Unity project
     if project_name == "Unity" and context_name == "Tasks":
         raise HTTPException(
@@ -674,6 +683,9 @@ def rename_context(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
+    # Normalize context name: remove leading slash to treat '/exp1/name1' the same as 'exp1/name1'
+    context_name = context_name.lstrip("/")
+
     # Protect the built-in Tasks context in Unity project
     if project_name == "Unity" and context_name == "Tasks":
         raise HTTPException(
@@ -697,7 +709,9 @@ def rename_context(
     ctx_id = ctx_list[0][0].id
     # 3) Attempt rename
     try:
-        context_dao.update(id=ctx_id, name=body.name)
+        # Normalize new context name: remove any leading slash from provided name
+        new_name = body.name.lstrip("/")
+        context_dao.update(id=ctx_id, name=new_name)
     except IntegrityError:
         raise HTTPException(
             status_code=400,

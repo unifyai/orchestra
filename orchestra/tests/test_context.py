@@ -41,6 +41,128 @@ async def test_create_context(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_create_context_with_slash(client: AsyncClient):
+    project_name = "test-project"
+    context_name = "/training/trial1"
+
+    # Create project first
+    response = await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create context
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert "Context created successfully" in response.json()["info"]
+
+    # Try to create same context again
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name[1:]},
+        headers=HEADERS,
+    )
+    assert response.status_code == 400
+    assert (
+        "A context with this name already exists in the project"
+        in response.json()["detail"]
+    )
+
+    # Check that context was created
+    response = await client.get(
+        f"/v0/project/{project_name}/contexts/{context_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json()["name"] == context_name[1:]
+
+
+@pytest.mark.anyio
+async def test_delete_context_with_slash(client: AsyncClient):
+    project_name = "test-project"
+    context_name = "/training/trial1"
+
+    # Create project first
+    response = await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create context
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert "Context created successfully" in response.json()["info"]
+
+    # Check that context was created
+    response = await client.get(
+        f"/v0/project/{project_name}/contexts/{context_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json()["name"] == context_name[1:]
+
+    # Delete context
+    request = await client.delete(
+        f"/v0/project/{project_name}/contexts/{context_name}",
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_rename_context_with_slash(client: AsyncClient):
+    project_name = "test-project"
+    context_name = "/training/trial1"
+    context_name2 = "/training/trial2"
+
+    # Create project first
+    response = await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create context
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert "Context created successfully" in response.json()["info"]
+
+    # Check that context was created
+    response = await client.get(
+        f"/v0/project/{project_name}/contexts/{context_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json()["name"] == context_name[1:]
+
+    # Perform rename
+    resp = await client.patch(
+        f"/v0/project/{project_name}/contexts/{context_name}/rename",
+        json={"name": context_name2},
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200
+
+
+@pytest.mark.anyio
 async def test_create_existing_context(client: AsyncClient):
     project_name = "test-project"
     context_name = "existing-context"
