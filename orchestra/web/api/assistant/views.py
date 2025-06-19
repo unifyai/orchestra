@@ -94,6 +94,7 @@ admin_router = APIRouter()
                             "phone": "+1-555-123-4567",
                             "email": "alice.smith@example.com",
                             "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
+                            "country": "US",
                         },
                     },
                 },
@@ -173,6 +174,7 @@ def create_assistant(
             voice_id=assistant_in.voice_id,
             phone=assistant_in.phone,
             email=assistant_in.email,
+            country=assistant_in.country,
         )
 
         # Commit the assistant creation before infrastructure setup
@@ -219,7 +221,7 @@ def create_assistant(
                 print(f"EMAIL WATCHED: {created_email}")
 
                 # Step 3: create phone number
-                phone_response = create_phone_number()
+                phone_response = create_phone_number(country=assistant_in.country)
                 if "detail" in phone_response:
                     raise Exception(
                         f"Phone number creation failed: {phone_response['detail']}",
@@ -426,6 +428,7 @@ def create_assistant(
             email=assistant.email,
             whatsapp_sid=assistant.whatsapp_sid,
             voice_id=assistant.voice_id,
+            country=assistant.country,
         ),
     )
 
@@ -457,6 +460,7 @@ def create_assistant(
                                 "profile_photo": "https://example.com/photos/alice.jpg",
                                 "about": "Mathematician and writer known for work on Analytical Engine",
                                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
+                                "country": "US",
                                 "created_at": "2025-04-25T12:00:00Z",
                                 "updated_at": "2025-04-25T12:00:00Z",
                             },
@@ -473,6 +477,7 @@ def create_assistant(
                                 "profile_photo": "https://example.com/photos/bob.jpg",
                                 "about": "Machine learning expert with focus on computer vision",
                                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
+                                "country": "CA",
                                 "created_at": "2025-04-24T10:30:00Z",
                                 "updated_at": "2025-04-24T10:30:00Z",
                             },
@@ -521,6 +526,7 @@ def list_assistants(
                     region=a.region,
                     profile_photo=a.profile_photo,
                     about=a.about,
+                    country=a.country,
                     weekly_limit=(
                         float(a.weekly_limit) if a.weekly_limit is not None else None
                     ),
@@ -703,6 +709,7 @@ def delete_assistant(
                             "region": "North America",
                             "profile_photo": "https://example.com/photos/alice.jpg",
                             "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
+                            "country": "US",
                             "created_at": "2025-04-25T12:00:00Z",
                             "updated_at": "2025-04-25T14:30:00Z",
                         },
@@ -762,6 +769,7 @@ def update_assistant_config(
             weekly_limit=weekly_limit,
             max_parallel=update.max_parallel,
             voice_id=update.voice_id,
+            country=update.country,
         )
         if not updated:
             raise HTTPException(
@@ -777,6 +785,7 @@ def update_assistant_config(
                 region=updated.region,
                 profile_photo=updated.profile_photo,
                 about=updated.about,
+                country=updated.country,
                 weekly_limit=float(updated.weekly_limit),
                 max_parallel=updated.max_parallel,
                 created_at=updated.created_at,
