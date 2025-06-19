@@ -61,6 +61,11 @@ class AssistantCreate(BaseModel):
         description="Brief description about the assistant",
         example="Mathematician and writer known for work on Analytical Engine",
     )
+    country: Optional[str] = Field(
+        None,
+        description="Country code for phone number provisioning (e.g., US, GB)",
+        example="US",
+    )
     email: Optional[str] = Field(
         None,
         description="Email of the assistant",
@@ -99,6 +104,7 @@ class AssistantCreate(BaseModel):
                 "region": "North America",
                 "profile_photo": "https://example.com/photos/ada.jpg",
                 "about": "Mathematician and writer known for work on Analytical Engine",
+                "country": "US",
                 "email": "ada.lovelace@unify.ai",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "user_phone": "+15551234567",
@@ -144,6 +150,7 @@ class AssistantRead(AssistantCreate):
                 "region": "North America",
                 "profile_photo": "https://example.com/photos/ada.jpg",
                 "about": "Mathematician and writer known for work on Analytical Engine",
+                "country": "US",
                 "email": "ada.lovelace@unify.ai",
                 "phone": "+15551234567",
                 "user_phone": "+15551234567",
@@ -202,6 +209,11 @@ class AssistantUpdate(BaseModel):
         description="Id of the voice (Cartesia ID) to use for the assistant",
         example="bf0a246a-8642-498a-9950-80c35e9276b5",
     )
+    country: Optional[str] = Field(
+        None,
+        description="Country code for phone number provisioning (e.g., US, GB)",
+        example="GB",
+    )
 
     class Config:
         orm_mode = True
@@ -215,6 +227,7 @@ class AssistantUpdate(BaseModel):
                 "email": "ada.lovelace@newdomain.com",
                 "whatsapp_sid": "whatsapp:+1234567890",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
+                "country": "GB",
             },
         }
 

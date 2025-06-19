@@ -1125,6 +1125,7 @@ class Assistant(Base):
     region = Column(String, nullable=True)
     profile_photo = Column(String, nullable=True)
     about = Column(String, nullable=True)
+    country = Column(String, nullable=True)
     weekly_limit = Column(Numeric, nullable=True)
     max_parallel = Column(Integer, nullable=True)
     email = Column(String, nullable=True)
