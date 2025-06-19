@@ -4,6 +4,7 @@ from fastapi import HTTPException
 from sqlalchemy import (
     TIMESTAMP,
     BindParameter,
+    Boolean,
     Date,
     Float,
     Integer,
@@ -22,6 +23,7 @@ from sqlalchemy import (
     select,
 )
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.sql.expression import Exists, UnaryExpression
 from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.dao.log_dao import LogDAO
@@ -53,6 +55,59 @@ __all__ = [
 
 
 # Helper function for logical operators (and, or, not)
+def _create_truthiness_condition(subq_or_literal, session):
+    """
+    Takes a subquery or a literal and returns an SQL condition that
+    evaluates its "truthiness" in the same way Python does.
+    """
+    if isinstance(subq_or_literal, (Exists, UnaryExpression)):
+        return subq_or_literal
+
+    # If it's a literal value, we can determine truthiness directly in Python.
+    if not isinstance(subq_or_literal, Subquery):
+        # Let SQLAlchemy handle the boolean conversion for literals
+        return literal(
+            bool(
+                (
+                    subq_or_literal.value
+                    if isinstance(subq_or_literal, BindParameter)
+                    else subq_or_literal
+                ),
+            ),
+        )
+
+    # If it's a subquery, build the condition based on its value and type.
+    subq = subq_or_literal
+    val_col, val_type = _select_value(subq, session)
+
+    # Handle cases where the subquery returns no value (e.g., key does not exist).
+    # This should be treated as falsy.
+    if val_col is None:
+        return literal(False)
+
+    if val_type == "bool":
+        # Explicitly cast to Boolean to prevent DatatypeMismatch errors.
+        return cast(val_col, Boolean).is_(True)
+    elif val_type in ("int", "float"):
+        # For numeric types, check if the value is not zero
+        return val_col != 0
+    elif val_type == "str":
+        # For string types, check if not empty
+        return func.length(func.replace(cast(val_col, String), '"', "")) > 0
+    elif val_type == "list":
+        # For lists, check if not empty
+        return func.jsonb_array_length(val_col) > 0
+    elif val_type == "dict":
+        # For dicts, check if not empty
+        return val_col != cast(literal("{}"), JSONB)
+    elif val_type == "NoneType":
+        # None is always falsy
+        return literal(False)
+    else:
+        # For other types (timestamp, etc.), check if not null
+        return val_col.isnot(None)
+
+
 def _handle_logical_operator(
     filter_dict,
     log_event_alias,
@@ -62,28 +117,44 @@ def _handle_logical_operator(
     local_scope=None,
 ):
     """
-    Handles logical operators ('and', 'or', 'not') in the filter dictionary.
-
-    Args:
-        filter_dict (dict): The filter dictionary containing the logical operator and operands.
-        log_event_alias: Alias for LogEvent to correlate subqueries.
-        session: SQLAlchemy session for executing subqueries.
-
-    Returns:
-        Subquery or SQLAlchemy condition based on the logical operator.
+    Handles logical operators ('and', 'or', 'not') using CASE statements
+    to ensure Python-like short-circuiting.
     """
     operand = filter_dict.get("operand")
-    lhs = (
-        build_sql_query(
-            filter_dict.get("lhs"),
+
+    # The 'not' operator can be handled simply by negating the truthiness
+    if operand == "not":
+        rhs = build_sql_query(
+            filter_dict.get("rhs"),
             log_event_alias,
             session,
             log_event_ids=log_event_ids,
             is_derived=is_derived,
             local_scope=local_scope,
         )
-        if operand != "not"
-        else None
+        if isinstance(rhs, Subquery):
+            # Re-use the truthiness condition, but negate it
+            is_truthy_condition = _create_truthiness_condition(rhs, session)
+            return (
+                select(
+                    rhs.c.log_event_id.label("log_event_id"),
+                    not_(is_truthy_condition).label("value"),
+                    literal("bool").label("inferred_type"),
+                )
+                .select_from(rhs)
+                .subquery()
+            )
+        else:
+            return not_(rhs)
+
+    # Build LHS and RHS expressions for 'and' / 'or'
+    lhs = build_sql_query(
+        filter_dict.get("lhs"),
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
     )
     rhs = build_sql_query(
         filter_dict.get("rhs"),
@@ -94,144 +165,54 @@ def _handle_logical_operator(
         local_scope=local_scope,
     )
 
-    # Check if lhs and rhs are subqueries
     lhs_is_sub = isinstance(lhs, Subquery)
     rhs_is_sub = isinstance(rhs, Subquery)
 
-    def _true_ids(subq):
-        val_col, val_type = _select_value(subq, session)
+    # If neither are subqueries, the operation is happening in a simple WHERE clause
+    # where standard `and_` and `or_` are sufficient.
+    if not lhs_is_sub and not rhs_is_sub:
+        return and_(lhs, rhs) if operand == "and" else or_(lhs, rhs)
 
-        if val_type == "bool":
-            # For boolean types, check if the value is True
-            condition = val_col.is_(True)
-        elif val_type in ("int", "float"):
-            # For numeric types, check if the value is not zero
-            condition = val_col != 0
-        elif val_type == "str":
-            # For string types, check if not empty (after removing JSON quotes)
-            condition = func.length(func.replace(cast(val_col, String), '"', "")) > 0
-        elif val_type in ("list", "dict"):
-            # For collections, check if not empty
-            if val_type == "list":
-                condition = func.jsonb_array_length(val_col) > 0
-            else:  # dict
-                # Check if dict is not empty using simple comparison
-                condition = val_col != cast(literal("{}"), JSONB)
-        elif val_type == "NoneType":
-            # None is always falsy
-            condition = literal(False)
-        else:
-            # For other types (timestamp, date, time, timedelta), check if not null
-            condition = subq.c.value.isnot(None)
+    # 1. Define the truthiness conditions for the CASE statement
+    lhs_condition = _create_truthiness_condition(lhs, session)
+    rhs_condition = _create_truthiness_condition(rhs, session)
 
-        return select(subq.c.log_event_id).select_from(subq).where(condition)
+    if operand == "and":
+        # Logic: CASE WHEN (LHS is truthy) THEN (RHS is truthy) ELSE FALSE END
+        case_expr = case((lhs_condition, rhs_condition), else_=literal(False))
+    elif operand == "or":
+        # Logic: CASE WHEN (LHS is truthy) THEN TRUE ELSE (RHS is truthy) END
+        case_expr = case((lhs_condition, literal(True)), else_=rhs_condition)
+    else:
+        raise ValueError(f"Unknown logical operand: {operand}")
 
-    def _make_bool_subq(ids_selectable):
-        tmp = ids_selectable.subquery()
-        return (
-            select(
-                tmp.c.log_event_id.label("log_event_id"),
-                literal(True).label("value"),
-                literal("bool").label("inferred_type"),
-            )
-            .select_from(tmp)
-            .subquery()
+    # 2. Build the final subquery, joining LHS and RHS to evaluate the CASE expression
+    select_cols = [case_expr.label("value"), literal("bool").label("inferred_type")]
+
+    from_clause = None
+    if lhs_is_sub and rhs_is_sub:
+        # Join the two subqueries to have access to both row contexts
+        is_full_join = operand == "or"
+        from_clause = lhs.outerjoin(
+            rhs,
+            lhs.c.log_event_id == rhs.c.log_event_id,
+            full=is_full_join,
         )
+        # Coalesce IDs from both sides in case of outer join
+        select_cols.insert(
+            0,
+            func.coalesce(lhs.c.log_event_id, rhs.c.log_event_id).label("log_event_id"),
+        )
+    elif lhs_is_sub:
+        from_clause = lhs
+        select_cols.insert(0, lhs.c.log_event_id.label("log_event_id"))
+    elif rhs_is_sub:
+        from_clause = rhs
+        select_cols.insert(0, rhs.c.log_event_id.label("log_event_id"))
+    else:
+        return case_expr
 
-    # Handle "not"
-    if operand == "not":
-        if rhs_is_sub:
-            val_col, val_type = _select_value(rhs, session)
-
-            if val_type == "bool":
-                # For boolean types, negate the value
-                not_expr = not_(val_col)
-            elif val_type in ("int", "float"):
-                # For numeric types, check if the value is zero
-                not_expr = val_col == 0
-            elif val_type == "str":
-                # For string types, check if empty (after removing JSON quotes)
-                not_expr = (
-                    func.length(func.replace(cast(val_col, String), '"', "")) == 0
-                )
-            elif val_type in ("list", "dict"):
-                # For collections, check if empty
-                if val_type == "list":
-                    not_expr = func.jsonb_array_length(val_col) == 0
-                else:  # dict
-                    # Check if dict is empty using simple comparison
-                    not_expr = val_col == cast(literal("{}"), JSONB)
-            elif val_type == "NoneType":
-                # None is always falsy, so not None is True
-                not_expr = literal(True)
-            else:
-                # For other types (timestamp, date, time, timedelta), check if null
-                not_expr = not_(rhs.c.value)
-
-            return (
-                select(
-                    rhs.c.log_event_id.label("log_event_id"),
-                    not_expr.label("value"),
-                    literal("bool").label("inferred_type"),
-                )
-                .select_from(rhs)
-                .subquery()
-            )
-        else:
-            return not_(rhs)
-
-    # Handle "and"/"or"
-    if operand in ("and", "or"):
-        if lhs_is_sub and rhs_is_sub:
-            lhs_ids = _true_ids(lhs)
-            rhs_ids = _true_ids(rhs)
-            combined_ids = (
-                lhs_ids.intersect(rhs_ids)
-                if operand == "and"
-                else lhs_ids.union(rhs_ids)
-            )
-            return _make_bool_subq(combined_ids)
-
-        elif lhs_is_sub and not rhs_is_sub:
-            if operand == "and":
-                passed_ids = _true_ids(lhs).subquery()
-                filtered_ids = (
-                    select(passed_ids.c.log_event_id.label("log_event_id"))
-                    .join(
-                        log_event_alias,
-                        log_event_alias.id == passed_ids.c.log_event_id,
-                    )
-                    .where(rhs)
-                )
-                return _make_bool_subq(filtered_ids)
-            else:
-                passed_ids = _true_ids(lhs)
-                pass_rhs = select(log_event_alias.id.label("log_event_id")).where(rhs)
-                combined = passed_ids.union(pass_rhs)
-                return _make_bool_subq(combined)
-
-        elif not lhs_is_sub and rhs_is_sub:
-            if operand == "and":
-                passed_ids = _true_ids(rhs).subquery()
-                filtered_ids = (
-                    select(passed_ids.c.log_event_id.label("log_event_id"))
-                    .join(
-                        log_event_alias,
-                        log_event_alias.id == passed_ids.c.log_event_id,
-                    )
-                    .where(lhs)
-                )
-                return _make_bool_subq(filtered_ids)
-            else:
-                pass_rhs = _true_ids(rhs)
-                pass_lhs = select(log_event_alias.id.label("log_event_id")).where(lhs)
-                combined = pass_lhs.union(pass_rhs)
-                return _make_bool_subq(combined)
-
-        else:
-            return and_(lhs, rhs) if operand == "and" else or_(lhs, rhs)
-
-    raise ValueError(f"Unknown logical operand: {operand}")
+    return select(*select_cols).select_from(from_clause).subquery()
 
 
 def _arithmetic_expr(lval, rval, operand, lval_type, rval_type):
