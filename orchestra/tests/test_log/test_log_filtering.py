@@ -43,10 +43,6 @@ from . import (
             {"d": {"nullkey": None}},
         ),
         (
-            "d is None and d.get('x') is None",
-            {"d": None},
-        ),
-        (
             "d and d.get('x').startswith('a')",
             {"d": {"x": "apple"}},
         ),
@@ -101,6 +97,26 @@ from . import (
         ("a == '\\\\'", {"a": "\\"}),
         ('a == "He said, \\"Hello\\""', {"a": 'He said, "Hello"'}),
         ("a == 'It\\'s a test'", {"a": "It's a test"}),
+        (
+            "schedule and schedule.get('start_at', '').startswith('2035-06-16')",
+            {"schedule": None},
+        ),
+        (
+            "d.get('x') and d.get('x').startswith('a')",
+            {"d": {}},
+        ),
+        (
+            "d.get('flag') and d.get('nested').get('key') == 'value'",
+            {"d": {"flag": False, "nested": None}},
+        ),
+        (
+            "d.get('valid_key') or d.get('invalid_obj').startswith('a')",
+            {"d": {"valid_key": "truthy_value", "invalid_obj": None}},
+        ),
+        (
+            "d.get('a') and d.get('b') and d.get('c').startswith('x')",
+            {"d": {"a": True, "b": None, "c": None}},
+        ),
     ],
 )
 async def test_log_filter_helper(client: AsyncClient, expression, values):
