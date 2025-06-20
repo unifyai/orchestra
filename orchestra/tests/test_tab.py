@@ -1847,3 +1847,701 @@ async def test_export_tab_template_with_valid_schema_tile_positioning(
 
     assert tiles_by_name["bottom_full"]["position"]["width"] == 12
     assert tiles_by_name["bottom_full"]["position"]["height"] == 4
+
+
+# Template Validation and Sanitization Tests
+@pytest.mark.anyio
+async def test_import_tab_template_with_validation_enabled(client: AsyncClient):
+    """Test importing tab template with validation enabled"""
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    # Create template with validation issues
+    template_with_issues = {
+        "name": "validation_test_tab",
+        "global_context": "NonExistent/Context",  # Invalid context
+        "tiles": [
+            {
+                "name": "invalid_table",
+                "type": "Table",
+                "position": {"x": 0, "y": 0, "width": 6, "height": 4},
+                "context": "Another/Invalid/Context",  # Invalid context
+                "column_context": "Invalid/ColumnContext/",  # Invalid column context
+                "grouping": "Entries/invalid_field,Parameters/missing_field",  # Invalid fields
+                "filters": "invalid_field~>~25§another_invalid~<~100",  # Invalid filter fields
+                "table_tile": {
+                    "table_type": "advanced",
+                    "column_order": "Entries/invalid_col1,Parameters/invalid_col2",  # Invalid columns
+                    "hidden_columns": "Entries/missing_col",  # Invalid column
+                    "sorting": '{"invalid_col": "desc"}',  # Invalid JSON reference
+                    "selected": "row1,row2,row3",  # Should be sanitized to null
+                },
+            },
+            {
+                "name": "invalid_plot",
+                "type": "Plot",
+                "position": {"x": 6, "y": 0, "width": 6, "height": 4},
+                "context": "Sciences/Physics",
+                "plot_tile": {
+                    "plot_type": "scatter",
+                    "x_axis": "invalid_field",  # Invalid field reference
+                    "y_axis": "NonExistentTable.column",  # Invalid tile reference
+                    "plot_group_by": "AnotherMissingTable.category",  # Invalid tile reference
+                },
+            },
+        ],
+    }
+
+    # Test with validation enabled - should fail
+    import_request = {
+        "project": TEST_PROJECT,
+        "template": template_with_issues,
+        "interface_id": interface_id,
+        "validate_first": True,
+        "auto_sanitize": False,
+    }
+
+    response = await client.post(
+        "/v0/tab/import_template",
+        json=import_request,
+        headers=HEADERS,
+    )
+
+    # Should fail validation
+    assert response.status_code == 400
+    error_data = response.json()
+    assert "validation" in error_data["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_import_tab_template_with_auto_sanitization(client: AsyncClient):
+    """Test importing tab template with auto sanitization enabled"""
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    # Create template with sanitizable issues
+    template_with_issues = {
+        "name": "sanitization_test_tab",
+        "global_context": "NonExistent/Context",  # Will be sanitized to null
+        "tiles": [
+            {
+                "name": "sanitizable_table",
+                "type": "Table",
+                "position": {"x": 0, "y": 0, "width": 6, "height": 4},
+                "context": "Invalid/Context",  # Will be sanitized to null
+                "grouping": "Entries/valid_field,Entries/invalid_field",  # Invalid field will be removed
+                "table_tile": {
+                    "table_type": "basic",
+                    "column_order": "Entries/age,Entries/invalid_col",  # Invalid column will be removed
+                    "selected": "row1,row2,row3",  # Will be sanitized to null
+                },
+            },
+        ],
+    }
+
+    # Test with auto sanitization enabled
+    import_request = {
+        "project": TEST_PROJECT,
+        "template": template_with_issues,
+        "interface_id": interface_id,
+        "validate_first": True,
+        "auto_sanitize": True,
+    }
+
+    response = await client.post(
+        "/v0/tab/import_template",
+        json=import_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+
+    # Verify sanitization occurred
+    created_tab_id = data["created_ids"]["tab_id"]
+    get_response = await _get_tab(client, tab_id=created_tab_id)
+    tab_data = get_response.json()
+
+    # Global context should be sanitized to null
+    assert tab_data.get("global_context") is None
+
+    # Tile context should be sanitized to null
+    tile = tab_data["tiles"][0]
+    assert tile.get("context") is None
+
+    # Selected should be sanitized to null
+    assert tile["table_tile"]["selected"] is None
+
+
+@pytest.mark.anyio
+async def test_import_tab_template_with_complex_validation_scenarios(
+    client: AsyncClient,
+):
+    """Test importing tab template with complex validation scenarios"""
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    # Create template with various validation edge cases
+    complex_template = {
+        "name": "complex_validation_tab",
+        "global_context": "Sciences/Physics",  # Valid context
+        "tiles": [
+            {
+                "name": "reference_table",
+                "type": "Table",
+                "position": {"x": 0, "y": 0, "width": 6, "height": 4},
+                "context": "Sciences/Physics",
+                "table_tile": {
+                    "table_type": "advanced",
+                    "column_order": "Entries/temperature,Parameters/pressure,RowNumbering",  # Mix of valid and special
+                    "hidden_columns": "Parameters/pressure",  # Should be subset of column_order
+                    "columns_pin_left": "Entries/temperature",  # Should be subset of column_order
+                    "columns_pin_right": "Parameters/pressure",  # Should be subset of column_order
+                    "sorting": '{"temperature": "desc", "pressure": "asc"}',  # Valid JSON
+                    "group_sorting": '{"category": "asc"}',  # Valid JSON
+                    "filters": "temperature~>~25.0§pressure~<~1000",  # Valid filters
+                    "common_filter": "any_value_should_pass",  # Common filter should always pass
+                },
+            },
+            {
+                "name": "plot_with_tile_references",
+                "type": "Plot",
+                "position": {"x": 6, "y": 0, "width": 6, "height": 4},
+                "context": "Sciences/Physics",
+                "plot_tile": {
+                    "plot_type": "scatter",
+                    "x_axis": "reference_table.temperature",  # Valid tile reference
+                    "y_axis": "pressure",  # Valid direct field reference
+                    "plot_group_by": "reference_table.pressure",  # Valid tile reference
+                },
+            },
+            {
+                "name": "plot_with_invalid_references",
+                "type": "Plot",
+                "position": {"x": 0, "y": 4, "width": 6, "height": 4},
+                "context": "Sciences/Physics",
+                "plot_tile": {
+                    "plot_type": "line",
+                    "x_axis": "reference_table.missing_column",  # Invalid tile reference
+                    "y_axis": "missing_field",  # Invalid direct field reference
+                    "plot_group_by": "nonexistent_table.category",  # Invalid tile reference
+                },
+            },
+            {
+                "name": "table_with_column_context",
+                "type": "Table",
+                "position": {"x": 6, "y": 4, "width": 6, "height": 4},
+                "context": "Sciences/Physics",
+                "column_context": "Sciences/Physics/",  # Valid column context
+                "grouping": "Entries/Quantum,Parameters/energy",  # Should be validated against column context
+                "table_tile": {
+                    "table_type": "basic",
+                    "column_order": "Entries/energy,Parameters/mass",  # Column context filtered
+                },
+            },
+        ],
+    }
+
+    # Test with validation enabled but no auto-sanitization
+    import_request = {
+        "project": TEST_PROJECT,
+        "template": complex_template,
+        "interface_id": interface_id,
+        "validate_first": True,
+        "auto_sanitize": False,
+    }
+
+    response = await client.post(
+        "/v0/tab/import_template",
+        json=import_request,
+        headers=HEADERS,
+    )
+
+    # Should succeed despite warnings (only errors block import)
+    if response.status_code == 200:
+        data = response.json()
+        assert data["success"] is True
+
+        # Check if validation results are included
+        if "validation_result" in data:
+            validation = data["validation_result"]
+            assert "issues" in validation
+            # Should have warnings for invalid references but no errors
+            errors = [
+                issue for issue in validation["issues"] if issue["level"] == "error"
+            ]
+            assert len(errors) == 0  # No blocking errors
+    else:
+        # If it fails, should be due to validation errors
+        assert response.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_import_tab_template_with_field_type_validation(client: AsyncClient):
+    """Test importing tab template with field type validation"""
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    # Create template that tests field type handling
+    field_type_template = {
+        "name": "field_type_test_tab",
+        "tiles": [
+            {
+                "name": "derived_entry_table",
+                "type": "Table",
+                "position": {"x": 0, "y": 0, "width": 12, "height": 4},
+                "context": "Sciences/Physics",
+                "table_tile": {
+                    "table_type": "advanced",
+                    # Test that derived_entry fields get "Entries/" prefix
+                    "column_order": "Entries/temperature,Entries/derived_score,Parameters/pressure",
+                    "grouping": "Entries/derived_score,Parameters/pressure",  # Mix of derived_entry and param
+                },
+            },
+            {
+                "name": "filter_validation_table",
+                "type": "Table",
+                "position": {"x": 0, "y": 4, "width": 12, "height": 4},
+                "context": "Sciences/Physics",
+                "filters": "temperature~>~25§derived_score~<~100§pressure~between~10,20",  # Mix of field types
+                "table_tile": {
+                    "table_type": "basic",
+                    "column_order": "Entries/temperature,Entries/derived_score",
+                },
+            },
+        ],
+    }
+
+    import_request = {
+        "project": TEST_PROJECT,
+        "template": field_type_template,
+        "interface_id": interface_id,
+        "validate_first": True,
+        "auto_sanitize": True,
+    }
+
+    response = await client.post(
+        "/v0/tab/import_template",
+        json=import_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+
+
+@pytest.mark.anyio
+async def test_import_tab_template_with_json_validation(client: AsyncClient):
+    """Test importing tab template with JSON field validation"""
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    # Create template with various JSON validation scenarios
+    json_validation_template = {
+        "name": "json_validation_tab",
+        "tiles": [
+            {
+                "name": "valid_json_table",
+                "type": "Table",
+                "position": {"x": 0, "y": 0, "width": 6, "height": 4},
+                "table_tile": {
+                    "table_type": "advanced",
+                    "column_order": "Entries/age,Entries/name",
+                    "sorting": '{"age": "desc", "name": "asc"}',  # Valid JSON
+                    "group_sorting": '{"category": "asc"}',  # Valid JSON
+                },
+            },
+            {
+                "name": "invalid_json_table",
+                "type": "Table",
+                "position": {"x": 6, "y": 0, "width": 6, "height": 4},
+                "table_tile": {
+                    "table_type": "advanced",
+                    "column_order": "Entries/age,Entries/name",
+                    "sorting": '{"age": "desc", "name": "asc"',  # Invalid JSON - missing closing brace
+                    "group_sorting": '{category: "asc"}',  # Invalid JSON - unquoted key
+                },
+            },
+        ],
+    }
+
+    # Test with validation but no auto-sanitization (should warn about invalid JSON)
+    import_request = {
+        "project": TEST_PROJECT,
+        "template": json_validation_template,
+        "interface_id": interface_id,
+        "validate_first": True,
+        "auto_sanitize": False,
+    }
+
+    response = await client.post(
+        "/v0/tab/import_template",
+        json=import_request,
+        headers=HEADERS,
+    )
+    assert response.status_code == 400
+    data = response.json()
+    assert "detail" in data
+    assert "Template validation failed" in data["detail"]
+
+    # Test with auto-sanitization (should clean up invalid JSON)
+    import_request["auto_sanitize"] = True
+    import_request["template"]["name"] = "json_validation_tab_sanitized"
+
+    response = await client.post(
+        "/v0/tab/import_template",
+        json=import_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+
+
+@pytest.mark.anyio
+async def test_import_tab_template_with_selected_field_sanitization(
+    client: AsyncClient,
+):
+    """Test that 'selected' field is always sanitized to null"""
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    # Create template with selected field that should be sanitized
+    selected_sanitization_template = {
+        "name": "selected_sanitization_tab",
+        "tiles": [
+            {
+                "name": "table_with_selected",
+                "type": "Table",
+                "position": {"x": 0, "y": 0, "width": 12, "height": 4},
+                "table_tile": {
+                    "table_type": "advanced",
+                    "column_order": "Entries/age,Entries/name",
+                    "selected": "row_1,row_5,row_10",  # Should always be sanitized to null
+                },
+            },
+        ],
+    }
+
+    import_request = {
+        "project": TEST_PROJECT,
+        "template": selected_sanitization_template,
+        "interface_id": interface_id,
+        "validate_first": True,
+        "auto_sanitize": True,
+    }
+
+    response = await client.post(
+        "/v0/tab/import_template",
+        json=import_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+
+    # Verify selected field was sanitized
+    created_tab_id = data["created_ids"]["tab_id"]
+    get_response = await _get_tab(client, tab_id=created_tab_id)
+    tab_data = get_response.json()
+
+    table_tile = tab_data["tiles"][0]["table_tile"]
+    assert table_tile["selected"] is None
+
+
+@pytest.mark.anyio
+async def test_import_tab_template_with_no_validation_tile_types(client: AsyncClient):
+    """Test importing tab template with tile types that require no validation"""
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    # Create template with tile types that should skip validation
+    no_validation_template = {
+        "name": "no_validation_tab",
+        "tiles": [
+            {
+                "name": "view_tile",
+                "type": "View",
+                "position": {"x": 0, "y": 0, "width": 4, "height": 4},
+                "view_tile": {
+                    "base_index": "markdown",
+                },
+            },
+            {
+                "name": "editor_tile",
+                "type": "Editor",
+                "position": {"x": 4, "y": 0, "width": 4, "height": 4},
+                "editor_tile": {
+                    "file_type": "python",
+                    "content": "print('Hello World')",
+                    "file_name": "test.py",
+                },
+            },
+            {
+                "name": "terminal_tile",
+                "type": "Terminal",
+                "position": {"x": 8, "y": 0, "width": 4, "height": 4},
+                "terminal_tile": {
+                    "shell_type": "bash",
+                },
+            },
+        ],
+    }
+
+    import_request = {
+        "project": TEST_PROJECT,
+        "template": no_validation_template,
+        "interface_id": interface_id,
+        "validate_first": True,
+        "auto_sanitize": False,
+    }
+
+    response = await client.post(
+        "/v0/tab/import_template",
+        json=import_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert data["import_stats"]["tiles"] == 3
+
+    # Verify all tiles were created without validation issues
+    created_tab_id = data["created_ids"]["tab_id"]
+    get_response = await _get_tab(client, tab_id=created_tab_id)
+    tab_data = get_response.json()
+
+    assert len(tab_data["tiles"]) == 3
+    tile_types = [tile["type"] for tile in tab_data["tiles"]]
+    assert "View" in tile_types
+    assert "Editor" in tile_types
+    assert "Terminal" in tile_types
+
+
+@pytest.mark.anyio
+async def test_export_tab_template_preserves_validation_data(client: AsyncClient):
+    """Test that exporting tab template preserves all validation-relevant data"""
+    interface_response = await _create_test_interface(client)
+    interface_id = interface_response.json()["id"]
+
+    tab_response = await _create_test_tab(
+        client,
+        interface_id,
+        name="validation_data_tab",
+        color="#FF0000",
+    )
+    tab_id = tab_response.json()["id"]
+
+    # Create tiles with comprehensive validation data
+    from orchestra.tests.test_tile import _create_test_tile
+
+    # Table tile with all validation fields
+    await _create_test_tile(
+        client,
+        tab_id,
+        name="comprehensive_table",
+        tile_type="Table",
+        context="Sciences/Physics",
+        column_context="Sciences/Physics/",
+        grouping="Entries/temperature,Parameters/pressure",
+        filters="temperature~>~25§pressure~<~1000",
+        common_filter="global_filter_value",
+        table_tile_data={
+            "table_type": "advanced",
+            "column_order": "Entries/temperature,Parameters/pressure,RowNumbering",
+            "hidden_columns": "Parameters/pressure",
+            "sorting": '{"temperature": "desc"}',
+            "group_sorting": '{"category": "asc"}',
+            "columns_pin_left": "Entries/temperature",
+            "columns_pin_right": "RowNumbering",
+            "selected": "row1,row2",  # Will be exported but should be sanitized on import
+        },
+    )
+
+    # Plot tile with tile references
+    await _create_test_tile(
+        client,
+        tab_id,
+        name="reference_plot",
+        tile_type="Plot",
+        context="Sciences/Physics",
+        plot_tile_data={
+            "plot_type": "scatter",
+            "x_axis": "comprehensive_table.temperature",
+            "y_axis": "pressure",
+            "plot_group_by": "comprehensive_table.pressure",
+        },
+    )
+
+    # Export the tab
+    export_request = {
+        "tab_id": tab_id,
+        "include_metadata": True,
+    }
+
+    response = await client.post(
+        "/v0/tab/export_template",
+        json=export_request,
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200
+    template = response.json()["template"]
+
+    # Verify all validation data is preserved
+    table_tile = next(
+        (tile for tile in template["tiles"] if tile["name"] == "comprehensive_table"),
+        None,
+    )
+    assert table_tile is not None
+    assert table_tile["context"] == "Sciences/Physics"
+    assert table_tile["column_context"] == "Sciences/Physics/"
+    assert table_tile["grouping"] == "Entries/temperature,Parameters/pressure"
+    assert table_tile["filters"] == "temperature~>~25§pressure~<~1000"
+    assert table_tile["common_filter"] == "global_filter_value"
+
+    table_data = table_tile["table_tile"]
+    assert (
+        table_data["column_order"]
+        == "Entries/temperature,Parameters/pressure,RowNumbering"
+    )
+    assert table_data["hidden_columns"] == "Parameters/pressure"
+    assert table_data["sorting"] == '{"temperature": "desc"}'
+    assert table_data["selected"] == "row1,row2"  # Preserved in export
+
+    plot_tile = next(
+        (tile for tile in template["tiles"] if tile["name"] == "reference_plot"),
+        None,
+    )
+    assert plot_tile is not None
+    plot_data = plot_tile["plot_tile"]
+    assert plot_data["x_axis"] == "comprehensive_table.temperature"
+    assert plot_data["y_axis"] == "pressure"
+    assert plot_data["plot_group_by"] == "comprehensive_table.pressure"
+
+
+@pytest.mark.anyio
+async def test_validate_tab_template(client: AsyncClient):
+    """Test tab template validation endpoint."""
+    # Create test interface first
+    response = await _create_test_interface(client)
+    interface_response = response.json()
+    interface_id = interface_response["id"]
+
+    # Create a test context first
+    response = await client.post(
+        f"/v0/project/{TEST_PROJECT}/contexts",
+        json={
+            "name": "test_context",
+            "description": "Test context for validation",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create valid tab template
+    valid_template = {
+        "name": "Test Tab",
+        "tiles": [
+            {
+                "name": "Test Tile",
+                "type": "Table",
+                "position": {"x": 0, "y": 0, "width": 4, "height": 4},
+                "context": "test_context",
+                "table": "test_table",
+            },
+        ],
+    }
+
+    # Test validation of valid template
+    response = await client.post(
+        "/v0/tab/validate_template",
+        json={
+            "project": TEST_PROJECT,
+            "template": valid_template,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert "is_valid" in result
+    assert "issues" in result
+    assert "can_sanitize" in result
+
+    # Test validation of invalid template (non-existent context)
+    invalid_template = {
+        "name": "Test Tab",
+        "tiles": [
+            {
+                "name": "Test Tile",
+                "type": "Table",
+                "position": {"x": 0, "y": 0, "width": 4, "height": 4},
+                "context": "non_existent_context",
+            },
+        ],
+    }
+
+    response = await client.post(
+        "/v0/tab/validate_template",
+        json={
+            "project": TEST_PROJECT,
+            "template": invalid_template,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert "is_valid" in result
+    # Should have validation issues for non-existent context
+    assert len(result["issues"]) > 0
+
+
+@pytest.mark.anyio
+async def test_sanitize_tab_template(client: AsyncClient):
+    """Test tab template sanitization endpoint."""
+    # Create test interface first
+    interface_response = await _create_test_interface(client)
+
+    # Create template that needs sanitization
+    template_to_sanitize = {
+        "name": "Test Tab",
+        "tiles": [
+            {
+                "name": "Test Tile",
+                "type": "Table",
+                "position": {"x": 0, "y": 0, "width": 4, "height": 4},
+                "context": "invalid_context",  # This should be sanitized
+                "table_tile": {
+                    "selected": "row_1,row_2",  # This should be sanitized to None
+                },
+            },
+        ],
+    }
+
+    # Test sanitization
+    response = await client.post(
+        "/v0/tab/sanitize_template",
+        json={
+            "project": TEST_PROJECT,
+            "template": template_to_sanitize,
+            "remove_invalid_references": True,
+            "preserve_structure": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert "sanitized_template" in result
+    assert "changes_made" in result
+
+    # Verify sanitization occurred
+    sanitized = result["sanitized_template"]
+    assert (
+        sanitized["tiles"][0]["context"] is None
+        or sanitized["tiles"][0]["context"] != "invalid_context"
+    )
