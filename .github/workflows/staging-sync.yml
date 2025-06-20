@@ -11,6 +11,10 @@ jobs:
   sync:
     name: Sync
     runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' &&
+       github.actor != 'unify-dev-bot')
     steps:
     - name: Checkout
       uses: actions/checkout@v3
