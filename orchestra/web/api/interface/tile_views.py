@@ -17,15 +17,23 @@ from orchestra.web.api.interface.schema import (
     ExportTileTemplateRequest,
     ImportTileTemplateRequest,
     PlotTileSchema,
+    SanitizeTileTemplateRequest,
     TableTileSchema,
     TemplateExportResponse,
     TemplateImportResponse,
     TerminalTileSchema,
     TileSchema,
+    TileTemplateSchema,
     UpdateTileRequest,
+    ValidateTileTemplateRequest,
+    ValidationResultSchema,
     ViewTileSchema,
 )
-from orchestra.web.api.interface.template_utils import TemplateConverter
+from orchestra.web.api.interface.template_utils import (
+    TemplateConverter,
+    TemplateSanitizer,
+    TemplateValidator,
+)
 
 router = APIRouter(prefix="/tile", tags=["tile"])
 
@@ -1422,6 +1430,94 @@ def export_tile_template(
 
 
 @router.post(
+    "/validate_template",
+    response_model=ValidationResultSchema,
+    responses={
+        200: {
+            "description": "Tile template validation completed",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "is_valid": True,
+                        "issues": [],
+                        "can_sanitize": True,
+                    },
+                },
+            },
+        },
+    },
+)
+def validate_tile_template(
+    request_fastapi: Request,
+    request: ValidateTileTemplateRequest,
+    session: Session = Depends(get_db_session),
+):
+    """Validate a tile template against a target project."""
+    validator = TemplateValidator(session)
+
+    # Get project validation schema
+    validation_schema = validator.get_project_validation_schema(
+        user_id=request_fastapi.state.user_id,
+        project_name=request.project,
+    )
+
+    # Validate the tile template
+    return validator.validate_tile_template(
+        tile_template=request.template,
+        validation_schema=validation_schema,
+    )
+
+
+@router.post(
+    "/sanitize_template",
+    response_model=dict,
+    responses={
+        200: {
+            "description": "Tile template sanitized successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "sanitized_template": {
+                            "name": "Data Table",
+                            "type": "Table",
+                            "position": {"x": 0, "y": 0, "width": 6, "height": 4},
+                        },
+                        "changes_made": ["Removed invalid context reference"],
+                    },
+                },
+            },
+        },
+    },
+)
+def sanitize_tile_template(
+    request_fastapi: Request,
+    request: SanitizeTileTemplateRequest,
+    session: Session = Depends(get_db_session),
+):
+    """Sanitize a tile template for a target project."""
+    validator = TemplateValidator(session)
+
+    # Get project validation schema
+    validation_schema = validator.get_project_validation_schema(
+        user_id=request_fastapi.state.user_id,
+        project_name=request.project,
+    )
+
+    # Sanitize the template
+    sanitizer = TemplateSanitizer(validation_schema)
+    sanitized_template = sanitizer.sanitize_tile_template(
+        tile_template=request.template,
+        remove_invalid=request.remove_invalid_references,
+        preserve_structure=request.preserve_structure,
+    )
+
+    return {
+        "sanitized_template": sanitized_template,
+        "changes_made": ["Template sanitized for target project"],
+    }
+
+
+@router.post(
     "/import_template",
     response_model=TemplateImportResponse,
     responses={
@@ -1434,6 +1530,16 @@ def export_tile_template(
                         "import_stats": {"tiles": 1},
                         "created_ids": {"tile_id": "ghi789"},
                         "warnings": [],
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Template validation failed",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Template validation failed: Context 'invalid_context' not found",
                     },
                 },
             },
@@ -1457,13 +1563,7 @@ def import_tile_template(
     tab = None
     if request.tab_id:
         tab = tab_dao.get(request.tab_id)
-    elif request.interface_id and request.tab_name:
-        tab = tab_dao.get_by_interface_and_name(
-            interface_id=request.interface_id,
-            name=request.tab_name,
-            is_checkpoint=False,
-        )
-    elif request.interface_name and request.tab_name:
+    elif request.project and request.interface_id and request.tab_name:
         # Get project first
         project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
@@ -1475,132 +1575,118 @@ def import_tile_template(
                 detail=f"Project {request.project} not found or you don't have access.",
             )
 
-        interface = interface_dao.get_by_project_and_name(
-            project_id=project.id,
-            name=request.interface_name,
+        # Get interface
+        interface = interface_dao.get(
+            id=request.interface_id,
+        )
+        if not interface:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Interface {request.interface_id} not found in project {request.project}.",
+            )
+
+        # Get tab
+        tab = tab_dao.get_by_interface_and_name(
+            interface_id=str(interface.id),
+            name=request.tab_name,
             is_checkpoint=False,
         )
-        if interface:
-            tab = tab_dao.get_by_interface_and_name(
-                interface_id=str(interface.id),
-                name=request.tab_name,
-                is_checkpoint=False,
-            )
 
     if not tab:
         raise HTTPException(
             status_code=404,
-            detail="Target tab not found.",
+            detail="Tab not found. Please provide valid tab_id or project+interface_name+tab_name.",
         )
 
+    validation_result = None
     warnings = []
 
-    # Determine tile name
-    tile_name = request.new_tile_name or request.template.name or "Imported Tile"
+    # Apply validation and sanitization if needed
+    template = request.template
 
-    # Check for name conflicts
-    existing_tile = tile_dao.get_by_tab_and_name(
-        tab_id=str(tab.id),
-        name=tile_name,
-        is_checkpoint=False,
+    # Get project for validation/sanitization
+    interface = interface_dao.get(tab.interface_id)
+    project = project_dao.get(interface.project_id)
+
+    # Always apply basic sanitization (for fields like 'selected')
+    validator = TemplateValidator(session)
+    validation_schema = validator.get_project_validation_schema(
+        user_id=request_fastapi.state.user_id,
+        project_name=project.name,
     )
 
-    if existing_tile and not request.overwrite_existing:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Tile with name {tile_name} already exists. Use overwrite_existing=true to replace it.",
+    # Apply basic sanitization always (for security/consistency reasons)
+    sanitizer = TemplateSanitizer(validation_schema)
+    template_dict = sanitizer.sanitize_tile_template(
+        tile_template=template,
+        remove_invalid=False,  # Only remove basic issues like 'selected' field
+        preserve_structure=True,
+    )
+    template = TileTemplateSchema(**template_dict)
+
+    if request.validate_first:
+        validation_result = validator.validate_tile_template(
+            tile_template=template,
+            validation_schema=validation_schema,
         )
 
-    # If overwriting and tile exists, delete it first
-    if existing_tile and request.overwrite_existing:
-        tile_dao.delete_tile(id=str(existing_tile.id))
-        warnings.append(f"Replaced existing tile '{tile_name}'")
+        # Check for blocking errors
+        errors = [issue for issue in validation_result.issues if issue.level == "error"]
+        if errors and not request.auto_sanitize:
+            error_messages = [
+                f"{issue.component_name}: {issue.message}" for issue in errors
+            ]
+            raise HTTPException(
+                status_code=400,
+                detail=f"Template validation failed: {'; '.join(error_messages)}",
+            )
 
-    # Handle position
-    position = request.template.position or {"x": 0, "y": 0, "width": 4, "height": 4}
+        # Auto-sanitize if requested and there are issues
+        if request.auto_sanitize and not validation_result.is_valid:
+            sanitized_dict = sanitizer.sanitize_tile_template(
+                tile_template=template,
+                remove_invalid=True,
+                preserve_structure=True,
+            )
+            template = TileTemplateSchema(**sanitized_dict)
+            warnings.append("Template was automatically sanitized")
 
-    # Create the tile
-    tile = tile_dao.create_tile(
-        tab_id=str(tab.id),
-        name=tile_name,
-        type=request.template.type,
-        x_position=(
-            position.get("x", 0)
-            if isinstance(position, dict)
-            else getattr(position, "x", 0)
-        ),
-        y_position=(
-            position.get("y", 0)
-            if isinstance(position, dict)
-            else getattr(position, "y", 0)
-        ),
-        width=(
-            position.get("width", 4)
-            if isinstance(position, dict)
-            else getattr(position, "width", 4)
-        ),
-        height=(
-            position.get("height", 4)
-            if isinstance(position, dict)
-            else getattr(position, "height", 4)
-        ),
-        minW=request.template.minW,
-        minH=request.template.minH,
-        visible=(
-            request.template.visible if request.template.visible is not None else True
-        ),
-        locked=(
-            request.template.locked if request.template.locked is not None else False
-        ),
-        moved=request.template.moved if request.template.moved is not None else False,
-        static=(
-            request.template.static if request.template.static is not None else False
-        ),
-        color=request.template.color,
-        context=request.template.context,
-        table=request.template.table,
-        auto_update=request.template.auto_update,
-        freeze=request.template.freeze,
-        filters=request.template.filters,
-        common_filter=request.template.common_filter,
-        metric=request.template.metric,
-        column_context=request.template.column_context,
-        grouping=request.template.grouping,
-        is_checkpoint=False,
-        # Pass specialized tile data
-        table_tile=(
-            request.template.table_tile.model_dump()
-            if request.template.table_tile
-            else None
-        ),
-        plot_tile=(
-            request.template.plot_tile.model_dump()
-            if request.template.plot_tile
-            else None
-        ),
-        view_tile=(
-            request.template.view_tile.model_dump()
-            if request.template.view_tile
-            else None
-        ),
-        editor_tile=(
-            request.template.editor_tile.model_dump()
-            if request.template.editor_tile
-            else None
-        ),
-        terminal_tile=(
-            request.template.terminal_tile.model_dump()
-            if request.template.terminal_tile
-            else None
-        ),
-    )
+    # Use TemplateConverter to create tile from template
+    try:
+        tile, converter_warnings = TemplateConverter.template_to_tile(
+            tile_template=template,
+            tab_id=str(tab.id),
+            tile_dao=tile_dao,
+            new_tile_name=request.new_tile_name,
+            overwrite_existing=request.overwrite_existing,
+        )
+        warnings.extend(converter_warnings)
+    except ValueError as e:
+        if "already exists" in str(e):
+            if request.overwrite_existing:
+                # This shouldn't happen as overwrite should handle it
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to overwrite tile: {str(e)}",
+                )
+            else:
+                tile_name = request.new_tile_name or template.name
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Tile with name {tile_name} already exists in this tab. Use overwrite_existing=true to replace it.",
+                )
+        else:
+            raise HTTPException(status_code=400, detail=str(e))
 
     created_ids = {"tile_id": str(tile.id)}
     import_stats = {"tiles": 1}
 
+    if validation_result:
+        validation_result.sanitized_template = template
+
     return TemplateImportResponse(
         success=True,
-        validation_result=None,
+        validation_result=validation_result,
         import_stats=import_stats,
         created_ids=created_ids,
         warnings=warnings,

@@ -15,10 +15,14 @@ from orchestra.web.api.interface.schema import (
     CreateTabRequest,
     ExportTabTemplateRequest,
     ImportTabTemplateRequest,
+    SanitizeTabTemplateRequest,
     TabSchema,
+    TabTemplateSchema,
     TemplateExportResponse,
     TemplateImportResponse,
     UpdateTabRequest,
+    ValidateTabTemplateRequest,
+    ValidationResultSchema,
 )
 from orchestra.web.api.interface.template_utils import (
     TemplateConverter,
@@ -934,6 +938,93 @@ def export_tab_template(
 
 
 @router.post(
+    "/validate_template",
+    response_model=ValidationResultSchema,
+    responses={
+        200: {
+            "description": "Tab template validation completed",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "is_valid": True,
+                        "issues": [],
+                        "can_sanitize": True,
+                    },
+                },
+            },
+        },
+    },
+)
+def validate_tab_template(
+    request_fastapi: Request,
+    request: ValidateTabTemplateRequest,
+    session: Session = Depends(get_db_session),
+):
+    """Validate a tab template against a target project."""
+    validator = TemplateValidator(session)
+
+    # Get project validation schema
+    validation_schema = validator.get_project_validation_schema(
+        user_id=request_fastapi.state.user_id,
+        project_name=request.project,
+    )
+
+    # Validate the tab template
+    return validator.validate_tab_template(
+        tab_template=request.template,
+        validation_schema=validation_schema,
+    )
+
+
+@router.post(
+    "/sanitize_template",
+    response_model=dict,
+    responses={
+        200: {
+            "description": "Tab template sanitized successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "sanitized_template": {
+                            "name": "Overview Tab",
+                            "tiles": [{"name": "Data Table", "type": "Table"}],
+                        },
+                        "changes_made": ["Removed invalid context reference"],
+                    },
+                },
+            },
+        },
+    },
+)
+def sanitize_tab_template(
+    request_fastapi: Request,
+    request: SanitizeTabTemplateRequest,
+    session: Session = Depends(get_db_session),
+):
+    """Sanitize a tab template for a target project."""
+    validator = TemplateValidator(session)
+
+    # Get project validation schema
+    validation_schema = validator.get_project_validation_schema(
+        user_id=request_fastapi.state.user_id,
+        project_name=request.project,
+    )
+
+    # Sanitize the template
+    sanitizer = TemplateSanitizer(validation_schema)
+    sanitized_template = sanitizer.sanitize_tab_template(
+        tab_template=request.template,
+        remove_invalid=request.remove_invalid_references,
+        preserve_structure=request.preserve_structure,
+    )
+
+    return {
+        "sanitized_template": sanitized_template,
+        "changes_made": ["Template sanitized for target project"],
+    }
+
+
+@router.post(
     "/import_template",
     response_model=TemplateImportResponse,
     responses={
@@ -946,6 +1037,16 @@ def export_tab_template(
                         "import_stats": {"tabs": 1, "tiles": 3},
                         "created_ids": {"tab_id": "def456"},
                         "warnings": [],
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Template validation failed",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Template validation failed: Context 'invalid_context' not found",
                     },
                 },
             },
@@ -969,7 +1070,7 @@ def import_tab_template(
     interface = None
     if request.interface_id:
         interface = interface_dao.get(request.interface_id)
-    elif request.interface_name:
+    elif request.project and request.interface_name:
         # Get project first
         project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
@@ -990,146 +1091,97 @@ def import_tab_template(
     if not interface:
         raise HTTPException(
             status_code=404,
-            detail="Target interface not found.",
+            detail="Interface not found. Please provide valid interface_id or project+interface_name.",
         )
 
     validation_result = None
     warnings = []
 
-    # Validate template if requested
+    # Apply validation and sanitization
+    template = request.template
+
+    # Get project for validation/sanitization
+    project = project_dao.get(interface.project_id)
+
+    validator = TemplateValidator(session)
+    validation_schema = validator.get_project_validation_schema(
+        user_id=request_fastapi.state.user_id,
+        project_name=project.name,
+    )
+
+    # Apply basic sanitization always (for security/consistency reasons)
+    sanitizer = TemplateSanitizer(validation_schema)
+    template_dict = sanitizer.sanitize_tab_template(
+        tab_template=template,
+        remove_invalid=False,  # Only remove basic issues like 'selected' field
+        preserve_structure=True,
+    )
+    template = TabTemplateSchema(**template_dict)
+
     if request.validate_first:
-        # Get project for validation
-        project = project_dao.get(interface.project_id)
-        validator = TemplateValidator(session)
-        validation_schema = validator.get_project_validation_schema(
-            user_id=request_fastapi.state.user_id,
-            project_name=project.name,
-        )
-
-        # Create a minimal interface template for validation
-        interface_template = {
-            "name": "temp",
-            "tabs": [request.template],
-        }
-
-        validation_result = validator.validate_interface_template(
-            interface_template=interface_template,
+        validation_result = validator.validate_tab_template(
+            tab_template=template,
             validation_schema=validation_schema,
         )
 
+        # Check for blocking errors
+        errors = [issue for issue in validation_result.issues if issue.level == "error"]
+        if errors and not request.auto_sanitize:
+            error_messages = [
+                f"{issue.component_name}: {issue.message}" for issue in errors
+            ]
+            raise HTTPException(
+                status_code=400,
+                detail=f"Template validation failed: {'; '.join(error_messages)}",
+            )
+
         # Auto-sanitize if requested and there are issues
         if request.auto_sanitize and not validation_result.is_valid:
-            sanitizer = TemplateSanitizer(validation_schema)
-            sanitized_interface = sanitizer.sanitize_interface_template(
-                interface_template=interface_template,
+            sanitized_dict = sanitizer.sanitize_tab_template(
+                tab_template=template,
                 remove_invalid=True,
                 preserve_structure=True,
             )
-            if sanitized_interface.get("tabs"):
-                request.template = sanitized_interface["tabs"][0]
+            # Convert back to schema object
+            template = TabTemplateSchema(**sanitized_dict)
             warnings.append("Template was automatically sanitized")
 
-    # Determine tab name
-    tab_name = request.new_tab_name or request.template.name or "Imported Tab"
-
-    # Check for name conflicts
-    existing_tab = tab_dao.get_by_interface_and_name(
-        interface_id=str(interface.id),
-        name=tab_name,
-        is_checkpoint=False,
-    )
-
-    if existing_tab and not request.overwrite_existing:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Tab with name {tab_name} already exists. Use overwrite_existing=true to replace it.",
+    # Use TemplateConverter to create tab from template
+    try:
+        tab, converter_warnings = TemplateConverter.template_to_tab(
+            tab_template=template,
+            interface_id=str(interface.id),
+            tab_dao=tab_dao,
+            tile_dao=tile_dao,
+            new_tab_name=request.new_tab_name,
+            overwrite_existing=request.overwrite_existing,
         )
+        warnings.extend(converter_warnings)
+    except ValueError as e:
+        if "already exists" in str(e):
+            if request.overwrite_existing:
+                # This shouldn't happen as overwrite should handle it
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to overwrite tab: {str(e)}",
+                )
+            else:
+                tab_name = request.new_tab_name or template.name
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Tab with name {tab_name} already exists in this interface. Use overwrite_existing=true to replace it.",
+                )
+        else:
+            raise HTTPException(status_code=400, detail=str(e))
 
-    # If overwriting and tab exists, delete it first
-    if existing_tab and request.overwrite_existing:
-        tab_dao.delete_tab(id=str(existing_tab.id))
-        warnings.append(f"Replaced existing tab '{tab_name}'")
-
-    # Create the tab
-    tab = tab_dao.create_tab(
-        interface_id=str(interface.id),
-        name=tab_name,
-        visible=(
-            request.template.visible if request.template.visible is not None else True
-        ),
-        active=(
-            request.template.active if request.template.active is not None else False
-        ),
-        order=request.template.order if request.template.order is not None else 0,
-        global_context=request.template.global_context,
-        color=request.template.color,
-        is_checkpoint=False,
-    )
+    # Calculate import stats
+    tiles = tile_dao.list_tiles_by_tab(tab_id=str(tab.id), is_checkpoint=False)
 
     created_ids = {"tab_id": str(tab.id)}
-    import_stats = {"tabs": 1, "tiles": 0}
+    import_stats = {"tabs": 1, "tiles": len(tiles)}
 
-    # Create tiles for this tab
-    for tile_data in request.template.tiles:
-        position = tile_data.position or {"x": 0, "y": 0, "width": 4, "height": 4}
-
-        tile = tile_dao.create_tile(
-            tab_id=str(tab.id),
-            name=tile_data.name or "Imported Tile",
-            type=tile_data.type,
-            x_position=(
-                position.get("x", 0)
-                if isinstance(position, dict)
-                else getattr(position, "x", 0)
-            ),
-            y_position=(
-                position.get("y", 0)
-                if isinstance(position, dict)
-                else getattr(position, "y", 0)
-            ),
-            width=(
-                position.get("width", 4)
-                if isinstance(position, dict)
-                else getattr(position, "width", 4)
-            ),
-            height=(
-                position.get("height", 4)
-                if isinstance(position, dict)
-                else getattr(position, "height", 4)
-            ),
-            minW=tile_data.minW,
-            minH=tile_data.minH,
-            visible=tile_data.visible if tile_data.visible is not None else True,
-            locked=tile_data.locked if tile_data.locked is not None else False,
-            moved=tile_data.moved if tile_data.moved is not None else False,
-            static=tile_data.static if tile_data.static is not None else False,
-            color=tile_data.color,
-            context=tile_data.context,
-            table=tile_data.table,
-            auto_update=tile_data.auto_update,
-            freeze=tile_data.freeze,
-            filters=tile_data.filters,
-            common_filter=tile_data.common_filter,
-            metric=tile_data.metric,
-            column_context=tile_data.column_context,
-            grouping=tile_data.grouping,
-            is_checkpoint=False,
-            # Pass specialized tile data
-            table_tile=(
-                tile_data.table_tile.model_dump() if tile_data.table_tile else None
-            ),
-            plot_tile=tile_data.plot_tile.model_dump() if tile_data.plot_tile else None,
-            view_tile=tile_data.view_tile.model_dump() if tile_data.view_tile else None,
-            editor_tile=(
-                tile_data.editor_tile.model_dump() if tile_data.editor_tile else None
-            ),
-            terminal_tile=(
-                tile_data.terminal_tile.model_dump()
-                if tile_data.terminal_tile
-                else None
-            ),
-        )
-        import_stats["tiles"] += 1
+    if validation_result:
+        validation_result.sanitized_template = template
 
     return TemplateImportResponse(
         success=True,

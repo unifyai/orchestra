@@ -383,9 +383,15 @@ class ProjectValidationSchema(BaseModel):
     """Schema describing what exists in a project for template validation"""
 
     contexts: List[str] = []
-    tables: List[str] = []
-    columns: dict = {}  # table_name -> [column_names]
-    field_types: dict = {}  # context_name -> {field_name: field_type}
+    field_types: dict = {}  # context_name -> {field_name: field_info}
+
+
+class TileValidationContext(BaseModel):
+    """Context data needed for tile validation"""
+
+    fields: dict = {}  # field_name -> field_info
+    column_contexts: List[str] = []
+    valid_columns: List[str] = []  # All valid column names with prefixes
 
 
 class ValidationIssue(BaseModel):
@@ -461,31 +467,72 @@ class ExportProjectTemplateRequest(ExportTemplateRequest):
     checkpoint: bool = False
 
 
-class ValidateTemplateRequest(BaseModel):
-    """Request to validate a template against a project"""
+class ValidateProjectTemplateRequest(BaseModel):
+    """Request to validate a project template against a project"""
 
     project: str
-    template: Union[
-        ProjectTemplateSchema,
-        InterfaceTemplateSchema,
-        TabTemplateSchema,
-        TileTemplateSchema,
-    ]  # Properly typed template
-    strict_validation: bool = False  # Whether to be strict about warnings
+    template: ProjectTemplateSchema
+    strict_validation: bool = False
 
 
-class SanitizeTemplateRequest(BaseModel):
-    """Request to sanitize a template for a project"""
+class ValidateInterfaceTemplateRequest(BaseModel):
+    """Request to validate an interface template against a project"""
 
     project: str
-    template: Union[
-        ProjectTemplateSchema,
-        InterfaceTemplateSchema,
-        TabTemplateSchema,
-        TileTemplateSchema,
-    ]  # Properly typed template
+    template: InterfaceTemplateSchema
+    strict_validation: bool = False
+
+
+class ValidateTabTemplateRequest(BaseModel):
+    """Request to validate a tab template against a project"""
+
+    project: str
+    template: TabTemplateSchema
+    strict_validation: bool = False
+
+
+class ValidateTileTemplateRequest(BaseModel):
+    """Request to validate a tile template against a project"""
+
+    project: str
+    template: TileTemplateSchema
+    strict_validation: bool = False
+
+
+class SanitizeProjectTemplateRequest(BaseModel):
+    """Request to sanitize a project template for a project"""
+
+    project: str
+    template: ProjectTemplateSchema
     remove_invalid_references: bool = True
-    preserve_structure: bool = True  # Try to keep original structure where possible
+    preserve_structure: bool = True
+
+
+class SanitizeInterfaceTemplateRequest(BaseModel):
+    """Request to sanitize an interface template for a project"""
+
+    project: str
+    template: InterfaceTemplateSchema
+    remove_invalid_references: bool = True
+    preserve_structure: bool = True
+
+
+class SanitizeTabTemplateRequest(BaseModel):
+    """Request to sanitize a tab template for a project"""
+
+    project: str
+    template: TabTemplateSchema
+    remove_invalid_references: bool = True
+    preserve_structure: bool = True
+
+
+class SanitizeTileTemplateRequest(BaseModel):
+    """Request to sanitize a tile template for a project"""
+
+    project: str
+    template: TileTemplateSchema
+    remove_invalid_references: bool = True
+    preserve_structure: bool = True
 
 
 class ImportTemplateRequest(BaseModel):
