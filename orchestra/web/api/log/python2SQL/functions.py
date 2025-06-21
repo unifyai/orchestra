@@ -467,19 +467,75 @@ def _handle_functions(
             return _pg_round_timestamp(ts_lit, sec_expr.value)
 
     elif operand == "exists":
-        if (
-            isinstance(filter_dict.get("rhs"), dict)
-            and filter_dict["rhs"].get("type") == "identifier"
-        ):
-            identifier = filter_dict["rhs"]["value"]
-            subq = select(Log.id).filter(
-                Log.log_event_id == log_event_alias.id,
-                Log.key == identifier,
+        rhs_dict = filter_dict.get("rhs")
+
+        # Case 1: Handle exists(top_level_key)
+        # This checks if a log with the given key exists for the log_event_id.
+        if isinstance(rhs_dict, dict) and rhs_dict.get("type") == "identifier":
+            identifier = rhs_dict["value"]
+
+            # This subquery produces a boolean `value` for each log_event_id.
+            # It's true if a log with the matching key exists for that log_event_id.
+            exists_subq = (
+                select(
+                    log_event_alias.id.label("log_event_id"),
+                    select(Log.id)
+                    .where(
+                        Log.log_event_id == log_event_alias.id,
+                        Log.key == identifier,
+                    )
+                    .exists()
+                    .label("value"),
+                    literal("bool").label("inferred_type"),
+                )
+                .select_from(log_event_alias)
+                .subquery()
             )
-            return subq.exists()
+            return exists_subq
+
+        # Case 2: Handle exists(<subquery>).
+        elif isinstance(rhs_expr, Subquery):
+            # Build the subquery for the argument, which can be any valid expression.
+            rhs_expr = build_sql_query(
+                filter_dict.get("rhs"),
+                log_event_alias,
+                session,
+                log_event_ids=log_event_ids,
+                is_derived=is_derived,
+                local_scope=local_scope,
+            )
+
+            # The argument must resolve to a subquery.
+            if not isinstance(rhs_expr, Subquery):
+                raise ValueError(
+                    "The argument to exists() must be a column or expression that can be resolved to a subquery.",
+                )
+
+            # `exists()` should be true if a value is present, even if that value is JSON `null`.
+            # It should only be false if the key/path lookup results in a SQL NULL (meaning not found).
+            lval = rhs_expr.c.value
+            lval_as_text = cast(lval, Text)
+            exists_expr = and_(lval_as_text.isnot(None), lval_as_text != "null")
+
+            # Wrap this boolean result in a new subquery to maintain the standard interface.
+            select_cols = [
+                rhs_expr.c.log_event_id.label("log_event_id"),
+                exists_expr.label("value"),
+                literal("bool").label("inferred_type"),
+            ]
+
+            # Propagate comprehension indices if they exist.
+            if "__comp_idx__" in rhs_expr.c.keys():
+                select_cols.append(rhs_expr.c.__comp_idx__.label("__comp_idx__"))
+            if "__parent_idx__" in rhs_expr.c.keys():
+                select_cols.append(rhs_expr.c.__parent_idx__.label("__parent_idx__"))
+
+            return select(*select_cols).select_from(rhs_expr).subquery()
+
         else:
+            # If the argument is neither a simple identifier nor a subquery, it's invalid.
             raise ValueError(
-                f"Invalid argument for 'exists' function: {filter_dict}",
+                f"Invalid argument for 'exists' function: {rhs_dict}",
             )
 
     elif operand == "version":
