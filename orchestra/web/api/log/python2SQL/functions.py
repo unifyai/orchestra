@@ -2439,18 +2439,33 @@ def _handle_dict_get(
             # Coalesce at the JSONB level
             coalesced_jsonb = func.coalesce(extracted_jsonb, default_jsonb)
 
-            # Cast the result to the default's type
+            # Determine the logical type of the value extracted from the dictionary, *before* coalescing.
+            try:
+                possible_types = [
+                    row[0] for row in session.execute(select(result_type)).fetchall()
+                ]
+                from_type = (
+                    unify_inferred_types(*possible_types) if possible_types else "str"
+                )
+            except Exception:
+                from_type = "str"  # Fallback
+
+            # Now, cast from the correctly inferred `from_type` to the `default_type`.
             value_expr = cast_expr(
                 coalesced_jsonb,
-                session.execute(select(result_type)).scalar_one(),
+                from_type,
                 default_type,
             )
             return value_expr, default_type
         else:
             # No default - use the inferred type directly
             try:
-                inferred_type = session.execute(select(result_type)).fetchall()
-                inferred_type = inferred_type[-1][0]
+                possible_types = [
+                    row[0] for row in session.execute(select(result_type)).fetchall()
+                ]
+                inferred_type = (
+                    unify_inferred_types(*possible_types) if possible_types else "str"
+                )
             except Exception:
                 inferred_type = "str"
 
