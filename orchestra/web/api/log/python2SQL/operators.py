@@ -453,7 +453,7 @@ def _handle_comparison_operator(
         SQLAlchemy condition or expression based on the comparison operator.
     """
     operand = filter_dict.get("operand")
-    lhs = build_sql_query(
+    lhs_sql = build_sql_query(
         filter_dict.get("lhs"),
         log_event_alias,
         session,
@@ -461,7 +461,7 @@ def _handle_comparison_operator(
         is_derived=is_derived,
         local_scope=local_scope,
     )
-    rhs = build_sql_query(
+    rhs_sql = build_sql_query(
         filter_dict.get("rhs"),
         log_event_alias,
         session,
@@ -470,128 +470,90 @@ def _handle_comparison_operator(
         local_scope=local_scope,
     )
 
-    lhs_is_sub = isinstance(lhs, Subquery)
-    rhs_is_sub = isinstance(rhs, Subquery)
+    lval, lval_type = _select_value(lhs_sql, session)
+    rval, rval_type = _select_value(rhs_sql, session)
+
+    # --- Build the core boolean expression ---
+    # `is` and `is not` are handled specially
+    if operand in ("is", "is not"):
+        if rval_type == "NoneType":
+            # Robust check for `is None` / `is not None` against JSONB
+            lval_as_text = cast(lval, Text)
+            expr = (
+                or_(lval_as_text.is_(None), lval_as_text == "null")
+                if operand == "is"
+                else and_(lval_as_text.isnot(None), lval_as_text != "null")
+            )
+        else:
+            # For `is True` or `is False`, treat as equality. For other `is` cases, use IS.
+            # Note: `val IS TRUE` is the same as `val = TRUE` in SQL for boolean types.
+            bool_val = cast_expr(lval, lval_type, "bool")
+            expr = (bool_val == rval) if operand == "is" else (bool_val != rval)
+
+    # Handle `==` and `!=` for list comparisons
+    elif (
+        operand in ("==", "!=")
+        and lval_type == "list"
+        and isinstance(rhs_sql.value, list)
+    ):
+        # Cast the Python list literal to JSONB for correct comparison
+        rval_as_jsonb = cast(literal(json.dumps(rhs_sql.value)), JSONB)
+        expr = (lval == rval_as_jsonb) if operand == "==" else (lval != rval_as_jsonb)
+
+    # Handle all other standard comparisons (>, <, ==, etc.)
+    else:
+        final_type = unify_inferred_types(lval_type, rval_type)
+        lval = cast_expr(lval, lval_type, final_type)
+        rval = cast_expr(rval, rval_type, final_type)
+
+        op_map = {
+            "==": lambda a, b: a == b,
+            "!=": lambda a, b: a != b,
+            "<": lambda a, b: a < b,
+            ">": lambda a, b: a > b,
+            "<=": lambda a, b: a <= b,
+            ">=": lambda a, b: a >= b,
+        }
+        if operand not in op_map:
+            raise ValueError(f"Unknown comparison operand: {operand}")
+        expr = op_map[operand](lval, rval)
+
+    # --- Wrap the expression in a subquery or join as needed ---
+    lhs_is_sub = isinstance(lhs_sql, Subquery)
+    rhs_is_sub = isinstance(rhs_sql, Subquery)
 
     if lhs_is_sub and rhs_is_sub:
-        lval, lval_type = _select_value(lhs, session)
-        rval, rval_type = _select_value(rhs, session)
-        lval = cast_expr(lval, lval_type, rval_type)
-        rval = cast_expr(rval, rval_type, lval_type)
-        if operand == "==":
-            expr = lval == rval
-        elif operand == "!=":
-            expr = lval != rval
-        elif operand == "<":
-            expr = lval < rval
-        elif operand == ">":
-            expr = lval > rval
-        elif operand == "<=":
-            expr = lval <= rval
-        elif operand == ">=":
-            expr = lval >= rval
-        elif operand == "is":
-            lval, _ = _select_value(lhs, session)
-            expr = lval.is_(rval)
-        elif operand == "is not":
-            expr = lval.isnot(rval)
-        return _join_subqueries(lhs, rhs, expr, "bool", session=session)
+        # If both sides are subqueries, they MUST be joined to avoid a cartesian product.
+        return _join_subqueries(lhs_sql, rhs_sql, expr, "bool", session=session)
     elif lhs_is_sub:
-        lval, lval_type = _select_value(lhs, session)
-        rval, rval_type = _select_value(rhs, session)
+        # If only LHS is a subquery, build the subquery from it.
+        select_cols = [lhs_sql.c.log_event_id.label("log_event_id")]
+        # (propagate comprehension indices if they exist)
+        if "__comp_idx__" in lhs_sql.c.keys():
+            select_cols.append(lhs_sql.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in lhs_sql.c.keys():
+            select_cols.append(lhs_sql.c.__parent_idx__.label("__parent_idx__"))
 
-        # Special handling for JSONB array comparison with Python list literals
-        if (
-            operand in ("==", "!=")
-            and lval_type in ("list", "dict")
-            and isinstance(rval, (list, dict))
-        ):
-            # Convert Python list/dict to JSONB using json.dumps and cast
-            rhs_jsonb = cast(literal(json.dumps(rval)), JSONB)
-            if operand == "==":
-                expr = lval == rhs_jsonb
-            else:
-                expr = lval != rhs_jsonb
-        else:
-            # Standard handling for other types
-            lval = cast_expr(lval, lval_type, rval_type)
-            rhs = cast_expr(rhs, rval_type, lval_type)
-            if operand == "==":
-                expr = lval == rhs
-            elif operand == "!=":
-                expr = lval != rhs
-            elif operand == "<":
-                expr = lval < rhs
-            elif operand == ">":
-                expr = lval > rhs
-            elif operand == "<=":
-                expr = lval <= rhs
-            elif operand == ">=":
-                expr = lval >= rhs
-            elif operand == "is":
-                expr = lval.is_(rval)
-            elif operand == "is not":
-                expr = lval.isnot(rval)
-        select_cols = [lhs.c.log_event_id.label("log_event_id")]
-        if "__comp_idx__" in lhs.c.keys():
-            select_cols.append(lhs.c.__comp_idx__.label("__comp_idx__"))
-        if "__parent_idx__" in lhs.c.keys():
-            select_cols.append(lhs.c.__parent_idx__.label("__parent_idx__"))
         select_cols.extend(
             [expr.label("value"), literal("bool").label("inferred_type")],
         )
-        return select(*select_cols).select_from(lhs).subquery()
+        return select(*select_cols).select_from(lhs_sql).subquery()
     elif rhs_is_sub:
-        rval, rval_type = _select_value(rhs, session)
-        lval, lval_type = _select_value(lhs, session)
-        rval = cast_expr(rval, rval_type, lval_type)
-        lhs = cast_expr(lhs, lval_type, rval_type)
-        if operand == "==":
-            expr = lhs == rval
-        elif operand == "!=":
-            expr = lhs != rval
-        elif operand == "<":
-            expr = lhs < rval
-        elif operand == ">":
-            expr = lhs > rval
-        elif operand == "<=":
-            expr = lhs <= rval
-        elif operand == ">=":
-            expr = lhs >= rval
-        elif operand == "is":
-            expr = rval.is_(lhs)
-        elif operand == "is not":
-            expr = rval.isnot(lhs)
-        select_cols = [rhs.c.log_event_id.label("log_event_id")]
-        if "__comp_idx__" in rhs.c.keys():
-            select_cols.append(rhs.c.__comp_idx__.label("__comp_idx__"))
-        if "__parent_idx__" in rhs.c.keys():
-            select_cols.append(rhs.c.__parent_idx__.label("__parent_idx__"))
+        # Symmetrical case if only RHS is a subquery.
+        select_cols = [rhs_sql.c.log_event_id.label("log_event_id")]
+        # (propagate comprehension indices if they exist)
+        if "__comp_idx__" in rhs_sql.c.keys():
+            select_cols.append(rhs_sql.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in rhs_sql.c.keys():
+            select_cols.append(rhs_sql.c.__parent_idx__.label("__parent_idx__"))
+
         select_cols.extend(
             [expr.label("value"), literal("bool").label("inferred_type")],
         )
-        return select(*select_cols).select_from(rhs).subquery()
+        return select(*select_cols).select_from(rhs_sql).subquery()
     else:
-        rval, rval_type = _select_value(rhs, session)
-        lval, lval_type = _select_value(lhs, session)
-        rval = cast_expr(rval, rval_type, lval_type)
-        lval = cast_expr(lval, lval_type, rval_type)
-        if operand == "==":
-            return lval == rval
-        elif operand == "!=":
-            return lval != rval
-        elif operand == "<":
-            return lval < rval
-        elif operand == ">":
-            return lval > rval
-        elif operand == "<=":
-            return lval <= rval
-        elif operand == ">=":
-            return lval >= rval
-        elif operand == "is":
-            return lval.is_(rval)
-        elif operand == "is not":
-            return lval.isnot(rval)
+        # If neither side was a subquery, we can return the raw boolean clause.
+        return expr
 
 
 # Helper function for membership operators (in, not in)
