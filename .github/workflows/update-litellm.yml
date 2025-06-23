@@ -50,8 +50,24 @@ jobs:
     - name: Push the changes if required
       if: steps.update_litellm.outputs.output_value == 'changes'
       run: |
+        echo "=== Debug: Pre-push context ==="
+        echo "Current github.actor: ${{ github.actor }}"
+        echo "Current github.event_name: ${{ github.event_name }}"
+        echo "Current workflow: ${{ github.workflow }}"
+        echo "Current job: ${{ github.job }}"
+        echo ""
+
         git config --global user.name "unify-dev-bot"
         git config --global user.email "github-bot@unify.ai"
         git add .
-        git commit -m "litellm update"
+        git commit -m "litellm update [skip-staging-sync]"
+
+        echo "=== Debug: About to push ==="
+        echo "Git user.name: $(git config user.name)"
+        echo "Git user.email: $(git config user.email)"
+        echo "Latest commit message: $(git log -1 --pretty=%B)"
+        echo "Latest commit author: $(git log -1 --pretty=%an)"
+        echo "Latest commit email: $(git log -1 --pretty=%ae)"
+        echo ""
+
         git push origin main
