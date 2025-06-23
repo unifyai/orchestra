@@ -8,38 +8,14 @@ permissions:
   contents: write
 
 jobs:
-  debug:
-    name: Debug GitHub Event
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push'
-    steps:
-    - name: Print Debug Info
-      run: |
-        echo "=== Workflow Trigger Debug ==="
-        echo "Actor: ${{ github.actor }}"
-        echo "Commit author email: ${{ github.event.commits[0].author.email }}"
-        echo "Commit message: ${{ github.event.commits[0].message }}"
-        echo "Contains skip tag: ${{ contains(github.event.commits[0].message, '[skip-staging-sync]') }}"
-        echo "Should skip: ${{ github.event.commits[0].author.email == 'github-bot@unify.ai' || contains(github.event.commits[0].message, '[skip-staging-sync]') }}"
-
   sync:
     name: Sync
     runs-on: ubuntu-latest
     if: |
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'push' &&
-       github.event.commits[0].author.email != 'github-bot@unify.ai' &&
-       !contains(github.event.commits[0].message, '[skip-staging-sync]'))
+       github.actor != 'unify-dev-bot')
     steps:
-    - name: Echo sync decision
-      run: |
-        echo "Proceeding with sync..."
-        echo "Event type: ${{ github.event_name }}"
-        if [ "${{ github.event_name }}" == "push" ]; then
-          echo "Commit author email: ${{ github.event.commits[0].author.email }}"
-          echo "Commit message: ${{ github.event.commits[0].message }}"
-        fi
-
     - name: Checkout
       uses: actions/checkout@v3
 
