@@ -13,44 +13,14 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'push'
     steps:
-    - name: Print GitHub Event Context
+    - name: Print Debug Info
       run: |
-        echo "=== GitHub Actor ==="
-        echo "github.actor: ${{ github.actor }}"
-        echo ""
-        echo "=== Event Sender Information ==="
-        echo "Sender login: ${{ github.event.sender.login || 'N/A' }}"
-        echo "Sender type: ${{ github.event.sender.type || 'N/A' }}"
-        echo "Sender id: ${{ github.event.sender.id || 'N/A' }}"
-        echo ""
-        echo "=== Commit Information ==="
-        echo "Number of commits: ${{ github.event.commits && length(github.event.commits) || 'N/A' }}"
-        echo ""
-        if [ "${{ github.event.commits[0] }}" != "" ]; then
-          echo "First commit author email: ${{ github.event.commits[0].author.email || 'N/A' }}"
-          echo "First commit author name: ${{ github.event.commits[0].author.name || 'N/A' }}"
-          echo "First commit author username: ${{ github.event.commits[0].author.username || 'N/A' }}"
-          echo "First commit message: ${{ github.event.commits[0].message || 'N/A' }}"
-          echo "First commit ID: ${{ github.event.commits[0].id || 'N/A' }}"
-          echo "First commit committer email: ${{ github.event.commits[0].committer.email || 'N/A' }}"
-          echo "First commit committer name: ${{ github.event.commits[0].committer.name || 'N/A' }}"
-        fi
-        echo ""
-        echo "=== Push Event Details ==="
-        echo "Pusher name: ${{ github.event.pusher.name || 'N/A' }}"
-        echo "Pusher email: ${{ github.event.pusher.email || 'N/A' }}"
-        echo ""
-        echo "=== Head Commit Information ==="
-        echo "Head commit author email: ${{ github.event.head_commit.author.email || 'N/A' }}"
-        echo "Head commit author name: ${{ github.event.head_commit.author.name || 'N/A' }}"
-        echo "Head commit message: ${{ github.event.head_commit.message || 'N/A' }}"
-        echo ""
-        echo "=== Repository Information ==="
-        echo "Repository: ${{ github.repository }}"
-        echo "Ref: ${{ github.ref }}"
-        echo ""
-        echo "=== Full Event JSON ==="
-        echo '${{ toJSON(github.event) }}' | jq '.'
+        echo "=== Workflow Trigger Debug ==="
+        echo "Actor: ${{ github.actor }}"
+        echo "Commit author email: ${{ github.event.commits[0].author.email }}"
+        echo "Commit message: ${{ github.event.commits[0].message }}"
+        echo "Contains skip tag: ${{ contains(github.event.commits[0].message, '[skip-staging-sync]') }}"
+        echo "Should skip: ${{ github.event.commits[0].author.email == 'github-bot@unify.ai' || contains(github.event.commits[0].message, '[skip-staging-sync]') }}"
 
   sync:
     name: Sync
