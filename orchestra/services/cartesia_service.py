@@ -1,5 +1,5 @@
 import io
-from typing import Any, Dict, Optional, Union, Tuple # Add Tuple
+from typing import Any, Dict, Optional, Tuple, Union  # Add Tuple
 
 import httpx
 from fastapi import HTTPException, status
@@ -13,7 +13,7 @@ class CartesiaAPIError(HTTPException):
 
 
 LONG_OPERATION_TIMEOUT = httpx.Timeout(60.0)  # 60 seconds
-TTS_TIMEOUT = httpx.Timeout(30.0) # Timeout for TTS requests
+TTS_TIMEOUT = httpx.Timeout(30.0)  # Timeout for TTS requests
 
 
 class CartesiaService:
@@ -91,7 +91,7 @@ class CartesiaService:
         }
         # Filter out None values from data
         data = {k: v for k, v in data.items() if v is not None}
-        
+
         # For multipart/form-data, httpx sets Content-Type. Do not set it in self.headers for this one.
         request_headers = self.headers.copy()
         request_headers.pop("Content-Type", None)
@@ -162,11 +162,11 @@ class CartesiaService:
     def generate_speech(
         self,
         transcript: str,
-        voice_id: str, # This is Cartesia's internal voice ID
+        voice_id: str,  # This is Cartesia's internal voice ID
         model_id: Optional[str] = "sonic-2",
         output_format_container: str = "mp3",
-        output_sample_rate: Optional[int] = None, # e.g. 44100
-        output_bit_rate: Optional[int] = None, # e.g. 128000 (not for PCM)
+        output_sample_rate: Optional[int] = None,  # e.g. 44100
+        output_bit_rate: Optional[int] = None,  # e.g. 128000 (not for PCM)
         language: Optional[str] = "en",
     ) -> Tuple[bytes, str]:
         """
@@ -174,36 +174,40 @@ class CartesiaService:
         Reference: https://docs.cartesia.ai/2025-04-16/api-reference/tts/bytes
         """
         url = f"{self.base_url}/tts/bytes"
-        
+
         payload_output_format: Dict[str, Any] = {"container": output_format_container}
         if output_sample_rate:
             payload_output_format["sample_rate"] = output_sample_rate
-        
+
         content_type = f"audio/{output_format_container}"
         if output_format_container == "mp3":
-            content_type = "audio/mpeg" # Standard MIME for MP3
+            content_type = "audio/mpeg"  # Standard MIME for MP3
             if output_bit_rate:
                 payload_output_format["bit_rate"] = output_bit_rate
-            elif not output_sample_rate: # Default if nothing specified
-                 payload_output_format["sample_rate"] = 44100
-                 payload_output_format["bit_rate"] = 128000
+            elif not output_sample_rate:  # Default if nothing specified
+                payload_output_format["sample_rate"] = 44100
+                payload_output_format["bit_rate"] = 128000
         elif output_format_container in ["pcm_s16le", "pcm_mulaw"]:
             # Determine encoding and default sample rate for PCM
             if output_format_container == "pcm_s16le":
                 payload_output_format["encoding"] = "pcm_s16le"
-                payload_output_format["sample_rate"] = output_sample_rate or 24000 # Cartesia default for pcm_s16le
+                payload_output_format["sample_rate"] = (
+                    output_sample_rate or 24000
+                )  # Cartesia default for pcm_s16le
                 content_type = f"audio/L16; rate={payload_output_format['sample_rate']}; channels=1"
-            else: # pcm_mulaw
+            else:  # pcm_mulaw
                 payload_output_format["encoding"] = "pcm_mulaw"
-                payload_output_format["sample_rate"] = output_sample_rate or 8000 # Cartesia default for pcm_mulaw
+                payload_output_format["sample_rate"] = (
+                    output_sample_rate or 8000
+                )  # Cartesia default for pcm_mulaw
                 content_type = f"audio/mulaw; rate={payload_output_format['sample_rate']}; channels=1"
             # bit_rate is not applicable for PCM
             payload_output_format.pop("bit_rate", None)
         elif output_format_container == "wav":
-             if output_bit_rate: # Wav doesn't typically have a bitrate like mp3
-                pass # Cartesia might ignore it or use it for internal compression
-             if not output_sample_rate:
-                 payload_output_format["sample_rate"] = 44100
+            if output_bit_rate:  # Wav doesn't typically have a bitrate like mp3
+                pass  # Cartesia might ignore it or use it for internal compression
+            if not output_sample_rate:
+                payload_output_format["sample_rate"] = 44100
 
         payload = {
             "model_id": model_id or "sonic-2",
@@ -216,7 +220,7 @@ class CartesiaService:
         }
         if language:
             payload["language"] = language
-        
+
         try:
             with httpx.Client(timeout=TTS_TIMEOUT) as client:
                 response = client.post(url, json=payload, headers=self.headers)

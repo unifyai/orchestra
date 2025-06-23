@@ -11,6 +11,7 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
     UploadFile,
     status,
 )
@@ -38,11 +39,11 @@ from orchestra.web.api.assistant.schema import (
     RecordingCreate,
     RecordingInfo,
     VoiceCreate,
-    VoiceRead,
-    VoiceGenerateRequest,
-    VoiceDesignGeneratePreviewsRequest,
-    VoiceDesignGeneratePreviewsAPIResponse,
     VoiceDesignCreateFromPreviewRequest,
+    VoiceDesignGeneratePreviewsAPIResponse,
+    VoiceDesignGeneratePreviewsRequest,
+    VoiceGenerateRequest,
+    VoiceRead,
 )
 from orchestra.web.api.utils.assistant_infra import (
     create_cloud_run_job,
@@ -1158,6 +1159,7 @@ async def clone_voice(
     name: str = Form(..., example="My Voice Clone"),
     language: str = Form(..., example="en"),
     description: Optional[str] = Form(None, example="A cloned voice for my assistant"),
+    gender: Optional[str] = Form(None, example="female"),
     provider: str = Form("cartesia"),
     file: UploadFile = File(..., example="voice_sample.wav"),
 ):
@@ -1198,9 +1200,12 @@ async def clone_voice(
             voice_id=new_voice_id,
             name=name,
             description=description or f"Cloned voice: {name}",
+            gender=gender,
             language=language,
             provider=provider,
         )
+        if provider == "cartesia" and not gender:
+            db_voice.gender = cartesia_response.get("gender")
         db_voice.is_preset = False
         session.commit()
 
@@ -1257,6 +1262,7 @@ async def clone_voice(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to clone and save voice: {str(e_generic)}",
         )
+
 
 @router.get(
     "/assistant/voice",
@@ -1461,12 +1467,16 @@ def delete_voice(
         },
         400: {
             "description": "Bad Request (e.g., invalid provider, provider API error)",
-            "content": {"application/json": {"example": {"detail": "Provider API error: ..."}}},
+            "content": {
+                "application/json": {"example": {"detail": "Provider API error: ..."}}
+            },
         },
         503: {
             "description": "Service unavailable (e.g. provider API down)",
-             "content": {"application/json": {"example": {"detail": "TTS provider unavailable."}}},
-        }
+            "content": {
+                "application/json": {"example": {"detail": "TTS provider unavailable."}}
+            },
+        },
     },
 )
 async def generate_speech(
@@ -1475,10 +1485,8 @@ async def generate_speech(
     session: Session = Depends(get_db_session),
     cartesia_service: CartesiaService = Depends(),
     elevenlabs_service: ElevenLabsService = Depends(),
-) -> InfoResponse:
+) -> Response:
     user_id = request.state.user_id
-    users_dao = UsersDAO(session)
-
     audio_bytes: bytes
     content_type: str
 
@@ -1487,7 +1495,7 @@ async def generate_speech(
             audio_bytes, content_type = cartesia_service.generate_speech(
                 transcript=request_data.text,
                 voice_id=request_data.voice_id,
-                model_id=request_data.model_id or "sonic-2", # Default Cartesia model
+                model_id=request_data.model_id or "sonic-2",  # Default Cartesia model
                 output_format_container=request_data.output_format,
                 output_sample_rate=request_data.cartesia_sample_rate,
                 output_bit_rate=request_data.cartesia_bit_rate,
@@ -1497,7 +1505,8 @@ async def generate_speech(
             audio_bytes, content_type = elevenlabs_service.generate_speech(
                 text=request_data.text,
                 voice_id=request_data.voice_id,
-                model_id=request_data.model_id or "eleven_multilingual_v2", # Default EL model
+                model_id=request_data.model_id
+                or "eleven_multilingual_v2",  # Default EL model
                 output_format=request_data.output_format,
                 optimize_streaming_latency=request_data.elevenlabs_optimize_streaming_latency,
                 stability=request_data.elevenlabs_voice_settings_stability,
@@ -1505,21 +1514,30 @@ async def generate_speech(
             )
         else:
             # This case should be prevented by Pydantic's Literal validation
-            raise HTTPException(status_code=400, detail="Invalid TTS provider specified.")
-        
-        return InfoResponse(content=audio_bytes, media_type=content_type)
+            raise HTTPException(
+                status_code=400, detail="Invalid TTS provider specified."
+            )
+
+        return Response(content=audio_bytes, media_type=content_type)
 
     except (CartesiaAPIError, ElevenLabsAPIError) as e:
-        logging.error(f"TTS API error for user {user_id}, provider {request_data.provider}: {e.detail}")
-        raise HTTPException(status_code=e.status_code, detail=f"TTS provider error: {e.detail}")
+        logging.error(
+            f"TTS API error for user {user_id}, provider {request_data.provider}: {e.detail}"
+        )
+        raise HTTPException(
+            status_code=e.status_code, detail=f"TTS provider error: {e.detail}"
+        )
     except HTTPException:
         raise
     except Exception as e:
-        logging.error(f"Unexpected error generating speech for user {user_id}: {str(e)}")
+        logging.error(
+            f"Unexpected error generating speech for user {user_id}: {str(e)}"
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate speech: {str(e)}",
         )
+
 
 @router.post(
     "/assistant/voice/design/preview",
@@ -1539,23 +1557,31 @@ async def design_voice_generate_previews_endpoint(
 
     try:
         el_response_data = elevenlabs_service.design_voice_generate_previews(
-            voice_prompt=request_data.voice_description, # Mapping our field to EL's expected
+            voice_prompt=request_data.voice_description,  # Mapping our field to EL's expected
             gender=request_data.gender,
             accent=request_data.accent,
             age=request_data.age,
             accent_strength=request_data.accent_strength,
         )
-        
+
         # Pydantic will validate if el_response_data matches VoiceDesignGeneratePreviewsAPIResponse
-        return InfoResponse(info=VoiceDesignGeneratePreviewsAPIResponse(**el_response_data))
+        return InfoResponse(
+            info=VoiceDesignGeneratePreviewsAPIResponse(**el_response_data)
+        )
 
     except ElevenLabsAPIError as e:
-        logging.error(f"ElevenLabs voice design preview error for user {user_id}: {e.detail}")
-        raise HTTPException(status_code=e.status_code, detail=f"ElevenLabs API error: {e.detail}")
+        logging.error(
+            f"ElevenLabs voice design preview error for user {user_id}: {e.detail}"
+        )
+        raise HTTPException(
+            status_code=e.status_code, detail=f"ElevenLabs API error: {e.detail}"
+        )
     except HTTPException:
         raise
     except Exception as e:
-        logging.error(f"Unexpected error generating voice previews for user {user_id}: {str(e)}")
+        logging.error(
+            f"Unexpected error generating voice previews for user {user_id}: {str(e)}"
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to generate voice previews: {str(e)}",
@@ -1579,7 +1605,7 @@ async def design_voice_create_from_preview_endpoint(
     user_id = request.state.user_id
     users_dao = UsersDAO(session)
     voice_dao = VoiceDAO(session)
-    
+
     new_el_voice_id: Optional[str] = None
     try:
         # Step 1: Call ElevenLabs to create the voice from the generated_voice_id
@@ -1589,53 +1615,70 @@ async def design_voice_create_from_preview_endpoint(
             description=request_data.voice_description_for_el_and_db,
             labels=request_data.elevenlabs_labels,
         )
-        
+
         new_el_voice_id = el_created_voice_data.get("voice_id")
         if not new_el_voice_id:
             raise ElevenLabsAPIError(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="ElevenLabs did not return a 'voice_id' after creating the voice from preview."
+                detail="ElevenLabs did not return a 'voice_id' after creating the voice from preview.",
             )
 
         # Step 2: Save the new voice to our database
         # Gender and language are taken from the request for our DB, as EL's response might vary.
         db_voice = voice_dao.create_voice(
             user_id=user_id,
-            voice_id=new_el_voice_id, # This is the *actual* persistent voice_id from EL
+            voice_id=new_el_voice_id,  # This is the *actual* persistent voice_id from EL
             name=request_data.voice_name,
-            description=request_data.voice_description_for_el_and_db or f"Designed voice: {request_data.voice_name}",
+            description=request_data.voice_description_for_el_and_db
+            or f"Designed voice: {request_data.voice_name}",
             gender=request_data.final_voice_gender,
             language=request_data.final_voice_language,
             provider="elevenlabs",
         )
-        db_voice.is_preset = False # Designed voices are not presets
-        session.flush() # Ensure db_voice gets all attributes before commit        
-        session.commit() # Commit DB voice creation
+        db_voice.is_preset = False  # Designed voices are not presets
+        session.flush()  # Ensure db_voice gets all attributes before commit
+        session.commit()  # Commit DB voice creation
 
         return InfoResponse(
-            info=VoiceRead.from_orm(db_voice)
+            info=VoiceRead.from_orm(db_voice),
         )
 
     except (ElevenLabsAPIError) as e:
         session.rollback()
         # If EL voice was created but DB save failed, we might have an orphan EL voice.
         # Attempt to delete it from EL if `new_el_voice_id` was obtained.
-        if new_el_voice_id and e.status_code != status.HTTP_402_PAYMENT_REQUIRED: # Don't delete if it was a credit issue before EL call
+        if (
+            new_el_voice_id and e.status_code != status.HTTP_402_PAYMENT_REQUIRED
+        ):  # Don't delete if it was a credit issue before EL call
             try:
-                logging.warning(f"Attempting to clean up orphaned ElevenLabs voice {new_el_voice_id} due to error: {e.detail}")
+                logging.warning(
+                    f"Attempting to clean up orphaned ElevenLabs voice {new_el_voice_id} due to error: {e.detail}"
+                )
                 elevenlabs_service.delete_voice(new_el_voice_id)
             except Exception as e_cleanup:
-                logging.error(f"Failed to cleanup orphaned ElevenLabs voice {new_el_voice_id}: {e_cleanup}")
-        logging.error(f"ElevenLabs voice creation from preview error for user {user_id}: {e.detail}")
-        raise HTTPException(status_code=e.status_code, detail=f"ElevenLabs API error: {e.detail}")
+                logging.error(
+                    f"Failed to cleanup orphaned ElevenLabs voice {new_el_voice_id}: {e_cleanup}"
+                )
+        logging.error(
+            f"ElevenLabs voice creation from preview error for user {user_id}: {e.detail}"
+        )
+        raise HTTPException(
+            status_code=e.status_code, detail=f"ElevenLabs API error: {e.detail}"
+        )
     except IntegrityError as e_db:
         session.rollback()
-        if new_el_voice_id: # EL voice was created, but DB failed (e.g. voice_id already exists in our DB by chance)
-            logging.warning(f"DB IntegrityError for EL voice {new_el_voice_id}. Attempting EL cleanup.")
+        if (
+            new_el_voice_id
+        ):  # EL voice was created, but DB failed (e.g. voice_id already exists in our DB by chance)
+            logging.warning(
+                f"DB IntegrityError for EL voice {new_el_voice_id}. Attempting EL cleanup."
+            )
             try:
                 elevenlabs_service.delete_voice(new_el_voice_id)
             except Exception as e_cleanup:
-                logging.error(f"Failed to cleanup EL voice {new_el_voice_id} after DB integrity error: {e_cleanup}")
+                logging.error(
+                    f"Failed to cleanup EL voice {new_el_voice_id} after DB integrity error: {e_cleanup}"
+                )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Database error creating voice, it might already exist: {str(e_db)}",
@@ -1644,17 +1687,24 @@ async def design_voice_create_from_preview_endpoint(
         raise
     except Exception as e:
         session.rollback()
-        if new_el_voice_id: # EL voice might have been created
-             logging.warning(f"Generic error after EL voice {new_el_voice_id} might have been created. Attempting EL cleanup.")
-             try:
+        if new_el_voice_id:  # EL voice might have been created
+            logging.warning(
+                f"Generic error after EL voice {new_el_voice_id} might have been created. Attempting EL cleanup."
+            )
+            try:
                 elevenlabs_service.delete_voice(new_el_voice_id)
-             except Exception as e_cleanup:
-                logging.error(f"Failed to cleanup EL voice {new_el_voice_id} after generic error: {e_cleanup}")
-        logging.error(f"Unexpected error creating voice from preview for user {user_id}: {str(e)}")
+            except Exception as e_cleanup:
+                logging.error(
+                    f"Failed to cleanup EL voice {new_el_voice_id} after generic error: {e_cleanup}"
+                )
+        logging.error(
+            f"Unexpected error creating voice from preview for user {user_id}: {str(e)}"
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create voice from preview: {str(e)}",
         )
+
 
 @router.post(
     "/assistant/photo/upload",
@@ -2094,6 +2144,7 @@ async def animate_video_endpoint(
                 logging.error(
                     f"Failed to clean up temporary audio file {temp_audio_gcs_url}: {e_cleanup}",
                 )
+
 
 ##################
 # Admin endpoints #

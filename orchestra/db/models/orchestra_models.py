@@ -1173,7 +1173,7 @@ class Voice(Base):
     provider = Column(String, nullable=True, server_default="cartesia")
     name = Column(String, nullable=False)
     description = Column(String, nullable=False)
-    gender = Column(String, nullable=False)
+    gender = Column(String, nullable=True)
     language = Column(String, nullable=False)  # e.g., "en", "es"
     is_preset = Column(
         Boolean,

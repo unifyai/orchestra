@@ -13,7 +13,7 @@ class ElevenLabsAPIError(HTTPException):
 
 
 LONG_OPERATION_TIMEOUT = httpx.Timeout(60.0)  # 60 seconds
-TTS_TIMEOUT = httpx.Timeout(30.0) # Timeout for TTS requests
+TTS_TIMEOUT = httpx.Timeout(30.0)  # Timeout for TTS requests
 
 
 class ElevenLabsService:
@@ -36,16 +36,20 @@ class ElevenLabsService:
             try:
                 # Attempt to parse error detail if JSON
                 error_data = response.json()
-                error_detail = error_data.get("detail", {}).get("message", response.text)
+                error_detail = error_data.get("detail", {}).get(
+                    "message", response.text
+                )
             except httpx.JSONDecodeError:
-                error_detail = response.text # Raw error text
+                error_detail = response.text  # Raw error text
             raise ElevenLabsAPIError(
                 status_code=response.status_code,
                 detail=f"ElevenLabs API audio generation failed: {error_detail}",
             )
         return response.content
-        
-    def _handle_response(self, response: httpx.Response) -> Dict[str, Any]: # For JSON responses
+
+    def _handle_response(
+        self, response: httpx.Response
+    ) -> Dict[str, Any]:  # For JSON responses
         # For DELETE, ElevenLabs returns 200 OK with JSON {"status": "ok"}
         # or error JSON. No 204.
         try:
@@ -58,10 +62,14 @@ class ElevenLabsService:
 
         if not (200 <= response.status_code < 300):
             error_detail = response_data.get(
-                "detail", # For some errors
-                response_data.get("message", "Unknown ElevenLabs API error") # For others
+                "detail",  # For some errors
+                response_data.get(
+                    "message", "Unknown ElevenLabs API error"
+                ),  # For others
             )
-            if isinstance(error_detail, dict) and "message" in error_detail: # Nested detail
+            if (
+                isinstance(error_detail, dict) and "message" in error_detail
+            ):  # Nested detail
                 error_detail = error_detail["message"]
             raise ElevenLabsAPIError(
                 status_code=response.status_code,
@@ -91,9 +99,9 @@ class ElevenLabsService:
         }
         if description:
             data["description"] = description
-        
+
         # For multipart/form-data, httpx sets Content-Type. Do not set it in v2_headers.
-        request_headers = self.headers.copy() 
+        request_headers = self.headers.copy()
         request_headers.pop("Content-Type", None)
 
         try:
@@ -160,7 +168,7 @@ class ElevenLabsService:
             )
 
     def _map_common_format_to_elevenlabs_output(
-        self, 
+        self,
         common_format: str,
         # Potentially add sample_rate, bitrate preferences here if needed for more granular mapping
     ) -> str:
@@ -169,16 +177,16 @@ class ElevenLabsService:
         # allow user to pass the `elevenlabs_explicit_output_format` string.
         mapping = {
             "mp3": "mp3_44100_128",  # Default MP3
-            "wav": "pcm_44100",      # High-quality PCM as WAV
-            "flac": "flac_22050_opus", # EL supports flac via this opus encoded flac. Client must decode.
-                                       # Or map to a PCM if direct FLAC is an issue.
-                                       # For simplicity, might be better to map FLAC to high quality PCM for now
-                                       # or state FLAC not directly supported via this mapping.
-                                       # Let's map to pcm_44100 as well for broader compatibility.
-            "pcm_s16le": "pcm_24000", # Example, can be pcm_16000, pcm_22050, pcm_44100
+            "wav": "pcm_44100",  # High-quality PCM as WAV
+            "flac": "flac_22050_opus",  # EL supports flac via this opus encoded flac. Client must decode.
+            # Or map to a PCM if direct FLAC is an issue.
+            # For simplicity, might be better to map FLAC to high quality PCM for now
+            # or state FLAC not directly supported via this mapping.
+            # Let's map to pcm_44100 as well for broader compatibility.
+            "pcm_s16le": "pcm_24000",  # Example, can be pcm_16000, pcm_22050, pcm_44100
             "pcm_mulaw": "ulaw_8000",
         }
-        return mapping.get(common_format, "mp3_44100_128") # Default to MP3
+        return mapping.get(common_format, "mp3_44100_128")  # Default to MP3
 
     def _get_content_type_for_elevenlabs_format(self, el_format_str: str) -> str:
         if el_format_str.startswith("mp3_"):
@@ -192,17 +200,16 @@ class ElevenLabsService:
             # Let's assume audio/wav for PCM from EL for now if not ulaw.
             return "audio/wav"
         if el_format_str.startswith("ulaw_"):
-            return "audio/mulaw" # Potentially with ;rate=8000
+            return "audio/mulaw"  # Potentially with ;rate=8000
         # Add other mappings if EL supports more raw types directly (e.g. "audio/flac")
-        return "application/octet-stream" # Fallback
-
+        return "application/octet-stream"  # Fallback
 
     def generate_speech(
         self,
         text: str,
-        voice_id: str, # This is ElevenLabs' voice_id
+        voice_id: str,  # This is ElevenLabs' voice_id
         model_id: Optional[str] = "eleven_multilingual_v2",
-        output_format: str = "mp3", # mp3, wav, pcm_s16le, pcm_mulaw, flac
+        output_format: str = "mp3",  # mp3, wav, pcm_s16le, pcm_mulaw, flac
         optimize_streaming_latency: Optional[int] = None,
         stability: Optional[float] = None,
         similarity_boost: Optional[float] = None,
@@ -211,18 +218,20 @@ class ElevenLabsService:
         Generates speech from text using ElevenLabs API and returns raw audio bytes and content type.
         Reference: https://elevenlabs.io/docs/api-reference/text-to-speech/convert
         """
-        elevenlabs_output_identifier = self._map_common_format_to_elevenlabs_output(output_format)
-        
+        elevenlabs_output_identifier = self._map_common_format_to_elevenlabs_output(
+            output_format
+        )
+
         url = f"{self.v1_base_url}/text-to-speech/{voice_id}"
-        
+
         params: Dict[str, Any] = {"output_format": elevenlabs_output_identifier}
         if optimize_streaming_latency is not None:
-             params["optimize_streaming_latency"] = optimize_streaming_latency
+            params["optimize_streaming_latency"] = optimize_streaming_latency
 
         payload: Dict[str, Any] = {"text": text}
         if model_id:
             payload["model_id"] = model_id
-            
+
         voice_settings: Dict[str, float] = {}
         if stability is not None:
             voice_settings["stability"] = stability
@@ -230,15 +239,19 @@ class ElevenLabsService:
             voice_settings["similarity_boost"] = similarity_boost
         if voice_settings:
             payload["voice_settings"] = voice_settings
-            
-        determined_content_type = self._get_content_type_for_elevenlabs_format(elevenlabs_output_identifier)
+
+        determined_content_type = self._get_content_type_for_elevenlabs_format(
+            elevenlabs_output_identifier
+        )
 
         try:
             # Use client with stream=True to handle potentially large audio files
             # The actual response reading will determine if it's streamed or read at once.
             # For non-streaming endpoint, httpx reads full response by default.
             with httpx.Client(timeout=TTS_TIMEOUT) as client:
-                response = client.post(url, json=payload, headers=self.headers, params=params)
+                response = client.post(
+                    url, json=payload, headers=self.headers, params=params
+                )
             audio_bytes = self._handle_audio_response(response)
             return audio_bytes, determined_content_type
         except httpx.RequestError as e:
@@ -246,10 +259,10 @@ class ElevenLabsService:
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=f"Request to ElevenLabs TTS failed: {e}",
             )
-        
+
     def design_voice_generate_previews(
         self,
-        voice_prompt: str, # This maps to "text" in EL API for this endpoint according to official docs / "voice_description" in user example
+        voice_prompt: str,  # This maps to "text" in EL API for this endpoint according to official docs / "voice_description" in user example
         gender: Optional[str] = None,
         accent: Optional[str] = None,
         age: Optional[str] = None,
@@ -260,18 +273,24 @@ class ElevenLabsService:
         Uses POST /v1/text-to-voice/design (as per user's example)
         """
         url = f"{self.v1_base_url}/text-to-voice/design"
-        payload: Dict[str, Any] = {"voice_description": voice_prompt} # Using voice_description as per user's curl example for this endpoint
-        
+        payload: Dict[str, Any] = {
+            "voice_description": voice_prompt
+        }  # Using voice_description as per user's curl example for this endpoint
+
         # Add optional parameters if provided
-        if gender: payload["gender"] = gender
-        if accent: payload["accent"] = accent
-        if age: payload["age"] = age
-        if accent_strength is not None : payload["accent_strength"] = accent_strength
-        
+        if gender:
+            payload["gender"] = gender
+        if accent:
+            payload["accent"] = accent
+        if age:
+            payload["age"] = age
+        if accent_strength is not None:
+            payload["accent_strength"] = accent_strength
+
         try:
             with httpx.Client(timeout=LONG_OPERATION_TIMEOUT) as client:
                 response = client.post(url, json=payload, headers=self.v1_headers)
-            return self._handle_response(response) # Expects JSON response
+            return self._handle_response(response)  # Expects JSON response
         except httpx.RequestError as e:
             raise ElevenLabsAPIError(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -289,16 +308,16 @@ class ElevenLabsService:
         Creates a full voice from a generated_voice_id obtained from the design preview step.
         Uses POST /v1/text-to-voice (as per user's example for creation step)
         """
-        url = f"{self.v1_base_url}/text-to-voice" # This is what user example implies for creating from generated_id
+        url = f"{self.v1_base_url}/text-to-voice"  # This is what user example implies for creating from generated_id
         payload: Dict[str, Any] = {
             "voice_name": voice_name,
             "generated_voice_id": generated_voice_id,
         }
         if description:
-            payload["voice_description"] = description # EL uses voice_description here
+            payload["voice_description"] = description  # EL uses voice_description here
         if labels:
             payload["labels"] = labels
-            
+
         try:
             with httpx.Client(timeout=LONG_OPERATION_TIMEOUT) as client:
                 response = client.post(url, json=payload, headers=self.v1_headers)

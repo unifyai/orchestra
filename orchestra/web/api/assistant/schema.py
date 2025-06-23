@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Generic, Literal, Optional, TypeVar, List, Dict
+from typing import Dict, Generic, List, Literal, Optional, TypeVar
 
 from pydantic import BaseModel, Field, HttpUrl
 from pydantic.generics import GenericModel
@@ -283,8 +283,8 @@ class VoiceCreate(BaseModel):
         description="Description of the voice",
         example="Calm and relaxing voice of an english-speaking woman",
     )
-    gender: str = Field(
-        ...,
+    gender: Optional[str] = Field(
+        None,
         description="Gender of the voice",
         example="female",
     )
@@ -347,62 +347,69 @@ class VoiceCloneRequestData(BaseModel):
         description="Optional description for the voice",
     )
 
+
 class VoiceGenerateRequest(BaseModel):
     text: str = Field(..., description="Text to synthesize.")
-    provider: Literal["cartesia", "elevenlabs"] = Field(..., description="TTS provider.")
-    voice_id: str = Field(..., description="Provider-specific voice ID for the speech.")
-    model_id: Optional[str] = Field(None, description="Provider-specific model ID (e.g., 'sonic-2' for Cartesia, 'eleven_multilingual_v2' for ElevenLabs).")
-    
-    output_format: Literal["mp3", "wav", "flac", "pcm_s16le", "pcm_mulaw"] = Field(
-        "mp3", 
-        description="Desired audio output format. This will determine the Content-Type of the response."
+    provider: Literal["cartesia", "elevenlabs"] = Field(
+        ..., description="TTS provider."
     )
-    
+    voice_id: str = Field(..., description="Provider-specific voice ID for the speech.")
+    model_id: Optional[str] = Field(
+        None,
+        description="Provider-specific model ID (e.g., 'sonic-2' for Cartesia, 'eleven_multilingual_v2' for ElevenLabs).",
+    )
+
+    output_format: Literal["mp3", "wav", "flac", "pcm_s16le", "pcm_mulaw"] = Field(
+        "mp3",
+        description="Desired audio output format. This will determine the Content-Type of the response.",
+    )
+
     # Cartesia-specific parameters
     cartesia_language: Optional[str] = Field(
-        "en", 
-        description="Language code for Cartesia TTS (e.g., 'en'). If None, Cartesia attempts auto-detection."
+        "en",
+        description="Language code for Cartesia TTS (e.g., 'en'). If None, Cartesia attempts auto-detection.",
     )
     cartesia_sample_rate: Optional[int] = Field(
-        None, 
-        description="Optional sample rate for Cartesia (e.g., 24000, 44100). Provider defaults used if None."
+        None,
+        description="Optional sample rate for Cartesia (e.g., 24000, 44100). Provider defaults used if None.",
     )
     cartesia_bit_rate: Optional[int] = Field(
-        None, 
-        description="Optional bit rate for Cartesia lossy formats like MP3 (e.g., 128000). Provider defaults used if None. Not for PCM."
+        None,
+        description="Optional bit rate for Cartesia lossy formats like MP3 (e.g., 128000). Provider defaults used if None. Not for PCM.",
     )
 
     # ElevenLabs-specific parameters
     elevenlabs_optimize_streaming_latency: Optional[int] = Field(
-        None, 
-        ge=0, 
-        le=4, 
-        description="0-4. Optimize for streaming latency for ElevenLabs."
+        None,
+        ge=0,
+        le=4,
+        description="0-4. Optimize for streaming latency for ElevenLabs.",
     )
     elevenlabs_voice_settings_stability: Optional[float] = Field(
-        None, 
-        ge=0, 
+        None,
+        ge=0,
         le=1,
-        description="Stability for ElevenLabs voice settings."
+        description="Stability for ElevenLabs voice settings.",
     )
     elevenlabs_voice_settings_similarity_boost: Optional[float] = Field(
-        None, 
-        ge=0, 
+        None,
+        ge=0,
         le=1,
-        description="Similarity boost for ElevenLabs voice settings."
+        description="Similarity boost for ElevenLabs voice settings.",
     )
     # If you need to specify the exact ElevenLabs output format string (e.g., "mp3_22050_32")
     # you could add a field like:
     # elevenlabs_explicit_output_format: Optional[str] = Field(None, description="Overrides output_format mapping for ElevenLabs if specified.")
 
-
     class Config:
-        orm_mode = True # Though not directly mapping to ORM, good practice for consistency
+        orm_mode = (
+            True  # Though not directly mapping to ORM, good practice for consistency
+        )
         schema_extra = {
             "example_cartesia": {
                 "text": "Hello from Cartesia!",
                 "provider": "cartesia",
-                "voice_id": "694f9389-aac1-45b6-b726-9d9369183238", # Example Cartesia Voice ID
+                "voice_id": "694f9389-aac1-45b6-b726-9d9369183238",  # Example Cartesia Voice ID
                 "model_id": "sonic-2",
                 "output_format": "mp3",
                 "cartesia_language": "en",
@@ -412,20 +419,38 @@ class VoiceGenerateRequest(BaseModel):
             "example_elevenlabs": {
                 "text": "Hello from ElevenLabs!",
                 "provider": "elevenlabs",
-                "voice_id": "JBFqnCBsd6RMkjVDRZzb", # Example ElevenLabs Voice ID
+                "voice_id": "JBFqnCBsd6RMkjVDRZzb",  # Example ElevenLabs Voice ID
                 "model_id": "eleven_multilingual_v2",
                 "output_format": "mp3",
                 "elevenlabs_voice_settings_stability": 0.75,
                 "elevenlabs_voice_settings_similarity_boost": 0.75,
-            }
+            },
         }
 
+
 class VoiceDesignGeneratePreviewsRequest(BaseModel):
-    voice_description: str = Field(..., description="Text prompt describing the desired voice characteristics for ElevenLabs (e.g., 'A deep, resonant male voice with a British accent, suitable for narration.'). This is sent as 'text' to EL's /v1/text-to-voice/design endpoint.")
-    gender: Optional[str] = Field(None, description="Optional: Desired gender for the voice (e.g., 'female', 'male').")
-    accent: Optional[str] = Field(None, description="Optional: Desired accent for the voice (e.g., 'american', 'british').")
-    age: Optional[str] = Field(None, description="Optional: Desired age category for the voice (e.g., 'young', 'middle_aged', 'old').")
-    accent_strength: Optional[float] = Field(None, ge=0.0, le=2.0, description="Optional: Strength of the accent (0.0 to 2.0).")
+    voice_description: str = Field(
+        ...,
+        description="Text prompt describing the desired voice characteristics for ElevenLabs (e.g., 'A deep, resonant male voice with a British accent, suitable for narration.'). This is sent as 'text' to EL's /v1/text-to-voice/design endpoint.",
+    )
+    gender: Optional[str] = Field(
+        None,
+        description="Optional: Desired gender for the voice (e.g., 'female', 'male').",
+    )
+    accent: Optional[str] = Field(
+        None,
+        description="Optional: Desired accent for the voice (e.g., 'american', 'british').",
+    )
+    age: Optional[str] = Field(
+        None,
+        description="Optional: Desired age category for the voice (e.g., 'young', 'middle_aged', 'old').",
+    )
+    accent_strength: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=2.0,
+        description="Optional: Strength of the accent (0.0 to 2.0).",
+    )
 
     class Config:
         schema_extra = {
@@ -435,33 +460,64 @@ class VoiceDesignGeneratePreviewsRequest(BaseModel):
                 "accent": "american",
                 "age": "middle_aged",
                 "accent_strength": 1.2,
-            }
+            },
         }
 
-class VoiceDesignPreviewItem(BaseModel):
-    audio_base_64: str = Field(..., description="Base64 encoded audio sample of the generated voice preview.")
-    generated_voice_id: str = Field(..., description="Temporary ID for this generated voice preview, used to create the full voice.")
-    media_type: str = Field(..., description="MIME type of the audio sample, e.g., 'audio/mpeg'.")
-    duration_secs: Optional[float] = Field(None, description="Duration of the audio sample in seconds.")
 
-class VoiceDesignGeneratePreviewsAPIResponse(BaseModel): # Maps to EL's successful response for /v1/text-to-voice/design
+class VoiceDesignPreviewItem(BaseModel):
+    audio_base_64: str = Field(
+        ..., description="Base64 encoded audio sample of the generated voice preview."
+    )
+    generated_voice_id: str = Field(
+        ...,
+        description="Temporary ID for this generated voice preview, used to create the full voice.",
+    )
+    media_type: str = Field(
+        ..., description="MIME type of the audio sample, e.g., 'audio/mpeg'."
+    )
+    duration_secs: Optional[float] = Field(
+        None, description="Duration of the audio sample in seconds."
+    )
+
+
+class VoiceDesignGeneratePreviewsAPIResponse(
+    BaseModel
+):  # Maps to EL's successful response for /v1/text-to-voice/design
     previews: List[VoiceDesignPreviewItem]
-    text: str # The original voice_description text that was sent to EL
+    text: str  # The original voice_description text that was sent to EL
+
 
 class VoiceDesignCreateFromPreviewRequest(BaseModel):
     # For ElevenLabs API to create the voice:
-    generated_voice_id: str = Field(..., description="The 'generated_voice_id' obtained from the '/generate-previews' step.")
+    generated_voice_id: str = Field(
+        ...,
+        description="The 'generated_voice_id' obtained from the '/generate-previews' step.",
+    )
     # For our database (Voice model) and also sent to ElevenLabs:
-    voice_name: str = Field(..., description="Name for the new voice. This will be used in our database and sent to ElevenLabs.")
+    voice_name: str = Field(
+        ...,
+        description="Name for the new voice. This will be used in our database and sent to ElevenLabs.",
+    )
     # Fields primarily for our database (Voice model) consistency:
     # These are crucial as our Voice model has non-nullable gender and language.
     # ElevenLabs' created voice object might have this in 'labels' or 'verified_languages',
     # but it's more robust to have the user confirm/provide them for our DB.
-    final_voice_gender: str = Field(..., description="Gender for the voice (e.g., 'female', 'male') to be stored in our database.")
-    final_voice_language: str = Field(..., description="Primary language code for the voice (e.g., 'en', 'es') to be stored in our database.")
+    final_voice_gender: str = Field(
+        ...,
+        description="Gender for the voice (e.g., 'female', 'male') to be stored in our database.",
+    )
+    final_voice_language: str = Field(
+        ...,
+        description="Primary language code for the voice (e.g., 'en', 'es') to be stored in our database.",
+    )
     # Optional for our DB and ElevenLabs:
-    voice_description_for_el_and_db: Optional[str] = Field(None, description="Optional description for the new voice. Will be used in our database and sent to ElevenLabs.")
-    elevenlabs_labels: Optional[Dict[str, str]] = Field(None, description="Optional labels for ElevenLabs when creating the voice.")
+    voice_description_for_el_and_db: Optional[str] = Field(
+        None,
+        description="Optional description for the new voice. Will be used in our database and sent to ElevenLabs.",
+    )
+    elevenlabs_labels: Optional[Dict[str, str]] = Field(
+        None, description="Optional labels for ElevenLabs when creating the voice."
+    )
 
     class Config:
         schema_extra = {
@@ -471,9 +527,10 @@ class VoiceDesignCreateFromPreviewRequest(BaseModel):
                 "final_voice_gender": "female",
                 "final_voice_language": "en",
                 "voice_description_for_el_and_db": "A custom voice designed from text.",
-                "elevenlabs_labels": {"use_case": "audiobook"}
-            }
+                "elevenlabs_labels": {"use_case": "audiobook"},
+            },
         }
+
 
 class AssistantPhotoUploadResponse(BaseModel):
     gcs_url: str = Field(

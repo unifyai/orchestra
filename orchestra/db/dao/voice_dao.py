@@ -17,11 +17,11 @@ class VoiceDAO:
 
     def create_voice(
         self,
-        voice_id: str,  # This is Cartesia's voice ID
+        voice_id: str,
         user_id: str,
         name: str,
         description: str,
-        gender: str,
+        gender: Optional[str],
         language: str,
         provider: str = "cartesia",
     ) -> Voice:
