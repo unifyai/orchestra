@@ -144,3 +144,18 @@ class CartesiaService:
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=f"Request to Cartesia failed: {e}",
             )
+
+    def list_voices(self) -> Dict[str, Any]:
+        """
+        List all available voices from Cartesia.
+        """
+        url = f"{self.base_url}/voices"
+        try:
+            with httpx.Client() as client:
+                response = client.get(url, headers=self.headers)
+            return self._handle_response(response)
+        except httpx.RequestError as e:
+            raise CartesiaAPIError(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Request to Cartesia failed: {e}",
+            )

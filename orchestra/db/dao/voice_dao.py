@@ -23,6 +23,7 @@ class VoiceDAO:
         description: str,
         gender: str,
         language: str,
+        provider: str = "cartesia",
     ) -> Voice:
         """
         Create a new Voice for the given user, using Cartesia's voice_id as primary key.
@@ -34,6 +35,7 @@ class VoiceDAO:
             description=description,
             gender=gender,
             language=language,
+            provider=provider,
         )
         self.session.add(voice)
         self.session.flush()
