@@ -45,12 +45,12 @@ supported_models = {
     },
     "llama-4-maverick-instruct": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/llama4-maverick-instruct-basic",
-        "context_window": 1024000,
+        "context_window": 1048576,
         "cost": {"prompt": 0.22, "completion": 0.88},
     },
     "llama-4-scout-instruct": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/llama4-scout-instruct-basic",
-        "context_window": 1024000,
+        "context_window": 1048576,
         "cost": {"prompt": 0.15, "completion": 0.6},
     },
     "llama-3.3-70b-chat": {
@@ -87,11 +87,6 @@ supported_models = {
         "endpoint": "fireworks_ai/accounts/fireworks/models/qwen3-30b-a3b",
         "context_window": 40000,
         "cost": {"prompt": 0.15, "completion": 0.6},
-    },
-    "qwen-qwq-32b": {
-        "endpoint": "fireworks_ai/accounts/fireworks/models/qwq-32b",
-        "context_window": 131072,
-        "cost": {"prompt": 0.9, "completion": 0.9},
     },
     "qwen-2.5-72b-instruct": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/qwen-v2p5-72b-instruct",
