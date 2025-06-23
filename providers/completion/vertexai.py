@@ -64,14 +64,20 @@ class VertexAI(BaseCompletionProvider):
 
 
 supported_models = {
-    "gemini-2.5-flash": {
-        "endpoint": "vertex_ai/gemini-2.5-flash-preview-05-20",
+    "gemini-2.5-flash-lite": {
+        "endpoint": "vertex_ai/gemini-2.5-flash-lite-preview-06-17",
         "region": "us-central1",
         "context_window": 200000,
-        "cost": {"prompt": 0.15, "completion": 0.6},
+        "cost": {"prompt": 0.1, "completion": 0.4},
+    },
+    "gemini-2.5-flash": {
+        "endpoint": "vertex_ai/gemini-2.5-flash",
+        "region": "us-central1",
+        "context_window": 200000,
+        "cost": {"prompt": 0.3, "completion": 2.5},
     },
     "gemini-2.5-pro": {
-        "endpoint": "vertex_ai/gemini-2.5-pro-preview-05-06",
+        "endpoint": "vertex_ai/gemini-2.5-pro",
         "region": "us-central1",
         "context_window": 200000,
         "cost": {"prompt": 1.25, "completion": 10},
