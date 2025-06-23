@@ -656,6 +656,20 @@ def _handle_membership_operator(
         rhs_list = _parse_rhs_list_or_dict_if_needed(filter_dict.get("rhs"), rhs)
 
         if rhs_list and isinstance(rhs_list, list):
+            if lval_type == "NoneType" and rhs_list:
+                # If the LHS column is all NULLs, its type is ambiguous.
+                # We infer the type from the RHS list and select the corresponding typed column.
+                first_item_type = LogDAO.infer_type("", rhs_list[0])
+
+                # Based on the inferred type, we select the correct column from the subquery `lhs`.
+                if first_item_type == "str":
+                    lval = lhs.c.str_value
+                elif first_item_type == "int":
+                    lval = lhs.c.int_value
+                elif first_item_type == "float":
+                    lval = lhs.c.float_value
+                elif first_item_type == "bool":
+                    lval = lhs.c.bool_value
             expr = lval.in_(rhs_list) if is_in else ~lval.in_(rhs_list)
         else:
             substring_cond = _substring_expr(lval, rhs)
