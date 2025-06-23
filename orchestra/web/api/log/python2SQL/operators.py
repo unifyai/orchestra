@@ -1047,15 +1047,15 @@ def _handle_l2(
 
     # Both sides subqueries
     if lhs_is_sub and rhs_is_sub:
-        lval, _ = _select_value(lhs, session)
-        rval, _ = _select_value(rhs, session)
+        lval, _ = _select_value(lhs, session, is_vector=True)
+        rval, _ = _select_value(rhs, session, is_vector=True)
         expr = lval.op("<->")(rval).cast(Float)
         return _join_subqueries(lhs, rhs, expr, "float", session=session)
 
     # Only LHS is subquery
     if lhs_is_sub:
-        lval, _ = _select_value(lhs, session)
-        rval, _ = _select_value(rhs, session)
+        lval, _ = _select_value(lhs, session, is_vector=True)
+        rval, _ = _select_value(rhs, session, is_vector=True)
         expr = lval.op("<->")(rval).cast(Float)
         select_cols = [lhs.c.log_event_id.label("log_event_id")]
         if "__comp_idx__" in lhs.c.keys():
@@ -1069,8 +1069,8 @@ def _handle_l2(
 
     # Only RHS is subquery
     if rhs_is_sub:
-        rval, _ = _select_value(rhs, session)
-        lval, _ = _select_value(lhs, session)
+        rval, _ = _select_value(rhs, session, is_vector=True)
+        lval, _ = _select_value(lhs, session, is_vector=True)
         expr = lval.op("<->")(rval).cast(Float)
         select_cols = [rhs.c.log_event_id.label("log_event_id")]
         if "__comp_idx__" in rhs.c.keys():
@@ -1118,14 +1118,14 @@ def _handle_cosine(
     rhs_is_sub = isinstance(rhs, Subquery)
 
     if lhs_is_sub and rhs_is_sub:
-        lval, _ = _select_value(lhs, session)
-        rval, _ = _select_value(rhs, session)
+        lval, _ = _select_value(lhs, session, is_vector=True)
+        rval, _ = _select_value(rhs, session, is_vector=True)
         dist = lval.op("<=>")(rval).cast(Float)
         return _join_subqueries(lhs, rhs, dist, "float", session=session)
 
     if lhs_is_sub:
-        lval, _ = _select_value(lhs, session)
-        rval, _ = _select_value(rhs, session)
+        lval, _ = _select_value(lhs, session, is_vector=True)
+        rval, _ = _select_value(rhs, session, is_vector=True)
         dist = lval.op("<=>")(rval).cast(Float)
         select_cols = [lhs.c.log_event_id.label("log_event_id")]
         if "__comp_idx__" in lhs.c.keys():
@@ -1138,8 +1138,8 @@ def _handle_cosine(
         return select(*select_cols).select_from(lhs).subquery()
 
     if rhs_is_sub:
-        rval, _ = _select_value(rhs, session)
-        lval, _ = _select_value(lhs, session)
+        rval, _ = _select_value(rhs, session, is_vector=True)
+        lval, _ = _select_value(lhs, session, is_vector=True)
         dist = lval.op("<=>")(rval).cast(Float)
         select_cols = [rhs.c.log_event_id.label("log_event_id")]
         if "__comp_idx__" in rhs.c.keys():
@@ -1187,14 +1187,14 @@ def _handle_ip(
     rhs_is_sub = isinstance(rhs, Subquery)
 
     if lhs_is_sub and rhs_is_sub:
-        lval, lval_type = _select_value(lhs, session)
-        rval, rval_type = _select_value(rhs, session)
+        lval, lval_type = _select_value(lhs, session, is_vector=True)
+        rval, rval_type = _select_value(rhs, session, is_vector=True)
         expr = lval.op("<#>")(rval).cast(Float)
         return _join_subqueries(lhs, rhs, expr, "float", session=session)
 
     if lhs_is_sub:
-        lval, lval_type = _select_value(lhs, session)
-        rval, rval_type = _select_value(rhs, session)
+        lval, lval_type = _select_value(lhs, session, is_vector=True)
+        rval, rval_type = _select_value(rhs, session, is_vector=True)
         expr = lval.op("<#>")(rval).cast(Float)
         select_cols = [lhs.c.log_event_id.label("log_event_id")]
         if "__comp_idx__" in lhs.c.keys():
@@ -1207,8 +1207,8 @@ def _handle_ip(
         return select(*select_cols).select_from(lhs).subquery()
 
     if rhs_is_sub:
-        rval, rval_type = _select_value(rhs, session)
-        lval, lval_type = _select_value(lhs, session)
+        rval, rval_type = _select_value(rhs, session, is_vector=True)
+        lval, lval_type = _select_value(lhs, session, is_vector=True)
         expr = lval.op("<#>")(rval).cast(Float)
         select_cols = [rhs.c.log_event_id.label("log_event_id")]
         if "__comp_idx__" in rhs.c.keys():
@@ -1255,14 +1255,14 @@ def _handle_l1(
     rhs_is_sub = isinstance(rhs, Subquery)
 
     if lhs_is_sub and rhs_is_sub:
-        lval, lval_type = _select_value(lhs, session)
-        rval, rval_type = _select_value(rhs, session)
+        lval, lval_type = _select_value(lhs, session, is_vector=True)
+        rval, rval_type = _select_value(rhs, session, is_vector=True)
         expr = lval.op("<+>")(rval).cast(Float)
         return _join_subqueries(lhs, rhs, expr, "float", session=session)
 
     if lhs_is_sub:
-        lval, lval_type = _select_value(lhs, session)
-        rval, rval_type = _select_value(rhs, session)
+        lval, lval_type = _select_value(lhs, session, is_vector=True)
+        rval, rval_type = _select_value(rhs, session, is_vector=True)
         expr = lval.op("<+>")(rval).cast(Float)
         select_cols = [lhs.c.log_event_id.label("log_event_id")]
         if "__comp_idx__" in lhs.c.keys():
@@ -1275,8 +1275,8 @@ def _handle_l1(
         return select(*select_cols).select_from(lhs).subquery()
 
     if rhs_is_sub:
-        rval, rval_type = _select_value(rhs, session)
-        lval, lval_type = _select_value(lhs, session)
+        rval, rval_type = _select_value(rhs, session, is_vector=True)
+        lval, lval_type = _select_value(lhs, session, is_vector=True)
         expr = lval.op("<+>")(rval).cast(Float)
         select_cols = [rhs.c.log_event_id.label("log_event_id")]
         if "__comp_idx__" in rhs.c.keys():
@@ -1323,14 +1323,14 @@ def _handle_hamming(
     rhs_is_sub = isinstance(rhs, Subquery)
 
     if lhs_is_sub and rhs_is_sub:
-        lval, lval_type = _select_value(lhs, session)
-        rval, rval_type = _select_value(rhs, session)
+        lval, lval_type = _select_value(lhs, session, is_vector=True)
+        rval, rval_type = _select_value(rhs, session, is_vector=True)
         expr = lval.op("<~>")(rval).cast(Float)
         return _join_subqueries(lhs, rhs, expr, "float", session=session)
 
     if lhs_is_sub:
-        lval, lval_type = _select_value(lhs, session)
-        rval, rval_type = _select_value(rhs, session)
+        lval, lval_type = _select_value(lhs, session, is_vector=True)
+        rval, rval_type = _select_value(rhs, session, is_vector=True)
         expr = lval.op("<~>")(rval).cast(Float)
         select_cols = [lhs.c.log_event_id.label("log_event_id")]
         if "__comp_idx__" in lhs.c.keys():
@@ -1343,8 +1343,8 @@ def _handle_hamming(
         return select(*select_cols).select_from(lhs).subquery()
 
     if rhs_is_sub:
-        rval, rval_type = _select_value(rhs, session)
-        lval, lval_type = _select_value(lhs, session)
+        rval, rval_type = _select_value(rhs, session, is_vector=True)
+        lval, lval_type = _select_value(lhs, session, is_vector=True)
         expr = lval.op("<~>")(rval).cast(Float)
         select_cols = [rhs.c.log_event_id.label("log_event_id")]
         if "__comp_idx__" in rhs.c.keys():
@@ -1391,14 +1391,14 @@ def _handle_jaccard(
     rhs_is_sub = isinstance(rhs, Subquery)
 
     if lhs_is_sub and rhs_is_sub:
-        lval, lval_type = _select_value(lhs, session)
-        rval, rval_type = _select_value(rhs, session)
+        lval, lval_type = _select_value(lhs, session, is_vector=True)
+        rval, rval_type = _select_value(rhs, session, is_vector=True)
         expr = lval.op("<%>")(rval).cast(Float)
         return _join_subqueries(lhs, rhs, expr, "float", session=session)
 
     if lhs_is_sub:
-        lval, lval_type = _select_value(lhs, session)
-        rval, rval_type = _select_value(rhs, session)
+        lval, lval_type = _select_value(lhs, session, is_vector=True)
+        rval, rval_type = _select_value(rhs, session, is_vector=True)
         expr = lval.op("<%>")(rval).cast(Float)
         select_cols = [lhs.c.log_event_id.label("log_event_id")]
         if "__comp_idx__" in lhs.c.keys():
@@ -1411,8 +1411,8 @@ def _handle_jaccard(
         return select(*select_cols).select_from(lhs).subquery()
 
     if rhs_is_sub:
-        rval, rval_type = _select_value(rhs, session)
-        lval, lval_type = _select_value(lhs, session)
+        rval, rval_type = _select_value(rhs, session, is_vector=True)
+        lval, lval_type = _select_value(lhs, session, is_vector=True)
         expr = lval.op("<%>")(rval).cast(Float)
         select_cols = [rhs.c.log_event_id.label("log_event_id")]
         if "__comp_idx__" in rhs.c.keys():

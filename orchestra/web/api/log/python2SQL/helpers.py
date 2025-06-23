@@ -151,7 +151,7 @@ def _substitute_placeholders(equation: str, single_ref: dict) -> tuple:
     return new_expr, alias_to_key_map
 
 
-def _select_value(subq, session, is_collection=False):
+def _select_value(subq, session, is_collection=False, is_vector=False):
     """
     Helper function to select the appropriate value column from a subquery.
     Prioritizes 'value' if it exists, otherwise selects based on inferred types.
@@ -179,7 +179,10 @@ def _select_value(subq, session, is_collection=False):
             ).first()  # execute the subquery to determine the type.
         else:
             dt = session.execute(select(subq).limit(1)).first()
-        if dt is None:
+
+        if is_vector:
+            dt = "vector"
+        elif dt is None:
             dt = "NoneType"
         else:
             dt = dt[-1]
