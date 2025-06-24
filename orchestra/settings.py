@@ -162,7 +162,7 @@ class Settings(BaseSettings):
     cartesia_api_version: Optional[str] = os.environ.get("CARTESIA_API_VERSION")
 
     # Variables for ElevenLabs voice management
-    elevenlabs_api_key: Optional[str] = os.environ.get("ELEVEN_API_KEY")
+    elevenlabs_api_key: Optional[str] = os.environ.get("ELEVENLABS_API_KEY")
 
     # Assistant creation
     assistant_creation_cost: float = 10.0
