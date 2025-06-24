@@ -198,6 +198,11 @@ class AssistantUpdate(BaseModel):
         description="Email address for the assistant",
         example="ada.lovelace@newdomain.com",
     )
+    whatsapp_sid: Optional[str] = Field(
+        None,
+        description="WhatsApp SID for Twilio integration",
+        example="whatsapp:+1234567890",
+    )
     voice_id: Optional[str] = Field(  # This is Cartesia's voice ID
         None,
         description="Id of the voice (Cartesia ID) to use for the assistant",
@@ -218,6 +223,7 @@ class AssistantUpdate(BaseModel):
                 "about": "Award-winning mathematician specializing in algorithm development",
                 "user_phone": "+15551234567",
                 "phone": "+15559876543",
+                "whatsapp_sid": "whatsapp:+1234567890",
                 "email": "ada.lovelace@newdomain.com",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "country": "GB",

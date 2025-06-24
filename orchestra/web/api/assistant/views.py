@@ -1386,64 +1386,56 @@ def delete_voice(
                 detail="Voice not found for this user.",
             )
 
-        # Only attempt to delete from provider if not a preset
-        if voice_to_delete.provider == "cartesia" and not voice_to_delete.is_preset:
-            try:
-                cartesia_service.delete_voice(voice_id)
-                logging.info(
-                    f"Successfully deleted voice {voice_id} from Cartesia for user {user_id}.",
-                )
-            except CartesiaAPIError as e_cartesia:
-                if e_cartesia.status_code == 404:
-                    logging.warning(
-                        f"Voice {voice_id} not found on Cartesia for user {user_id}. Proceeding with DB deletion.",
+        provider_delete_failed_critically = False
+
+        if not voice_to_delete.is_preset:
+
+            provider_service = None
+            if voice_to_delete.provider == "cartesia":
+                provider_service = cartesia_service
+            elif voice_to_delete.provider == "elevenlabs":
+                provider_service = elevenlabs_service
+
+            if provider_service:
+                try:
+                    provider_service.delete_voice(voice_id)
+                    logging.info(
+                        f"Successfully deleted voice {voice_id} from {voice_to_delete.provider} for user {user_id}.",
                     )
-                else:
-                    session.rollback()
+                except (CartesiaAPIError, ElevenLabsAPIError) as e_provider:
+                    if e_provider.status_code == 404:
+                        logging.warning(
+                            f"Voice {voice_id} not found on {voice_to_delete.provider} for user {user_id}. Proceeding with DB deletion.",
+                        )
+                    else:
+                        # CRITICAL FAILURE - DO NOT DELETE FROM DB
+                        provider_delete_failed_critically = True
+                        session.rollback()  # Rollback before raising
+                        raise HTTPException(
+                            status_code=e_provider.status_code,  # Use provider's status code
+                            detail=f"Failed to delete voice from {voice_to_delete.provider}: {e_provider.detail}",
+                        )
+                except Exception as e_provider_generic:
+                    provider_delete_failed_critically = True
+                    session.rollback()  # Rollback before raising
                     raise HTTPException(
                         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail=f"Failed to delete voice from Cartesia: {e_cartesia.detail}",
+                        detail=f"Unexpected error during {voice_to_delete.provider} deletion: {str(e_provider_generic)}",
                     )
-            except Exception as e_cartesia_generic:
-                session.rollback()
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Unexpected error during Cartesia deletion: {str(e_cartesia_generic)}",
-                )
-        elif voice_to_delete.provider == "elevenlabs" and not voice_to_delete.is_preset:
-            try:
-                elevenlabs_service.delete_voice(voice_id)
-                logging.info(
-                    f"Successfully deleted voice {voice_id} from ElevenLabs for user {user_id}.",
-                )
-            except ElevenLabsAPIError as e_elevenlabs:
-                if e_elevenlabs.status_code == 404:
-                    logging.warning(
-                        f"Voice {voice_id} not found on ElevenLabs for user {user_id}. Proceeding with DB deletion.",
-                    )
-                else:
-                    session.rollback()
-                    raise HTTPException(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail=f"Failed to delete voice from ElevenLabs: {e_elevenlabs.detail}",
-                    )
-            except Exception as e_elevenlabs_generic:
-                session.rollback()
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Unexpected error during ElevenLabs deletion: {str(e_elevenlabs_generic)}",
-                )
 
-        # If it was a preset, or provider deletion was successful/404
-        voice_dao.delete_voice(
-            user_id=user_id,
-            voice_id=voice_id,
-        )
-        session.commit()
-        return InfoResponse(info="Voice deleted successfully.")
+        # If provider deletion was successful, or it was a preset, or provider returned 404 (non-critical)
+        if not provider_delete_failed_critically:
+            voice_dao.delete_voice(
+                user_id=user_id,
+                voice_id=voice_id,
+            )
+            session.commit()
+            return InfoResponse(info="Voice deleted successfully.")
+        # If critical failure occurred, the HTTPException would have been raised already.
+        # This part should ideally not be reached if provider_delete_failed_critically is true.
 
-    except HTTPException as e:
-        session.rollback()
+    except HTTPException as e:  # If it's already an HTTPException, re-raise
+        # session.rollback() # Rollback might have already happened or is not needed if it's a 404 before DB ops
         raise e
     except Exception as e_generic_delete:
         session.rollback()

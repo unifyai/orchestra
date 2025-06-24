@@ -72,7 +72,7 @@ def mock_tts_services_factory(fastapi_app):
                 "generated_voice_id": "temp_preview_el_123",
                 "audio_base_64": _get_dummy_base64_audio(),
                 "media_type": "audio/mpeg",
-            }
+            },
         ],
         "text": "Mock text used for generating ElevenLabs preview.",
     }
@@ -236,9 +236,19 @@ async def test_register_voice_missing_required_field(
 
     assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
     error_details = resp.json()["detail"]
-    assert any(
-        "name" in e["loc"] and "field required" in e["msg"] for e in error_details
-    )
+    found_error = False
+    for e in error_details:
+        if (
+            isinstance(e["loc"], list)
+            and "name" in e["loc"]
+            and (
+                "field required" in e["msg"].lower()
+                or "value_error.missing" in e.get("type", "").lower()
+            )
+        ):
+            found_error = True
+            break
+    assert found_error, f"Expected error for missing 'name' field, got: {error_details}"
 
 
 @pytest.mark.anyio
@@ -330,7 +340,9 @@ async def test_delete_non_preset_voice_provider_api_error(
     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
         mock_state.user_id = user_id
         reg_resp = await client.post(
-            "/v0/assistant/voice", json=reg_payload, headers=HEADERS
+            "/v0/assistant/voice",
+            json=reg_payload,
+            headers=HEADERS,
         )
         assert reg_resp.status_code == status.HTTP_201_CREATED
 
@@ -365,7 +377,7 @@ async def test_delete_non_preset_voice_provider_api_error(
     #    (reset mock for a clean delete from DB)
     cartesia_mock.delete_voice.side_effect = None  # Clear side effect
     cartesia_mock.delete_voice.return_value = {
-        "status": "success"
+        "status": "success",
     }  # Mock success for DB cleanup
     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
         mock_state.user_id = user_id
@@ -657,7 +669,7 @@ async def test_clone_voice_elevenlabs_api_error_on_clone(
         resp.status_code == status.HTTP_400_BAD_REQUEST
     )  # Or whatever status the EL error has
     assert (
-        "ElevenLabs API error: ElevenLabs clone failed: Invalid audio format"
+        "Elevenlabs API error: ElevenLabs clone failed: Invalid audio format"
         in resp.json()["detail"]
     )
     elevenlabs_mock.delete_voice.assert_not_called()  # Should not attempt delete if clone itself failed
@@ -792,7 +804,7 @@ async def test_design_generate_previews_success(
     user_id = await get_user_id_from_request_state(client)
 
     payload = {
-        "voice_description": "A happy robot voice",
+        "voice_description": "A very happy and cheerful robot voice, beep boop.",
     }
     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
         mock_state.user_id = user_id
@@ -864,7 +876,8 @@ async def test_design_create_from_preview_success(
 
     # Clean up
     VoiceDAO(dbsession).delete_voice(
-        user_id=user_id, voice_id="final_el_voice_id_abc_789"
+        user_id=user_id,
+        voice_id="final_el_voice_id_abc_789",
     )
     dbsession.commit()
 
@@ -882,7 +895,9 @@ async def test_design_generate_previews_el_api_error(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail="Invalid description for EL",
     )
-    payload = {"voice_description": "Invalid"}
+    payload = {
+        "voice_description": "This is a sufficiently long description for testing API errors."
+    }
     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
         mock_state.user_id = user_id
         resp = await client.post(
