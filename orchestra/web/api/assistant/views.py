@@ -11,6 +11,7 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
     UploadFile,
     status,
 )
@@ -25,6 +26,7 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.call_recording_service import CallRecordingService
 from orchestra.services.cartesia_service import CartesiaAPIError, CartesiaService
+from orchestra.services.elevenlabs_service import ElevenLabsAPIError, ElevenLabsService
 from orchestra.services.replicate_service import ReplicateAPIError, ReplicateService
 from orchestra.settings import settings
 from orchestra.web.api.assistant.schema import (
@@ -37,7 +39,10 @@ from orchestra.web.api.assistant.schema import (
     RecordingCreate,
     RecordingInfo,
     VoiceCreate,
-    VoiceLocalizeRequest,
+    VoiceDesignCreateFromPreviewRequest,
+    VoiceDesignGeneratePreviewsAPIResponse,
+    VoiceDesignGeneratePreviewsRequest,
+    VoiceGenerateRequest,
     VoiceRead,
 )
 from orchestra.web.api.utils.assistant_infra import (
@@ -426,7 +431,6 @@ def create_assistant(
             updated_at=assistant.updated_at,
             phone=assistant.phone,
             email=assistant.email,
-            whatsapp_sid=assistant.whatsapp_sid,
             voice_id=assistant.voice_id,
             country=assistant.country,
         ),
@@ -1056,6 +1060,8 @@ def delete_recording(
                             "description": "Calm and relaxting voice of an english-speaking woman",
                             "gender": "female",
                             "language": "en",
+                            "provider": "cartesia",
+                            "is_preset": True,
                         },
                     },
                 },
@@ -1080,7 +1086,7 @@ def delete_recording(
     },
     tags=["Voices"],
 )
-def register_cartesia_voice(
+def register_voice(
     voice_in: VoiceCreate,
     request: Request,
     session: Session = Depends(get_db_session),
@@ -1095,6 +1101,7 @@ def register_cartesia_voice(
             description=voice_in.description,
             gender=voice_in.gender,
             language=voice_in.language,
+            provider=voice_in.provider,
         )
         voice.is_preset = (
             voice_in.is_preset if voice_in.is_preset is not None else False
@@ -1107,6 +1114,7 @@ def register_cartesia_voice(
                 description=voice.description,
                 gender=voice.gender,
                 language=voice.language,
+                provider=voice.provider,
                 is_preset=voice.is_preset,
             ),
         )
@@ -1143,48 +1151,61 @@ def register_cartesia_voice(
     description="Create a new assistant voice by cloning a voice from an audio file.",
     tags=["Voices"],
 )
-async def clone_voice_endpoint(
+async def clone_voice(
     request: Request,
     session: Session = Depends(get_db_session),
     cartesia_service: CartesiaService = Depends(),
+    elevenlabs_service: ElevenLabsService = Depends(),
     name: str = Form(..., example="My Voice Clone"),
     language: str = Form(..., example="en"),
     description: Optional[str] = Form(None, example="A cloned voice for my assistant"),
+    gender: Optional[str] = Form(None, example="female"),
+    provider: str = Form("cartesia"),
     file: UploadFile = File(..., example="voice_sample.wav"),
 ):
     user_id = request.state.user_id
     voice_dao = VoiceDAO(session)
-    new_cartesia_voice_id: Optional[str] = None
+    new_voice_id: Optional[str] = None
 
     try:
         file_content = await file.read()
-        cartesia_response = cartesia_service.clone_voice(
-            file_content=file_content,
-            file_name=file.filename
-            or "audio_clip_default_name",  # Ensure filename is provided
-            name=name,
-            language=language,
-            description=description,
-        )
+        if provider == "cartesia":
+            cartesia_response = cartesia_service.clone_voice(
+                file_content=file_content,
+                file_name=file.filename or "audio_clip_default_name",
+                name=name,
+                language=language,
+                description=description,
+            )
+            new_voice_id = cartesia_response.get("id")
+        elif provider == "elevenlabs":
+            elevenlabs_response = elevenlabs_service.clone_voice(
+                file_content=file_content,
+                file_name=file.filename or "audio_clip_default_name",
+                name=name,
+                description=description,
+            )
+            new_voice_id = elevenlabs_response.get("voice_id")
+        else:
+            raise HTTPException(status_code=400, detail="Invalid provider.")
 
-        new_cartesia_voice_id = cartesia_response.get("id")
-        if not new_cartesia_voice_id:
+        if not new_voice_id:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Cartesia did not return a voice ID after cloning.",
+                detail=f"{provider.capitalize()} did not return a voice ID after cloning.",
             )
 
         db_voice = voice_dao.create_voice(
             user_id=user_id,
-            voice_id=new_cartesia_voice_id,
-            name=cartesia_response.get("name", name),
-            description=cartesia_response.get(
-                "description",
-                description or f"Cloned voice: {name}",
-            ),
-            gender=cartesia_response.get("gender", "female"),
-            language=cartesia_response.get("language", language),
+            voice_id=new_voice_id,
+            name=name,
+            description=description or f"Cloned voice: {name}",
+            gender=gender,
+            language=language,
+            provider=provider,
         )
+        if provider == "cartesia" and not gender:
+            db_voice.gender = cartesia_response.get("gender")
         db_voice.is_preset = False
         session.commit()
 
@@ -1195,27 +1216,32 @@ async def clone_voice_endpoint(
                 description=db_voice.description,
                 language=db_voice.language,
                 gender=db_voice.gender,
+                provider=db_voice.provider,
                 is_preset=False,
             ),
         )
 
-    except CartesiaAPIError as e:
+    except (CartesiaAPIError, ElevenLabsAPIError) as e:
         session.rollback()
         raise HTTPException(
             status_code=e.status_code,
-            detail=f"Cartesia API error: {e.detail}",
+            detail=f"{provider.capitalize()} API error: {e.detail}",
         )
-    except IntegrityError as e_db_integrity:  # DB unique constraint violation
+    except IntegrityError as e_db_integrity:
         session.rollback()
-        if new_cartesia_voice_id:  # If Cartesia voice was created but DB save failed
+        if new_voice_id:
             logging.warning(
-                f"DB save failed for cloned voice {new_cartesia_voice_id} due to integrity error. Attempting Cartesia cleanup.",
+                f"DB save failed for cloned voice {new_voice_id} due to integrity error. Attempting {provider} cleanup.",
             )
+            if provider == "cartesia":
+                provider_service = cartesia_service
+            elif provider == "elevenlabs":
+                provider_service = elevenlabs_service
             try:
-                cartesia_service.delete_voice(new_cartesia_voice_id)
-            except Exception as e_cartesia_cleanup:
+                provider_service.delete_voice(new_voice_id)
+            except Exception as e_voice_cleanup:
                 logging.error(
-                    f"Failed to cleanup Cartesia voice {new_cartesia_voice_id} after DB integrity error: {e_cartesia_cleanup}",
+                    f"Failed to cleanup {provider} voice {new_voice_id} after DB integrity error: {e_voice_cleanup}",
                 )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1223,128 +1249,18 @@ async def clone_voice_endpoint(
         )
     except Exception as e_generic:
         session.rollback()
-        if (
-            new_cartesia_voice_id
-        ):  # If Cartesia voice was created but another DB error occurred
-            logging.warning(
-                f"DB operation failed for cloned voice {new_cartesia_voice_id}. Attempting Cartesia cleanup. Error: {str(e_generic)}",
-            )
+        if new_voice_id:
+            if provider == "cartesia":
+                provider_service = cartesia_service
+            elif provider == "elevenlabs":
+                provider_service = elevenlabs_service
             try:
-                cartesia_service.delete_voice(new_cartesia_voice_id)
-            except Exception as e_cartesia_cleanup:
-                logging.error(
-                    f"Failed to cleanup Cartesia voice {new_cartesia_voice_id} after generic DB error: {e_cartesia_cleanup}",
-                )
+                cartesia_service.delete_voice(new_voice_id)
+            except Exception:
+                pass
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to clone and save voice: {str(e_generic)}",
-        )
-
-
-@router.post(
-    "/assistant/voice/localize",
-    response_model=InfoResponse[VoiceRead],
-    status_code=status.HTTP_201_CREATED,
-    summary="Localize voice",
-    description="Create a new assistant voice by localizing an existing voice to a new language.",
-    tags=["Voices"],
-)
-def localize_voice_endpoint(
-    localize_request_data: VoiceLocalizeRequest,
-    request: Request,
-    session: Session = Depends(get_db_session),
-    cartesia_service: CartesiaService = Depends(),
-):
-    user_id = request.state.user_id
-    voice_dao = VoiceDAO(session)
-    new_cartesia_voice_id: Optional[str] = None
-
-    try:
-        cartesia_response = cartesia_service.localize_voice(
-            base_voice_id=localize_request_data.base_cartesia_voice_id,
-            name=localize_request_data.name,
-            target_language=localize_request_data.target_language,
-            original_speaker_gender=localize_request_data.original_speaker_gender,
-            description=localize_request_data.description,
-            dialect=localize_request_data.dialect,
-        )
-
-        new_cartesia_voice_id = cartesia_response.get("id")
-        if not new_cartesia_voice_id:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Cartesia did not return a voice ID after localization.",
-            )
-
-        db_voice = voice_dao.create_voice(
-            user_id=user_id,
-            voice_id=new_cartesia_voice_id,
-            name=cartesia_response.get("name", localize_request_data.name),
-            description=cartesia_response.get(
-                "description",
-                localize_request_data.description
-                or f"Localized voice: {localize_request_data.name}",
-            ),
-            gender=cartesia_response.get(
-                "gender",
-                localize_request_data.original_speaker_gender,
-            ),
-            language=cartesia_response.get(
-                "language",
-                localize_request_data.target_language,
-            ),
-        )
-        db_voice.is_preset = False
-        session.commit()
-
-        return InfoResponse(
-            info=VoiceRead(
-                voice_id=db_voice.voice_id,
-                name=db_voice.name,
-                description=db_voice.description,
-                language=db_voice.language,
-                gender=db_voice.gender,
-                is_preset=False,
-            ),
-        )
-
-    except CartesiaAPIError as e:
-        session.rollback()
-        raise HTTPException(
-            status_code=e.status_code,
-            detail=f"Cartesia API error: {e.detail}",
-        )
-    except IntegrityError as e_db_integrity:
-        session.rollback()
-        if new_cartesia_voice_id:
-            logging.warning(
-                f"DB save failed for localized voice {new_cartesia_voice_id} due to integrity error. Attempting Cartesia cleanup.",
-            )
-            try:
-                cartesia_service.delete_voice(new_cartesia_voice_id)
-            except Exception as e_cartesia_cleanup:
-                logging.error(
-                    f"Failed to cleanup Cartesia voice {new_cartesia_voice_id} after DB integrity error: {e_cartesia_cleanup}",
-                )
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"Failed to save localized voice to database, voice ID might already exist: {str(e_db_integrity)}",
-        )
-    except Exception as e_generic:
-        session.rollback()
-        if new_cartesia_voice_id:
-            logging.warning(
-                f"DB operation failed for localized voice {new_cartesia_voice_id}. Attempting Cartesia cleanup. Error: {str(e_generic)}",
-            )
-            try:
-                cartesia_service.delete_voice(new_cartesia_voice_id)
-            except Exception as e_cartesia_cleanup:
-                logging.error(
-                    f"Failed to cleanup Cartesia voice {new_cartesia_voice_id} after generic DB error: {e_cartesia_cleanup}",
-                )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to localize and save voice: {str(e_generic)}",
         )
 
 
@@ -1367,6 +1283,8 @@ def localize_voice_endpoint(
                                 "description": "Calm and relaxting voice of an english-speaking woman",
                                 "gender": "female",
                                 "language": "en",
+                                "provider": "cartesia",
+                                "is_preset": True,
                             },
                             {
                                 "voice_id": "c99d36f3-5ffd-4253-803a-535c1bc9c306",
@@ -1374,6 +1292,8 @@ def localize_voice_endpoint(
                                 "description": "A deep, smoooth British man's voice perfect for narration.",
                                 "gender": "male",
                                 "language": "en",
+                                "provider": "elevenlabs",
+                                "is_preset": False,
                             },
                         ],
                     },
@@ -1410,6 +1330,7 @@ def list_voices(
                     description=voice.description,
                     language=voice.language,
                     gender=voice.gender,
+                    provider=voice.provider,
                     is_preset=voice.is_preset,
                 )
                 for voice in voices
@@ -1451,63 +1372,350 @@ def delete_voice(
     request: Request,
     session: Session = Depends(get_db_session),
     cartesia_service: CartesiaService = Depends(),
+    elevenlabs_service: ElevenLabsService = Depends(),
 ) -> InfoResponse[str]:
     user_id = request.state.user_id
     voice_dao = VoiceDAO(session)
 
-    try:
-        voice_to_delete = voice_dao.get_voice_by_id(user_id=user_id, voice_id=voice_id)
+    # Step 1: Get the voice from DB
+    voice_to_delete = voice_dao.get_voice_by_id(user_id=user_id, voice_id=voice_id)
+    if not voice_to_delete:
+        # No session.rollback() needed here as it's a read operation that failed to find.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Voice not found for this user.",
+        )
 
-        if not voice_to_delete:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Voice not found for this user.",
-            )
+    # Step 2: Attempt to delete from provider if applicable
+    if not voice_to_delete.is_preset:
 
-        # Only attempt to delete from Cartesia if it's NOT a preset
-        if not voice_to_delete.is_preset:
+        provider_service = None
+        if voice_to_delete.provider == "cartesia":
+            provider_service = cartesia_service
+        elif voice_to_delete.provider == "elevenlabs":
+            provider_service = elevenlabs_service
+
+        if provider_service:
             try:
-                cartesia_service.delete_voice(voice_id)
-                logging.info(
-                    f"Successfully deleted voice {voice_id} from Cartesia for user {user_id}.",
-                )
-            except CartesiaAPIError as e_cartesia:
-                if e_cartesia.status_code == 404:
+                provider_service.delete_voice(voice_id)
+            except (CartesiaAPIError, ElevenLabsAPIError) as e_provider:
+                if e_provider.status_code == 404:
                     logging.warning(
-                        f"Voice {voice_id} not found on Cartesia for user {user_id}. Proceeding with DB deletion.",
+                        f"Voice {voice_id} not found on {voice_to_delete.provider} (status 404). Proceeding with DB deletion."
                     )
+                    # Non-critical, continue to DB deletion
                 else:
-                    # For other Cartesia errors, prevent DB deletion and report
-                    session.rollback()  # Rollback before raising to ensure no partial commit from earlier ops in this session
-                    raise HTTPException(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,  # Or e_cartesia.status_code if appropriate
-                        detail=f"Failed to delete voice from Cartesia: {e_cartesia.detail}",
+                    # CRITICAL PROVIDER FAILURE
+                    logging.error(
+                        f"Critical error deleting voice {voice_id} from {voice_to_delete.provider}: {e_provider.detail}"
                     )
-            except (
-                Exception
-            ) as e_cartesia_generic:  # Catch any other unexpected error from service
+                    session.rollback()  # Ensure rollback of any prior DB changes in this session (though unlikely here)
+                    raise HTTPException(
+                        status_code=e_provider.status_code,
+                        detail=f"Failed to delete voice from {voice_to_delete.provider}: {e_provider.detail}",
+                    )
+            except Exception as e_provider_generic:
+                # Other unexpected provider errors
+                logging.error(
+                    f"Unexpected critical error deleting voice {voice_id} from {voice_to_delete.provider}: {str(e_provider_generic)}"
+                )
                 session.rollback()
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Unexpected error during Cartesia deletion: {str(e_cartesia_generic)}",
+                    detail=f"Unexpected error during {voice_to_delete.provider} deletion: {str(e_provider_generic)}",
                 )
 
-        # If it was a preset, or Cartesia deletion was successful/404 for a non-preset
-        voice_dao.delete_voice(
-            user_id=user_id,
-            voice_id=voice_id,
-        )  # This re-fetches and deletes the user-specific record
+    # Step 3: If we've reached here, it means:
+    # - Voice is a preset (provider deletion skipped)
+    # - OR Provider deletion was successful
+    # - OR Provider deletion returned 404 (non-critical)
+    # So, proceed to delete from our database.
+    try:
+        voice_dao.delete_voice(user_id=user_id, voice_id=voice_id)
         session.commit()
         return InfoResponse(info="Voice deleted successfully.")
-
-    except HTTPException as e:
+    except IntegrityError as e_db_integrity:  # Should not happen on delete typically, but good to catch
         session.rollback()
-        raise e
-    except Exception as e_generic_delete:
-        session.rollback()
+        logging.error(
+            f"DB IntegrityError during voice deletion from DB {voice_id}: {str(e_db_integrity)}"
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error deleting voice record: {str(e_generic_delete)}",
+            detail=f"Database integrity error during voice deletion: {str(e_db_integrity)}",
+        )
+    except Exception as e_db_generic:  # Other errors during DB delete
+        session.rollback()
+        logging.error(
+            f"Generic error during voice deletion from DB {voice_id}: {str(e_db_generic)}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error deleting voice from database: {str(e_db_generic)}",
+        )
+
+
+@router.post(
+    "/assistant/voice/generate",
+    # response_model is not InfoResponse[bytes] because we return raw audio
+    status_code=status.HTTP_200_OK,
+    summary="Generate speech from text",
+    description="Generates audio from text using the specified provider and voice.",
+    tags=["Voices", "TTS"],
+    responses={
+        200: {
+            "description": "Audio generated successfully. Content-Type will be audio/mpeg, audio/wav, etc.",
+            # "content" example not straightforward for raw bytes, will depend on format
+        },
+        400: {
+            "description": "Bad Request (e.g., invalid provider, provider API error)",
+            "content": {
+                "application/json": {"example": {"detail": "Provider API error: ..."}},
+            },
+        },
+        503: {
+            "description": "Service unavailable (e.g. provider API down)",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "TTS provider unavailable."},
+                },
+            },
+        },
+    },
+)
+async def generate_speech(
+    request_data: VoiceGenerateRequest,
+    request: Request,
+    session: Session = Depends(get_db_session),
+    cartesia_service: CartesiaService = Depends(),
+    elevenlabs_service: ElevenLabsService = Depends(),
+) -> Response:
+    user_id = request.state.user_id
+    audio_bytes: bytes
+    content_type: str
+
+    try:
+        if request_data.provider == "cartesia":
+            audio_bytes, content_type = cartesia_service.generate_speech(
+                transcript=request_data.text,
+                voice_id=request_data.voice_id,
+                model_id=request_data.model_id or "sonic-2",  # Default Cartesia model
+                output_format_container=request_data.output_format,
+                output_sample_rate=request_data.cartesia_sample_rate,
+                output_bit_rate=request_data.cartesia_bit_rate,
+                language=request_data.cartesia_language,
+            )
+        elif request_data.provider == "elevenlabs":
+            audio_bytes, content_type = elevenlabs_service.generate_speech(
+                text=request_data.text,
+                voice_id=request_data.voice_id,
+                model_id=request_data.model_id
+                or "eleven_multilingual_v2",  # Default EL model
+                output_format=request_data.output_format,
+                optimize_streaming_latency=request_data.elevenlabs_optimize_streaming_latency,
+                stability=request_data.elevenlabs_voice_settings_stability,
+                similarity_boost=request_data.elevenlabs_voice_settings_similarity_boost,
+            )
+        else:
+            # This case should be prevented by Pydantic's Literal validation
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid TTS provider specified.",
+            )
+
+        return Response(content=audio_bytes, media_type=content_type)
+
+    except (CartesiaAPIError, ElevenLabsAPIError) as e:
+        logging.error(
+            f"TTS API error for user {user_id}, provider {request_data.provider}: {e.detail}",
+        )
+        raise HTTPException(
+            status_code=e.status_code,
+            detail=f"TTS provider error: {e.detail}",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(
+            f"Unexpected error generating speech for user {user_id}: {str(e)}",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate speech: {str(e)}",
+        )
+
+
+@router.post(
+    "/assistant/voice/design/preview",
+    response_model=InfoResponse[VoiceDesignGeneratePreviewsAPIResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Design Voice Previews",
+    description="Generates voice design previews from a text description.",
+    tags=["Voices", "TTS Design"],
+)
+async def design_voice_generate_previews_endpoint(
+    request_data: VoiceDesignGeneratePreviewsRequest,
+    request: Request,
+    session: Session = Depends(get_db_session),
+    elevenlabs_service: ElevenLabsService = Depends(),
+) -> InfoResponse[VoiceDesignGeneratePreviewsAPIResponse]:
+    user_id = request.state.user_id
+
+    try:
+        el_response_data = elevenlabs_service.design_voice_generate_previews(
+            voice_description=request_data.voice_description,
+            text_for_preview=request_data.text,
+            auto_generate_text_flag=request_data.auto_generate_text,
+            model_id_for_design=request_data.model_id,
+        )
+
+        # Pydantic will validate if el_response_data matches VoiceDesignGeneratePreviewsAPIResponse
+        return InfoResponse(
+            info=VoiceDesignGeneratePreviewsAPIResponse(**el_response_data),
+        )
+
+    except ElevenLabsAPIError as e:
+        logging.error(
+            f"ElevenLabs voice design preview error for user {user_id}: {e.detail}",
+        )
+        raise HTTPException(
+            status_code=e.status_code,
+            detail=f"ElevenLabs API error: {e.detail}",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(
+            f"Unexpected error generating voice previews for user {user_id}: {str(e)}",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate voice previews: {str(e)}",
+        )
+
+
+@router.post(
+    "/assistant/voice/design/create",
+    response_model=InfoResponse[VoiceRead],
+    status_code=status.HTTP_201_CREATED,
+    summary="Create Voice from Design Preview",
+    description="Creates a full voice from a generated preview voice id.",
+    tags=["Voices", "TTS Design"],
+)
+async def design_voice_create_from_preview_endpoint(
+    request_data: VoiceDesignCreateFromPreviewRequest,
+    request: Request,
+    session: Session = Depends(get_db_session),
+    elevenlabs_service: ElevenLabsService = Depends(),
+) -> InfoResponse[VoiceRead]:
+    user_id = request.state.user_id
+    voice_dao = VoiceDAO(session)
+
+    new_el_voice_id: Optional[str] = None
+    try:
+        # Step 1: Call ElevenLabs to create the voice from the generated_voice_id
+        el_created_voice_data = elevenlabs_service.create_voice_from_generated_id(
+            voice_name=request_data.voice_name,
+            generated_voice_id=request_data.generated_voice_id,
+            description=request_data.voice_description,
+            labels=request_data.labels,
+        )
+
+        new_el_voice_id = el_created_voice_data.get("voice_id")
+        if not new_el_voice_id:
+            raise ElevenLabsAPIError(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="ElevenLabs did not return a 'voice_id' after creating the voice from preview.",
+            )
+
+        # Step 2: Save the new voice to our database
+        # Language is taken from the request for our DB, as EL's response might vary.
+        db_voice = voice_dao.create_voice(
+            user_id=user_id,
+            voice_id=new_el_voice_id,
+            name=request_data.voice_name,
+            description=request_data.voice_description
+            or f"Designed voice: {request_data.voice_name}",
+            language=request_data.language,
+            gender=request_data.gender,
+            provider="elevenlabs",
+        )
+        db_voice.is_preset = False  # Designed voices are not presets
+        session.flush()  # Ensure db_voice gets all attributes before commit
+        session.commit()  # Commit DB voice creation
+
+        return InfoResponse(
+            info=VoiceRead(
+                voice_id=db_voice.voice_id,
+                name=db_voice.name,
+                description=db_voice.description,
+                language=db_voice.language,
+                gender=db_voice.gender,
+                provider=db_voice.provider,
+                is_preset=db_voice.is_preset,
+            ),
+        )
+
+    except (ElevenLabsAPIError) as e:
+        session.rollback()
+        # If EL voice was created but DB save failed, we might have an orphan EL voice.
+        # Attempt to delete it from EL if `new_el_voice_id` was obtained.
+        if (
+            new_el_voice_id and e.status_code != status.HTTP_402_PAYMENT_REQUIRED
+        ):  # Don't delete if it was a credit issue before EL call
+            try:
+                logging.warning(
+                    f"Attempting to clean up orphaned ElevenLabs voice {new_el_voice_id} due to error: {e.detail}",
+                )
+                elevenlabs_service.delete_voice(new_el_voice_id)
+            except Exception as e_cleanup:
+                logging.error(
+                    f"Failed to cleanup orphaned ElevenLabs voice {new_el_voice_id}: {e_cleanup}",
+                )
+        logging.error(
+            f"ElevenLabs voice creation from preview error for user {user_id}: {e.detail}",
+        )
+        raise HTTPException(
+            status_code=e.status_code,
+            detail=f"ElevenLabs API error: {e.detail}",
+        )
+    except IntegrityError as e_db:
+        session.rollback()
+        if (
+            new_el_voice_id
+        ):  # EL voice was created, but DB failed (e.g. voice_id already exists in our DB by chance)
+            logging.warning(
+                f"DB IntegrityError for EL voice {new_el_voice_id}. Attempting EL cleanup.",
+            )
+            try:
+                elevenlabs_service.delete_voice(new_el_voice_id)
+            except Exception as e_cleanup:
+                logging.error(
+                    f"Failed to cleanup EL voice {new_el_voice_id} after DB integrity error: {e_cleanup}",
+                )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Database error creating voice, it might already exist: {str(e_db)}",
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        if new_el_voice_id:  # EL voice might have been created
+            logging.warning(
+                f"Generic error after EL voice {new_el_voice_id} might have been created. Attempting EL cleanup.",
+            )
+            try:
+                elevenlabs_service.delete_voice(new_el_voice_id)
+            except Exception as e_cleanup:
+                logging.error(
+                    f"Failed to cleanup EL voice {new_el_voice_id} after generic error: {e_cleanup}",
+                )
+        logging.error(
+            f"Unexpected error creating voice from preview for user {user_id}: {str(e)}",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create voice from preview: {str(e)}",
         )
 
 
