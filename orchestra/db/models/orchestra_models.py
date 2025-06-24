@@ -1170,15 +1170,23 @@ class Voice(Base):
         nullable=False,
         index=True,
     )
+    provider = Column(String, nullable=True, server_default="cartesia")
     name = Column(String, nullable=False)
     description = Column(String, nullable=False)
-    gender = Column(String, nullable=False)
+    gender = Column(String, nullable=True)
     language = Column(String, nullable=False)  # e.g., "en", "es"
     is_preset = Column(
         Boolean,
         nullable=False,
         server_default="f",
     )  # True if this is a Cartesia preset voice
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "provider IN ('cartesia', 'elevenlabs')",
+            name="ck_voice_provider",
+        ),
+    )
 
 
 class Tab(Base):
