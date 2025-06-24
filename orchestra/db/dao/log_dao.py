@@ -733,6 +733,76 @@ class LogDAO:
         except Exception as e:
             raise e
 
+    def get_next_row_ids(
+        self,
+        project_id: int,
+        context_id: int,
+        param_key: str,
+        count: int,
+    ) -> List[int]:
+        """
+        Atomically obtains and increments the version counter for a given parameter key
+        to reserve a batch of sequential IDs.
+
+        Args:
+            project_id: The project identifier.
+            context_id: The context identifier.
+            param_key: The parameter key for the unique ID column.
+            count: The number of sequential IDs to reserve.
+
+        Returns:
+            A list of the next sequential IDs.
+        """
+        if count == 0:
+            return []
+
+        # Use pg_insert with ON CONFLICT DO NOTHING to ensure the counter row exists.
+        # This is safe for concurrent calls.
+        insert_stmt = (
+            pg_insert(ParamVersion)
+            .values(
+                project_id=project_id,
+                context_id=context_id,
+                param_key=param_key,
+                last_version=-1,  # Initialize with 0
+            )
+            .on_conflict_do_nothing(
+                index_elements=["project_id", "context_id", "param_key"],
+            )
+        )
+        self.session.execute(insert_stmt)
+
+        # Atomically increment the counter by the batch size and return the new value.
+        # The database ensures this operation is safe from race conditions.
+        result = self.session.execute(
+            text(
+                """
+                UPDATE param_version
+                SET last_version = last_version + :count
+                WHERE project_id = :project_id AND context_id = :context_id AND param_key = :param_key
+                RETURNING last_version
+            """,
+            ),
+            {
+                "project_id": project_id,
+                "context_id": context_id,
+                "param_key": param_key,
+                "count": count,
+            },
+        )
+
+        new_max_id = result.scalar_one_or_none()
+
+        if new_max_id is None:
+            self.session.rollback()
+            raise ValueError(
+                f"Failed to get next batch of row IDs for parameter {param_key}",
+            )
+
+        # Calculate the range of IDs reserved in this batch
+        start_id = new_max_id - count + 1
+        return list(range(start_id, new_max_id + 1))
+
     def get_next_param_version(
         self,
         project_id: int,
