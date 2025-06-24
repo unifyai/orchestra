@@ -1,15 +1,13 @@
 from datetime import datetime, timezone
 from typing import List, Optional, Union
 
-from sqlalchemy import and_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.models.orchestra_models import (
     Context,
-    Log,
     LogEvent,
     LogEventContext,
     Project,
@@ -42,7 +40,7 @@ class LogEventDAO:
         self.session.flush()  # Flush to get IDs before committing
 
         log_event_ids = [event.id for event in log_events]
-        row_ids = [None] * count  # Initialize with None values
+        row_ids: List[Optional[int]] = [None] * count
 
         if context_id:
             # Associate logs with context
@@ -58,64 +56,43 @@ class LogEventDAO:
             # Check if this context needs a unique sequential ID
             context = self.session.query(Context).filter_by(id=context_id).one()
             if context.unique_id_column:
-                field_type_dao = FieldTypeDAO(self.session)
-                field_type = field_type_dao.get_by_name_and_context(
-                    project_id,
-                    context.unique_id_name,
-                    context.id,
-                )
+                log_dao = LogDAO(self.session, ContextDAO(self.session))
 
-                if field_type:
-                    # Create sequential ID log entries
-                    log_dao = LogDAO(self.session, ContextDAO(self.session))
+                try:
+                    reserved_ids = log_dao.get_next_row_ids(
+                        project_id=project_id,
+                        context_id=context_id,
+                        param_key=context.unique_id_name,
+                        count=count,
+                    )
+                    row_ids = reserved_ids
+                except Exception as e:
+                    self.session.rollback()
+                    raise e
 
-                    # Get the current max ID before creating any new ones
-                    # This ensures proper sequencing even across multiple API calls
-                    max_id_query = (
-                        self.session.query(Log.value)
-                        .join(LogEvent, Log.log_event_id == LogEvent.id)
-                        .join(
-                            LogEventContext,
-                            LogEvent.id == LogEventContext.log_event_id,
-                        )
-                        .filter(
-                            and_(
-                                LogEventContext.context_id == context_id,
-                                Log.key == context.unique_id_name,
-                            ),
-                        )
-                        .all()
+                # Create sequential ID log entries using the reserved IDs
+                sequential_id_logs = []
+                for i, log_event_id in enumerate(log_event_ids):
+                    new_id = row_ids[i]  # Use the updated row_ids list
+                    sequential_id_logs.append(
+                        {
+                            "project_id": project_id,
+                            "log_event_id": log_event_id,
+                            "key": context.unique_id_name,
+                            "value": new_id,
+                            "context_id": context_id,
+                            "explicit_types": {
+                                context.unique_id_name: {"type": "int"},
+                            },
+                        },
                     )
 
-                    # Extract max ID from results
-                    current_max_id = -1
-                    for row in max_id_query:
-                        if row[0] is not None and isinstance(row[0], (int, float)):
-                            current_max_id = max(current_max_id, int(row[0]))
-
-                    # Create sequential IDs for all log events in this batch
-                    sequential_id_logs = []
-                    for i, log_event_id in enumerate(log_event_ids):
-                        new_id = current_max_id + i + 1
-                        row_ids[
-                            i
-                        ] = new_id  # Store the sequential ID for this log event
-                        sequential_id_logs.append(
-                            {
-                                "project_id": project_id,
-                                "log_event_id": log_event_id,
-                                "key": context.unique_id_name,
-                                "value": new_id,
-                                "context_id": context_id,
-                                "explicit_types": {
-                                    context.unique_id_name: {"type": "int"},
-                                },
-                            },
-                        )
-
-                    # Create all sequential ID logs in one batch
-                    if sequential_id_logs:
+                # Create all sequential ID logs in one batch
+                if sequential_id_logs:
+                    try:
                         log_dao.bulk_create(sequential_id_logs)
+                    except Exception as e:
+                        raise e
 
         self.session.commit()
 
