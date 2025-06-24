@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Generic, Optional, TypeVar
+from typing import Dict, Generic, List, Literal, Optional, TypeVar
 
 from pydantic import BaseModel, Field, HttpUrl
 from pydantic.generics import GenericModel
@@ -154,7 +154,6 @@ class AssistantRead(AssistantCreate):
                 "email": "ada.lovelace@unify.ai",
                 "phone": "+15551234567",
                 "user_phone": "+15551234567",
-                "whatsapp_sid": "whatsapp:+1234567890",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "agent_id": "12345",
                 "created_at": "2025-04-25T10:30:00Z",
@@ -224,8 +223,8 @@ class AssistantUpdate(BaseModel):
                 "about": "Award-winning mathematician specializing in algorithm development",
                 "user_phone": "+15551234567",
                 "phone": "+15559876543",
-                "email": "ada.lovelace@newdomain.com",
                 "whatsapp_sid": "whatsapp:+1234567890",
+                "email": "ada.lovelace@newdomain.com",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "country": "GB",
             },
@@ -290,8 +289,8 @@ class VoiceCreate(BaseModel):
         description="Description of the voice",
         example="Calm and relaxing voice of an english-speaking woman",
     )
-    gender: str = Field(
-        ...,
+    gender: Optional[str] = Field(
+        None,
         description="Gender of the voice",
         example="female",
     )
@@ -299,6 +298,11 @@ class VoiceCreate(BaseModel):
         ...,
         description="Language code of the voice",
         example="en",
+    )
+    provider: Literal["cartesia", "elevenlabs"] = Field(
+        "cartesia",
+        description="Provider of the voice (cartesia or elevenlabs)",
+        example="cartesia",
     )
     is_preset: Optional[bool] = Field(
         False,
@@ -315,6 +319,7 @@ class VoiceCreate(BaseModel):
                 "description": "Calm and relaxting voice of an english-speaking woman",
                 "gender": "female",
                 "language": "en",
+                "provider": "cartesia",
                 "is_preset": True,
             },
         }
@@ -334,6 +339,7 @@ class VoiceRead(VoiceCreate):
                 "description": "Calm and relaxting voice of an english-speaking woman",
                 "gender": "female",
                 "language": "en",
+                "provider": "cartesia",
                 "is_preset": True,
             },
         }
@@ -348,28 +354,184 @@ class VoiceCloneRequestData(BaseModel):
     )
 
 
-class VoiceLocalizeRequest(BaseModel):
-    base_cartesia_voice_id: str = Field(
+class VoiceGenerateRequest(BaseModel):
+    text: str = Field(..., description="Text to synthesize.")
+    provider: Literal["cartesia", "elevenlabs"] = Field(
         ...,
-        description="Cartesia Voice ID of the voice to localize",
+        description="TTS provider.",
     )
-    name: str = Field(..., description="Name for the new localized voice")
-    target_language: str = Field(
-        ...,
-        description="Target language for localization (e.g., 'es')",
-    )
-    original_speaker_gender: str = Field(
-        ...,
-        description="Gender of the original speaker ('female' or 'male')",
-    )
-    description: Optional[str] = Field(
+    voice_id: str = Field(..., description="Provider-specific voice ID for the speech.")
+    model_id: Optional[str] = Field(
         None,
-        description="Optional description for the voice",
+        description="Provider-specific model ID (e.g., 'sonic-2' for Cartesia, 'eleven_multilingual_v2' for ElevenLabs).",
     )
-    dialect: Optional[str] = Field(
+
+    output_format: Literal["mp3", "wav", "flac", "pcm_s16le", "pcm_mulaw"] = Field(
+        "mp3",
+        description="Desired audio output format. This will determine the Content-Type of the response.",
+    )
+
+    # Cartesia-specific parameters
+    cartesia_language: Optional[str] = Field(
+        "en",
+        description="Language code for Cartesia TTS (e.g., 'en'). If None, Cartesia attempts auto-detection.",
+    )
+    cartesia_sample_rate: Optional[int] = Field(
         None,
-        description="Optional dialect for localization",
+        description="Optional sample rate for Cartesia (e.g., 24000, 44100). Provider defaults used if None.",
     )
+    cartesia_bit_rate: Optional[int] = Field(
+        None,
+        description="Optional bit rate for Cartesia lossy formats like MP3 (e.g., 128000). Provider defaults used if None. Not for PCM.",
+    )
+
+    # ElevenLabs-specific parameters
+    elevenlabs_optimize_streaming_latency: Optional[int] = Field(
+        None,
+        ge=0,
+        le=4,
+        description="0-4. Optimize for streaming latency for ElevenLabs.",
+    )
+    elevenlabs_voice_settings_stability: Optional[float] = Field(
+        None,
+        ge=0,
+        le=1,
+        description="Stability for ElevenLabs voice settings.",
+    )
+    elevenlabs_voice_settings_similarity_boost: Optional[float] = Field(
+        None,
+        ge=0,
+        le=1,
+        description="Similarity boost for ElevenLabs voice settings.",
+    )
+    # If you need to specify the exact ElevenLabs output format string (e.g., "mp3_22050_32")
+    # you could add a field like:
+    # elevenlabs_explicit_output_format: Optional[str] = Field(None, description="Overrides output_format mapping for ElevenLabs if specified.")
+
+    class Config:
+        orm_mode = (
+            True  # Though not directly mapping to ORM, good practice for consistency
+        )
+        schema_extra = {
+            "example_cartesia": {
+                "text": "Hello from Cartesia!",
+                "provider": "cartesia",
+                "voice_id": "694f9389-aac1-45b6-b726-9d9369183238",  # Example Cartesia Voice ID
+                "model_id": "sonic-2",
+                "output_format": "mp3",
+                "cartesia_language": "en",
+                "cartesia_sample_rate": 44100,
+                "cartesia_bit_rate": 128000,
+            },
+            "example_elevenlabs": {
+                "text": "Hello from ElevenLabs!",
+                "provider": "elevenlabs",
+                "voice_id": "JBFqnCBsd6RMkjVDRZzb",  # Example ElevenLabs Voice ID
+                "model_id": "eleven_multilingual_v2",
+                "output_format": "mp3",
+                "elevenlabs_voice_settings_stability": 0.75,
+                "elevenlabs_voice_settings_similarity_boost": 0.75,
+            },
+        }
+
+
+class VoiceDesignGeneratePreviewsRequest(BaseModel):
+    voice_description: str = Field(
+        ...,
+        min_length=20,
+        max_length=1000,
+        description="Text prompt describing the desired voice characteristics (e.g., 'A deep, resonant male voice with a British accent, suitable for narration.').",
+    )
+    text: Optional[str] = Field(
+        None,
+        min_length=100,
+        max_length=1000,
+        description="Optional: Text to be spoken in the generated voice previews. If not provided, and auto_generate_text is false, ElevenLabs might use a default or generic text.",
+    )
+    auto_generate_text: Optional[bool] = Field(
+        None,
+        description="Optional: Whether to automatically generate a text suitable for the voice description if 'text' is not provided. Defaults to false by ElevenLabs.",
+    )
+    model_id: Optional[Literal["eleven_multilingual_ttv_v2", "eleven_ttv_v3"]] = Field(
+        None,
+        description="Optional: Model to use for voice generation.",
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "voice_description": "A warm, friendly female voice with a slight Southern American accent, perfect for an audiobook.",
+                "text": "The quick brown fox jumps over the lazy dog. This is a sample text to hear how the designed voice sounds.",
+                "auto_generate_text": False,
+                "model_id": "eleven_multilingual_ttv_v2",
+            },
+        }
+
+
+class VoiceDesignPreviewItem(BaseModel):
+    audio_base_64: str = Field(
+        ...,
+        description="Base64 encoded audio sample of the generated voice preview.",
+    )
+    generated_voice_id: str = Field(
+        ...,
+        description="Temporary ID for this generated voice preview, used to create the full voice.",
+    )
+    media_type: str = Field(
+        ...,
+        description="MIME type of the audio sample, e.g., 'audio/mpeg'.",
+    )
+    duration_secs: Optional[float] = Field(
+        None,
+        description="Duration of the audio sample in seconds.",
+    )
+
+
+class VoiceDesignGeneratePreviewsAPIResponse(
+    BaseModel,
+):  # Maps to EL's successful response for /v1/text-to-voice/design
+    previews: List[VoiceDesignPreviewItem]
+    text: str  # The original voice_description text that was sent to EL
+
+
+class VoiceDesignCreateFromPreviewRequest(BaseModel):
+    generated_voice_id: str = Field(
+        ...,
+        description="The 'generated_voice_id' obtained from the '/design/preview'.",
+    )
+    voice_name: str = Field(
+        ...,
+        description="Name for the new voice.",
+    )
+    voice_description: str = Field(
+        ...,
+        description="Description for the new voice.",
+    )
+    labels: Optional[Dict[str, str]] = Field(
+        None,
+        description="Optional labels for ElevenLabs when creating the voice.",
+    )
+    # Orchestra voice inputs, not strictly needed for ElevenLabs endpoint
+    language: str = Field(
+        ...,
+        description="Language of the voice.",
+    )
+    gender: Optional[str] = Field(
+        None,
+        description="Gender of the voice.",
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "generated_voice_id": "temp_preview_id_from_step1",
+                "voice_name": "My New Designed Voice",
+                "voice_description": "A custom voice designed from text.",
+                "language": "en",
+                "gender": "male",
+                "labels": {"use_case": "audiobook"},
+            },
+        }
 
 
 class AssistantPhotoUploadResponse(BaseModel):
