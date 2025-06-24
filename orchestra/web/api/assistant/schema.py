@@ -351,7 +351,8 @@ class VoiceCloneRequestData(BaseModel):
 class VoiceGenerateRequest(BaseModel):
     text: str = Field(..., description="Text to synthesize.")
     provider: Literal["cartesia", "elevenlabs"] = Field(
-        ..., description="TTS provider."
+        ...,
+        description="TTS provider.",
     )
     voice_id: str = Field(..., description="Provider-specific voice ID for the speech.")
     model_id: Optional[str] = Field(
@@ -431,92 +432,87 @@ class VoiceGenerateRequest(BaseModel):
 class VoiceDesignGeneratePreviewsRequest(BaseModel):
     voice_description: str = Field(
         ...,
-        description="Text prompt describing the desired voice characteristics for ElevenLabs (e.g., 'A deep, resonant male voice with a British accent, suitable for narration.'). This is sent as 'text' to EL's /v1/text-to-voice/design endpoint.",
+        min_length=20,
+        max_length=1000,
+        description="Text prompt describing the desired voice characteristics (e.g., 'A deep, resonant male voice with a British accent, suitable for narration.').",
     )
-    gender: Optional[str] = Field(
+    text: Optional[str] = Field(
         None,
-        description="Optional: Desired gender for the voice (e.g., 'female', 'male').",
+        min_length=100,
+        max_length=1000,
+        description="Optional: Text to be spoken in the generated voice previews. If not provided, and auto_generate_text is false, ElevenLabs might use a default or generic text.",
     )
-    accent: Optional[str] = Field(
+    auto_generate_text: Optional[bool] = Field(
         None,
-        description="Optional: Desired accent for the voice (e.g., 'american', 'british').",
+        description="Optional: Whether to automatically generate a text suitable for the voice description if 'text' is not provided. Defaults to false by ElevenLabs.",
     )
-    age: Optional[str] = Field(
+    model_id: Optional[Literal["eleven_multilingual_ttv_v2", "eleven_ttv_v3"]] = Field(
         None,
-        description="Optional: Desired age category for the voice (e.g., 'young', 'middle_aged', 'old').",
-    )
-    accent_strength: Optional[float] = Field(
-        None,
-        ge=0.0,
-        le=2.0,
-        description="Optional: Strength of the accent (0.0 to 2.0).",
+        description="Optional: Model to use for voice generation.",
     )
 
     class Config:
         schema_extra = {
             "example": {
                 "voice_description": "A warm, friendly female voice with a slight Southern American accent, perfect for an audiobook.",
-                "gender": "female",
-                "accent": "american",
-                "age": "middle_aged",
-                "accent_strength": 1.2,
+                "text": "The quick brown fox jumps over the lazy dog. This is a sample text to hear how the designed voice sounds.",
+                "auto_generate_text": False,
+                "model_id": "eleven_multilingual_ttv_v2",
             },
         }
 
 
 class VoiceDesignPreviewItem(BaseModel):
     audio_base_64: str = Field(
-        ..., description="Base64 encoded audio sample of the generated voice preview."
+        ...,
+        description="Base64 encoded audio sample of the generated voice preview.",
     )
     generated_voice_id: str = Field(
         ...,
         description="Temporary ID for this generated voice preview, used to create the full voice.",
     )
     media_type: str = Field(
-        ..., description="MIME type of the audio sample, e.g., 'audio/mpeg'."
+        ...,
+        description="MIME type of the audio sample, e.g., 'audio/mpeg'.",
     )
     duration_secs: Optional[float] = Field(
-        None, description="Duration of the audio sample in seconds."
+        None,
+        description="Duration of the audio sample in seconds.",
     )
 
 
 class VoiceDesignGeneratePreviewsAPIResponse(
-    BaseModel
+    BaseModel,
 ):  # Maps to EL's successful response for /v1/text-to-voice/design
     previews: List[VoiceDesignPreviewItem]
     text: str  # The original voice_description text that was sent to EL
 
 
 class VoiceDesignCreateFromPreviewRequest(BaseModel):
-    # For ElevenLabs API to create the voice:
     generated_voice_id: str = Field(
         ...,
-        description="The 'generated_voice_id' obtained from the '/generate-previews' step.",
+        description="The 'generated_voice_id' obtained from the '/design/preview'.",
     )
-    # For our database (Voice model) and also sent to ElevenLabs:
     voice_name: str = Field(
         ...,
-        description="Name for the new voice. This will be used in our database and sent to ElevenLabs.",
+        description="Name for the new voice.",
     )
-    # Fields primarily for our database (Voice model) consistency:
-    # These are crucial as our Voice model has non-nullable gender and language.
-    # ElevenLabs' created voice object might have this in 'labels' or 'verified_languages',
-    # but it's more robust to have the user confirm/provide them for our DB.
-    final_voice_gender: str = Field(
+    voice_description: str = Field(
         ...,
-        description="Gender for the voice (e.g., 'female', 'male') to be stored in our database.",
+        description="Description for the new voice.",
     )
-    final_voice_language: str = Field(
-        ...,
-        description="Primary language code for the voice (e.g., 'en', 'es') to be stored in our database.",
-    )
-    # Optional for our DB and ElevenLabs:
-    voice_description_for_el_and_db: Optional[str] = Field(
+    labels: Optional[Dict[str, str]] = Field(
         None,
-        description="Optional description for the new voice. Will be used in our database and sent to ElevenLabs.",
+        description="Optional labels for ElevenLabs when creating the voice.",
     )
-    elevenlabs_labels: Optional[Dict[str, str]] = Field(
-        None, description="Optional labels for ElevenLabs when creating the voice."
+    # Orchestra voice inputs, not strictly needed for ElevenLabs endpoint
+    language: str = Field(
+        ...,
+        description="Language of the voice.",
+    )
+    gender: Optional[str] = Field(
+        None,
+        description="Gender of the voice.",
     )
 
     class Config:
@@ -524,10 +520,10 @@ class VoiceDesignCreateFromPreviewRequest(BaseModel):
             "example": {
                 "generated_voice_id": "temp_preview_id_from_step1",
                 "voice_name": "My New Designed Voice",
-                "final_voice_gender": "female",
-                "final_voice_language": "en",
-                "voice_description_for_el_and_db": "A custom voice designed from text.",
-                "elevenlabs_labels": {"use_case": "audiobook"},
+                "voice_description": "A custom voice designed from text.",
+                "language": "en",
+                "gender": "male",
+                "labels": {"use_case": "audiobook"},
             },
         }
 

@@ -37,7 +37,8 @@ class ElevenLabsService:
                 # Attempt to parse error detail if JSON
                 error_data = response.json()
                 error_detail = error_data.get("detail", {}).get(
-                    "message", response.text
+                    "message",
+                    response.text,
                 )
             except httpx.JSONDecodeError:
                 error_detail = response.text  # Raw error text
@@ -48,7 +49,8 @@ class ElevenLabsService:
         return response.content
 
     def _handle_response(
-        self, response: httpx.Response
+        self,
+        response: httpx.Response,
     ) -> Dict[str, Any]:  # For JSON responses
         # For DELETE, ElevenLabs returns 200 OK with JSON {"status": "ok"}
         # or error JSON. No 204.
@@ -64,7 +66,8 @@ class ElevenLabsService:
             error_detail = response_data.get(
                 "detail",  # For some errors
                 response_data.get(
-                    "message", "Unknown ElevenLabs API error"
+                    "message",
+                    "Unknown ElevenLabs API error",
                 ),  # For others
             )
             if (
@@ -219,7 +222,7 @@ class ElevenLabsService:
         Reference: https://elevenlabs.io/docs/api-reference/text-to-speech/convert
         """
         elevenlabs_output_identifier = self._map_common_format_to_elevenlabs_output(
-            output_format
+            output_format,
         )
 
         url = f"{self.v1_base_url}/text-to-speech/{voice_id}"
@@ -241,7 +244,7 @@ class ElevenLabsService:
             payload["voice_settings"] = voice_settings
 
         determined_content_type = self._get_content_type_for_elevenlabs_format(
-            elevenlabs_output_identifier
+            elevenlabs_output_identifier,
         )
 
         try:
@@ -250,7 +253,10 @@ class ElevenLabsService:
             # For non-streaming endpoint, httpx reads full response by default.
             with httpx.Client(timeout=TTS_TIMEOUT) as client:
                 response = client.post(
-                    url, json=payload, headers=self.headers, params=params
+                    url,
+                    json=payload,
+                    headers=self.headers,
+                    params=params,
                 )
             audio_bytes = self._handle_audio_response(response)
             return audio_bytes, determined_content_type
@@ -262,35 +268,35 @@ class ElevenLabsService:
 
     def design_voice_generate_previews(
         self,
-        voice_prompt: str,  # This maps to "text" in EL API for this endpoint according to official docs / "voice_description" in user example
-        gender: Optional[str] = None,
-        accent: Optional[str] = None,
-        age: Optional[str] = None,
-        accent_strength: Optional[float] = None,
+        voice_description: str,  # Main description
+        text_for_preview: Optional[str] = None,
+        auto_generate_text_flag: Optional[bool] = None,
+        model_id_for_design: Optional[str] = None,
+        # Add other optional parameters here if you added them to schema
     ) -> Dict[str, Any]:
         """
         Generates voice design previews from a text description using ElevenLabs.
-        Uses POST /v1/text-to-voice/design (as per user's example)
+        Uses POST /v1/text-to-voice/design
         """
         url = f"{self.v1_base_url}/text-to-voice/design"
-        payload: Dict[str, Any] = {
-            "voice_description": voice_prompt
-        }  # Using voice_description as per user's curl example for this endpoint
+        payload: Dict[str, Any] = {"voice_description": voice_description}
 
-        # Add optional parameters if provided
-        if gender:
-            payload["gender"] = gender
-        if accent:
-            payload["accent"] = accent
-        if age:
-            payload["age"] = age
-        if accent_strength is not None:
-            payload["accent_strength"] = accent_strength
+        if text_for_preview is not None:
+            payload["text"] = text_for_preview
+        if auto_generate_text_flag is not None:
+            payload["auto_generate_text"] = auto_generate_text_flag
+        if model_id_for_design is not None:
+            payload["model_id"] = model_id_for_design
+        # Add other optional params to payload if defined
+
+        # Headers (assuming self.headers includes xi-api-key but not Content-Type)
+        request_headers = self.headers.copy()
+        request_headers["Content-Type"] = "application/json"
 
         try:
             with httpx.Client(timeout=LONG_OPERATION_TIMEOUT) as client:
-                response = client.post(url, json=payload, headers=self.v1_headers)
-            return self._handle_response(response)  # Expects JSON response
+                response = client.post(url, json=payload, headers=request_headers)
+            return self._handle_response(response)
         except httpx.RequestError as e:
             raise ElevenLabsAPIError(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -301,27 +307,25 @@ class ElevenLabsService:
         self,
         voice_name: str,
         generated_voice_id: str,
-        description: Optional[str] = None,
+        description: str,
         labels: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """
         Creates a full voice from a generated_voice_id obtained from the design preview step.
-        Uses POST /v1/text-to-voice (as per user's example for creation step)
+        Reference: https://elevenlabs.io/docs/api-reference/text-to-voice/create
         """
         url = f"{self.v1_base_url}/text-to-voice"  # This is what user example implies for creating from generated_id
         payload: Dict[str, Any] = {
             "voice_name": voice_name,
             "generated_voice_id": generated_voice_id,
+            "voice_description": description,
         }
-        if description:
-            payload["voice_description"] = description  # EL uses voice_description here
         if labels:
             payload["labels"] = labels
 
         try:
             with httpx.Client(timeout=LONG_OPERATION_TIMEOUT) as client:
-                response = client.post(url, json=payload, headers=self.v1_headers)
-            # This endpoint returns the full voice object of the newly created voice
+                response = client.post(url, json=payload, headers=self.headers)
             return self._handle_response(response)
         except httpx.RequestError as e:
             raise ElevenLabsAPIError(
