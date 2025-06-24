@@ -1377,71 +1377,80 @@ def delete_voice(
     user_id = request.state.user_id
     voice_dao = VoiceDAO(session)
 
-    try:
-        voice_to_delete = voice_dao.get_voice_by_id(user_id=user_id, voice_id=voice_id)
+    # Step 1: Get the voice from DB
+    voice_to_delete = voice_dao.get_voice_by_id(user_id=user_id, voice_id=voice_id)
+    if not voice_to_delete:
+        # No session.rollback() needed here as it's a read operation that failed to find.
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Voice not found for this user.",
+        )
 
-        if not voice_to_delete:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Voice not found for this user.",
-            )
+    # Step 2: Attempt to delete from provider if applicable
+    if not voice_to_delete.is_preset:
 
-        provider_delete_failed_critically = False
+        provider_service = None
+        if voice_to_delete.provider == "cartesia":
+            provider_service = cartesia_service
+        elif voice_to_delete.provider == "elevenlabs":
+            provider_service = elevenlabs_service
 
-        if not voice_to_delete.is_preset:
-
-            provider_service = None
-            if voice_to_delete.provider == "cartesia":
-                provider_service = cartesia_service
-            elif voice_to_delete.provider == "elevenlabs":
-                provider_service = elevenlabs_service
-
-            if provider_service:
-                try:
-                    provider_service.delete_voice(voice_id)
-                    logging.info(
-                        f"Successfully deleted voice {voice_id} from {voice_to_delete.provider} for user {user_id}.",
+        if provider_service:
+            try:
+                provider_service.delete_voice(voice_id)
+            except (CartesiaAPIError, ElevenLabsAPIError) as e_provider:
+                if e_provider.status_code == 404:
+                    logging.warning(
+                        f"Voice {voice_id} not found on {voice_to_delete.provider} (status 404). Proceeding with DB deletion."
                     )
-                except (CartesiaAPIError, ElevenLabsAPIError) as e_provider:
-                    if e_provider.status_code == 404:
-                        logging.warning(
-                            f"Voice {voice_id} not found on {voice_to_delete.provider} for user {user_id}. Proceeding with DB deletion.",
-                        )
-                    else:
-                        # CRITICAL FAILURE - DO NOT DELETE FROM DB
-                        provider_delete_failed_critically = True
-                        session.rollback()  # Rollback before raising
-                        raise HTTPException(
-                            status_code=e_provider.status_code,  # Use provider's status code
-                            detail=f"Failed to delete voice from {voice_to_delete.provider}: {e_provider.detail}",
-                        )
-                except Exception as e_provider_generic:
-                    provider_delete_failed_critically = True
-                    session.rollback()  # Rollback before raising
+                    # Non-critical, continue to DB deletion
+                else:
+                    # CRITICAL PROVIDER FAILURE
+                    logging.error(
+                        f"Critical error deleting voice {voice_id} from {voice_to_delete.provider}: {e_provider.detail}"
+                    )
+                    session.rollback()  # Ensure rollback of any prior DB changes in this session (though unlikely here)
                     raise HTTPException(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail=f"Unexpected error during {voice_to_delete.provider} deletion: {str(e_provider_generic)}",
+                        status_code=e_provider.status_code,
+                        detail=f"Failed to delete voice from {voice_to_delete.provider}: {e_provider.detail}",
                     )
+            except Exception as e_provider_generic:
+                # Other unexpected provider errors
+                logging.error(
+                    f"Unexpected critical error deleting voice {voice_id} from {voice_to_delete.provider}: {str(e_provider_generic)}"
+                )
+                session.rollback()
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Unexpected error during {voice_to_delete.provider} deletion: {str(e_provider_generic)}",
+                )
 
-        # If provider deletion was successful, or it was a preset, or provider returned 404 (non-critical)
-        if not provider_delete_failed_critically:
-            voice_dao.delete_voice(
-                user_id=user_id,
-                voice_id=voice_id,
-            )
-            session.commit()
-            return InfoResponse(info="Voice deleted successfully.")
-        # If critical failure occurred, the HTTPException would have been raised already.
-        # This part should ideally not be reached if provider_delete_failed_critically is true.
-
-    except HTTPException as e:  # If it's already an HTTPException, re-raise
-        # session.rollback() # Rollback might have already happened or is not needed if it's a 404 before DB ops
-        raise e
-    except Exception as e_generic_delete:
+    # Step 3: If we've reached here, it means:
+    # - Voice is a preset (provider deletion skipped)
+    # - OR Provider deletion was successful
+    # - OR Provider deletion returned 404 (non-critical)
+    # So, proceed to delete from our database.
+    try:
+        voice_dao.delete_voice(user_id=user_id, voice_id=voice_id)
+        session.commit()
+        return InfoResponse(info="Voice deleted successfully.")
+    except IntegrityError as e_db_integrity:  # Should not happen on delete typically, but good to catch
         session.rollback()
+        logging.error(
+            f"DB IntegrityError during voice deletion from DB {voice_id}: {str(e_db_integrity)}"
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error deleting voice record: {str(e_generic_delete)}",
+            detail=f"Database integrity error during voice deletion: {str(e_db_integrity)}",
+        )
+    except Exception as e_db_generic:  # Other errors during DB delete
+        session.rollback()
+        logging.error(
+            f"Generic error during voice deletion from DB {voice_id}: {str(e_db_generic)}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error deleting voice from database: {str(e_db_generic)}",
         )
 
 
