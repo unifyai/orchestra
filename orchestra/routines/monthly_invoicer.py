@@ -137,6 +137,7 @@ def _invoice_month_with_session(
             # 2. create invoice which pulls the pending items
             invoice = stripe.Invoice.create(
                 customer=user.stripe_customer_id,
+                automatic_tax={"enabled": True},  # Enable automatic tax collection
                 auto_advance=True,
                 pending_invoice_items_behavior="include",
                 description=f"{total_cr} credits used in {year}-{month:02d}",
