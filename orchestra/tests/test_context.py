@@ -1592,17 +1592,21 @@ async def test_nested_unique_ids_increment(client: AsyncClient):
         headers=HEADERS,
     )
 
-    # 1. Create first user -> {"user": 0, "session": 0, "event": 0}
+    # 1. Create first user
     res = await _create_log(client, project_name, context=context_name, params={})
     assert res.status_code == 200, res.text
-    assert res.json()["row_ids"][0] == {"user": 0, "session": 0, "event": 0}
+    row_ids_data = res.json()["row_ids"]
+    assert row_ids_data["name"] == unique_id_names
+    assert row_ids_data["ids"] == [[0, 0, 0]]
 
-    # 2. Create second user -> {"user": 1, "session": 0, "event": 0}
+    # 2. Create second user
     res = await _create_log(client, project_name, context=context_name, params={})
     assert res.status_code == 200, res.text
-    assert res.json()["row_ids"][0] == {"user": 1, "session": 0, "event": 0}
+    row_ids_data = res.json()["row_ids"]
+    assert row_ids_data["name"] == unique_id_names
+    assert row_ids_data["ids"] == [[1, 0, 0]]
 
-    # 3. Create a new session for user 0 -> {"user": 0, "session": 1, "event": 0}
+    # 3. Create a new session for user 0
     res = await _create_log(
         client,
         project_name,
@@ -1611,9 +1615,11 @@ async def test_nested_unique_ids_increment(client: AsyncClient):
         params={},
     )
     assert res.status_code == 200, res.text
-    assert res.json()["row_ids"][0] == {"user": 0, "session": 1, "event": 0}
+    row_ids_data = res.json()["row_ids"]
+    assert row_ids_data["name"] == unique_id_names
+    assert row_ids_data["ids"] == [[0, 1, 0]]
 
-    # 4. Create a new event for user 0, session 1 -> {"user": 0, "session": 1, "event": 1}
+    # 4. Create a new event for user 0, session 1
     res = await _create_log(
         client,
         project_name,
@@ -1622,9 +1628,11 @@ async def test_nested_unique_ids_increment(client: AsyncClient):
         params={},
     )
     assert res.status_code == 200, res.text
-    assert res.json()["row_ids"][0] == {"user": 0, "session": 1, "event": 1}
+    row_ids_data = res.json()["row_ids"]
+    assert row_ids_data["name"] == unique_id_names
+    assert row_ids_data["ids"] == [[0, 1, 1]]
 
-    # 5. Create another session for user 0 -> {"user": 0, "session": 2, "event": 0}
+    # 5. Create another session for user 0
     res = await _create_log(
         client,
         project_name,
@@ -1633,7 +1641,9 @@ async def test_nested_unique_ids_increment(client: AsyncClient):
         params={},
     )
     assert res.status_code == 200, res.text
-    assert res.json()["row_ids"][0] == {"user": 0, "session": 2, "event": 0}
+    row_ids_data = res.json()["row_ids"]
+    assert row_ids_data["name"] == unique_id_names
+    assert row_ids_data["ids"] == [[0, 2, 0]]
 
     # Fetch and verify final state
     logs = await fetch_logs(client, project_name, context=context_name)
@@ -1666,7 +1676,9 @@ async def test_nested_ids_batch_creation(client: AsyncClient):
     # First, create the parent run_id=0. This will also create step_id=0.
     res = await _create_log(client, project_name, context=context_name, params={})
     assert res.status_code == 200
-    assert res.json()["row_ids"][0] == {"run_id": 0, "step_id": 0}
+    row_ids_data = res.json()["row_ids"]
+    assert row_ids_data["name"] == unique_id_names
+    assert row_ids_data["ids"] == [[0, 0]]
 
     # Now, create a batch of 5 steps under run_id=0
     batch_size = 5
@@ -1686,22 +1698,21 @@ async def test_nested_ids_batch_creation(client: AsyncClient):
     assert log_response.status_code == 200, log_response.text
     response_data = log_response.json()
 
-    # Verify the response contains a list of correctly incremented IDs
-    row_ids = response_data["row_ids"]
-    assert isinstance(row_ids, list)
-    assert len(row_ids) == batch_size
+    # Verify the response contains the standardized format for the batch
+    row_ids_data = response_data["row_ids"]
+    assert row_ids_data["name"] == unique_id_names
 
     # The step_ids should start from 1 because step_id=0 was used when the parent was created.
-    expected_ids = [{"run_id": 0, "step_id": i} for i in range(1, batch_size + 1)]
-    assert row_ids == expected_ids
+    expected_ids = [[0, i] for i in range(1, batch_size + 1)]
+    assert row_ids_data["ids"] == expected_ids
 
     # Fetch all logs and verify the database state
     logs = await fetch_logs(client, project_name, context=context_name)
-    assert len(logs) == batch_size + 1  # +1 for the initial parent log
+    assert len(logs) == batch_size + 1
 
     # Check that all expected step_ids are present for run_id 0
     db_step_ids = {
         log["entries"]["step_id"] for log in logs if log["entries"]["run_id"] == 0
     }
-    expected_db_steps = set(range(batch_size + 1))  # 0, 1, 2, 3, 4, 5
+    expected_db_steps = set(range(batch_size + 1))
     assert db_step_ids == expected_db_steps
