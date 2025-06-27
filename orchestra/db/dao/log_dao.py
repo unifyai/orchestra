@@ -5,7 +5,7 @@ from collections import defaultdict
 from datetime import date, datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
-from sqlalchemy import alias, cast, func, literal, select, text, update
+from sqlalchemy import alias, and_, cast, func, literal, or_, select, text, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
@@ -21,6 +21,7 @@ from orchestra.db.models.orchestra_models import (
     ParamVersion,
 )
 from orchestra.services.bucket_service import BucketService
+from orchestra.web.api.utils.helpers import _safe_json_loads
 
 
 class OverwriteError(Exception):
@@ -475,32 +476,128 @@ class LogDAO:
         if not unique_field_defs:
             return
 
-        batch_unique_values = defaultdict(
-            set,
-        )  # (project, context, key) -> set of values
-
-        entries_to_check_in_db = defaultdict(
-            lambda: defaultdict(lambda: defaultdict(list)),
-        )  # project -> context -> key -> values
-
+        # Group entries by project and context to handle composite keys correctly
+        grouped_by_context = defaultdict(list)
         for entry in entries:
-            project_id = entry.get("project_id")
-            context_id = entry.get("context_id")
-            key = entry.get("key")
-            value = entry.get("value")
+            # We only care about entries that correspond to a unique field
+            if (
+                entry.get("project_id"),
+                entry.get("context_id"),
+                entry.get("key"),
+            ) in unique_field_defs:
+                grouped_by_context[
+                    (entry.get("project_id"), entry.get("context_id"))
+                ].append(entry)
 
-            if (project_id, context_id, key) in unique_field_defs:
-                # Check for duplicates within the batch
-                if value in batch_unique_values[(project_id, context_id, key)]:
-                    raise ValueError(
-                        f"Duplicate value for unique field '{key}' in batch.",
+        if not grouped_by_context:
+            return
+
+        # Check for duplicates within the batch first
+        batch_unique_values = defaultdict(set)
+        for (project_id, context_id), context_entries in grouped_by_context.items():
+            context = (
+                self.session.query(Context).filter_by(id=context_id).one_or_none()
+                if context_id
+                else None
+            )
+            context.unique_id_name = _safe_json_loads(context.unique_id_name)
+            composite_keys = (
+                context.unique_id_name
+                if context and isinstance(context.unique_id_name, list)
+                else None
+            )
+
+            if composite_keys:
+                # Group by log_event_id for composite check
+                log_event_composites = defaultdict(dict)
+                for entry in context_entries:
+                    if entry["key"] in composite_keys:
+                        log_event_composites[entry["log_event_id"]][entry["key"]] = (
+                            entry["value"]
+                        )
+                for log_event_id, kv_pair in log_event_composites.items():
+                    # Create a frozenset of items to make it hashable for the batch check
+                    composite_val = frozenset(kv_pair.items())
+                    if composite_val in batch_unique_values[(project_id, context_id)]:
+                        raise ValueError(
+                            f"Duplicate entry for composite key {kv_pair} in batch.",
+                        )
+                    batch_unique_values[(project_id, context_id)].add(composite_val)
+            else:
+                # Simple key check
+                for entry in context_entries:
+                    simple_val = entry["value"]
+                    if (
+                        simple_val
+                        in batch_unique_values[(project_id, context_id, entry["key"])]
+                    ):
+                        raise ValueError(
+                            f"Duplicate value for unique field '{entry['key']}' in batch.",
+                        )
+                    batch_unique_values[(project_id, context_id, entry["key"])].add(
+                        simple_val,
                     )
-                batch_unique_values[(project_id, context_id, key)].add(value)
-                entries_to_check_in_db[project_id][context_id][key].append(value)
 
         # Check against DB
-        for project_id, contexts in entries_to_check_in_db.items():
-            for context_id, keys_and_values in contexts.items():
+        for (project_id, context_id), context_entries in grouped_by_context.items():
+            context = (
+                self.session.query(Context).filter_by(id=context_id).one_or_none()
+                if context_id
+                else None
+            )
+            context.unique_id_name = _safe_json_loads(context.unique_id_name)
+            composite_keys = (
+                context.unique_id_name
+                if context and isinstance(context.unique_id_name, list)
+                else None
+            )
+
+            if composite_keys:
+                # Handle composite key check
+                log_events_to_check = defaultdict(dict)
+                for entry in context_entries:
+                    if entry["key"] in composite_keys:
+                        log_events_to_check[entry["log_event_id"]][entry["key"]] = (
+                            entry["value"]
+                        )
+
+                for log_event_id, key_values in log_events_to_check.items():
+                    if len(key_values) != len(composite_keys):
+                        continue
+
+                    # Find existing log_events that have the exact same set of key-value pairs
+                    q = (
+                        select(Log.log_event_id)
+                        .join(
+                            LogEventContext,
+                            LogEventContext.log_event_id == Log.log_event_id,
+                        )
+                        .where(LogEventContext.context_id == context_id)
+                        .where(
+                            or_(
+                                *[
+                                    and_(
+                                        Log.key == k,
+                                        Log.value == literal(v, type_=JSONB),
+                                    )
+                                    for k, v in key_values.items()
+                                ],
+                            ),
+                        )
+                        .group_by(Log.log_event_id)
+                        .having(func.count(Log.id) == len(composite_keys))
+                    )
+
+                    if self.session.execute(q.limit(1)).first():
+                        raise ValueError(
+                            f"Duplicate entry for composite key {key_values}.",
+                        )
+            else:
+                # Handle simple unique key check (original logic, but scoped to this context group)
+                keys_and_values = defaultdict(list)
+                for entry in context_entries:
+                    keys_and_values[entry["key"]].append(entry["value"])
+
                 for key, values in keys_and_values.items():
                     q = (
                         select(Log.id)
@@ -854,6 +951,109 @@ class LogDAO:
         if row is None:
             raise ValueError(f"Failed to get next version for parameter {param_key}")
         return row[0]
+
+    def _validate_parent_exists(
+        self,
+        context_id: int,
+        parent_ids: Dict[str, Any],
+    ) -> bool:
+        """
+        Validates that a log with the given parent ID combination already exists in the context.
+        """
+        if not parent_ids:
+            return True
+
+        conditions = [
+            and_(Log.key == k, Log.value == literal(v, type_=JSONB))
+            for k, v in parent_ids.items()
+        ]
+
+        q = (
+            select(Log.log_event_id)
+            .join(LogEventContext, LogEventContext.log_event_id == Log.log_event_id)
+            .where(LogEventContext.context_id == context_id, or_(*conditions))
+            .group_by(Log.log_event_id)
+            .having(func.count(Log.id) == len(parent_ids))
+        )
+        return self.session.execute(q.limit(1)).first() is not None
+
+    def get_next_nested_ids(
+        self,
+        project_id: int,
+        context_id: int,
+        columns: List[str],
+        provided_ids: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Generates nested, hierarchical unique IDs based on the strict sequential policy.
+        """
+        if not provided_ids:
+            return []
+
+        parent_id_dict = provided_ids[0]
+        num_to_generate = len(provided_ids)
+
+        target_col_index = len(parent_id_dict)
+        if target_col_index >= len(columns):
+            raise ValueError("All unique ID components have been specified.")
+        target_col = columns[target_col_index]
+
+        if not self._validate_parent_exists(context_id, parent_id_dict):
+            raise ValueError(
+                f"Parent ID combination {parent_id_dict} does not exist in this context.",
+            )
+
+        key_parts = [f"{col}={val}" for col, val in parent_id_dict.items()]
+        key_parts.append(target_col)
+        param_key = "::".join(key_parts)
+
+        new_ids = self.get_next_row_ids(
+            project_id=project_id,
+            context_id=context_id,
+            param_key=param_key,
+            count=num_to_generate,
+        )
+
+        completed_ids = []
+        for i in range(num_to_generate):
+            final_id = parent_id_dict.copy()
+            final_id[target_col] = new_ids[i]
+            for j in range(target_col_index + 1, len(columns)):
+                final_id[columns[j]] = 0
+
+            # Initialize counters for all newly created child paths.
+            temp_parent_path = {}
+            for k in range(len(columns) - 1):
+                current_level_key = columns[k]
+                temp_parent_path[current_level_key] = final_id[current_level_key]
+
+                child_col = columns[k + 1]
+                child_key_parts = [
+                    f"{col}={val}" for col, val in temp_parent_path.items()
+                ]
+                child_key_parts.append(child_col)
+                child_param_key = "::".join(child_key_parts)
+
+                # Use a simple ON CONFLICT DO NOTHING. This ensures that if the counter
+                # already exists (from a previous operation), we don't touch it. If it
+                # doesn't exist, we create it and mark the '0' ID as used.
+                init_stmt = (
+                    pg_insert(ParamVersion)
+                    .values(
+                        project_id=project_id,
+                        context_id=context_id,
+                        param_key=child_param_key,
+                        last_version=0,
+                    )
+                    .on_conflict_do_nothing(
+                        index_elements=["project_id", "context_id", "param_key"],
+                    )
+                )
+                self.session.execute(init_stmt)
+
+            completed_ids.append(final_id)
+
+        return completed_ids
 
     def bulk_update(
         self,
