@@ -132,7 +132,15 @@ log_data = {
 }
 
 
-def _create_log(client, project_name, user=1, params=None, entries=None, context=None):
+def _create_log(
+    client,
+    project_name,
+    user=1,
+    params=None,
+    entries=None,
+    context=None,
+    unique_id_parents=None,
+):
     _headers = HEADERS if user == 1 else HEADERS_2
     if entries is None:
         entries = log_data["log"]
@@ -212,6 +220,7 @@ def _create_log(client, project_name, user=1, params=None, entries=None, context
             "params": params,
             "entries": entries,
             "context": context,
+            "unique_id_parents": unique_id_parents,
         },
         headers=_headers,
     )
