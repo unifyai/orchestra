@@ -1486,7 +1486,7 @@ async def test_context_with_sequential_id(client: AsyncClient):
     """Test that logs in a context with unique_id_column get a sequential ID."""
     project_name = "sequential-id-project"
     context_name = "sequential-id-context"
-    unique_id_name = "my_row_id"
+    unique_id_names = "my_row_id"
 
     # Create project
     await _create_project(client, project_name)
@@ -1498,7 +1498,7 @@ async def test_context_with_sequential_id(client: AsyncClient):
             "name": context_name,
             "description": "Context with sequential IDs",
             "unique_id_column": True,
-            "unique_id_name": unique_id_name,
+            "unique_id_names": unique_id_names,
         },
         headers=HEADERS,
     )
@@ -1519,14 +1519,14 @@ async def test_context_with_sequential_id(client: AsyncClient):
         client,
         project_name,
         context=context_name,
-        sort_by=unique_id_name,
+        sort_by=unique_id_names,
     )
 
     # Verify the logs and their sequential IDs
     assert len(logs) == 5
     for i, log in enumerate(reversed(logs)):
-        assert unique_id_name in log["entries"]
-        assert log["entries"][unique_id_name] == i
+        assert unique_id_names in log["entries"]
+        assert log["entries"][unique_id_names] == i
 
 
 @pytest.mark.anyio
@@ -1538,7 +1538,7 @@ async def test_nested_ids_explicit_set_fails(client: AsyncClient):
     await _create_project(client, project_name)
     await client.post(
         f"/v0/project/{project_name}/contexts",
-        json={"name": context_name, "unique_id_name": unique_id_names},
+        json={"name": context_name, "unique_id_names": unique_id_names},
         headers=HEADERS,
     )
 
@@ -1562,7 +1562,7 @@ async def test_nested_ids_non_existent_parent_fails(client: AsyncClient):
     await _create_project(client, project_name)
     await client.post(
         f"/v0/project/{project_name}/contexts",
-        json={"name": context_name, "unique_id_name": unique_id_names},
+        json={"name": context_name, "unique_id_names": unique_id_names},
         headers=HEADERS,
     )
 
@@ -1588,7 +1588,7 @@ async def test_nested_unique_ids_increment(client: AsyncClient):
     await _create_project(client, project_name)
     await client.post(
         f"/v0/project/{project_name}/contexts",
-        json={"name": context_name, "unique_id_name": unique_id_names},
+        json={"name": context_name, "unique_id_names": unique_id_names},
         headers=HEADERS,
     )
 
@@ -1659,7 +1659,7 @@ async def test_nested_ids_batch_creation(client: AsyncClient):
     await _create_project(client, project_name)
     await client.post(
         f"/v0/project/{project_name}/contexts",
-        json={"name": context_name, "unique_id_name": unique_id_names},
+        json={"name": context_name, "unique_id_names": unique_id_names},
         headers=HEADERS,
     )
 
