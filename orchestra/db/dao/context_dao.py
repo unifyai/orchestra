@@ -1,4 +1,5 @@
 import hashlib
+import json
 import re
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -55,7 +56,7 @@ class ContextDAO:
         is_versioned: bool = False,
         allow_duplicates: bool = True,
         unique_id_column: bool = False,
-        unique_id_name: str = "row_id",
+        unique_id_name: str = '"row_id"',
     ) -> int:
         """Create a new context using upsert to handle race conditions."""
         from orchestra.db.dao.field_type_dao import FieldTypeDAO
@@ -95,25 +96,28 @@ class ContextDAO:
         # If unique_id_column is enabled, ensure the FieldType exists
         if unique_id_column:
             field_type_dao = FieldTypeDAO(self.session)
-            # Use the newly added method to check for the field type
-            field_type = field_type_dao.get_by_name_and_context(
-                project_id,
-                unique_id_name,
-                context_id,
-            )
-            if not field_type:
-                # Create the field type for the sequential ID
-                # Note: The 'value' of 0 is just to infer the type as 'integer'
-                field_type_dao.create_field_type_if_absent(
-                    project_id=project_id,
-                    field_name=unique_id_name,
-                    value=0,  # for type inference
-                    context_id=context_id,
-                    field_category="entry",
-                    mutable=False,  # This should be immutable
-                    unique=True,  # This should be unique within the context
-                    description=f"Sequential row ID",
+            id_names = json.loads(unique_id_name)
+            if not isinstance(id_names, list):
+                id_names = [id_names]
+
+            for id_name in id_names:
+                field_type = field_type_dao.get_by_name_and_context(
+                    project_id,
+                    id_name,
+                    context_id,
                 )
+                if not field_type:
+                    # Create the field type for the sequential ID
+                    field_type_dao.create_field_type_if_absent(
+                        project_id=project_id,
+                        field_name=id_name,
+                        value=0,  # for type inference to integer
+                        context_id=context_id,
+                        field_category="entry",
+                        mutable=False,
+                        unique=True,
+                        description=f"Unique sequential ID component.",
+                    )
         self.session.commit()
         return context_id
 
