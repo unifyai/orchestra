@@ -56,7 +56,7 @@ class ContextDAO:
         is_versioned: bool = False,
         allow_duplicates: bool = True,
         unique_id_column: bool = False,
-        unique_id_name: str = '"row_id"',
+        unique_id_names: str = '"row_id"',
     ) -> int:
         """Create a new context using upsert to handle race conditions."""
         from orchestra.db.dao.field_type_dao import FieldTypeDAO
@@ -74,7 +74,7 @@ class ContextDAO:
             is_versioned=is_versioned,
             allow_duplicates=allow_duplicates,
             unique_id_column=unique_id_column,
-            unique_id_name=unique_id_name,
+            unique_id_names=unique_id_names,
         )
 
         # On conflict, do nothing and return the existing context's id
@@ -96,7 +96,7 @@ class ContextDAO:
         # If unique_id_column is enabled, ensure the FieldType exists
         if unique_id_column:
             field_type_dao = FieldTypeDAO(self.session)
-            id_names = json.loads(unique_id_name)
+            id_names = json.loads(unique_id_names)
             if not isinstance(id_names, list):
                 id_names = [id_names]
 

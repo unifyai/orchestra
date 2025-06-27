@@ -104,20 +104,20 @@ def create_context(
             context_is_versioned = False
             context_allow_duplicates = True
             unique_id_column = False
-            unique_id_name = "row_id"
+            unique_id_names = "row_id"
         else:
             context_name = request.name
             context_description = request.description
             context_is_versioned = request.is_versioned
             context_allow_duplicates = request.allow_duplicates
             unique_id_column = request.unique_id_column
-            unique_id_name = request.unique_id_name
+            unique_id_names = request.unique_id_names
 
-            if isinstance(unique_id_name, list):
+            if isinstance(unique_id_names, list):
                 unique_id_column = True  # Automatically enable if it's a list
-                unique_id_name = json.dumps(unique_id_name)
+                unique_id_names = json.dumps(unique_id_names)
             else:
-                unique_id_name = json.dumps(unique_id_name)
+                unique_id_names = json.dumps(unique_id_names)
 
         # Normalize context name: remove leading slash to treat '/exp1/name1' the same as 'exp1/name1'
         context_name = context_name.lstrip("/")
@@ -143,7 +143,7 @@ def create_context(
             is_versioned=context_is_versioned,
             allow_duplicates=context_allow_duplicates,
             unique_id_column=unique_id_column,
-            unique_id_name=unique_id_name,
+            unique_id_names=unique_id_names,
         )
 
         return {"info": "Context created successfully."}
@@ -170,7 +170,7 @@ def create_context(
                             "is_versioned": True,
                             "allow_duplicates": True,
                             "unique_id_column": False,
-                            "unique_id_name": "row_id",
+                            "unique_id_names": "row_id",
                         },
                         {
                             "name": "context2",
@@ -178,7 +178,7 @@ def create_context(
                             "is_versioned": False,
                             "allow_duplicates": True,
                             "unique_id_column": False,
-                            "unique_id_name": "my_id",
+                            "unique_id_names": "my_id",
                         },
                     ],
                 },
@@ -237,7 +237,7 @@ def get_contexts(
                 "is_versioned": context[0].is_versioned,
                 "allow_duplicates": context[0].allow_duplicates,
                 "unique_id_column": context[0].unique_id_column,
-                "unique_id_name": _safe_json_loads(context[0].unique_id_name),
+                "unique_id_names": _safe_json_loads(context[0].unique_id_names),
             }
             for context in existing_contexts
             if context[0].name != ""
@@ -302,7 +302,7 @@ def get_context_commits(
                         "is_versioned": True,
                         "allow_duplicates": True,
                         "unique_id_column": False,
-                        "unique_id_name": "row_id",
+                        "unique_id_names": "row_id",
                     },
                 },
             },
@@ -362,7 +362,7 @@ def get_context(
             "is_versioned": context[0][0].is_versioned,
             "allow_duplicates": context[0][0].allow_duplicates,
             "unique_id_column": context[0][0].unique_id_column,
-            "unique_id_name": _safe_json_loads(context[0][0].unique_id_name),
+            "unique_id_names": _safe_json_loads(context[0][0].unique_id_names),
         }
     except IndexError as e:
         raise not_found(str(e))
