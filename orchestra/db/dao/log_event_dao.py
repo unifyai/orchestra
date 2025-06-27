@@ -59,7 +59,7 @@ class LogEventDAO:
             context = self.session.query(Context).filter_by(id=context_id).one()
             if context.unique_id_column:
                 log_dao = LogDAO(self.session, ContextDAO(self.session))
-                unique_id_names = context.unique_id_name
+                unique_id_names = context.unique_id_names
                 try:
                     unique_id_names_json = json.loads(unique_id_names)
                     unique_id_names = unique_id_names_json
