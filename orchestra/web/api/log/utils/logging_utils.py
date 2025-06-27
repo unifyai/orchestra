@@ -850,12 +850,56 @@ def create_logs_internal(
     params_len = len(params_list)
     total_logs = max(entries_len, params_len)
 
+    provided_unique_ids = None
+    if context_obj and context_obj.unique_id_column:
+        raw_name = context_obj.unique_id_name
+        unique_id_names = []
+        if isinstance(raw_name, str):
+            try:
+                parsed = json.loads(raw_name)
+                unique_id_names = parsed if isinstance(parsed, list) else [str(parsed)]
+            except (json.JSONDecodeError, TypeError):
+                unique_id_names = [raw_name]
+        elif isinstance(raw_name, list):
+            unique_id_names = raw_name
+
+        unique_id_names_set = set(unique_id_names)
+
+        # 1. Forbid explicitly setting unique ID columns in entries/params
+        for i in range(total_logs):
+            current_data = {
+                **(entries_list[min(i, len(entries_list) - 1)] or {}),
+                **(params_list[min(i, len(params_list) - 1)] or {}),
+            }
+            for key in current_data:
+                if key in unique_id_names_set:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Unique ID column '{key}' cannot be set explicitly. Use 'unique_id_parents' to specify parent IDs for generation.",
+                    )
+
+        # 2. Use 'unique_id_parents' as the source for ID generation context
+        parent_ids = request.unique_id_parents or {}
+
+        # Validate that parent keys are valid unique ID names
+        for key in parent_ids:
+            if key not in unique_id_names_set:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid key '{key}' in 'unique_id_parents'. Allowed keys are: {unique_id_names}",
+                )
+
+        # Construct the `provided_unique_ids` list for the DAO.
+        # It's a list of the same parent_ids dictionary, one for each log being created in the batch.
+        provided_unique_ids = [parent_ids.copy() for _ in range(total_logs)]
+
     # Bulk create all log events in one operation
     log_event_ids, row_ids = log_event_dao.bulk_create(
         project_id=project_id,
         context_id=context_id,
         count=total_logs,
         return_row_ids=True,
+        provided_unique_ids=provided_unique_ids,
     )
 
     # Prepare collections for bulk operations
@@ -1019,12 +1063,25 @@ def create_logs_internal(
         context_obj.updated_at = datetime.now(timezone.utc)
         context_dao.session.commit()
 
-    # Build row_ids payload with unique ID column name
-    row_ids_payload = {
-        "name": context_obj.unique_id_name,
-        "ids": row_ids,
-    }
+    # Build row_ids payload
+    row_ids_payload = None
+    if context_obj and context_obj.unique_id_column:
+        # Check if the unique_id_name is a list (or a string representation of a list)
+        is_nested = isinstance(context_obj.unique_id_name, list)
+        if not is_nested and isinstance(context_obj.unique_id_name, str):
+            try:
+                if json.loads(context_obj.unique_id_name).__class__ == list:
+                    is_nested = True
+            except:
+                pass
 
+        if is_nested:
+            row_ids_payload = row_ids
+        else:
+            row_ids_payload = {
+                "name": context_obj.unique_id_name,
+                "ids": row_ids,
+            }
     return {"log_event_ids": log_event_ids, "row_ids": row_ids_payload}
 
 
