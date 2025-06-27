@@ -1065,23 +1065,22 @@ def create_logs_internal(
 
     # Build row_ids payload
     row_ids_payload = None
-    if context_obj and context_obj.unique_id_column:
-        # Check if the unique_id_name is a list (or a string representation of a list)
-        is_nested = isinstance(context_obj.unique_id_name, list)
-        if not is_nested and isinstance(context_obj.unique_id_name, str):
-            try:
-                if json.loads(context_obj.unique_id_name).__class__ == list:
-                    is_nested = True
-            except:
-                pass
+    # Check if the unique_id_name is a list (or a string representation of a list)
+    is_nested = isinstance(context_obj.unique_id_name, list)
+    if not is_nested and isinstance(context_obj.unique_id_name, str):
+        try:
+            if json.loads(context_obj.unique_id_name).__class__ == list:
+                is_nested = True
+        except:
+            pass
 
-        if is_nested:
-            row_ids_payload = row_ids
-        else:
-            row_ids_payload = {
-                "name": context_obj.unique_id_name,
-                "ids": row_ids,
-            }
+    if is_nested:
+        row_ids_payload = row_ids
+    else:
+        row_ids_payload = {
+            "name": context_obj.unique_id_name,
+            "ids": row_ids,
+        }
     return {"log_event_ids": log_event_ids, "row_ids": row_ids_payload}
 
 
