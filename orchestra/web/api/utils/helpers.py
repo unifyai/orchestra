@@ -266,3 +266,10 @@ class CustomEncoder(json.JSONEncoder):
             return asdict(obj)
 
         return super().default(obj)
+
+
+def _safe_json_loads(value):
+    try:
+        return json.loads(value)
+    except Exception:
+        return value

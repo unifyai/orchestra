@@ -1,6 +1,6 @@
 """Schema models for context management endpoints."""
 
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -35,9 +35,10 @@ class ContextCreateRequest(BaseModel):
         default=False,
         description="Whether to create a unique, sequential ID for each log in this context.",
     )
-    unique_id_name: str = Field(
+    unique_id_name: Union[str, List[str]] = Field(
         default="row_id",
-        description="The name of the unique ID column.",
+        description="Name(s) of the unique ID column(s). Can be a string for a single column or a list for nested unique IDs.",
+        example=["task_id", "instance_id"],
     )
 
 
