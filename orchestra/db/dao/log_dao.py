@@ -1008,6 +1008,10 @@ class LogDAO:
                     existing_log.inferred_type = inferred_type
                     existing_log.updated_at = now
 
+                    # Also update corresponding JSONLog
+                    existing_json_log = existing_json_log_map.get(group_key)
+                    if existing_json_log:
+                        existing_json_log.value = json_value
                 else:
                     # Prepare for batch upsert
                     log_pk = (log_event_id, key, param_version)
