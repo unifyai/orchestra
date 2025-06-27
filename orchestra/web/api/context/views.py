@@ -2,6 +2,7 @@
 Includes endpoints related to context management within projects.
 """
 
+import json
 import re
 from typing import List, Optional, Union
 
@@ -23,6 +24,7 @@ from orchestra.web.api.context.schema import (
     RenameContextRequest,
 )
 from orchestra.web.api.log.views import _get_logs_query
+from orchestra.web.api.utils.helpers import _safe_json_loads
 from orchestra.web.api.utils.http_responses import not_found
 
 router = APIRouter()
@@ -110,6 +112,12 @@ def create_context(
             context_allow_duplicates = request.allow_duplicates
             unique_id_column = request.unique_id_column
             unique_id_name = request.unique_id_name
+
+            if isinstance(unique_id_name, list):
+                unique_id_column = True  # Automatically enable if it's a list
+                unique_id_name = json.dumps(unique_id_name)
+            else:
+                unique_id_name = json.dumps(unique_id_name)
 
         # Normalize context name: remove leading slash to treat '/exp1/name1' the same as 'exp1/name1'
         context_name = context_name.lstrip("/")
@@ -229,7 +237,7 @@ def get_contexts(
                 "is_versioned": context[0].is_versioned,
                 "allow_duplicates": context[0].allow_duplicates,
                 "unique_id_column": context[0].unique_id_column,
-                "unique_id_name": context[0].unique_id_name,
+                "unique_id_name": _safe_json_loads(context[0].unique_id_name),
             }
             for context in existing_contexts
             if context[0].name != ""
@@ -354,7 +362,7 @@ def get_context(
             "is_versioned": context[0][0].is_versioned,
             "allow_duplicates": context[0][0].allow_duplicates,
             "unique_id_column": context[0][0].unique_id_column,
-            "unique_id_name": context[0][0].unique_id_name,
+            "unique_id_name": _safe_json_loads(context[0][0].unique_id_name),
         }
     except IndexError as e:
         raise not_found(str(e))
