@@ -1,5 +1,6 @@
+import json
 from datetime import datetime, timezone
-from typing import List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -24,7 +25,8 @@ class LogEventDAO:
         count: int,
         context_id: Optional[int] = None,
         return_row_ids: bool = False,
-    ) -> Union[List[int], tuple[List[int], List[Optional[int]]]]:
+        provided_unique_ids: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[List[int], tuple[List[int], List[Any]]]:
         """Create multiple LogEvent instances in one operation."""
         ts = datetime.now(timezone.utc)
         log_events = [
@@ -40,7 +42,7 @@ class LogEventDAO:
         self.session.flush()  # Flush to get IDs before committing
 
         log_event_ids = [event.id for event in log_events]
-        row_ids: List[Optional[int]] = [None] * count
+        row_ids: List[Any] = [None] * count
 
         if context_id:
             # Associate logs with context
@@ -57,42 +59,75 @@ class LogEventDAO:
             context = self.session.query(Context).filter_by(id=context_id).one()
             if context.unique_id_column:
                 log_dao = LogDAO(self.session, ContextDAO(self.session))
-
+                unique_id_names = context.unique_id_name
                 try:
-                    reserved_ids = log_dao.get_next_row_ids(
-                        project_id=project_id,
-                        context_id=context_id,
-                        param_key=context.unique_id_name,
-                        count=count,
-                    )
-                    row_ids = reserved_ids
+                    unique_id_names_json = json.loads(unique_id_names)
+                    unique_id_names = unique_id_names_json
+                except Exception:
+                    pass
+                try:
+                    if isinstance(unique_id_names, list):
+                        # Nested unique IDs
+                        if provided_unique_ids is None:
+                            provided_unique_ids = [{} for _ in range(count)]
+                        reserved_ids = log_dao.get_next_nested_ids(
+                            project_id=project_id,
+                            context_id=context_id,
+                            columns=unique_id_names,
+                            provided_ids=provided_unique_ids,
+                        )
+                        row_ids = reserved_ids
+
+                        # Create log entries for all unique ID columns
+                        all_id_logs = []
+                        for i, log_event_id in enumerate(log_event_ids):
+                            id_dict = row_ids[i]
+                            for col_name, col_value in id_dict.items():
+                                all_id_logs.append(
+                                    {
+                                        "project_id": project_id,
+                                        "log_event_id": log_event_id,
+                                        "key": col_name,
+                                        "value": col_value,
+                                        "context_id": context_id,
+                                        "explicit_types": {col_name: {"type": "int"}},
+                                    },
+                                )
+                        if all_id_logs:
+                            log_dao.bulk_create(all_id_logs)
+
+                    else:  # Single unique ID
+                        param_key = unique_id_names
+                        reserved_ids = log_dao.get_next_row_ids(
+                            project_id=project_id,
+                            context_id=context_id,
+                            param_key=param_key,
+                            count=count,
+                        )
+                        row_ids = reserved_ids
+
+                        # Create sequential ID log entries
+                        sequential_id_logs = []
+                        for i, log_event_id in enumerate(log_event_ids):
+                            new_id = row_ids[i]
+                            sequential_id_logs.append(
+                                {
+                                    "project_id": project_id,
+                                    "log_event_id": log_event_id,
+                                    "key": param_key,
+                                    "value": new_id,
+                                    "context_id": context_id,
+                                    "explicit_types": {param_key: {"type": "int"}},
+                                },
+                            )
+                        if sequential_id_logs:
+                            log_dao.bulk_create(
+                                sequential_id_logs,
+                            )
+
                 except Exception as e:
                     self.session.rollback()
                     raise e
-
-                # Create sequential ID log entries using the reserved IDs
-                sequential_id_logs = []
-                for i, log_event_id in enumerate(log_event_ids):
-                    new_id = row_ids[i]  # Use the updated row_ids list
-                    sequential_id_logs.append(
-                        {
-                            "project_id": project_id,
-                            "log_event_id": log_event_id,
-                            "key": context.unique_id_name,
-                            "value": new_id,
-                            "context_id": context_id,
-                            "explicit_types": {
-                                context.unique_id_name: {"type": "int"},
-                            },
-                        },
-                    )
-
-                # Create all sequential ID logs in one batch
-                if sequential_id_logs:
-                    try:
-                        log_dao.bulk_create(sequential_id_logs)
-                    except Exception as e:
-                        raise e
 
         self.session.commit()
 
