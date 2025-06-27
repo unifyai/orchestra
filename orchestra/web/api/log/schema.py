@@ -159,6 +159,11 @@ class CreateLogConfig(BaseModel):
             ],
         },
     )
+    unique_id_parents: Optional[Dict[str, Union[str, int]]] = Field(
+        default=None,
+        description="Parent IDs for generating a nested unique ID. The keys must match the parent columns in the unique ID list.",
+        example={"user": 100, "session": 4},
+    )
 
 
 class CreateDerivedEntriesConfig(BaseModel):
