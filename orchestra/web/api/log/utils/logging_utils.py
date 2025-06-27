@@ -1066,25 +1066,24 @@ def create_logs_internal(
 
     # Build row_ids payload
     row_ids_payload = None
-    if context_obj and context_obj.unique_id_column:
-        # Safely parse unique_id_name which is stored as JSONB
-        unique_id_names = _safe_json_loads(context_obj.unique_id_names)
+    # Safely parse unique_id_name which is stored as JSONB
+    unique_id_names = _safe_json_loads(context_obj.unique_id_names)
 
-        ids_list = []
-        if isinstance(unique_id_names, list):
-            # Nested ID case: transform the list of dictionaries into a list of lists,
-            # ensuring the order of values matches the order of column names.
-            if row_ids:
-                for id_dict in row_ids:
-                    ids_list.append([id_dict.get(name) for name in unique_id_names])
-        else:
-            # Single ID case: the `row_ids` are already in a simple list.
-            ids_list = row_ids
+    ids_list = []
+    if isinstance(unique_id_names, list):
+        # Nested ID case: transform the list of dictionaries into a list of lists,
+        # ensuring the order of values matches the order of column names.
+        if row_ids:
+            for id_dict in row_ids:
+                ids_list.append([id_dict.get(name) for name in unique_id_names])
+    else:
+        # Single ID case: the `row_ids` are already in a simple list.
+        ids_list = row_ids
 
-        row_ids_payload = {
-            "name": unique_id_names,
-            "ids": ids_list,
-        }
+    row_ids_payload = {
+        "name": unique_id_names,
+        "ids": ids_list,
+    }
     return {"log_event_ids": log_event_ids, "row_ids": row_ids_payload}
 
 
