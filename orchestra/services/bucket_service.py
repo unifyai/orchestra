@@ -230,7 +230,7 @@ class BucketService:
             logging.error(f"Failed to upload assistant photo to GCS: {str(e)}")
             raise Exception(f"Failed to upload assistant photo: {str(e)}")
 
-    def upload_temp_assistant_photo_file(
+    def upload_temp_assistant_file(
         self,
         file_content: bytes,
         user_id: str,
@@ -282,16 +282,16 @@ class BucketService:
             raise Exception(f"Failed to upload temporary file: {str(e)}")
         except Exception as e:
             logging.error(
-                f"Unexpected error in upload_temp_assistant_photo_file: {str(e)}",
+                f"Unexpected error in upload_temp_assistant_file: {str(e)}",
             )
             raise Exception(f"Failed to process temporary file: {str(e)}")
 
-    def delete_assistant_photo(self, gcs_url: str) -> bool:
+    def delete_assistant_file(self, gcs_url: str) -> bool:
         """
-        Delete an assistant's profile photo from GCS using its GCS URL.
+        Delete an assistant's profile photo/file from GCS using its GCS URL.
         Ensures deletion only occurs from the designated assistant images bucket.
         Args:
-            gcs_url: The GCS URL of the photo to delete (e.g., gs://bucket/path/to/photo.jpg)
+            gcs_url: The GCS URL of the photo/file to delete (e.g., gs://bucket/path/to/photo.jpg)
         Returns:
             Boolean indicating success.
         Raises:
@@ -305,17 +305,19 @@ class BucketService:
 
         if parsed_bucket != self.assistant_images_bucket_name:
             logging.error(
-                f"Attempt to delete photo from incorrect bucket. Expected '{self.assistant_images_bucket_name}', got '{parsed_bucket}'. URL: {gcs_url}",
+                f"Attempt to delete photo/file from incorrect bucket. Expected '{self.assistant_images_bucket_name}', got '{parsed_bucket}'. URL: {gcs_url}",
             )
             return False
         try:
             blob = self.assistant_images_bucket.blob(object_path)
             blob.delete()
-            logging.info(f"Successfully deleted assistant photo: {gcs_url}")
+            logging.info(f"Successfully deleted assistant photo/file: {gcs_url}")
             return True
         except exceptions.NotFound:
-            logging.warning(f"Assistant photo not found during deletion: {gcs_url}")
+            logging.warning(
+                f"Assistant photo/file not found during deletion: {gcs_url}",
+            )
             return True
         except exceptions.GoogleAPIError as e:
-            logging.error(f"Failed to delete assistant photo {gcs_url}: {str(e)}")
-            raise Exception(f"Failed to delete assistant photo: {str(e)}")
+            logging.error(f"Failed to delete assistant photo/file {gcs_url}: {str(e)}")
+            raise Exception(f"Failed to delete assistant photo/file: {str(e)}")
