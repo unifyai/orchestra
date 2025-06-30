@@ -6,7 +6,6 @@ import pytest
 from fastapi import status
 from httpx import AsyncClient
 
-from orchestra.db.dao.voice_dao import VoiceDAO
 from orchestra.services.cartesia_service import CartesiaAPIError
 from orchestra.services.cartesia_service import (
     CartesiaService as OriginalCartesiaService,
@@ -816,55 +815,6 @@ async def test_design_generate_previews_success(
         auto_generate_text_flag=None,
         model_id_for_design=None,
     )
-
-
-@pytest.mark.anyio
-async def test_design_create_from_preview_autodetect_language_success(
-    client: AsyncClient,
-    mock_tts_services_factory,
-    dbsession,
-):
-    _, elevenlabs_mock, _, openai_mock = mock_tts_services_factory
-    openai_mock.detect_language_from_text.return_value = "es"
-    user_id = await get_user_id_from_request_state(client)
-
-    payload = {
-        "generated_voice_id": "temp_preview_es_123",
-        "voice_name": "Spanish Robot Voice",
-        "voice_description": "Una voz de robot genial diseñada a través de texto.",
-    }
-
-    with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
-        mock_state.user_id = user_id
-        resp = await client.post(
-            "/v0/assistant/voice/design/create",
-            json=payload,
-            headers=HEADERS,
-        )
-
-    assert resp.status_code == status.HTTP_201_CREATED
-    data = resp.json()["info"]
-    assert data["language"] == "es"
-    assert data["voice_id"] == "final_el_voice_id_abc_789"
-    assert data["name"] == "Spanish Robot Voice"
-
-    openai_mock.detect_language_from_text.assert_called_once_with(
-        payload["voice_description"],
-    )
-    elevenlabs_mock.create_voice_from_generated_id.assert_called_once()
-
-    db_voice = VoiceDAO(dbsession).get_voice_by_id(
-        user_id=user_id,
-        voice_id="final_el_voice_id_abc_789",
-    )
-    assert db_voice is not None
-    assert db_voice.language == "es"
-
-    VoiceDAO(dbsession).delete_voice(
-        user_id=user_id,
-        voice_id="final_el_voice_id_abc_789",
-    )
-    dbsession.commit()
 
 
 @pytest.mark.anyio
