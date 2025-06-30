@@ -27,6 +27,7 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.call_recording_service import CallRecordingService
 from orchestra.services.cartesia_service import CartesiaAPIError, CartesiaService
+from orchestra.services.deepgram_service import DeepgramAPIError, DeepgramService
 from orchestra.services.elevenlabs_service import ElevenLabsAPIError, ElevenLabsService
 from orchestra.services.replicate_service import ReplicateAPIError, ReplicateService
 from orchestra.settings import settings
@@ -1167,8 +1168,9 @@ async def clone_voice(
     session: Session = Depends(get_db_session),
     cartesia_service: CartesiaService = Depends(),
     elevenlabs_service: ElevenLabsService = Depends(),
+    deepgram_service: DeepgramService = Depends(),
     name: str = Form(..., example="My Voice Clone"),
-    language: str = Form(..., example="en"),
+    language: Optional[str] = Form(None, example="en"),
     description: Optional[str] = Form(None, example="A cloned voice for my assistant"),
     gender: Optional[str] = Form(None, example="female"),
     provider: str = Form("cartesia"),
@@ -1177,15 +1179,32 @@ async def clone_voice(
     user_id = request.state.user_id
     voice_dao = VoiceDAO(session)
     new_voice_id: Optional[str] = None
+    voice_language: Optional[str] = language
 
     try:
         file_content = await file.read()
+        if not voice_language:
+            try:
+                detected_language = deepgram_service.detect_language_from_audio(
+                    file_content,
+                    file.content_type,
+                )
+                voice_language = detected_language or "en"
+            except DeepgramAPIError as e:
+                logging.error(
+                    f"Deepgram API error during voice clone language detection: {e.detail}",
+                )
+                raise HTTPException(
+                    status_code=e.status_code,
+                    detail=f"Language detection failed: {e.detail}",
+                )
+
         if provider == "cartesia":
             cartesia_response = cartesia_service.clone_voice(
                 file_content=file_content,
                 file_name=file.filename or "audio_clip_default_name",
                 name=name,
-                language=language,
+                language=voice_language,
                 description=description,
             )
             new_voice_id = cartesia_response.get("id")
@@ -1212,7 +1231,7 @@ async def clone_voice(
             name=name,
             description=description or f"Cloned voice: {name}",
             gender=gender,
-            language=language,
+            language=voice_language,
             provider=provider,
         )
         if provider == "cartesia" and not gender:
@@ -1232,11 +1251,18 @@ async def clone_voice(
             ),
         )
 
-    except (CartesiaAPIError, ElevenLabsAPIError) as e:
+    except (CartesiaAPIError, ElevenLabsAPIError, DeepgramAPIError) as e:
         session.rollback()
+        service_name = "External service"
+        if isinstance(e, CartesiaAPIError):
+            service_name = "Cartesia"
+        elif isinstance(e, ElevenLabsAPIError):
+            service_name = "ElevenLabs"
+        elif isinstance(e, DeepgramAPIError):
+            service_name = "Language Detection"
         raise HTTPException(
             status_code=e.status_code,
-            detail=f"{provider.capitalize()} API error: {e.detail}",
+            detail=f"{service_name} API error: {e.detail}",
         )
     except IntegrityError as e_db_integrity:
         session.rollback()
@@ -1617,12 +1643,29 @@ async def design_voice_create_from_preview_endpoint(
     request: Request,
     session: Session = Depends(get_db_session),
     elevenlabs_service: ElevenLabsService = Depends(),
+    deepgram_service: DeepgramService = Depends(),
 ) -> InfoResponse[VoiceRead]:
     user_id = request.state.user_id
     voice_dao = VoiceDAO(session)
-
     new_el_voice_id: Optional[str] = None
+    voice_language: Optional[str] = request_data.language
+
     try:
+        if not voice_language:
+            try:
+                detected_language = deepgram_service.detect_language_from_text(
+                    request_data.voice_description,
+                )
+                voice_language = detected_language or "en"
+            except DeepgramAPIError as e:
+                logging.error(
+                    f"Deepgram API error during design/create language detection: {e.detail}",
+                )
+                raise HTTPException(
+                    status_code=e.status_code,
+                    detail=f"Language detection failed: {e.detail}",
+                )
+
         # Step 1: Call ElevenLabs to create the voice from the generated_voice_id
         el_created_voice_data = elevenlabs_service.create_voice_from_generated_id(
             voice_name=request_data.voice_name,
@@ -1646,7 +1689,7 @@ async def design_voice_create_from_preview_endpoint(
             name=request_data.voice_name,
             description=request_data.voice_description
             or f"Designed voice: {request_data.voice_name}",
-            language=request_data.language,
+            language=voice_language,
             gender=request_data.gender,
             provider="elevenlabs",
         )
@@ -1666,13 +1709,18 @@ async def design_voice_create_from_preview_endpoint(
             ),
         )
 
-    except (ElevenLabsAPIError) as e:
+    except (ElevenLabsAPIError, DeepgramAPIError) as e:
         session.rollback()
-        # If EL voice was created but DB save failed, we might have an orphan EL voice.
-        # Attempt to delete it from EL if `new_el_voice_id` was obtained.
-        if (
-            new_el_voice_id and e.status_code != status.HTTP_402_PAYMENT_REQUIRED
-        ):  # Don't delete if it was a credit issue before EL call
+        service_name = "External service"
+        should_cleanup_el = isinstance(e, ElevenLabsAPIError)
+
+        if isinstance(e, ElevenLabsAPIError):
+            service_name = "ElevenLabs"
+        elif isinstance(e, DeepgramAPIError):
+            service_name = "Language Detection"
+            should_cleanup_el = False  # Don't cleanup if EL was never called
+
+        if new_el_voice_id and should_cleanup_el:
             try:
                 logging.warning(
                     f"Attempting to clean up orphaned ElevenLabs voice {new_el_voice_id} due to error: {e.detail}",
@@ -1683,11 +1731,11 @@ async def design_voice_create_from_preview_endpoint(
                     f"Failed to cleanup orphaned ElevenLabs voice {new_el_voice_id}: {e_cleanup}",
                 )
         logging.error(
-            f"ElevenLabs voice creation from preview error for user {user_id}: {e.detail}",
+            f"{service_name} error during voice creation from preview for user {user_id}: {e.detail}",
         )
         raise HTTPException(
             status_code=e.status_code,
-            detail=f"ElevenLabs API error: {e.detail}",
+            detail=f"{service_name} API error: {e.detail}",
         )
     except IntegrityError as e_db:
         session.rollback()
