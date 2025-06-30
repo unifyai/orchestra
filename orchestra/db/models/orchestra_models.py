@@ -676,8 +676,7 @@ class Context(Base):
     updated_at = Column(TIMESTAMP, onupdate=func.now())
     is_versioned = Column(Boolean, nullable=False, server_default="f")
     allow_duplicates = Column(Boolean, nullable=False, server_default="t")
-    unique_id_column = Column(Boolean, nullable=False, server_default="f")
-    unique_id_names = Column(JSONB, nullable=False, server_default='"row_id"')
+    unique_id_names = Column(JSONB, nullable=False, server_default="[]")
 
     project = relationship("Project", back_populates="contexts")
     log_events = relationship(
