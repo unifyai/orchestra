@@ -387,13 +387,13 @@ async def test_complex_join_expression(client: AsyncClient):
         "columns": ["A.user_id", "A.new_field", "A.field_A", "B.field_B"],
     }
     response = await client.post("/v0/logs/join", json=join_payload, headers=HEADERS)
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
 
     response = await client.get(
         f"/v0/logs?project={project_name}&context={joined_context}",
         headers=HEADERS,
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     logs = response.json().get("logs", [])
     assert isinstance(logs, list) and len(logs) == 1
 
@@ -489,13 +489,13 @@ async def test_join_without_columns_arg(client: AsyncClient):
         # No "columns" key specified
     }
     response = await client.post("/v0/logs/join", json=payload, headers=HEADERS)
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
 
     response = await client.get(
         f"/v0/logs?project={project_name}&context={joined_context}",
         headers=HEADERS,
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     logs = response.json().get("logs", [])
     assert len(logs) == 1
 
