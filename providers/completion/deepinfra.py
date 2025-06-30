@@ -31,7 +31,7 @@ supported_models = {
     "deepseek-v3-0324": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3-0324",
         "context_window": 160000,
-        "cost": {"prompt": 0.3, "completion": 0.88},
+        "cost": {"prompt": 0.28, "completion": 0.88},
     },
     "deepseek-r1": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-R1-0528",
@@ -66,7 +66,7 @@ supported_models = {
     "llama-3.2-3b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.2-3B-Instruct",
         "context_window": 128000,
-        "cost": {"prompt": 0.01, "completion": 0.02},
+        "cost": {"prompt": 0.003, "completion": 0.006},
     },
     "llama-3.2-11b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.2-11B-Vision-Instruct",
@@ -93,11 +93,6 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 0.12, "completion": 0.30},
     },
-    "llama-3.1-405b-chat": {
-        "endpoint": "deepinfra/meta-llama/Meta-Llama-3.1-405B-Instruct",
-        "context_window": 32000,
-        "cost": {"prompt": 0.8, "completion": 0.8},
-    },
     "llama-3-8b-chat": {
         "endpoint": "deepinfra/meta-llama/Meta-Llama-3-8B-Instruct",
         "context_window": 8000,
@@ -111,7 +106,7 @@ supported_models = {
     "gemma-3-27b-it": {
         "endpoint": "deepinfra/google/gemma-3-27b-it",
         "context_window": 128000,
-        "cost": {"prompt": 0.1, "completion": 0.2},
+        "cost": {"prompt": 0.1, "completion": 0.19},
     },
     "gemma-3-12b-it": {
         "endpoint": "deepinfra/google/gemma-3-12b-it",
@@ -141,7 +136,7 @@ supported_models = {
     "mistral-nemo": {
         "endpoint": "deepinfra/mistralai/Mistral-Nemo-Instruct-2407",
         "context_window": 128000,
-        "cost": {"prompt": 0.01, "completion": 0.019},
+        "cost": {"prompt": 0.01, "completion": 0.011},
     },
     "qwen-3-235b-a22b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen3-235B-A22B",
@@ -171,6 +166,6 @@ supported_models = {
     "qwen-qwq-32b": {
         "endpoint": "deepinfra/Qwen/QwQ-32B",
         "context_window": 128000,
-        "cost": {"prompt": 0.15, "completion": 0.2},
+        "cost": {"prompt": 0.075, "completion": 0.15},
     },
 }
