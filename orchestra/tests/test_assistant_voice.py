@@ -849,7 +849,7 @@ async def test_design_create_from_preview_autodetect_language_success(
     assert data["name"] == "Spanish Robot Voice"
 
     openai_mock.detect_language_from_text.assert_called_once_with(
-        text=payload["voice_description"],
+        payload["voice_description"],
     )
     elevenlabs_mock.create_voice_from_generated_id.assert_called_once()
 
