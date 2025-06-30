@@ -491,6 +491,7 @@ def admin_list_assistants(
                     created_at=a.created_at,
                     updated_at=a.updated_at,
                     phone=a.phone,
+                    user_phone=a.user_phone,
                     email=a.email,
                     whatsapp_sid=a.whatsapp_sid,
                     voice_id=a.voice_id,
