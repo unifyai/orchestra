@@ -84,8 +84,8 @@ def mock_tts_services_factory(fastapi_app):
     }
 
     # Language detection mock
-    deepgram_mock.analyze_audio.return_value = "en"
-    deepgram_mock.analyze_text.return_value = "en"
+    deepgram_mock.detect_language_from_audio.return_value = "en"
+    deepgram_mock.detect_language_from_text.return_value = "en"
 
     # Patch send_pubsub_msg where it's looked up by the middleware's log_production_traffic function.
     # The log_production_traffic function is in the same module as ProductionTrafficMiddleware,
@@ -551,7 +551,9 @@ async def test_clone_voice_autodetect_language(
     mock_tts_services_factory: MagicMock,
 ):
     cartesia_mock, _, deepgram_mock = mock_tts_services_factory
-    deepgram_mock.analyze_audio.return_value = "fr"  # test with a different lang
+    deepgram_mock.detect_language_from_audio.return_value = (
+        "fr"  # test with a different lang
+    )
     user_id = await get_user_id_from_request_state(client)
     sample_audio_bytes = _get_sample_wav_bytes()
 
@@ -579,8 +581,9 @@ async def test_clone_voice_autodetect_language(
     cloned_voice_data = resp.json()["info"]
     assert cloned_voice_data["language"] == "fr"
 
-    deepgram_mock.analyze_audio.assert_called_once_with(
-        sample_audio_bytes, "audio/wav",
+    deepgram_mock.detect_language_from_audio.assert_called_once_with(
+        sample_audio_bytes,
+        "audio/wav",
     )
     cartesia_mock.clone_voice.assert_called_once_with(
         file_content=sample_audio_bytes,
