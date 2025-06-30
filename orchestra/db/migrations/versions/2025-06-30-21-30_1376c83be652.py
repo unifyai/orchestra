@@ -1,16 +1,16 @@
 """added default_hidden_columns field to table tile
 
-Revision ID: a007b080a491
-Revises: d9b3c968c46c
-Create Date: 2025-06-30 17:11:26.517942
+Revision ID: 1376c83be652
+Revises: 74dded9a9283
+Create Date: 2025-06-30 21:30:08.884069
 
 """
 import sqlalchemy as sa
 from alembic import op
 
 # revision identifiers, used by Alembic.
-revision = "a007b080a491"
-down_revision = "d9b3c968c46c"
+revision = "1376c83be652"
+down_revision = "74dded9a9283"
 branch_labels = None
 depends_on = None
 
