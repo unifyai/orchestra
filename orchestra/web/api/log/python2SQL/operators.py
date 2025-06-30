@@ -494,8 +494,11 @@ def _handle_comparison_operator(
     elif (
         operand in ("==", "!=")
         and lval_type == "list"
+        and isinstance(rhs_sql, BindParameter)
         and isinstance(rhs_sql.value, list)
     ):
+        # Explicitly cast lval to JSONB to ensure correct comparison operator
+        lval = cast(lval, JSONB)
         # Cast the Python list literal to JSONB for correct comparison
         rval_as_jsonb = cast(literal(json.dumps(rhs_sql.value)), JSONB)
         expr = (lval == rval_as_jsonb) if operand == "==" else (lval != rval_as_jsonb)
@@ -798,8 +801,19 @@ def _handle_index_operator(
             session,
             is_collection=is_collection,
         )
-        if isinstance(rhs_expr, Subquery):
+
+        # If the LHS type does not support indexing, the result is None.
+        if lhs_type not in ("list", "dict", "str"):
+            extracted = literal(None)
+            inferred_type = "NoneType"
+        elif isinstance(rhs_expr, Subquery):
             rhs_valcol, rhs_type = _select_value(rhs_expr, session)
+            extracted = func.jsonb_extract_path(
+                lhs_valcol,
+                func.cast(rhs_valcol, String),
+            )
+            inferred_type = rhs_type
+            # The subquery needs to be joined. We build a new subquery for that.
             select_cols = [lhs_expr.c.log_event_id.label("log_event_id")]
             if "__comp_idx__" in lhs_expr.c.keys():
                 select_cols.append(lhs_expr.c.__comp_idx__.label("__comp_idx__"))
@@ -807,11 +821,8 @@ def _handle_index_operator(
                 select_cols.append(lhs_expr.c.__parent_idx__.label("__parent_idx__"))
             select_cols.extend(
                 [
-                    func.jsonb_extract_path(
-                        lhs_valcol,
-                        func.cast(rhs_valcol, String),
-                    ).label("value"),
-                    literal(rhs_type).label("inferred_type"),
+                    extracted.label("value"),
+                    literal(inferred_type).label("inferred_type"),
                 ],
             )
             return (
@@ -826,63 +837,43 @@ def _handle_index_operator(
             )
             if lhs_type == "str":
                 # For strings, we need to use PostgreSQL's substring function
-                # PostgreSQL is 1-indexed, so we need to adjust the index
                 if isinstance(rhs_expr, int):
-                    # Convert 0-indexed to 1-indexed for PostgreSQL
-                    pg_index = rhs_expr + 1
-                    extracted = func.substring(
-                        func.replace(cast(lhs_valcol, String), '"', ""),
-                        literal(pg_index),
-                        literal(1),
-                    )
-                elif isinstance(rhs_expr, BindParameter) and isinstance(
-                    rhs_expr.value,
-                    int,
-                ):
-                    # Convert 0-indexed to 1-indexed for PostgreSQL
-                    pg_index = rhs_expr.value + 1
+                    pg_index = rhs_expr + 1  # Convert 0-indexed to 1-indexed
                     extracted = func.substring(
                         func.replace(cast(lhs_valcol, String), '"', ""),
                         literal(pg_index),
                         literal(1),
                     )
                 else:
-                    # If it's not a simple integer index, try to cast it
                     extracted = func.substring(
                         func.replace(cast(lhs_valcol, String), '"', ""),
                         cast(rhs_expr, Integer) + 1,
                         literal(1),
                     )
-            # Standard JSONB indexing for non-string types
-            elif isinstance(rhs_expr, int):
-                extracted = lhs_valcol[rhs_expr]  # Postgres list indexing
-            elif isinstance(rhs_expr, str):
-                extracted = lhs_valcol[rhs_expr]  # Postgres dict indexing
+            # Standard JSONB indexing for list/dict
             else:
-                # fallback
                 extracted = lhs_valcol[rhs_expr]
 
             result = session.execute(select(extracted)).first()[0]
             inferred_type = LogDAO.infer_type("", result)
-            select_cols = [lhs_expr.c.log_event_id.label("log_event_id")]
-            if "__comp_idx__" in lhs_expr.c.keys():
-                select_cols.append(lhs_expr.c.__comp_idx__.label("__comp_idx__"))
-            if "__parent_idx__" in lhs_expr.c.keys():
-                select_cols.append(lhs_expr.c.__parent_idx__.label("__parent_idx__"))
-            select_cols.extend(
-                [
-                    extracted.label("value"),
-                    literal(inferred_type).label("inferred_type"),
-                ],
-            )
-            return select(*select_cols).select_from(lhs_expr).subquery()
+
+        select_cols = [lhs_expr.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in lhs_expr.c.keys():
+            select_cols.append(lhs_expr.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in lhs_expr.c.keys():
+            select_cols.append(lhs_expr.c.__parent_idx__.label("__parent_idx__"))
+        select_cols.extend(
+            [
+                extracted.label("value"),
+                literal(inferred_type).label("inferred_type"),
+            ],
+        )
+        return select(*select_cols).select_from(lhs_expr).subquery()
 
     else:
         # If LHS is not a subquery => e.g. LHS is a python dict or list literal
         if isinstance(lhs_expr, (dict, list)):
-            # Then we do a python-level extraction if the rhs is also python-literal
             if isinstance(rhs_expr, (int, str)):
-                # Just do dictionary or list indexing:
                 try:
                     extracted_value = lhs_expr[rhs_expr]
                 except (KeyError, IndexError, TypeError):
