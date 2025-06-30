@@ -31,6 +31,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
+from sqlalchemy.sql.elements import ColumnClause
 from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.dao.log_dao import LogDAO
@@ -154,62 +155,85 @@ def _substitute_placeholders(equation: str, single_ref: dict) -> tuple:
 def _select_value(subq, session, is_collection=False, is_vector=False):
     """
     Helper function to select the appropriate value column from a subquery.
-    Prioritizes 'value' if it exists, otherwise selects based on inferred types.
+    This version is deterministic, unifying all possible types in a subquery.
     """
     try:
         if isinstance(subq, BindParameter):
             return subq.value, LogDAO.infer_type("", subq.value)
         if hasattr(subq, "element") and subq.name == "reduction_metric":
             return subq.element, "float"
-        if isinstance(subq, Subquery) and hasattr(subq.c, "value"):
-            if is_collection:
-                # the assumption here is lists/dicts to have a single consistent type
-                # so we can just check the first element
-                first_elem = session.execute(
-                    select(subq.c.value).limit(1),
-                ).scalar()  # Use scalar() to get a single value or None
-                dt = LogDAO.infer_type("", first_elem)
-            else:
-                dt = session.execute(
-                    select(subq.c.inferred_type).limit(1),
-                ).scalar()  # Use scalar() to get a single value or None
-            return subq.c.value, dt
 
-        if hasattr(subq, "c") and hasattr(subq.c, "inferred_type"):
-            dt = session.execute(
-                select(subq.c.inferred_type)
-                .where(subq.c.inferred_type != "NoneType")
-                .limit(1),
-            ).first()  # execute the subquery to determine the type.
-        else:
+        if isinstance(subq, ColumnClause):
+            # TODO(yusha): this is a hack to get the type of the column (susceptible to SQL ordering non-determinism)
+            # we should have a better way to do this.
             dt = session.execute(select(subq).limit(1)).first()
-
-        if is_vector:
-            dt = "vector"
-        elif dt is None:
-            dt = "NoneType"
-        else:
             dt = dt[-1]
-        if not isinstance(subq, Subquery):
             return subq, LogDAO.infer_type("", dt)
-        d = {
-            "int": subq.c.int_value,
-            "float": subq.c.float_value,
-            "bool": subq.c.bool_value,
-            "str": subq.c.str_value,
-            "datetime": subq.c.timestamp_value,
-            "time": subq.c.time_value,
-            "date": subq.c.date_value,
-            "timedelta": subq.c.timedelta_value,
-            "list": subq.c.jsonb_value,
-            "dict": subq.c.jsonb_value,
-            "vector": subq.c.vector_value,
-            "NoneType": subq.c.int_value,
-            "image": subq.c.str_value,
-        }
-        return d[dt], dt
-    except:
+
+        if isinstance(subq, Subquery):
+            dt = None
+            # Subqueries with a single 'value' column (results of functions, operations)
+            if hasattr(subq.c, "value"):
+                distinct_types_rows = session.execute(
+                    select(subq.c.inferred_type).distinct(),
+                ).fetchall()
+                distinct_types = [
+                    row[0]
+                    for row in distinct_types_rows
+                    if row[0] not in (None, "NoneType")
+                ]
+
+                if not distinct_types:
+                    dt = "NoneType"
+                elif len(distinct_types) == 1:
+                    dt = distinct_types[0]
+                else:
+                    dt = functools.reduce(unify_inferred_types, distinct_types)
+                return subq.c.value, dt
+
+            # Subqueries with multiple typed columns (from _build_subquery_for_identifier)
+            elif hasattr(subq.c, "inferred_type"):
+                distinct_types_rows = session.execute(
+                    select(subq.c.inferred_type).distinct(),
+                ).fetchall()
+                distinct_types = [
+                    row[0]
+                    for row in distinct_types_rows
+                    if row[0] not in (None, "NoneType")
+                ]
+
+                if not distinct_types:
+                    dt = "NoneType"
+                elif len(distinct_types) == 1:
+                    dt = distinct_types[0]
+                else:
+                    dt = functools.reduce(unify_inferred_types, distinct_types)
+
+                type_to_col_map = {
+                    "int": subq.c.int_value,
+                    "float": subq.c.float_value,
+                    "bool": subq.c.bool_value,
+                    "str": subq.c.str_value,
+                    "datetime": subq.c.timestamp_value,
+                    "time": subq.c.time_value,
+                    "date": subq.c.date_value,
+                    "timedelta": subq.c.timedelta_value,
+                    "list": subq.c.jsonb_value,
+                    "dict": subq.c.jsonb_value,
+                    "vector": subq.c.vector_value,
+                    "image": subq.c.str_value,
+                    "NoneType": subq.c.int_value,  # Fallback, value will be NULL
+                }
+                if is_vector:
+                    dt = "vector"
+                return type_to_col_map.get(dt), dt
+
+        if not isinstance(subq, Subquery):
+            return subq, LogDAO.infer_type("", subq)
+
+    except Exception:
         return None, None
+    return None, None
 
 
 def unify_inferred_types(t1: str, t2: str) -> str:
