@@ -1490,6 +1490,7 @@ async def test_import_tab_template_with_valid_schema_complex_tiles(client: Async
                     "page_number": "3",
                     "column_order": '["id", "name", "value", "timestamp"]',
                     "hidden_columns": '["internal_id"]',
+                    "default_hidden_columns": False,
                     "sorting": '{"timestamp": "desc", "value": "asc"}',
                     "group_sorting": '{"category": "asc"}',
                     "columns_pin_left": '["id", "name"]',
@@ -1586,6 +1587,7 @@ async def test_import_tab_template_with_valid_schema_complex_tiles(client: Async
     assert table_config["page_number"] == "3"
     assert "id" in table_config["column_order"]
     assert "internal_id" in table_config["hidden_columns"]
+    assert table_config["default_hidden_columns"] is False
 
     # Verify plot configuration
     plot_tile = next(

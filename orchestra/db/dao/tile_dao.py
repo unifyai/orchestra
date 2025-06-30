@@ -704,6 +704,7 @@ class TileDAO:
         page_number: Optional[str] = None,
         column_order: Optional[str] = None,
         hidden_columns: Optional[str] = None,
+        default_hidden_columns: bool = True,
         sorting: Optional[str] = None,
         grouping: Optional[str] = None,
         group_sorting: Optional[str] = None,
@@ -751,6 +752,7 @@ class TileDAO:
                 page_number=page_number,
                 column_order=column_order,
                 hidden_columns=hidden_columns,
+                default_hidden_columns=default_hidden_columns,
                 sorting=sorting,
                 group_sorting=group_sorting,
                 columns_pin_left=columns_pin_left,
@@ -819,6 +821,7 @@ class TileDAO:
         page_number: Optional[str] = None,
         column_order: Optional[str] = None,
         hidden_columns: Optional[str] = None,
+        default_hidden_columns: Optional[bool] = None,
         sorting: Optional[str] = None,
         group_sorting: Optional[str] = None,
         columns_pin_left: Optional[str] = None,
@@ -850,6 +853,8 @@ class TileDAO:
             table_tile.column_order = column_order
         if hidden_columns is not None:
             table_tile.hidden_columns = hidden_columns
+        if default_hidden_columns is not None:
+            table_tile.default_hidden_columns = default_hidden_columns
         if sorting is not None:
             table_tile.sorting = sorting
         if group_sorting is not None:
@@ -1759,6 +1764,7 @@ class TileDAO:
                     page_number=source_tile.table_tile.page_number,
                     column_order=source_tile.table_tile.column_order,
                     hidden_columns=source_tile.table_tile.hidden_columns,
+                    default_hidden_columns=source_tile.table_tile.default_hidden_columns,
                     sorting=source_tile.table_tile.sorting,
                     group_sorting=source_tile.table_tile.group_sorting,
                     columns_pin_left=source_tile.table_tile.columns_pin_left,
@@ -1775,6 +1781,7 @@ class TileDAO:
                     page_number=source_tile.table_tile.page_number,
                     column_order=source_tile.table_tile.column_order,
                     hidden_columns=source_tile.table_tile.hidden_columns,
+                    default_hidden_columns=source_tile.table_tile.default_hidden_columns,
                     sorting=source_tile.table_tile.sorting,
                     group_sorting=source_tile.table_tile.group_sorting,
                     columns_pin_left=source_tile.table_tile.columns_pin_left,
@@ -2175,6 +2182,7 @@ class TileDAO:
                                 "page_number": tt.page_number,
                                 "column_order": tt.column_order,
                                 "hidden_columns": tt.hidden_columns,
+                                "default_hidden_columns": tt.default_hidden_columns,
                                 "sorting": tt.sorting,
                                 "group_sorting": tt.group_sorting,
                                 "columns_pin_left": tt.columns_pin_left,
@@ -2191,6 +2199,7 @@ class TileDAO:
                                 "page_number": tt.page_number,
                                 "column_order": tt.column_order,
                                 "hidden_columns": tt.hidden_columns,
+                                "default_hidden_columns": tt.default_hidden_columns,
                                 "sorting": tt.sorting,
                                 "group_sorting": tt.group_sorting,
                                 "columns_pin_left": tt.columns_pin_left,

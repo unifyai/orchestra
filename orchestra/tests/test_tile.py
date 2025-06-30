@@ -209,6 +209,7 @@ async def _create_test_table_tile(
     page_number=None,
     column_order=None,
     hidden_columns=None,
+    default_hidden_columns=None,
     sorting=None,
     group_sorting=None,
     columns_pin_left=None,
@@ -226,6 +227,7 @@ async def _create_test_table_tile(
         page_number: Page number
         column_order: Column order data
         hidden_columns: Hidden columns data
+        default_hidden_columns: Default hidden columns boolean
         sorting: Sorting data
         group_sorting: Group sorting data
         columns_pin_left: Columns pinned to left
@@ -239,6 +241,7 @@ async def _create_test_table_tile(
         "page_number": page_number,
         "column_order": column_order,
         "hidden_columns": hidden_columns,
+        "default_hidden_columns": default_hidden_columns,
         "sorting": sorting,
         "group_sorting": group_sorting,
         "columns_pin_left": columns_pin_left,
@@ -2039,6 +2042,7 @@ async def test_export_tile_template_with_valid_schema(client: AsyncClient):
         page_number="3",
         column_order='["id", "name", "value", "timestamp"]',
         hidden_columns='["internal_id", "temp_field"]',
+        default_hidden_columns=False,
         sorting='{"timestamp": "desc", "value": "asc"}',
         group_sorting='{"category": "asc"}',
         columns_pin_left='["id", "name"]',
@@ -2095,6 +2099,7 @@ async def test_export_tile_template_with_valid_schema(client: AsyncClient):
     assert table_data["page_number"] == "3"
     assert "id" in table_data["column_order"]
     assert "internal_id" in table_data["hidden_columns"]
+    assert table_data["default_hidden_columns"] is False
     assert table_data["selected"] == "row_1,row_3,row_7"
 
     # Verify export stats
@@ -2355,6 +2360,7 @@ async def test_import_tile_template_with_valid_schema(client: AsyncClient):
             "page_number": "2",
             "column_order": '["id", "name", "status"]',
             "hidden_columns": '["internal_notes"]',
+            "default_hidden_columns": False,
             "sorting": '{"name": "asc"}',
             "group_sorting": '{"status": "desc"}',
             "columns_pin_left": '["id"]',
@@ -2404,6 +2410,7 @@ async def test_import_tile_template_with_valid_schema(client: AsyncClient):
     assert table_data["page_number"] == "2"
     assert "id" in table_data["column_order"]
     assert "internal_notes" in table_data["hidden_columns"]
+    assert table_data["default_hidden_columns"] is False
     assert table_data["selected"] == "row_2,row_4,row_6"
 
 
