@@ -157,12 +157,13 @@ class Settings(BaseSettings):
         "/secrets/gcp/mail_sender_service_account_key.json",
     )
 
-    # Variables for Cartesia voice management
+    # Variables for voice management
+    selected_voice_provider: Optional[str] = "elevenlabs"
     cartesia_api_key: Optional[str] = os.environ.get("CARTESIA_API_KEY")
     cartesia_api_version: Optional[str] = os.environ.get("CARTESIA_API_VERSION")
-
-    # Variables for ElevenLabs voice management
     elevenlabs_api_key: Optional[str] = os.environ.get("ELEVENLABS_API_KEY")
+    deepgram_api_key: Optional[str] = os.environ.get("DEEPGRAM_API_KEY")
+    openai_api_key: Optional[str] = None  # Populated by model_config below
 
     # Assistant creation
     assistant_creation_cost: float = 10.0

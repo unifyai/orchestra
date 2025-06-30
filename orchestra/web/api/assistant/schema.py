@@ -511,10 +511,9 @@ class VoiceDesignCreateFromPreviewRequest(BaseModel):
         None,
         description="Optional labels for ElevenLabs when creating the voice.",
     )
-    # Orchestra voice inputs, not strictly needed for ElevenLabs endpoint
-    language: str = Field(
-        ...,
-        description="Language of the voice.",
+    language: Optional[str] = Field(
+        None,
+        description="Language of the voice. If not provided, it will be auto-detected from the voice_description.",
     )
     gender: Optional[str] = Field(
         None,

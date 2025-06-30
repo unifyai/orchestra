@@ -27,7 +27,9 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.call_recording_service import CallRecordingService
 from orchestra.services.cartesia_service import CartesiaAPIError, CartesiaService
+from orchestra.services.deepgram_service import DeepgramAPIError, DeepgramService
 from orchestra.services.elevenlabs_service import ElevenLabsAPIError, ElevenLabsService
+from orchestra.services.openai_service import OpenAIAPIError, OpenAIService
 from orchestra.services.replicate_service import ReplicateAPIError, ReplicateService
 from orchestra.settings import settings
 from orchestra.web.api.assistant.schema import (
@@ -614,7 +616,7 @@ def delete_assistant(
         # Delete GCS profile photo if it exists and is a GCS URL from the assistant images bucket
         if assistant.profile_photo and assistant.profile_photo.startswith("gs://"):
             try:
-                deleted_from_gcs = bucket_service.delete_assistant_photo(
+                deleted_from_gcs = bucket_service.delete_assistant_file(
                     assistant.profile_photo,
                 )
                 if not deleted_from_gcs:
@@ -1167,8 +1169,9 @@ async def clone_voice(
     session: Session = Depends(get_db_session),
     cartesia_service: CartesiaService = Depends(),
     elevenlabs_service: ElevenLabsService = Depends(),
+    deepgram_service: DeepgramService = Depends(),
     name: str = Form(..., example="My Voice Clone"),
-    language: str = Form(..., example="en"),
+    language: Optional[str] = Form(None, example="en"),
     description: Optional[str] = Form(None, example="A cloned voice for my assistant"),
     gender: Optional[str] = Form(None, example="female"),
     provider: str = Form("cartesia"),
@@ -1177,15 +1180,33 @@ async def clone_voice(
     user_id = request.state.user_id
     voice_dao = VoiceDAO(session)
     new_voice_id: Optional[str] = None
+    voice_language: Optional[str] = language
 
     try:
         file_content = await file.read()
+        if not voice_language:
+            try:
+                detected_language = deepgram_service.detect_language_from_audio(
+                    file_content,
+                    user_id,
+                    file.content_type,
+                )
+                voice_language = detected_language or "en"
+            except DeepgramAPIError as e:
+                logging.error(
+                    f"Deepgram API error during voice clone language detection: {e.detail}",
+                )
+                raise HTTPException(
+                    status_code=e.status_code,
+                    detail=f"Language detection failed: {e.detail}",
+                )
+
         if provider == "cartesia":
             cartesia_response = cartesia_service.clone_voice(
                 file_content=file_content,
                 file_name=file.filename or "audio_clip_default_name",
                 name=name,
-                language=language,
+                language=voice_language,
                 description=description,
             )
             new_voice_id = cartesia_response.get("id")
@@ -1212,7 +1233,7 @@ async def clone_voice(
             name=name,
             description=description or f"Cloned voice: {name}",
             gender=gender,
-            language=language,
+            language=voice_language,
             provider=provider,
         )
         if provider == "cartesia" and not gender:
@@ -1232,11 +1253,18 @@ async def clone_voice(
             ),
         )
 
-    except (CartesiaAPIError, ElevenLabsAPIError) as e:
+    except (CartesiaAPIError, ElevenLabsAPIError, DeepgramAPIError) as e:
         session.rollback()
+        service_name = "External service"
+        if isinstance(e, CartesiaAPIError):
+            service_name = "Cartesia"
+        elif isinstance(e, ElevenLabsAPIError):
+            service_name = "ElevenLabs"
+        elif isinstance(e, DeepgramAPIError):
+            service_name = "Language Detection"
         raise HTTPException(
             status_code=e.status_code,
-            detail=f"{provider.capitalize()} API error: {e.detail}",
+            detail=f"{service_name} API error: {e.detail}",
         )
     except IntegrityError as e_db_integrity:
         session.rollback()
@@ -1617,12 +1645,29 @@ async def design_voice_create_from_preview_endpoint(
     request: Request,
     session: Session = Depends(get_db_session),
     elevenlabs_service: ElevenLabsService = Depends(),
+    openai_service: OpenAIService = Depends(),
 ) -> InfoResponse[VoiceRead]:
     user_id = request.state.user_id
     voice_dao = VoiceDAO(session)
-
     new_el_voice_id: Optional[str] = None
+    voice_language: Optional[str] = request_data.language
+
     try:
+        if not voice_language:
+            try:
+                detected_language = openai_service.detect_language_from_text(
+                    request_data.voice_description,
+                )
+                voice_language = detected_language or "en"
+            except OpenAIAPIError as e:
+                logging.error(
+                    f"OpenAI API error during design/create language detection: {e.detail}",
+                )
+                raise HTTPException(
+                    status_code=e.status_code,
+                    detail=f"Language detection failed: {e.detail}",
+                )
+
         # Step 1: Call ElevenLabs to create the voice from the generated_voice_id
         el_created_voice_data = elevenlabs_service.create_voice_from_generated_id(
             voice_name=request_data.voice_name,
@@ -1646,7 +1691,7 @@ async def design_voice_create_from_preview_endpoint(
             name=request_data.voice_name,
             description=request_data.voice_description
             or f"Designed voice: {request_data.voice_name}",
-            language=request_data.language,
+            language=voice_language,
             gender=request_data.gender,
             provider="elevenlabs",
         )
@@ -1666,13 +1711,18 @@ async def design_voice_create_from_preview_endpoint(
             ),
         )
 
-    except (ElevenLabsAPIError) as e:
+    except (ElevenLabsAPIError, OpenAIAPIError) as e:
         session.rollback()
-        # If EL voice was created but DB save failed, we might have an orphan EL voice.
-        # Attempt to delete it from EL if `new_el_voice_id` was obtained.
-        if (
-            new_el_voice_id and e.status_code != status.HTTP_402_PAYMENT_REQUIRED
-        ):  # Don't delete if it was a credit issue before EL call
+        service_name = "External service"
+        should_cleanup_el = isinstance(e, ElevenLabsAPIError)
+
+        if isinstance(e, ElevenLabsAPIError):
+            service_name = "ElevenLabs"
+        elif isinstance(e, OpenAIAPIError):
+            service_name = "Language Detection"
+            should_cleanup_el = False  # Don't cleanup if EL was never called
+
+        if new_el_voice_id and should_cleanup_el:
             try:
                 logging.warning(
                     f"Attempting to clean up orphaned ElevenLabs voice {new_el_voice_id} due to error: {e.detail}",
@@ -1683,11 +1733,11 @@ async def design_voice_create_from_preview_endpoint(
                     f"Failed to cleanup orphaned ElevenLabs voice {new_el_voice_id}: {e_cleanup}",
                 )
         logging.error(
-            f"ElevenLabs voice creation from preview error for user {user_id}: {e.detail}",
+            f"{service_name} error during voice creation from preview for user {user_id}: {e.detail}",
         )
         raise HTTPException(
             status_code=e.status_code,
-            detail=f"ElevenLabs API error: {e.detail}",
+            detail=f"{service_name} API error: {e.detail}",
         )
     except IntegrityError as e_db:
         session.rollback()
@@ -1921,7 +1971,7 @@ async def edit_assistant_photo(
             (
                 public_url,
                 gcs_url_for_delete,
-            ) = bucket_service.upload_temp_assistant_photo_file(
+            ) = bucket_service.upload_temp_assistant_file(
                 file_content,
                 user_id,
                 input_image_file.content_type,
@@ -1980,7 +2030,7 @@ async def edit_assistant_photo(
     finally:
         if temp_gcs_url_to_delete:
             try:
-                bucket_service.delete_assistant_photo(temp_gcs_url_to_delete)
+                bucket_service.delete_assistant_file(temp_gcs_url_to_delete)
                 logging.info(
                     f"Successfully deleted temporary file {temp_gcs_url_to_delete} for photo edit.",
                 )
@@ -2053,10 +2103,7 @@ async def animate_video_endpoint(
                     detail="Invalid file type for 'image_file'. Only images are allowed.",
                 )
             image_content = await image_file.read()
-            (
-                public_img_url,
-                gcs_img_url,
-            ) = bucket_service.upload_temp_assistant_photo_file(
+            (public_img_url, gcs_img_url) = bucket_service.upload_temp_assistant_file(
                 image_content,
                 user_id,
                 image_file.content_type,
@@ -2076,11 +2123,11 @@ async def animate_video_endpoint(
                     detail="Invalid file type for 'audio_file'. Only audio files are allowed.",
                 )
             audio_content = await audio_file.read()
-            # Reusing upload_temp_assistant_photo_file for audio, path is generic enough
+            # Reusing upload_temp_assistant_file for audio, path is generic enough
             (
                 public_audio_url,
                 gcs_audio_url,
-            ) = bucket_service.upload_temp_assistant_photo_file(
+            ) = bucket_service.upload_temp_assistant_file(
                 audio_content,
                 user_id,
                 audio_file.content_type,
@@ -2148,7 +2195,7 @@ async def animate_video_endpoint(
         # Cleanup temporary files from GCS
         if temp_image_gcs_url:
             try:
-                bucket_service.delete_assistant_photo(temp_image_gcs_url)
+                bucket_service.delete_assistant_file(temp_image_gcs_url)
                 logging.info(
                     f"Successfully deleted temporary image file {temp_image_gcs_url} for video animation.",
                 )
@@ -2158,9 +2205,9 @@ async def animate_video_endpoint(
                 )
         if temp_audio_gcs_url:
             try:
-                bucket_service.delete_assistant_photo(
+                bucket_service.delete_assistant_file(
                     temp_audio_gcs_url,
-                )  # Reusing delete_assistant_photo
+                )  # Reusing delete_assistant_file
                 logging.info(
                     f"Successfully deleted temporary audio file {temp_audio_gcs_url} for video animation.",
                 )
