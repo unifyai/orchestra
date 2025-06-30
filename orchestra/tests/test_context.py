@@ -1483,7 +1483,7 @@ async def test_rename_context(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_context_with_sequential_id(client: AsyncClient):
-    """Test that logs in a context with unique_id_column get a sequential ID."""
+    """Test that logs in a context with unique_column_ids get a sequential ID."""
     project_name = "sequential-id-project"
     context_name = "sequential-id-context"
     unique_id_names = "my_row_id"
@@ -1491,14 +1491,13 @@ async def test_context_with_sequential_id(client: AsyncClient):
     # Create project
     await _create_project(client, project_name)
 
-    # Create a context with unique_id_column enabled
+    # Create a context with unique_column_ids enabled
     response = await client.post(
         f"/v0/project/{project_name}/contexts",
         json={
             "name": context_name,
             "description": "Context with sequential IDs",
-            "unique_id_column": True,
-            "unique_id_names": unique_id_names,
+            "unique_column_ids": [unique_id_names],
         },
         headers=HEADERS,
     )
@@ -1538,7 +1537,7 @@ async def test_nested_ids_explicit_set_fails(client: AsyncClient):
     await _create_project(client, project_name)
     await client.post(
         f"/v0/project/{project_name}/contexts",
-        json={"name": context_name, "unique_id_names": unique_id_names},
+        json={"name": context_name, "unique_column_ids": unique_id_names},
         headers=HEADERS,
     )
 
@@ -1562,7 +1561,7 @@ async def test_nested_ids_non_existent_parent_fails(client: AsyncClient):
     await _create_project(client, project_name)
     await client.post(
         f"/v0/project/{project_name}/contexts",
-        json={"name": context_name, "unique_id_names": unique_id_names},
+        json={"name": context_name, "unique_column_ids": unique_id_names},
         headers=HEADERS,
     )
 
@@ -1588,7 +1587,7 @@ async def test_nested_unique_ids_increment(client: AsyncClient):
     await _create_project(client, project_name)
     await client.post(
         f"/v0/project/{project_name}/contexts",
-        json={"name": context_name, "unique_id_names": unique_id_names},
+        json={"name": context_name, "unique_column_ids": unique_id_names},
         headers=HEADERS,
     )
 
@@ -1596,14 +1595,14 @@ async def test_nested_unique_ids_increment(client: AsyncClient):
     res = await _create_log(client, project_name, context=context_name, params={})
     assert res.status_code == 200, res.text
     row_ids_data = res.json()["row_ids"]
-    assert row_ids_data["name"] == unique_id_names
+    assert row_ids_data["names"] == unique_id_names
     assert row_ids_data["ids"] == [[0, 0, 0]]
 
     # 2. Create second user
     res = await _create_log(client, project_name, context=context_name, params={})
     assert res.status_code == 200, res.text
     row_ids_data = res.json()["row_ids"]
-    assert row_ids_data["name"] == unique_id_names
+    assert row_ids_data["names"] == unique_id_names
     assert row_ids_data["ids"] == [[1, 0, 0]]
 
     # 3. Create a new session for user 0
@@ -1616,7 +1615,7 @@ async def test_nested_unique_ids_increment(client: AsyncClient):
     )
     assert res.status_code == 200, res.text
     row_ids_data = res.json()["row_ids"]
-    assert row_ids_data["name"] == unique_id_names
+    assert row_ids_data["names"] == unique_id_names
     assert row_ids_data["ids"] == [[0, 1, 0]]
 
     # 4. Create a new event for user 0, session 1
@@ -1629,7 +1628,7 @@ async def test_nested_unique_ids_increment(client: AsyncClient):
     )
     assert res.status_code == 200, res.text
     row_ids_data = res.json()["row_ids"]
-    assert row_ids_data["name"] == unique_id_names
+    assert row_ids_data["names"] == unique_id_names
     assert row_ids_data["ids"] == [[0, 1, 1]]
 
     # 5. Create another session for user 0
@@ -1642,7 +1641,7 @@ async def test_nested_unique_ids_increment(client: AsyncClient):
     )
     assert res.status_code == 200, res.text
     row_ids_data = res.json()["row_ids"]
-    assert row_ids_data["name"] == unique_id_names
+    assert row_ids_data["names"] == unique_id_names
     assert row_ids_data["ids"] == [[0, 2, 0]]
 
     # Fetch and verify final state
@@ -1669,7 +1668,7 @@ async def test_nested_ids_batch_creation(client: AsyncClient):
     await _create_project(client, project_name)
     await client.post(
         f"/v0/project/{project_name}/contexts",
-        json={"name": context_name, "unique_id_names": unique_id_names},
+        json={"name": context_name, "unique_column_ids": unique_id_names},
         headers=HEADERS,
     )
 
@@ -1677,7 +1676,7 @@ async def test_nested_ids_batch_creation(client: AsyncClient):
     res = await _create_log(client, project_name, context=context_name, params={})
     assert res.status_code == 200
     row_ids_data = res.json()["row_ids"]
-    assert row_ids_data["name"] == unique_id_names
+    assert row_ids_data["names"] == unique_id_names
     assert row_ids_data["ids"] == [[0, 0]]
 
     # Now, create a batch of 5 steps under run_id=0
@@ -1700,7 +1699,7 @@ async def test_nested_ids_batch_creation(client: AsyncClient):
 
     # Verify the response contains the standardized format for the batch
     row_ids_data = response_data["row_ids"]
-    assert row_ids_data["name"] == unique_id_names
+    assert row_ids_data["names"] == unique_id_names
 
     # The step_ids should start from 1 because step_id=0 was used when the parent was created.
     expected_ids = [[0, i] for i in range(1, batch_size + 1)]
@@ -1716,3 +1715,216 @@ async def test_nested_ids_batch_creation(client: AsyncClient):
     }
     expected_db_steps = set(range(batch_size + 1))
     assert db_step_ids == expected_db_steps
+
+
+@pytest.mark.anyio
+async def test_unique_column_ids_none_disables_unique_ids(client: AsyncClient):
+    """Test that unique_column_ids: None disables unique IDs."""
+    project_name = "no-unique-ids-project"
+    context_name = "no-unique-ids-context"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Create a context with unique_column_ids: None
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "description": "Context without unique IDs",
+            "unique_column_ids": None,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create logs in this context
+    for i in range(3):
+        log_response = await _create_log(
+            client,
+            project_name,
+            entries={"value": f"log-entry-{i}"},
+            context=context_name,
+        )
+        assert log_response.status_code == 200
+        # Verify no row_ids are returned
+        response_data = log_response.json()
+        assert "row_ids" not in response_data or response_data["row_ids"]["names"] == []
+
+    # Fetch the logs from the context
+    logs = await fetch_logs(client, project_name, context=context_name)
+
+    # Verify no unique ID columns were created
+    assert len(logs) == 3
+    for log in logs:
+        # Should not have any unique ID columns
+        assert "row_id" not in log["entries"]
+
+
+@pytest.mark.anyio
+async def test_unique_column_ids_empty_list_validation(client: AsyncClient):
+    """Test that unique_column_ids: [] is rejected with validation error."""
+    project_name = "empty-list-validation-project"
+    context_name = "empty-list-validation-context"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Try to create a context with empty list - should fail validation
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "description": "Context with empty unique_column_ids",
+            "unique_column_ids": [],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 422  # Validation error
+    assert "cannot be an empty list" in response.json()["detail"][0]["msg"]
+
+
+@pytest.mark.anyio
+async def test_single_column_returns_nested_format(client: AsyncClient):
+    """Test that single unique column returns nested format."""
+    project_name = "single-column-nested-project"
+    context_name = "single-column-nested-context"
+    unique_column_name = "sequence_id"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Create a context with single unique column
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "description": "Context with single unique column",
+            "unique_column_ids": [unique_column_name],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create multiple logs
+    for i in range(3):
+        log_response = await _create_log(
+            client,
+            project_name,
+            entries={"value": f"log-entry-{i}"},
+            context=context_name,
+        )
+        assert log_response.status_code == 200
+
+        # Verify response format is nested even for single column
+        row_ids_data = log_response.json()["row_ids"]
+        assert row_ids_data["names"] == [unique_column_name]
+        assert row_ids_data["ids"] == [[i]]  # Nested format: [[0]], [[1]], [[2]]
+
+    # Fetch the logs from the context
+    logs = await fetch_logs(client, project_name, context=context_name)
+
+    # Verify the logs have the correct unique IDs
+    assert len(logs) == 3
+    for i, log in enumerate(reversed(logs)):  # Reversed because of default sorting
+        assert unique_column_name in log["entries"]
+        assert log["entries"][unique_column_name] == i
+
+
+@pytest.mark.anyio
+async def test_invalid_column_names_validation(client: AsyncClient):
+    """Test validation of invalid column names."""
+    project_name = "invalid-names-project"
+    context_name = "invalid-names-context"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Test various invalid column names
+    invalid_names = [
+        ["invalid-name!"],  # Contains exclamation mark
+        ["invalid name"],  # Contains space
+        ["invalid.name"],  # Contains dot
+        ["invalid@name"],  # Contains at symbol
+        [""],  # Empty string
+        ["valid_name", "invalid-name!"],  # Mix of valid and invalid
+    ]
+
+    for invalid_name_list in invalid_names:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={
+                "name": f"{context_name}-{len(invalid_name_list)}",
+                "description": "Context with invalid column names",
+                "unique_column_ids": invalid_name_list,
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 422  # Validation error
+        error_detail = response.json()["detail"][0]["msg"]
+        assert (
+            "must contain only alphanumeric characters and underscores" in error_detail
+        )
+
+
+@pytest.mark.anyio
+async def test_duplicate_column_names_validation(client: AsyncClient):
+    """Test validation of duplicate column names."""
+    project_name = "duplicate-names-project"
+    context_name = "duplicate-names-context"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Try to create a context with duplicate column names
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "description": "Context with duplicate column names",
+            "unique_column_ids": [
+                "user_id",
+                "session_id",
+                "user_id",
+            ],  # Duplicate user_id
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 422  # Validation error
+    assert "cannot contain duplicate names" in response.json()["detail"][0]["msg"]
+
+
+@pytest.mark.anyio
+async def test_valid_column_names_accepted(client: AsyncClient):
+    """Test that valid column names are accepted."""
+    project_name = "valid-names-project"
+    context_name = "valid-names-context"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Test various valid column names
+    valid_names = [
+        ["user_id"],
+        ["user123"],
+        ["_private_id"],
+        ["ID"],
+        ["a"],
+        ["user_id", "session_id", "event_id"],
+        ["CamelCase", "snake_case", "UPPERCASE", "lowercase123"],
+    ]
+
+    for i, valid_name_list in enumerate(valid_names):
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={
+                "name": f"{context_name}-{i}",
+                "description": "Context with valid column names",
+                "unique_column_ids": valid_name_list,
+            },
+            headers=HEADERS,
+        )
+        assert (
+            response.status_code == 200
+        ), f"Failed for names: {valid_name_list}, response: {response.json()}"
+        assert "Context created successfully" in response.json()["info"]
