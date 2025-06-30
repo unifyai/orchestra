@@ -1,6 +1,6 @@
 import base64
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from fastapi import status
@@ -10,10 +10,14 @@ from orchestra.services.cartesia_service import CartesiaAPIError
 from orchestra.services.cartesia_service import (
     CartesiaService as OriginalCartesiaService,
 )
+from orchestra.services.deepgram_service import (
+    DeepgramService as OriginalDeepgramService,
+)
 from orchestra.services.elevenlabs_service import ElevenLabsAPIError
 from orchestra.services.elevenlabs_service import (
     ElevenLabsService as OriginalElevenLabsService,
 )
+from orchestra.services.openai_service import OpenAIService as OriginalOpenAIService
 from orchestra.tests.utils import HEADERS
 
 
@@ -36,12 +40,13 @@ def _get_dummy_base64_audio() -> str:
 @pytest.fixture(autouse=True)
 def mock_tts_services_factory(fastapi_app):
     """
-    Provides a mock TTS provider instance and overrides the dependency for FastAPI.
-    Yields the mock instance for tests to customize.
-    Also patches send_pubsub_msg from where it's called by the middleware.
+    Provides mock provider instances and overrides the dependencies for FastAPI.
+    Yields the mock instances for tests to customize.
     """
     cartesia_mock = MagicMock(spec=OriginalCartesiaService)
     elevenlabs_mock = MagicMock(spec=OriginalElevenLabsService)
+    deepgram_mock = MagicMock(spec=OriginalDeepgramService)
+    openai_mock = MagicMock(spec=OriginalOpenAIService)
 
     # Generate speech endpoint data
     mock_audio_bytes = b"mock_audio_data"
@@ -77,24 +82,28 @@ def mock_tts_services_factory(fastapi_app):
     }
     elevenlabs_mock.create_voice_from_generated_id.return_value = {
         "voice_id": "final_el_voice_id_abc_789",
-        # Potentially other fields like name, but service primarily uses voice_id
     }
 
+    # Language detection mocks
+    deepgram_mock.detect_language_from_audio.return_value = "en"
+    openai_mock.detect_language_from_text.return_value = "en"
+
     # Patch send_pubsub_msg where it's looked up by the middleware's log_production_traffic function.
-    # The log_production_traffic function is in the same module as ProductionTrafficMiddleware,
-    # and it calls send_pubsub_msg directly.
     with patch(
         "orchestra.web.api.utils.production_traffic_middleware.send_pubsub_msg",
     ) as mock_send_pubsub:
-
         fastapi_app.dependency_overrides[
             OriginalCartesiaService
         ] = lambda: cartesia_mock
         fastapi_app.dependency_overrides[
             OriginalElevenLabsService
         ] = lambda: elevenlabs_mock
+        fastapi_app.dependency_overrides[
+            OriginalDeepgramService
+        ] = lambda: deepgram_mock
+        fastapi_app.dependency_overrides[OriginalOpenAIService] = lambda: openai_mock
 
-        yield cartesia_mock, elevenlabs_mock
+        yield cartesia_mock, elevenlabs_mock, deepgram_mock, openai_mock
 
         fastapi_app.dependency_overrides.clear()
 
@@ -115,7 +124,7 @@ async def test_register_preset_voice(
     dbsession,
     mock_tts_services_factory,
 ):
-    cartesia_mock, _ = mock_tts_services_factory
+    _, _, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
     payload = {
         "voice_id": "cartesia-preset-echo",
@@ -149,7 +158,7 @@ async def test_register_non_preset_voice(
     dbsession,
     mock_tts_services_factory,
 ):
-    cartesia_mock, _ = mock_tts_services_factory
+    _, _, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
     payload = {
         "voice_id": "user-owned-cartesia-voice-123",
@@ -183,7 +192,7 @@ async def test_register_voice_already_exists_in_db(
     dbsession,
     mock_tts_services_factory,
 ):
-    cartesia_mock, _ = mock_tts_services_factory
+    _, _, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
     payload = {
         "voice_id": "db-conflict-voice",
@@ -222,7 +231,6 @@ async def test_register_voice_missing_required_field(
     # Payload missing 'name' which is required
     payload = {
         "voice_id": "schema-test-voice-invalid",
-        # "name": "A Valid Name", # Name is missing
         "description": "A voice for schema validation test.",
         "gender": "female",
         "language": "en",
@@ -256,7 +264,7 @@ async def test_delete_non_preset_voice(
     dbsession,
     mock_tts_services_factory,
 ):
-    cartesia_mock, _ = mock_tts_services_factory
+    cartesia_mock, _, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
     voice_id_to_delete = "delete-non-preset-test"
     reg_payload = {
@@ -290,7 +298,7 @@ async def test_delete_preset_voice(
     dbsession,
     mock_tts_services_factory,
 ):
-    cartesia_mock, _ = mock_tts_services_factory
+    cartesia_mock, _, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
     voice_id_to_delete = "delete-preset-registration-test"
     reg_payload = {
@@ -314,77 +322,6 @@ async def test_delete_preset_voice(
     assert resp_del.status_code == 200
     assert "deleted successfully" in resp_del.json()["info"].lower()
     cartesia_mock.delete_voice.assert_not_called()
-
-
-# @pytest.mark.anyio
-# async def test_delete_non_preset_voice_provider_api_error(
-#     client: AsyncClient,
-#     dbsession,
-#     mock_tts_services_factory,
-# ):
-#     cartesia_mock, _ = mock_tts_services_factory
-#     user_id = await get_user_id_from_request_state(client)
-#     voice_id_to_delete = "non-preset-voice-delete-fail"
-#
-#     # 1. Register a non-preset voice
-#     reg_payload = {
-#         "voice_id": voice_id_to_delete,
-#         "name": "To Del NP Fail",
-#         "description": "...",
-#         "gender": "male",
-#         "language": "es",
-#         "is_preset": False,
-#         "provider": "cartesia",
-#     }
-#     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
-#         mock_state.user_id = user_id
-#         reg_resp = await client.post(
-#             "/v0/assistant/voice",
-#             json=reg_payload,
-#             headers=HEADERS,
-#         )
-#         assert reg_resp.status_code == status.HTTP_201_CREATED
-#
-#     # 2. Mock Cartesia's delete_voice to fail with a non-404 error
-#     cartesia_mock.delete_voice.side_effect = CartesiaAPIError(
-#         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-#         detail="Cartesia delete service broken",
-#     )
-#
-#     # 3. Attempt to delete the voice
-#     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
-#         mock_state.user_id = user_id
-#         resp_del = await client.delete(
-#             f"/v0/assistant/voice/{voice_id_to_delete}",
-#             headers=HEADERS,
-#         )
-#
-#     assert resp_del.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
-#     assert (
-#         # "Failed to delete voice from Cartesia: Cartesia delete service broken" # Original
-#         "Failed to delete voice from cartesia: Cartesia delete service broken"
-#         in resp_del.json()["detail"]
-#     )
-#     cartesia_mock.delete_voice.assert_called_once_with(voice_id_to_delete)
-#
-#     # 4. Verify voice still exists in DB (since provider delete failed, DB op shouldn't proceed)
-#     voice_dao = VoiceDAO(dbsession)
-#     db_voice = voice_dao.get_voice_by_id(user_id=user_id, voice_id=voice_id_to_delete)
-#     assert db_voice is not None
-#     assert db_voice.name == "To Del NP Fail"
-#
-#     # 5. Cleanup: Manually delete the voice from DB for test isolation
-#     #    (reset mock for a clean delete from DB)
-#     cartesia_mock.delete_voice.side_effect = None  # Clear side effect
-#     cartesia_mock.delete_voice.return_value = {
-#         "status": "success",
-#     }  # Mock success for DB cleanup
-#     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
-#         mock_state.user_id = user_id
-#         await client.delete(
-#             f"/v0/assistant/voice/{voice_id_to_delete}",
-#             headers=HEADERS,
-#         )
 
 
 @pytest.mark.anyio
@@ -485,7 +422,7 @@ async def test_clone_voice_cartesia(
     dbsession,
     mock_tts_services_factory: MagicMock,
 ):
-    cartesia_mock, _ = mock_tts_services_factory
+    cartesia_mock, _, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
     sample_audio_bytes = _get_sample_wav_bytes()
 
@@ -509,7 +446,7 @@ async def test_clone_voice_cartesia(
             "/v0/assistant/voice/clone",
             data=form_data_fields,
             files=files_payload,
-            headers=request_headers,  # Use the potentially modified headers
+            headers=request_headers,
         )
 
     assert resp.status_code == 201, f"Actual response: {resp.status_code} {resp.text}"
@@ -538,11 +475,66 @@ async def test_clone_voice_cartesia(
 
 
 @pytest.mark.anyio
+async def test_clone_voice_autodetect_language(
+    client: AsyncClient,
+    dbsession,
+    mock_tts_services_factory: MagicMock,
+):
+    cartesia_mock, _, deepgram_mock, _ = mock_tts_services_factory
+    deepgram_mock.detect_language_from_audio.return_value = "fr"
+    user_id = await get_user_id_from_request_state(client)
+    sample_audio_bytes = _get_sample_wav_bytes()
+
+    form_data_fields = {
+        "name": "Cloned Via Test Autodetect",
+        "description": "Test clone desc autodetect",
+        "provider": "cartesia",
+    }
+    files_payload = {"file": ("sample.wav", sample_audio_bytes, "audio/wav")}
+
+    request_headers = HEADERS.copy()
+    if "Content-Type" in request_headers:
+        del request_headers["Content-Type"]
+
+    with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
+        mock_state.user_id = user_id
+        resp = await client.post(
+            "/v0/assistant/voice/clone",
+            data=form_data_fields,
+            files=files_payload,
+            headers=request_headers,
+        )
+
+    assert resp.status_code == 201
+    cloned_voice_data = resp.json()["info"]
+    assert cloned_voice_data["language"] == "fr"
+
+    deepgram_mock.detect_language_from_audio.assert_called_once_with(
+        sample_audio_bytes,
+        ANY,
+        "audio/wav",
+    )
+    cartesia_mock.clone_voice.assert_called_once_with(
+        file_content=sample_audio_bytes,
+        file_name="sample.wav",
+        name="Cloned Via Test Autodetect",
+        language="fr",
+        description="Test clone desc autodetect",
+    )
+    with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
+        mock_state.user_id = user_id
+        await client.delete(
+            f"/v0/assistant/voice/{cloned_voice_data['voice_id']}",
+            headers=HEADERS,
+        )
+
+
+@pytest.mark.anyio
 async def test_clone_voice_cartesia_api_error_on_clone(
     client: AsyncClient,
     mock_tts_services_factory,
 ):
-    cartesia_mock, _ = mock_tts_services_factory
+    cartesia_mock, _, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
     sample_audio_bytes = _get_sample_wav_bytes()
 
@@ -572,7 +564,7 @@ async def test_clone_voice_cartesia_api_error_on_clone(
 
     assert resp.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
     assert "Cartesia API error: Cartesia clone service down" in resp.json()["detail"]
-    cartesia_mock.delete_voice.assert_not_called()  # Should not attempt delete if clone failed
+    cartesia_mock.delete_voice.assert_not_called()
 
 
 @pytest.mark.anyio
@@ -581,7 +573,7 @@ async def test_clone_voice_elevenlabs(
     dbsession,
     mock_tts_services_factory: MagicMock,
 ):
-    _, elevenlabs_mock = mock_tts_services_factory
+    _, elevenlabs_mock, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
     sample_audio_bytes = _get_sample_wav_bytes()
 
@@ -605,7 +597,7 @@ async def test_clone_voice_elevenlabs(
             "/v0/assistant/voice/clone",
             data=form_data_fields,
             files=files_payload,
-            headers=request_headers,  # Use the potentially modified headers
+            headers=request_headers,
         )
 
     assert resp.status_code == 201, f"Actual response: {resp.status_code} {resp.text}"
@@ -637,18 +629,18 @@ async def test_clone_voice_elevenlabs_api_error_on_clone(
     client: AsyncClient,
     mock_tts_services_factory,
 ):
-    _, elevenlabs_mock = mock_tts_services_factory
+    _, elevenlabs_mock, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
     sample_audio_bytes = _get_sample_wav_bytes()
 
     elevenlabs_mock.clone_voice.side_effect = ElevenLabsAPIError(
-        status_code=status.HTTP_400_BAD_REQUEST,  # Example error, could be 5xx too
+        status_code=status.HTTP_400_BAD_REQUEST,
         detail="ElevenLabs clone failed: Invalid audio format",
     )
 
     form_data_fields = {
         "name": "EL Clone Fails API",
-        "language": "en",  # For DB entry if it were to succeed
+        "language": "en",
         "provider": "elevenlabs",
     }
     files_payload = {"file": ("sample.wav", sample_audio_bytes, "audio/wav")}
@@ -665,14 +657,12 @@ async def test_clone_voice_elevenlabs_api_error_on_clone(
             headers=request_headers,
         )
 
+    assert resp.status_code == status.HTTP_400_BAD_REQUEST
     assert (
-        resp.status_code == status.HTTP_400_BAD_REQUEST
-    )  # Or whatever status the EL error has
-    assert (
-        "Elevenlabs API error: ElevenLabs clone failed: Invalid audio format"
+        "ElevenLabs API error: ElevenLabs clone failed: Invalid audio format"
         in resp.json()["detail"]
     )
-    elevenlabs_mock.delete_voice.assert_not_called()  # Should not attempt delete if clone itself failed
+    elevenlabs_mock.delete_voice.assert_not_called()
 
 
 # --- Test Generate Speech ---
@@ -684,7 +674,7 @@ async def test_generate_speech_cartesia_success(
     mock_tts_services_factory,
     dbsession,
 ):
-    cartesia_mock, _ = mock_tts_services_factory
+    cartesia_mock, _, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
 
     payload = {
@@ -711,8 +701,8 @@ async def test_generate_speech_cartesia_success(
         voice_id="cartesia-voice-123",
         model_id="sonic-2",
         output_format_container="mp3",
-        output_sample_rate=None,  # Explicitly pass None if schema defaults to None
-        output_bit_rate=None,  # Same as above
+        output_sample_rate=None,
+        output_bit_rate=None,
         language="en",
     )
 
@@ -723,7 +713,7 @@ async def test_generate_speech_elevenlabs_success(
     mock_tts_services_factory,
     dbsession,
 ):
-    _, elevenlabs_mock = mock_tts_services_factory
+    _, elevenlabs_mock, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
 
     payload = {
@@ -764,7 +754,7 @@ async def test_generate_speech_provider_api_error(
     mock_tts_services_factory,
     dbsession,
 ):
-    cartesia_mock, _ = mock_tts_services_factory
+    cartesia_mock, _, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
 
     cartesia_mock.generate_speech.side_effect = CartesiaAPIError(
@@ -785,9 +775,7 @@ async def test_generate_speech_provider_api_error(
             headers=HEADERS,
         )
 
-    assert (
-        resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
-    )  # The error from Cartesia
+    assert resp.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
     assert "TTS provider error: Cartesia down" in resp.json()["detail"]
 
 
@@ -800,7 +788,7 @@ async def test_design_generate_previews_success(
     mock_tts_services_factory,
     dbsession,
 ):
-    _, elevenlabs_mock = mock_tts_services_factory
+    _, elevenlabs_mock, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
 
     payload = {
@@ -829,69 +817,13 @@ async def test_design_generate_previews_success(
     )
 
 
-# @pytest.mark.anyio
-# async def test_design_create_from_preview_success(
-#     client: AsyncClient,
-#     mock_tts_services_factory,
-#     dbsession,
-# ):
-#     _, elevenlabs_mock = mock_tts_services_factory
-#     user_id = await get_user_id_from_request_state(client)
-#
-#     payload = {
-#         "generated_voice_id": "temp_preview_123",
-#         "voice_name": "Awesome Robot Voice",
-#         "language": "en",
-#         "voice_description": "A cool robot voice designed via text.",
-#     }
-#
-#     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
-#         mock_state.user_id = user_id
-#         resp = await client.post(
-#             "/v0/assistant/voice/design/create",
-#             json=payload,
-#             headers=HEADERS,
-#         )
-#
-#     assert resp.status_code == status.HTTP_201_CREATED
-#     data = resp.json()["info"]
-#     assert data["voice_id"] == "final_el_voice_id_abc_789"
-#     assert data["name"] == "Awesome Robot Voice"
-#     assert data["provider"] == "elevenlabs"
-#     assert data["is_preset"] is False
-#
-#     elevenlabs_mock.create_voice_from_generated_id.assert_called_once_with(
-#         voice_name="Awesome Robot Voice",
-#         generated_voice_id="temp_preview_123",
-#         description="A cool robot voice designed via text.",
-#         labels=None,
-#     )
-#
-#     # Check DB
-#     db_voice = VoiceDAO(dbsession).get_voice_by_id(
-#         user_id=user_id,
-#         voice_id="final_el_voice_id_abc_789",
-#     )
-#     assert db_voice is not None
-#     assert db_voice.name == "Awesome Robot Voice"
-#     assert db_voice.user_id == user_id
-#     assert db_voice.provider == "elevenlabs"
-#
-#     # Clean up
-#     VoiceDAO(dbsession).delete_voice(
-#         user_id=user_id,
-#         voice_id="final_el_voice_id_abc_789",
-#     )
-#     dbsession.commit()
-
-
 @pytest.mark.anyio
 async def test_design_generate_previews_el_api_error(
     client: AsyncClient,
     mock_tts_services_factory,
     dbsession,
 ):
-    _, elevenlabs_mock = mock_tts_services_factory
+    _, elevenlabs_mock, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
 
     elevenlabs_mock.design_voice_generate_previews.side_effect = ElevenLabsAPIError(
