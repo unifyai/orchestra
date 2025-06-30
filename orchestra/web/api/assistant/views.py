@@ -29,6 +29,7 @@ from orchestra.services.call_recording_service import CallRecordingService
 from orchestra.services.cartesia_service import CartesiaAPIError, CartesiaService
 from orchestra.services.deepgram_service import DeepgramAPIError, DeepgramService
 from orchestra.services.elevenlabs_service import ElevenLabsAPIError, ElevenLabsService
+from orchestra.services.openai_service import OpenAIAPIError, OpenAIService
 from orchestra.services.replicate_service import ReplicateAPIError, ReplicateService
 from orchestra.settings import settings
 from orchestra.web.api.assistant.schema import (
@@ -1187,6 +1188,7 @@ async def clone_voice(
             try:
                 detected_language = deepgram_service.detect_language_from_audio(
                     file_content,
+                    user_id,
                     file.content_type,
                 )
                 voice_language = detected_language or "en"
@@ -1643,7 +1645,7 @@ async def design_voice_create_from_preview_endpoint(
     request: Request,
     session: Session = Depends(get_db_session),
     elevenlabs_service: ElevenLabsService = Depends(),
-    deepgram_service: DeepgramService = Depends(),
+    openai_service: OpenAIService = Depends(),
 ) -> InfoResponse[VoiceRead]:
     user_id = request.state.user_id
     voice_dao = VoiceDAO(session)
@@ -1653,13 +1655,13 @@ async def design_voice_create_from_preview_endpoint(
     try:
         if not voice_language:
             try:
-                detected_language = deepgram_service.detect_language_from_text(
+                detected_language = openai_service.detect_language_from_text(
                     request_data.voice_description,
                 )
                 voice_language = detected_language or "en"
-            except DeepgramAPIError as e:
+            except OpenAIAPIError as e:
                 logging.error(
-                    f"Deepgram API error during design/create language detection: {e.detail}",
+                    f"OpenAI API error during design/create language detection: {e.detail}",
                 )
                 raise HTTPException(
                     status_code=e.status_code,
@@ -1709,14 +1711,14 @@ async def design_voice_create_from_preview_endpoint(
             ),
         )
 
-    except (ElevenLabsAPIError, DeepgramAPIError) as e:
+    except (ElevenLabsAPIError, OpenAIAPIError) as e:
         session.rollback()
         service_name = "External service"
         should_cleanup_el = isinstance(e, ElevenLabsAPIError)
 
         if isinstance(e, ElevenLabsAPIError):
             service_name = "ElevenLabs"
-        elif isinstance(e, DeepgramAPIError):
+        elif isinstance(e, OpenAIAPIError):
             service_name = "Language Detection"
             should_cleanup_el = False  # Don't cleanup if EL was never called
 

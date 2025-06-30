@@ -315,7 +315,7 @@ class BucketService:
             return True
         except exceptions.NotFound:
             logging.warning(
-                f"Assistant photo/file not found during deletion: {gcs_url}"
+                f"Assistant photo/file not found during deletion: {gcs_url}",
             )
             return True
         except exceptions.GoogleAPIError as e:
