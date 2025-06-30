@@ -157,6 +157,7 @@ def delete_pubsub_topic(assistant_id: str):
 
 
 def create_cloud_run_job(
+    api_key: str,
     assistant_id: str,
     user_name: str,
     assistant_number: str,
@@ -166,6 +167,7 @@ def create_cloud_run_job(
     Create a Cloud Run job by making a POST request to the comms endpoint.
 
     Args:
+        api_key (str): The API key of the user
         assistant_id (str): The ID of the assistant
         user_name (str): The user's name
         assistant_number (str): The assistant's phone number
@@ -177,6 +179,7 @@ def create_cloud_run_job(
     return requests.post(
         f"{COMMS_URL}/infra/job/create",
         data={
+            "api_key": api_key,
             "assistant_id": assistant_id,
             "user_name": user_name,
             "assistant_number": assistant_number,

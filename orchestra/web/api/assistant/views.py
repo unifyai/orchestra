@@ -18,6 +18,7 @@ from fastapi import (
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.recording_dao import RecordingDAO
 from orchestra.db.dao.users_dao import UsersDAO
@@ -148,6 +149,14 @@ def create_assistant(
     user_id = request.state.user_id
     users_dao = UsersDAO(session)
     assistant_dao = AssistantDAO(session)
+    api_key_dao = ApiKeyDAO(session)
+    api_keys = api_key_dao.filter(user_id=user_id)
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unauthorized. Please contact support to get an API key.",
+        )
+    api_key = api_keys[0][0].key
     assistant = None
 
     # Phase 1: Pre-checks and prepare assistant data
@@ -258,6 +267,7 @@ def create_assistant(
 
                 # Step 6: create cloud run job
                 job_response = create_cloud_run_job(
+                    api_key=api_key,
                     assistant_id=str(assistant_id),
                     user_name=f"{assistant_in.first_name} {assistant_in.surname}",
                     assistant_number=created_phone,
@@ -1401,13 +1411,13 @@ def delete_voice(
             except (CartesiaAPIError, ElevenLabsAPIError) as e_provider:
                 if e_provider.status_code == 404:
                     logging.warning(
-                        f"Voice {voice_id} not found on {voice_to_delete.provider} (status 404). Proceeding with DB deletion."
+                        f"Voice {voice_id} not found on {voice_to_delete.provider} (status 404). Proceeding with DB deletion.",
                     )
                     # Non-critical, continue to DB deletion
                 else:
                     # CRITICAL PROVIDER FAILURE
                     logging.error(
-                        f"Critical error deleting voice {voice_id} from {voice_to_delete.provider}: {e_provider.detail}"
+                        f"Critical error deleting voice {voice_id} from {voice_to_delete.provider}: {e_provider.detail}",
                     )
                     session.rollback()  # Ensure rollback of any prior DB changes in this session (though unlikely here)
                     raise HTTPException(
@@ -1417,7 +1427,7 @@ def delete_voice(
             except Exception as e_provider_generic:
                 # Other unexpected provider errors
                 logging.error(
-                    f"Unexpected critical error deleting voice {voice_id} from {voice_to_delete.provider}: {str(e_provider_generic)}"
+                    f"Unexpected critical error deleting voice {voice_id} from {voice_to_delete.provider}: {str(e_provider_generic)}",
                 )
                 session.rollback()
                 raise HTTPException(
@@ -1437,7 +1447,7 @@ def delete_voice(
     except IntegrityError as e_db_integrity:  # Should not happen on delete typically, but good to catch
         session.rollback()
         logging.error(
-            f"DB IntegrityError during voice deletion from DB {voice_id}: {str(e_db_integrity)}"
+            f"DB IntegrityError during voice deletion from DB {voice_id}: {str(e_db_integrity)}",
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1446,7 +1456,7 @@ def delete_voice(
     except Exception as e_db_generic:  # Other errors during DB delete
         session.rollback()
         logging.error(
-            f"Generic error during voice deletion from DB {voice_id}: {str(e_db_generic)}"
+            f"Generic error during voice deletion from DB {voice_id}: {str(e_db_generic)}",
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
