@@ -1353,6 +1353,7 @@ class TableTile(Base):
     page_number = Column(String(), nullable=True)
     column_order = Column(String(), nullable=True)
     hidden_columns = Column(String(), nullable=True)
+    default_hidden_columns = Column(Boolean(), nullable=False, server_default="t")
     sorting = Column(String(), nullable=True)
     group_sorting = Column(String(), nullable=True)
     columns_pin_left = Column(String(), nullable=True)
