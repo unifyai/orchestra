@@ -29,11 +29,11 @@ def mock_photo_services_factory(fastapi_app):
     )
 
     bucket_mock = MagicMock(spec=OriginalBucketService)
-    bucket_mock.upload_temp_assistant_photo_file.return_value = (
+    bucket_mock.upload_temp_assistant_file.return_value = (
         "https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_image.jpg",
         "gs://mock-bucket/_temp/test-user/temp_image.jpg",
     )
-    bucket_mock.delete_assistant_photo.return_value = True
+    bucket_mock.delete_assistant_file.return_value = True
 
     fastapi_app.dependency_overrides[OriginalReplicateService] = lambda: replicate_mock
     fastapi_app.dependency_overrides[OriginalBucketService] = lambda: bucket_mock
@@ -97,8 +97,8 @@ async def test_edit_photo_with_url_success(
         output_format="jpg",
         safety_tolerance=2.0,
     )
-    bucket_mock.upload_temp_assistant_photo_file.assert_not_called()
-    bucket_mock.delete_assistant_photo.assert_not_called()
+    bucket_mock.upload_temp_assistant_file.assert_not_called()
+    bucket_mock.delete_assistant_file.assert_not_called()
 
 
 @pytest.mark.anyio
@@ -135,7 +135,7 @@ async def test_edit_photo_with_file_success(
     data = resp.json()["info"]
     assert data == "https://replicate.delivery/pbxt/mock-edited-url"
 
-    bucket_mock.upload_temp_assistant_photo_file.assert_called_once_with(
+    bucket_mock.upload_temp_assistant_file.assert_called_once_with(
         file_content,
         ANY,
         "image/jpeg",
@@ -147,7 +147,7 @@ async def test_edit_photo_with_file_success(
         output_format="jpg",
         safety_tolerance=2.0,
     )
-    bucket_mock.delete_assistant_photo.assert_called_once_with(
+    bucket_mock.delete_assistant_file.assert_called_once_with(
         "gs://mock-bucket/_temp/test-user/temp_image.jpg",
     )
 
@@ -237,8 +237,8 @@ async def test_animate_video_with_urls_success(
         inference_steps=25,  # default
         keep_resolution=True,  # default
     )
-    bucket_mock.upload_temp_assistant_photo_file.assert_not_called()
-    bucket_mock.delete_assistant_photo.assert_not_called()
+    bucket_mock.upload_temp_assistant_file.assert_not_called()
+    bucket_mock.delete_assistant_file.assert_not_called()
 
 
 @pytest.mark.anyio
@@ -258,7 +258,7 @@ async def test_animate_video_with_files_success(
     image_content = b"fake image data"
     audio_content = b"fake audio data"
 
-    bucket_mock.upload_temp_assistant_photo_file.side_effect = [
+    bucket_mock.upload_temp_assistant_file.side_effect = [
         (
             "https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_image.jpg",
             "gs://mock-bucket/_temp/test-user/temp_image.jpg",
@@ -289,13 +289,13 @@ async def test_animate_video_with_files_success(
     data = resp.json()["info"]
     assert data == "https://replicate.delivery/pbxt/mock-animated-video-url"
 
-    assert bucket_mock.upload_temp_assistant_photo_file.call_count == 2
-    bucket_mock.upload_temp_assistant_photo_file.assert_any_call(
+    assert bucket_mock.upload_temp_assistant_file.call_count == 2
+    bucket_mock.upload_temp_assistant_file.assert_any_call(
         image_content,
         ANY,
         "image/jpeg",
     )
-    bucket_mock.upload_temp_assistant_photo_file.assert_any_call(
+    bucket_mock.upload_temp_assistant_file.assert_any_call(
         audio_content,
         ANY,
         "audio/mpeg",
@@ -311,11 +311,11 @@ async def test_animate_video_with_files_success(
         keep_resolution=False,
     )
 
-    assert bucket_mock.delete_assistant_photo.call_count == 2
-    bucket_mock.delete_assistant_photo.assert_any_call(
+    assert bucket_mock.delete_assistant_file.call_count == 2
+    bucket_mock.delete_assistant_file.assert_any_call(
         "gs://mock-bucket/_temp/test-user/temp_image.jpg",
     )
-    bucket_mock.delete_assistant_photo.assert_any_call(
+    bucket_mock.delete_assistant_file.assert_any_call(
         "gs://mock-bucket/_temp/test-user/temp_audio.mp3",
     )
 

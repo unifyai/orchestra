@@ -615,7 +615,7 @@ def delete_assistant(
         # Delete GCS profile photo if it exists and is a GCS URL from the assistant images bucket
         if assistant.profile_photo and assistant.profile_photo.startswith("gs://"):
             try:
-                deleted_from_gcs = bucket_service.delete_assistant_photo(
+                deleted_from_gcs = bucket_service.delete_assistant_file(
                     assistant.profile_photo,
                 )
                 if not deleted_from_gcs:
@@ -1969,7 +1969,7 @@ async def edit_assistant_photo(
             (
                 public_url,
                 gcs_url_for_delete,
-            ) = bucket_service.upload_temp_assistant_photo_file(
+            ) = bucket_service.upload_temp_assistant_file(
                 file_content,
                 user_id,
                 input_image_file.content_type,
@@ -2028,7 +2028,7 @@ async def edit_assistant_photo(
     finally:
         if temp_gcs_url_to_delete:
             try:
-                bucket_service.delete_assistant_photo(temp_gcs_url_to_delete)
+                bucket_service.delete_assistant_file(temp_gcs_url_to_delete)
                 logging.info(
                     f"Successfully deleted temporary file {temp_gcs_url_to_delete} for photo edit.",
                 )
@@ -2101,10 +2101,7 @@ async def animate_video_endpoint(
                     detail="Invalid file type for 'image_file'. Only images are allowed.",
                 )
             image_content = await image_file.read()
-            (
-                public_img_url,
-                gcs_img_url,
-            ) = bucket_service.upload_temp_assistant_photo_file(
+            (public_img_url, gcs_img_url) = bucket_service.upload_temp_assistant_file(
                 image_content,
                 user_id,
                 image_file.content_type,
@@ -2124,11 +2121,11 @@ async def animate_video_endpoint(
                     detail="Invalid file type for 'audio_file'. Only audio files are allowed.",
                 )
             audio_content = await audio_file.read()
-            # Reusing upload_temp_assistant_photo_file for audio, path is generic enough
+            # Reusing upload_temp_assistant_file for audio, path is generic enough
             (
                 public_audio_url,
                 gcs_audio_url,
-            ) = bucket_service.upload_temp_assistant_photo_file(
+            ) = bucket_service.upload_temp_assistant_file(
                 audio_content,
                 user_id,
                 audio_file.content_type,
@@ -2196,7 +2193,7 @@ async def animate_video_endpoint(
         # Cleanup temporary files from GCS
         if temp_image_gcs_url:
             try:
-                bucket_service.delete_assistant_photo(temp_image_gcs_url)
+                bucket_service.delete_assistant_file(temp_image_gcs_url)
                 logging.info(
                     f"Successfully deleted temporary image file {temp_image_gcs_url} for video animation.",
                 )
@@ -2206,9 +2203,9 @@ async def animate_video_endpoint(
                 )
         if temp_audio_gcs_url:
             try:
-                bucket_service.delete_assistant_photo(
+                bucket_service.delete_assistant_file(
                     temp_audio_gcs_url,
-                )  # Reusing delete_assistant_photo
+                )  # Reusing delete_assistant_file
                 logging.info(
                     f"Successfully deleted temporary audio file {temp_audio_gcs_url} for video animation.",
                 )
