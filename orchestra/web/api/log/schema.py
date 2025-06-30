@@ -6,14 +6,14 @@ from orchestra.web.api.context.schema import ContextCreateRequest
 
 
 class RowIDs(BaseModel):
-    name: str = Field(
-        description="Name of the unique ID column for the rows.",
-        example="row_id",
+    names: List[str] = Field(
+        description="List of unique ID column names for the rows. For single columns, this will be a list with one element. For nested unique IDs, this contains the column names in order from most major to most minor.",
+        example=["row_id"],
     )
-    ids: List[int] = Field(
-        description="List of sequential row IDs corresponding to each log event, "
-        "providing a consistent ordering mechanism for the created logs.",
-        example=[1001, 1002, 1003],
+    ids: List[List[int]] = Field(
+        description="List of sequential row ID lists corresponding to each log event, "
+        "providing a consistent ordering mechanism for the created logs. Each inner list contains the ID values for the corresponding column names. For single columns, each inner list contains one element.",
+        example=[[0], [1], [2]],
     )
 
 
@@ -23,8 +23,8 @@ class CreateLogsResponse(BaseModel):
         example=[123, 124, 125],
     )
     row_ids: RowIDs = Field(
-        description="Object containing the name of the unique ID column and the corresponding row IDs.",
-        example={"name": "row_id", "ids": [1001, 1002, 1003]},
+        description="Object containing the names of the unique ID columns and the corresponding nested row IDs.",
+        example={"names": ["row_id"], "ids": [[0], [1], [2]]},
     )
 
 

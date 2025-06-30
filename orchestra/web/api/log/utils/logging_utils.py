@@ -43,7 +43,6 @@ from orchestra.db.models.orchestra_models import (
 )
 from orchestra.settings import settings
 from orchestra.web.api.log.schema import CreateLogConfig
-from orchestra.web.api.utils.helpers import _safe_json_loads
 from orchestra.web.api.utils.http_responses import not_found
 
 from ..python2SQL import STR_TO_SQL_TYPES
@@ -852,17 +851,8 @@ def create_logs_internal(
     total_logs = max(entries_len, params_len)
 
     provided_unique_ids = None
-    if context_obj and context_obj.unique_id_column:
-        raw_name = context_obj.unique_id_names
-        unique_id_names = []
-        if isinstance(raw_name, str):
-            try:
-                parsed = json.loads(raw_name)
-                unique_id_names = parsed if isinstance(parsed, list) else [str(parsed)]
-            except (json.JSONDecodeError, TypeError):
-                unique_id_names = [raw_name]
-        elif isinstance(raw_name, list):
-            unique_id_names = raw_name
+    if context_obj and context_obj.unique_id_names:
+        unique_id_names = context_obj.unique_id_names or []
 
         unique_id_names_set = set(unique_id_names)
 
@@ -1066,22 +1056,22 @@ def create_logs_internal(
 
     # Build row_ids payload
     row_ids_payload = None
-    # Safely parse unique_id_name which is stored as JSONB
-    unique_id_names = _safe_json_loads(context_obj.unique_id_names)
+    unique_id_names = context_obj.unique_id_names or []
 
     ids_list = []
-    if isinstance(unique_id_names, list):
-        # Nested ID case: transform the list of dictionaries into a list of lists,
-        # ensuring the order of values matches the order of column names.
-        if row_ids:
+    # Always return nested format: transform row_ids into a list of lists
+    if row_ids and unique_id_names:
+        if isinstance(row_ids[0], dict):
+            # Nested ID case: transform the list of dictionaries into a list of lists,
+            # ensuring the order of values matches the order of column names.
             for id_dict in row_ids:
                 ids_list.append([id_dict.get(name) for name in unique_id_names])
-    else:
-        # Single ID case: the `row_ids` are already in a simple list.
-        ids_list = row_ids
+        else:
+            # Single ID case: wrap each ID in a list to create nested format
+            ids_list = [[row_id] for row_id in row_ids]
 
     row_ids_payload = {
-        "name": unique_id_names,
+        "names": unique_id_names,
         "ids": ids_list,
     }
     return {"log_event_ids": log_event_ids, "row_ids": row_ids_payload}
