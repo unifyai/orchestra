@@ -548,6 +548,7 @@ def list_assistants(
                     created_at=a.created_at,
                     updated_at=a.updated_at,
                     phone=a.phone,
+                    user_phone=a.user_phone,
                     email=a.email,
                     voice_id=a.voice_id,
                 )
