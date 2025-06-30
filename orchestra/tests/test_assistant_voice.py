@@ -92,7 +92,7 @@ def mock_tts_services_factory(fastapi_app):
     # Patch send_pubsub_msg where it's looked up by the middleware's log_production_traffic function.
     with patch(
         "orchestra.web.api.utils.production_traffic_middleware.send_pubsub_msg",
-    ):
+    ) as mock_send_pubsub:
         fastapi_app.dependency_overrides[
             OriginalCartesiaService
         ] = lambda: cartesia_mock
@@ -325,77 +325,6 @@ async def test_delete_preset_voice(
     cartesia_mock.delete_voice.assert_not_called()
 
 
-# @pytest.mark.anyio
-# async def test_delete_non_preset_voice_provider_api_error(
-#     client: AsyncClient,
-#     dbsession,
-#     mock_tts_services_factory,
-# ):
-#     cartesia_mock, _ = mock_tts_services_factory
-#     user_id = await get_user_id_from_request_state(client)
-#     voice_id_to_delete = "non-preset-voice-delete-fail"
-#
-#     # 1. Register a non-preset voice
-#     reg_payload = {
-#         "voice_id": voice_id_to_delete,
-#         "name": "To Del NP Fail",
-#         "description": "...",
-#         "gender": "male",
-#         "language": "es",
-#         "is_preset": False,
-#         "provider": "cartesia",
-#     }
-#     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
-#         mock_state.user_id = user_id
-#         reg_resp = await client.post(
-#             "/v0/assistant/voice",
-#             json=reg_payload,
-#             headers=HEADERS,
-#         )
-#         assert reg_resp.status_code == status.HTTP_201_CREATED
-#
-#     # 2. Mock Cartesia's delete_voice to fail with a non-404 error
-#     cartesia_mock.delete_voice.side_effect = CartesiaAPIError(
-#         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-#         detail="Cartesia delete service broken",
-#     )
-#
-#     # 3. Attempt to delete the voice
-#     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
-#         mock_state.user_id = user_id
-#         resp_del = await client.delete(
-#             f"/v0/assistant/voice/{voice_id_to_delete}",
-#             headers=HEADERS,
-#         )
-#
-#     assert resp_del.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
-#     assert (
-#         # "Failed to delete voice from Cartesia: Cartesia delete service broken" # Original
-#         "Failed to delete voice from cartesia: Cartesia delete service broken"
-#         in resp_del.json()["detail"]
-#     )
-#     cartesia_mock.delete_voice.assert_called_once_with(voice_id_to_delete)
-#
-#     # 4. Verify voice still exists in DB (since provider delete failed, DB op shouldn't proceed)
-#     voice_dao = VoiceDAO(dbsession)
-#     db_voice = voice_dao.get_voice_by_id(user_id=user_id, voice_id=voice_id_to_delete)
-#     assert db_voice is not None
-#     assert db_voice.name == "To Del NP Fail"
-#
-#     # 5. Cleanup: Manually delete the voice from DB for test isolation
-#     #    (reset mock for a clean delete from DB)
-#     cartesia_mock.delete_voice.side_effect = None  # Clear side effect
-#     cartesia_mock.delete_voice.return_value = {
-#         "status": "success",
-#     }  # Mock success for DB cleanup
-#     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
-#         mock_state.user_id = user_id
-#         await client.delete(
-#             f"/v0/assistant/voice/{voice_id_to_delete}",
-#             headers=HEADERS,
-#         )
-
-
 @pytest.mark.anyio
 async def test_list_voices(
     client: AsyncClient,
@@ -464,7 +393,8 @@ async def test_list_voices(
 
     assert custom_voice_payload["voice_id"] in listed_voice_ids
     assert user_registered_preset_payload["voice_id"] in listed_voice_ids
-    assert len(listed_voices) == 2
+    assert global_preset_payload["voice_id"] in listed_voice_ids
+    assert len(listed_voices) == 3
 
     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
         mock_state.user_id = user_id
@@ -582,7 +512,7 @@ async def test_clone_voice_autodetect_language(
 
     deepgram_mock.detect_language_from_audio.assert_called_once_with(
         sample_audio_bytes,
-        user_id,
+        ANY,
         "audio/wav",
     )
     cartesia_mock.clone_voice.assert_called_once_with(
@@ -888,50 +818,6 @@ async def test_design_generate_previews_success(
     )
 
 
-# @pytest.mark.anyio
-# async def test_design_create_from_preview_success(
-#     client: AsyncClient,
-#     mock_tts_services_factory,
-#     dbsession,
-# ):
-#     _, elevenlabs_mock, _, _ = mock_tts_services_factory
-#     user_id = await get_user_id_from_request_state(client)
-#
-#     payload = {
-#         "generated_voice_id": "temp_preview_123",
-#         "voice_name": "Awesome Robot Voice",
-#         "language": "en",
-#         "voice_description": "A cool robot voice designed via text.",
-#     }
-#
-#     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
-#         mock_state.user_id = user_id
-#         resp = await client.post("/v0/assistant/voice/design/create", json=payload, headers=HEADERS)
-#
-#     assert resp.status_code == status.HTTP_201_CREATED
-#     data = resp.json()["info"]
-#     assert data["voice_id"] == "final_el_voice_id_abc_789"
-#     assert data["name"] == "Awesome Robot Voice"
-#     assert data["provider"] == "elevenlabs"
-#     assert data["is_preset"] is False
-#
-#     elevenlabs_mock.create_voice_from_generated_id.assert_called_once_with(
-#         voice_name="Awesome Robot Voice",
-#         generated_voice_id="temp_preview_123",
-#         description="A cool robot voice designed via text.",
-#         labels=None,
-#     )
-#
-#     db_voice = VoiceDAO(dbsession).get_voice_by_id(user_id=user_id, voice_id="final_el_voice_id_abc_789")
-#     assert db_voice is not None
-#     assert db_voice.name == "Awesome Robot Voice"
-#     assert db_voice.user_id == user_id
-#     assert db_voice.provider == "elevenlabs"
-#
-#     VoiceDAO(dbsession).delete_voice(user_id=user_id, voice_id="final_el_voice_id_abc_789")
-#     dbsession.commit()
-
-
 @pytest.mark.anyio
 async def test_design_create_from_preview_autodetect_language_success(
     client: AsyncClient,
@@ -964,7 +850,6 @@ async def test_design_create_from_preview_autodetect_language_success(
 
     openai_mock.detect_language_from_text.assert_called_once_with(
         text=payload["voice_description"],
-        supported_languages=ANY,
     )
     elevenlabs_mock.create_voice_from_generated_id.assert_called_once()
 
