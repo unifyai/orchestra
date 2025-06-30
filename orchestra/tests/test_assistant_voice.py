@@ -86,7 +86,7 @@ def mock_tts_services_factory(fastapi_app):
     }
 
     # Language detection mocks
-    deepgram_mock.analyze_audio.return_value = "en"
+    deepgram_mock.detect_language_from_audio.return_value = "en"
     openai_mock.detect_language_from_text.return_value = "en"
 
     # Patch send_pubsub_msg where it's looked up by the middleware's log_production_traffic function.
@@ -552,7 +552,7 @@ async def test_clone_voice_autodetect_language(
     mock_tts_services_factory: MagicMock,
 ):
     cartesia_mock, _, deepgram_mock, _ = mock_tts_services_factory
-    deepgram_mock.analyze_audio.return_value = "fr"
+    deepgram_mock.detect_language_from_audio.return_value = "fr"
     user_id = await get_user_id_from_request_state(client)
     sample_audio_bytes = _get_sample_wav_bytes()
 
@@ -580,8 +580,10 @@ async def test_clone_voice_autodetect_language(
     cloned_voice_data = resp.json()["info"]
     assert cloned_voice_data["language"] == "fr"
 
-    deepgram_mock.analyze_audio.assert_called_once_with(
-        sample_audio_bytes, user_id, "audio/wav"
+    deepgram_mock.detect_language_from_audio.assert_called_once_with(
+        sample_audio_bytes,
+        user_id,
+        "audio/wav",
     )
     cartesia_mock.clone_voice.assert_called_once_with(
         file_content=sample_audio_bytes,
@@ -949,7 +951,9 @@ async def test_design_create_from_preview_autodetect_language_success(
     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
         mock_state.user_id = user_id
         resp = await client.post(
-            "/v0/assistant/voice/design/create", json=payload, headers=HEADERS
+            "/v0/assistant/voice/design/create",
+            json=payload,
+            headers=HEADERS,
         )
 
     assert resp.status_code == status.HTTP_201_CREATED
@@ -959,18 +963,21 @@ async def test_design_create_from_preview_autodetect_language_success(
     assert data["name"] == "Spanish Robot Voice"
 
     openai_mock.detect_language_from_text.assert_called_once_with(
-        text=payload["voice_description"], supported_languages=ANY
+        text=payload["voice_description"],
+        supported_languages=ANY,
     )
     elevenlabs_mock.create_voice_from_generated_id.assert_called_once()
 
     db_voice = VoiceDAO(dbsession).get_voice_by_id(
-        user_id=user_id, voice_id="final_el_voice_id_abc_789"
+        user_id=user_id,
+        voice_id="final_el_voice_id_abc_789",
     )
     assert db_voice is not None
     assert db_voice.language == "es"
 
     VoiceDAO(dbsession).delete_voice(
-        user_id=user_id, voice_id="final_el_voice_id_abc_789"
+        user_id=user_id,
+        voice_id="final_el_voice_id_abc_789",
     )
     dbsession.commit()
 
