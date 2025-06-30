@@ -77,8 +77,7 @@ def _create_truthiness_condition(subq_or_literal, session):
         )
 
     # If it's a subquery, build the condition based on its value and type.
-    subq = subq_or_literal
-    val_col, val_type = _select_value(subq, session)
+    val_col, val_type = _select_value(subq_or_literal, session)
 
     # Handle cases where the subquery returns no value (e.g., key does not exist).
     # This should be treated as falsy.
@@ -86,13 +85,16 @@ def _create_truthiness_condition(subq_or_literal, session):
         return literal(False)
 
     if val_type == "bool":
-        # Explicitly cast to Boolean to prevent DatatypeMismatch errors.
+        # The value column might be JSONB, so we must cast it to Boolean.
         return cast(val_col, Boolean).is_(True)
     elif val_type in ("int", "float"):
-        # For numeric types, check if the value is not zero
-        return val_col != 0
+        # For numbers, check if not 0
+        return case(
+            (func.jsonb_typeof(val_col) == "null", literal(False)),
+            else_=(cast(val_col, Float) != 0),
+        )
     elif val_type == "str":
-        # For string types, check if not empty
+        # For strings, check if not empty
         return func.length(func.replace(cast(val_col, String), '"', "")) > 0
     elif val_type == "list":
         # For lists, check if not empty
@@ -879,11 +881,11 @@ def _handle_index_operator(
                 return literal(extracted_value)
             else:
                 raise ValueError(
-                    "Cannot index a python dict/list with a subquery or complex expr."
+                    "Cannot index a python dict/list with a subquery or complex expr.",
                 )
         else:
             raise ValueError(
-                "INDEX operator expects LHS to be a subquery (JSON) or a python list/dict literal."
+                "INDEX operator expects LHS to be a subquery (JSON) or a python list/dict literal.",
             )
 
 
