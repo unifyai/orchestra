@@ -819,6 +819,14 @@ def _transform_ast(node: ast.AST, preserve_string_literals: bool = False) -> dic
                 "rhs": _transform_ast(node.slice, preserve_string_literals),
             }
 
+    # Handle property access (e.g., my_dict.key -> my_dict['key'])
+    elif isinstance(node, ast.Attribute):
+        return {
+            "operand": "INDEX",
+            "lhs": _transform_ast(node.value, preserve_string_literals),
+            "rhs": node.attr,
+        }
+
     # Handle lists and tuples
     elif isinstance(node, (ast.List, ast.Tuple)):
         return [_transform_ast(elt, preserve_string_literals) for elt in node.elts]

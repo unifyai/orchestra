@@ -2,7 +2,6 @@
 Includes endpoints related to context management within projects.
 """
 
-import json
 import re
 from typing import List, Optional, Union
 
@@ -103,21 +102,13 @@ def create_context(
             context_description = None
             context_is_versioned = False
             context_allow_duplicates = True
-            unique_id_column = False
-            unique_id_names = "row_id"
+            unique_column_ids = None
         else:
             context_name = request.name
             context_description = request.description
             context_is_versioned = request.is_versioned
             context_allow_duplicates = request.allow_duplicates
-            unique_id_column = request.unique_id_column
-            unique_id_names = request.unique_id_names
-
-            if isinstance(unique_id_names, list):
-                unique_id_column = True  # Automatically enable if it's a list
-                unique_id_names = json.dumps(unique_id_names)
-            else:
-                unique_id_names = json.dumps(unique_id_names)
+            unique_column_ids = request.unique_column_ids
 
         # Normalize context name: remove leading slash to treat '/exp1/name1' the same as 'exp1/name1'
         context_name = context_name.lstrip("/")
@@ -142,8 +133,7 @@ def create_context(
             description=context_description,
             is_versioned=context_is_versioned,
             allow_duplicates=context_allow_duplicates,
-            unique_id_column=unique_id_column,
-            unique_id_names=unique_id_names,
+            unique_column_ids=unique_column_ids,
         )
 
         return {"info": "Context created successfully."}
@@ -236,8 +226,15 @@ def get_contexts(
                 "description": context[0].description,
                 "is_versioned": context[0].is_versioned,
                 "allow_duplicates": context[0].allow_duplicates,
-                "unique_id_column": context[0].unique_id_column,
-                "unique_id_names": _safe_json_loads(context[0].unique_id_names),
+                "unique_column_ids": (
+                    context[0].unique_id_names
+                    if isinstance(context[0].unique_id_names, list)
+                    else (
+                        _safe_json_loads(context[0].unique_id_names)
+                        if context[0].unique_id_names
+                        else []
+                    )
+                ),
             }
             for context in existing_contexts
             if context[0].name != ""
@@ -361,8 +358,15 @@ def get_context(
             "description": context[0][0].description,
             "is_versioned": context[0][0].is_versioned,
             "allow_duplicates": context[0][0].allow_duplicates,
-            "unique_id_column": context[0][0].unique_id_column,
-            "unique_id_names": _safe_json_loads(context[0][0].unique_id_names),
+            "unique_column_ids": (
+                context[0][0].unique_id_names
+                if isinstance(context[0][0].unique_id_names, list)
+                else (
+                    _safe_json_loads(context[0][0].unique_id_names)
+                    if context[0][0].unique_id_names
+                    else []
+                )
+            ),
         }
     except IndexError as e:
         raise not_found(str(e))

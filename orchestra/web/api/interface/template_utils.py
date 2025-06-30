@@ -231,6 +231,7 @@ class TemplateValidator:
             for field in [
                 "column_order",
                 "hidden_columns",
+                "default_hidden_columns",
                 "columns_pin_left",
                 "columns_pin_right",
             ]:
@@ -399,6 +400,7 @@ class TemplateSanitizer:
             for field in [
                 "column_order",
                 "hidden_columns",
+                "default_hidden_columns",
                 "columns_pin_left",
                 "columns_pin_right",
             ]:
@@ -458,6 +460,7 @@ class TemplateConverter:
                 "page_number": tile.table_tile.page_number,
                 "column_order": tile.table_tile.column_order,
                 "hidden_columns": tile.table_tile.hidden_columns,
+                "default_hidden_columns": tile.table_tile.default_hidden_columns,
                 "sorting": tile.table_tile.sorting,
                 "group_sorting": tile.table_tile.group_sorting,
                 "columns_pin_left": tile.table_tile.columns_pin_left,

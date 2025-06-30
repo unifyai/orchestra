@@ -1,5 +1,4 @@
 import hashlib
-import json
 import re
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -55,8 +54,7 @@ class ContextDAO:
         description: Optional[str] = None,
         is_versioned: bool = False,
         allow_duplicates: bool = True,
-        unique_id_column: bool = False,
-        unique_id_names: str = '"row_id"',
+        unique_column_ids: Optional[List[str]] = None,
     ) -> int:
         """Create a new context using upsert to handle race conditions."""
         from orchestra.db.dao.field_type_dao import FieldTypeDAO
@@ -73,8 +71,7 @@ class ContextDAO:
             updated_at=ts,
             is_versioned=is_versioned,
             allow_duplicates=allow_duplicates,
-            unique_id_column=unique_id_column,
-            unique_id_names=unique_id_names,
+            unique_id_names=unique_column_ids or [],
         )
 
         # On conflict, do nothing and return the existing context's id
@@ -93,14 +90,11 @@ class ContextDAO:
             else:
                 raise ValueError(f"Failed to create or retrieve context {name}")
 
-        # If unique_id_column is enabled, ensure the FieldType exists
-        if unique_id_column:
+        # If unique_column_ids is provided, ensure the FieldType exists
+        if unique_column_ids:
             field_type_dao = FieldTypeDAO(self.session)
-            id_names = json.loads(unique_id_names)
-            if not isinstance(id_names, list):
-                id_names = [id_names]
 
-            for id_name in id_names:
+            for id_name in unique_column_ids:
                 field_type = field_type_dao.get_by_name_and_context(
                     project_id,
                     id_name,
@@ -184,6 +178,7 @@ class ContextDAO:
         description: Optional[str] = None,
         is_versioned: bool = False,
         allow_duplicates: bool = True,
+        unique_column_ids: Optional[List[str]] = None,
     ) -> int:
         """
         Get or create a context using upsert.
@@ -225,6 +220,7 @@ class ContextDAO:
                 updated_at=ts,
                 is_versioned=is_versioned,
                 allow_duplicates=allow_duplicates,
+                unique_id_names=unique_column_ids or [],
             )
 
             # On conflict, do nothing and return the existing context's id
@@ -253,6 +249,7 @@ class ContextDAO:
                             updated_at=ts,
                             is_versioned=False,
                             allow_duplicates=allow_duplicates,
+                            unique_id_names=unique_column_ids or [],
                         )
                         .returning(Context.id)
                     )
@@ -276,6 +273,7 @@ class ContextDAO:
                     description="default context",
                     is_versioned=False,
                     allow_duplicates=allow_duplicates,
+                    unique_column_ids=unique_column_ids,
                 )
             except Exception:
                 raise ValueError(
@@ -337,12 +335,14 @@ class ContextDAO:
     def get_context_id(self, project_id: int, body):
         if body:
             allow_duplicates = getattr(body, "allow_duplicates", True)
+            unique_column_ids = getattr(body, "unique_column_ids", None)
             return self.get_or_create(
                 project_id=project_id,
                 name=body.name,
                 description=body.description,
                 is_versioned=body.is_versioned,
                 allow_duplicates=allow_duplicates,
+                unique_column_ids=unique_column_ids,
             )
         else:
             # Create or get default context using upsert
@@ -351,6 +351,7 @@ class ContextDAO:
                 name="",
                 description="default context",
                 is_versioned=False,
+                unique_column_ids=None,
             )
 
     def check_for_duplicates(self, context_id: int, log_event_id: int) -> bool:

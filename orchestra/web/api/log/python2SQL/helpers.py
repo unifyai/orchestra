@@ -165,10 +165,14 @@ def _select_value(subq, session, is_collection=False, is_vector=False):
             if is_collection:
                 # the assumption here is lists/dicts to have a single consistent type
                 # so we can just check the first element
-                first_elem = session.execute(select(subq).limit(1)).first()[0]
+                first_elem = session.execute(
+                    select(subq.c.value).limit(1),
+                ).scalar()  # Use scalar() to get a single value or None
                 dt = LogDAO.infer_type("", first_elem)
             else:
-                dt = session.execute(select(subq.c.inferred_type).limit(1)).first()[0]
+                dt = session.execute(
+                    select(subq.c.inferred_type).limit(1),
+                ).scalar()  # Use scalar() to get a single value or None
             return subq.c.value, dt
 
         if hasattr(subq, "c") and hasattr(subq.c, "inferred_type"):
