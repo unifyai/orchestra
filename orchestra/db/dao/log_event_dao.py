@@ -1,4 +1,3 @@
-import json
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
@@ -57,77 +56,69 @@ class LogEventDAO:
 
             # Check if this context needs a unique sequential ID
             context = self.session.query(Context).filter_by(id=context_id).one()
-            if context.unique_id_column:
+            if context.unique_id_names:
                 log_dao = LogDAO(self.session, ContextDAO(self.session))
-                unique_id_names = context.unique_id_names
-                try:
-                    unique_id_names_json = json.loads(unique_id_names)
-                    unique_id_names = unique_id_names_json
-                except Exception:
-                    pass
-                try:
-                    if isinstance(unique_id_names, list):
-                        # Nested unique IDs
-                        if provided_unique_ids is None:
-                            provided_unique_ids = [{} for _ in range(count)]
-                        reserved_ids = log_dao.get_next_nested_ids(
-                            project_id=project_id,
-                            context_id=context_id,
-                            columns=unique_id_names,
-                            provided_ids=provided_unique_ids,
-                        )
-                        row_ids = reserved_ids
+                unique_id_names = context.unique_id_names or []
 
-                        # Create log entries for all unique ID columns
-                        all_id_logs = []
-                        for i, log_event_id in enumerate(log_event_ids):
-                            id_dict = row_ids[i]
-                            for col_name, col_value in id_dict.items():
-                                all_id_logs.append(
-                                    {
-                                        "project_id": project_id,
-                                        "log_event_id": log_event_id,
-                                        "key": col_name,
-                                        "value": col_value,
-                                        "context_id": context_id,
-                                        "explicit_types": {col_name: {"type": "int"}},
-                                    },
-                                )
-                        if all_id_logs:
-                            log_dao.bulk_create(all_id_logs)
+                if len(unique_id_names) > 1:
+                    # Nested unique IDs
+                    if provided_unique_ids is None:
+                        provided_unique_ids = [{} for _ in range(count)]
+                    reserved_ids = log_dao.get_next_nested_ids(
+                        project_id=project_id,
+                        context_id=context_id,
+                        columns=unique_id_names,
+                        provided_ids=provided_unique_ids,
+                    )
+                    row_ids = reserved_ids
 
-                    else:  # Single unique ID
-                        param_key = unique_id_names
-                        reserved_ids = log_dao.get_next_row_ids(
-                            project_id=project_id,
-                            context_id=context_id,
-                            param_key=param_key,
-                            count=count,
-                        )
-                        row_ids = reserved_ids
-
-                        # Create sequential ID log entries
-                        sequential_id_logs = []
-                        for i, log_event_id in enumerate(log_event_ids):
-                            new_id = row_ids[i]
-                            sequential_id_logs.append(
+                    # Create log entries for all unique ID columns
+                    all_id_logs = []
+                    for i, log_event_id in enumerate(log_event_ids):
+                        id_dict = row_ids[i]
+                        for col_name, col_value in id_dict.items():
+                            all_id_logs.append(
                                 {
                                     "project_id": project_id,
                                     "log_event_id": log_event_id,
-                                    "key": param_key,
-                                    "value": new_id,
+                                    "key": col_name,
+                                    "value": col_value,
                                     "context_id": context_id,
-                                    "explicit_types": {param_key: {"type": "int"}},
+                                    "explicit_types": {col_name: {"type": "int"}},
                                 },
                             )
-                        if sequential_id_logs:
-                            log_dao.bulk_create(
-                                sequential_id_logs,
-                            )
+                    if all_id_logs:
+                        log_dao.bulk_create(all_id_logs)
 
-                except Exception as e:
-                    self.session.rollback()
-                    raise e
+                elif len(unique_id_names) == 1:
+                    # Single unique ID
+                    param_key = unique_id_names[0]
+                    reserved_ids = log_dao.get_next_row_ids(
+                        project_id=project_id,
+                        context_id=context_id,
+                        param_key=param_key,
+                        count=count,
+                    )
+                    row_ids = reserved_ids
+
+                    # Create sequential ID log entries
+                    sequential_id_logs = []
+                    for i, log_event_id in enumerate(log_event_ids):
+                        new_id = row_ids[i]
+                        sequential_id_logs.append(
+                            {
+                                "project_id": project_id,
+                                "log_event_id": log_event_id,
+                                "key": param_key,
+                                "value": new_id,
+                                "context_id": context_id,
+                                "explicit_types": {param_key: {"type": "int"}},
+                            },
+                        )
+                    if sequential_id_logs:
+                        log_dao.bulk_create(
+                            sequential_id_logs,
+                        )
 
         self.session.commit()
 
