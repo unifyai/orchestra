@@ -117,6 +117,19 @@ from . import (
             "d.get('a') and d.get('b') and d.get('c').startswith('x')",
             {"d": {"a": True, "b": None, "c": None}},
         ),
+        # Test property access
+        (
+            "schedule and schedule.start_at.startswith('2035-06-16')",
+            {"schedule": {"start_at": "2035-06-16T10:00:00Z"}},
+        ),
+        (
+            "schedule and schedule.start_at.startswith('2035-06-16')",
+            {"schedule": {"start_at": "2024-01-01T10:00:00Z"}},
+        ),
+        (
+            "schedule and schedule.start_at.startswith('2035-06-16')",
+            {"schedule": None},
+        ),
     ],
 )
 async def test_log_filter_helper(client: AsyncClient, expression, values):
@@ -613,6 +626,54 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
                 "args": [1, 3],
             },
         ),
+        # Property access
+        (
+            "my_dict.key > 10",
+            {
+                "lhs": {
+                    "operand": "INDEX",
+                    "lhs": {"type": "identifier", "value": "my_dict"},
+                    "rhs": "key",
+                },
+                "operand": ">",
+                "rhs": 10,
+            },
+        ),
+        # Chained property access
+        (
+            "a.b.c == 'test'",
+            {
+                "lhs": {
+                    "operand": "INDEX",
+                    "lhs": {
+                        "operand": "INDEX",
+                        "lhs": {"type": "identifier", "value": "a"},
+                        "rhs": "b",
+                    },
+                    "rhs": "c",
+                },
+                "operand": "==",
+                "rhs": "test",
+            },
+        ),
+        # Method call on a property
+        (
+            "d.name.lower() == 'test'",
+            {
+                "lhs": {
+                    "operand": "str_method",
+                    "method": "lower",
+                    "rhs": {
+                        "operand": "INDEX",
+                        "lhs": {"type": "identifier", "value": "d"},
+                        "rhs": "name",
+                    },
+                    "args": [],
+                },
+                "operand": "==",
+                "rhs": "test",
+            },
+        ),
     ],
 )
 def test_ast_parser(expression, expected_dict):
@@ -662,6 +723,19 @@ def test_ast_parser(expression, expected_dict):
         ("x[0] + y[1] == 5", {"x": [1, 2], "y": [3, 4]}, True),
         ("'hell' + x[4] == 'hello'", {"x": "hello"}, True),
         ("x['a'][0] + 2 == 12", {"x": {"a": [10, 20, 30]}}, True),
+        # Property access on dict
+        ("d.a == 5", {"d": {"a": 5}}, True),
+        ("d.a > 10", {"d": {"a": 5}}, False),
+        # Chained property access
+        ("d.x.y > 10", {"d": {"x": {"y": 12}}}, True),
+        ("d.x.y == 20", {"d": {"x": {"y": 12}}}, False),
+        # Method call on a property
+        ('d.name.lower() == "test"', {"d": {"name": "TEST"}}, True),
+        ('d.name.upper() == "TEST"', {"d": {"name": "test"}}, True),
+        # Property access on a None object (should not error and evaluate to false)
+        ("d.name.lower() == 'test'", {"d": None}, False),
+        # Property access resulting in None
+        ("d.name is None", {"d": {"name": None}}, True),
         # Indexing + Rounding
         ("round(x['some_key'], 2) >= 100.44", {"x": {"some_key": 100.4479}}, True),
         (
