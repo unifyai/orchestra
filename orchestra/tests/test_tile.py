@@ -2360,6 +2360,7 @@ async def test_import_tile_template_with_valid_schema(client: AsyncClient):
             "page_number": "2",
             "column_order": '["id", "name", "status"]',
             "hidden_columns": '["internal_notes"]',
+            "default_hidden_columns": False,
             "sorting": '{"name": "asc"}',
             "group_sorting": '{"status": "desc"}',
             "columns_pin_left": '["id"]',
