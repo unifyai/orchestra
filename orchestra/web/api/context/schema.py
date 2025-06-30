@@ -1,8 +1,9 @@
 """Schema models for context management endpoints."""
 
-from typing import Any, Dict, List, Literal, Optional, Union
+import re
+from typing import Any, Dict, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class ContextCreateRequest(BaseModel):
@@ -31,15 +32,38 @@ class ContextCreateRequest(BaseModel):
         description="Whether duplicate log entries are allowed in this context. If False, attempts to add duplicate logs will be ignored.",
         example=True,
     )
-    unique_id_column: bool = Field(
-        default=False,
-        description="Whether to create a unique, sequential ID for each log in this context.",
-    )
-    unique_id_names: Union[str, List[str]] = Field(
-        default="row_id",
-        description="Name(s) of the unique ID column(s). Can be a string for a single column or a list for nested unique IDs.",
+    unique_column_ids: Optional[List[str]] = Field(
+        default=None,
+        description="List of unique column names for nested unique IDs. Leftmost is most major, rightmost is most minor. If None or empty, no unique IDs are generated.",
         example=["task_id", "instance_id"],
     )
+
+    @field_validator("unique_column_ids")
+    @classmethod
+    def validate_unique_column_ids(cls, v):
+        """Validate unique column IDs."""
+        if v is None:
+            return v
+
+        if not v:  # Empty list
+            raise ValueError(
+                "unique_column_ids cannot be an empty list. Use None to disable unique IDs.",
+            )
+
+        # Check for duplicates
+        if len(v) != len(set(v)):
+            raise ValueError("unique_column_ids cannot contain duplicate names")
+
+        # Validate each column name
+        for name in v:
+            if not isinstance(name, str):
+                raise ValueError("All column names must be strings")
+            if not re.match(r"^[a-zA-Z0-9_]+$", name):
+                raise ValueError(
+                    f"Column name '{name}' must contain only alphanumeric characters and underscores",
+                )
+
+        return v
 
 
 class AddLogsToContextRequest(BaseModel):
