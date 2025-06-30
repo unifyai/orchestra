@@ -26,6 +26,7 @@ class TableTileSchema(BaseModel):
     page_number: Optional[str] = None
     column_order: Optional[str] = None
     hidden_columns: Optional[str] = None
+    default_hidden_columns: Optional[bool] = None
     sorting: Optional[str] = None
     group_sorting: Optional[str] = None
     columns_pin_left: Optional[str] = None
@@ -326,6 +327,7 @@ class Item(BaseModel):
     metric: Optional[str] = None
     column_order: Optional[str] = None
     hidden_columns: Optional[str] = None
+    default_hidden_columns: Optional[bool] = None
     sorting: Optional[str] = None
     grouping: Optional[str] = None
     group_sorting: Optional[str] = None
