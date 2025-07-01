@@ -30,7 +30,7 @@ class AssistantDAO:
         phone: Optional[str] = None,
         user_phone: Optional[str] = None,
         email: Optional[str] = None,
-        whatsapp_sid: Optional[str] = None,
+        whatsapp_number: Optional[str] = None,
         voice_id: Optional[str] = None,
         country: Optional[str] = None,
     ) -> Assistant:
@@ -50,7 +50,7 @@ class AssistantDAO:
             phone=phone,
             user_phone=user_phone,
             email=email,
-            whatsapp_sid=whatsapp_sid,
+            whatsapp_number=whatsapp_number,
             voice_id=voice_id,
             country=country,
         )
@@ -109,7 +109,7 @@ class AssistantDAO:
         phone: Optional[str] = None,
         user_phone: Optional[str] = None,
         email: Optional[str] = None,
-        whatsapp_sid: Optional[str] = None,
+        whatsapp_number: Optional[str] = None,
         voice_id: Optional[str] = None,
         country: Optional[str] = None,
     ) -> Optional[Assistant]:
@@ -131,8 +131,8 @@ class AssistantDAO:
             assistant.user_phone = user_phone
         if email is not None:
             assistant.email = email
-        if whatsapp_sid is not None:
-            assistant.whatsapp_sid = whatsapp_sid
+        if whatsapp_number is not None:
+            assistant.whatsapp_number = whatsapp_number
         if voice_id is not None:
             assistant.voice_id = voice_id
         if country is not None:
@@ -144,6 +144,7 @@ class AssistantDAO:
         self,
         phone: Optional[str] = None,
         user_phone: Optional[str] = None,
+        whatsapp_number: Optional[str] = None,
         email: Optional[str] = None,
     ) -> List[Assistant]:
         """
@@ -154,6 +155,8 @@ class AssistantDAO:
             stmt = stmt.where(Assistant.phone == phone)
         if user_phone is not None:
             stmt = stmt.where(Assistant.user_phone == user_phone)
+        if whatsapp_number is not None:
+            stmt = stmt.where(Assistant.whatsapp_number == whatsapp_number)
         if email is not None:
             stmt = stmt.where(Assistant.email == email)
         result = self.session.execute(stmt).scalars().all()

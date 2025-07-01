@@ -161,11 +161,18 @@ def create_assistant(
     api_key = api_keys[0][0].key
     assistant = None
 
+    # Determine total cost as base creation cost
+    # plus premium for each social account added
+    total_creation_cost = settings.assistant_creation_cost
+    if assistant_in.whatsapp_number:
+        total_creation_cost += settings.assistant_creation_cost
+
     # Phase 1: Pre-checks and prepare assistant data
     try:
         if not settings.is_staging:
             user = users_dao.get_user_with_id(user_id)
-            if user.credits < settings.assistant_creation_cost:
+
+            if user.credits < total_creation_cost:
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail="Insufficient credits to create an assistant.",
@@ -191,6 +198,7 @@ def create_assistant(
             phone=assistant_in.phone,
             email=assistant_in.email,
             country=assistant_in.country,
+            whatsapp_number=assistant_in.whatsapp_number,
         )
 
         # Commit the assistant creation before infrastructure setup
@@ -201,7 +209,6 @@ def create_assistant(
         # Infrastructure creation with rollback on failure
         created_email = None
         created_phone = None
-        created_whatsapp = None
         created_pubsub = None
         created_job = None
         started_job = False
@@ -245,18 +252,19 @@ def create_assistant(
                 created_phone = phone_response.get("phoneNumber")
                 print(f"PHONE CREATED: {created_phone}")
 
-                # Step 4: create whatsapp sender
-                whatsapp_response = create_whatsapp_sender(
-                    created_phone,
-                    assistant_in.first_name,
-                    assistant_in.surname,
-                )
-                if "detail" in whatsapp_response:
-                    raise Exception(
-                        f"WhatsApp sender creation failed: {whatsapp_response['detail']}",
+                # Step 4: create whatsapp sender if number is provided
+                if assistant_in.whatsapp_number:
+                    whatsapp_response = create_whatsapp_sender(
+                        assistant_in.whatsapp_number,
+                        assistant_in.first_name,
+                        assistant_in.surname,
                     )
-                created_whatsapp = whatsapp_response.get("sid")
-                print(f"WHATSAPP CREATED: {created_whatsapp}")
+                    if "detail" in whatsapp_response:
+                        raise Exception(
+                            f"WhatsApp sender creation failed: {whatsapp_response['detail']}",
+                        )
+                    created_whatsapp = assistant_in.whatsapp_number
+                    print(f"WHATSAPP SENDER CREATED FOR: {created_whatsapp}")
 
                 # Step 5: create pubsub topic
                 pubsub_response = create_pubsub_topic(str(assistant_id))
@@ -306,7 +314,7 @@ def create_assistant(
                     email=created_email,
                     phone=created_phone,
                     user_phone=assistant_in.user_phone,
-                    whatsapp_sid=created_whatsapp,
+                    whatsapp_number=assistant_in.whatsapp_number,
                 )
                 # Commit the infrastructure updates
                 session.commit()
@@ -407,7 +415,7 @@ def create_assistant(
             # Refresh session before credit operation to ensure connection is valid
             users_dao.recharge_credit(
                 user_id=user_id,
-                quantity=-float(settings.assistant_creation_cost),
+                quantity=-float(total_creation_cost),
             )
             session.commit()
         except Exception as e_commit:
@@ -445,6 +453,8 @@ def create_assistant(
             email=assistant.email,
             voice_id=assistant.voice_id,
             country=assistant.country,
+            whatsapp_number=assistant.whatsapp_number,
+            user_phone=assistant.user_phone,
         ),
     )
 
@@ -551,6 +561,7 @@ def list_assistants(
                     updated_at=a.updated_at,
                     phone=a.phone,
                     user_phone=a.user_phone,
+                    whatsapp_number=a.whatsapp_number,
                     email=a.email,
                     voice_id=a.voice_id,
                 )
@@ -782,7 +793,7 @@ def update_assistant_config(
             about=update.about,
             phone=update.phone,
             email=update.email,
-            whatsapp_sid=update.whatsapp_sid,
+            whatsapp_number=update.whatsapp_number,
             weekly_limit=weekly_limit,
             max_parallel=update.max_parallel,
             voice_id=update.voice_id,
@@ -809,7 +820,8 @@ def update_assistant_config(
                 updated_at=updated.updated_at,
                 phone=updated.phone,
                 email=updated.email,
-                whatsapp_sid=updated.whatsapp_sid,
+                whatsapp_number=updated.whatsapp_number,
+                user_phone=updated.user_phone,
                 voice_id=updated.voice_id,
             ),
         )
