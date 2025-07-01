@@ -83,7 +83,7 @@ class AssistantCreate(BaseModel):
     )
     whatsapp_number: Optional[str] = Field(
         None,
-        description="WhatsApp number for the assistant",
+        description="WhatsApp number of the user",
         example="+15551234567",
     )
     create_infra: Optional[bool] = Field(
