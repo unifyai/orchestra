@@ -210,6 +210,7 @@ def create_assistant(
         created_email = None
         created_phone = None
         created_pubsub = None
+        created_whatsapp = None
         created_job = None
         started_job = False
 
@@ -254,19 +255,20 @@ def create_assistant(
 
                 # Step 4: create whatsapp sender if number is provided
                 if assistant_in.user_whatsapp_number:
-                    whatsapp_response = create_whatsapp_sender(
-                        assistant_in.user_whatsapp_number,
-                        assistant_in.first_name,
-                        assistant_in.surname,
-                    )
-                    if "detail" in whatsapp_response:
-                        raise Exception(
-                            f"WhatsApp sender creation failed: {whatsapp_response['detail']}",
-                        )
-                    created_whatsapp = whatsapp_response.get("sid")
-                    print(
-                        f"WHATSAPP SENDER CREATED FOR: {assistant_in.whatsapp_number}"
-                    )
+                    print("WHATSAPP SENDER CREATED")
+                    # whatsapp_response = create_whatsapp_sender(
+                    #     assistant_in.user_whatsapp_number,
+                    #     assistant_in.first_name,
+                    #     assistant_in.surname,
+                    # )
+                    # if "detail" in whatsapp_response:
+                    #     raise Exception(
+                    #         f"WhatsApp sender creation failed: {whatsapp_response['detail']}",
+                    #     )
+                    # created_whatsapp = whatsapp_response.get("sid")
+                    # print(
+                    #     f"WHATSAPP SENDER CREATED FOR: {assistant_in.whatsapp_number}"
+                    # )
 
                 # Step 5: create pubsub topic
                 pubsub_response = create_pubsub_topic(str(assistant_id))
