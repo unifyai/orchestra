@@ -853,36 +853,75 @@ def create_logs_internal(
     provided_unique_ids = None
     if context_obj and context_obj.unique_id_names:
         unique_id_names = context_obj.unique_id_names or []
-
         unique_id_names_set = set(unique_id_names)
 
-        # 1. Forbid explicitly setting unique ID columns in entries/params
+        # 1. Extract parent IDs from entries/params and validate nesting rules
+        all_parent_ids = []
         for i in range(total_logs):
-            current_data = {
-                **(entries_list[min(i, len(entries_list) - 1)] or {}),
-                **(params_list[min(i, len(params_list) - 1)] or {}),
-            }
-            for key in current_data:
+            current_entries = entries_list[min(i, len(entries_list) - 1)] or {}
+            current_params = params_list[min(i, len(params_list) - 1)] or {}
+
+            # Merge entries and params to check for unique ID columns
+            current_data = {**current_entries, **current_params}
+
+            # Extract parent IDs that match unique ID column names
+            parent_ids = {}
+            for key in list(current_data.keys()):
                 if key in unique_id_names_set:
+                    parent_ids[key] = current_data[key]
+
+            # Validate parent IDs follow proper nesting rules
+            if parent_ids:
+                # Cannot provide the rightmost (auto-incremented) column
+                rightmost_col = unique_id_names[-1]
+                if rightmost_col in parent_ids:
                     raise HTTPException(
                         status_code=400,
-                        detail=f"Unique ID column '{key}' cannot be set explicitly. Use 'unique_id_parents' to specify parent IDs for generation.",
+                        detail=f"Cannot provide value for rightmost unique ID column '{rightmost_col}'. This column is auto-incremented.",
                     )
 
-        # 2. Use 'unique_id_parents' as the source for ID generation context
-        parent_ids = request.unique_id_parents or {}
+                # Cannot skip hierarchy levels - must provide consecutive columns from left
+                provided_indices = [
+                    unique_id_names.index(key) for key in parent_ids.keys()
+                ]
+                if provided_indices:
+                    provided_indices.sort()
+                    # Check if indices are consecutive starting from 0
+                    expected_indices = list(range(len(provided_indices)))
+                    if provided_indices != expected_indices:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Parent IDs must be provided for consecutive columns starting from the leftmost. "
+                            f"Expected columns: {unique_id_names[:len(provided_indices)]}, "
+                            f"but got: {list(parent_ids.keys())}",
+                        )
 
-        # Validate that parent keys are valid unique ID names
-        for key in parent_ids:
-            if key not in unique_id_names_set:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid key '{key}' in 'unique_id_parents'. Allowed keys are: {unique_id_names}",
-                )
+                # Validate that parent keys are valid unique ID names (redundant check but kept for safety)
+                for key in parent_ids:
+                    if key not in unique_id_names_set:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Invalid parent ID key '{key}'. Allowed keys are: {unique_id_names[:-1]}",
+                        )
 
-        # Construct the `provided_unique_ids` list for the DAO.
-        # It's a list of the same parent_ids dictionary, one for each log being created in the batch.
-        provided_unique_ids = [parent_ids.copy() for _ in range(total_logs)]
+            all_parent_ids.append(parent_ids)
+
+        # 2. Pop parent ID keys from original entries/params to prevent them from becoming log fields
+        for i in range(total_logs):
+            current_entries = entries_list[min(i, len(entries_list) - 1)]
+            current_params = params_list[min(i, len(params_list) - 1)]
+            parent_ids = all_parent_ids[i]
+
+            # Remove parent ID keys from entries and params
+            if current_entries:
+                for key in parent_ids:
+                    current_entries.pop(key, None)
+            if current_params:
+                for key in parent_ids:
+                    current_params.pop(key, None)
+
+        # 3. Construct the `provided_unique_ids` list for the DAO
+        provided_unique_ids = all_parent_ids
 
     # Bulk create all log events in one operation
     log_event_ids, row_ids = log_event_dao.bulk_create(
