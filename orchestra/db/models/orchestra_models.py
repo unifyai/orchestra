@@ -1130,7 +1130,8 @@ class Assistant(Base):
     email = Column(String, nullable=True)
     phone = Column(String, nullable=True)
     user_phone = Column(String, nullable=True)
-    whatsapp_number = Column(String, nullable=True)
+    user_whatsapp_number = Column(String, nullable=True)
+    assistant_whatsapp_number = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
     recordings = relationship(

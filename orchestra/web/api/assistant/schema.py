@@ -81,7 +81,7 @@ class AssistantCreate(BaseModel):
         description="Contact phone number of the user",
         example="+15551234567",
     )
-    whatsapp_number: Optional[str] = Field(
+    user_whatsapp_number: Optional[str] = Field(
         None,
         description="WhatsApp number of the user",
         example="+15551234567",
@@ -113,7 +113,7 @@ class AssistantCreate(BaseModel):
                 "email": "ada.lovelace@unify.ai",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "user_phone": "+15551234567",
-                "whatsapp_number": "+15551234567",
+                "user_whatsapp_number": "+15551234567",
             },
         }
 
@@ -143,6 +143,11 @@ class AssistantRead(AssistantCreate):
         description="Phone number of the assistant",
         example="+15551234567",
     )
+    assistant_whatsapp_number: Optional[str] = Field(
+        None,
+        description="WhatsApp number of the assistant",
+        example="+15551234567",
+    )
 
     class Config:
         orm_mode = True
@@ -160,7 +165,8 @@ class AssistantRead(AssistantCreate):
                 "email": "ada.lovelace@unify.ai",
                 "phone": "+15551234567",
                 "user_phone": "+15551234567",
-                "whatsapp_number": "+15551234567",
+                "user_whatsapp_number": "+15551234567",
+                "assistant_whatsapp_number": "+15551234567",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "agent_id": "12345",
                 "created_at": "2025-04-25T10:30:00Z",
@@ -205,9 +211,14 @@ class AssistantUpdate(BaseModel):
         description="Email address for the assistant",
         example="ada.lovelace@newdomain.com",
     )
-    whatsapp_number: Optional[str] = Field(
+    user_whatsapp_number: Optional[str] = Field(
         None,
-        description="WhatsApp number for Twilio integration",
+        description="WhatsApp number of the user",
+        example="+15559876543",
+    )
+    assistant_whatsapp_number: Optional[str] = Field(
+        None,
+        description="WhatsApp number of the assistant",
         example="+15559876543",
     )
     voice_id: Optional[str] = Field(  # This is Cartesia's voice ID
@@ -230,7 +241,8 @@ class AssistantUpdate(BaseModel):
                 "about": "Award-winning mathematician specializing in algorithm development",
                 "user_phone": "+15551234567",
                 "phone": "+15559876543",
-                "whatsapp_number": "+15559876543",
+                "user_whatsapp_number": "+15559876543",
+                "assistant_whatsapp_number": "+15559876543",
                 "email": "ada.lovelace@newdomain.com",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "country": "GB",
