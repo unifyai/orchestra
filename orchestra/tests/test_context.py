@@ -1549,7 +1549,7 @@ async def test_nested_ids_explicit_set_fails(client: AsyncClient):
         entries={"task_id": 99},
     )
     assert log_response.status_code == 400
-    assert "cannot be set explicitly" in log_response.json()["detail"]
+    assert "Parent ID combination" in log_response.json()["detail"]
 
 
 @pytest.mark.anyio
@@ -1570,7 +1570,7 @@ async def test_nested_ids_non_existent_parent_fails(client: AsyncClient):
         client,
         project_name,
         context=context_name,
-        unique_id_parents={"user": 999},  # This user has not been created
+        entries={"user": 999},  # This user has not been created
         params={},
     )
     assert log_response.status_code == 400  # Or appropriate error code
@@ -1610,7 +1610,7 @@ async def test_nested_unique_ids_increment(client: AsyncClient):
         client,
         project_name,
         context=context_name,
-        unique_id_parents={"user": 0},
+        entries={"user": 0},
         params={},
     )
     assert res.status_code == 200, res.text
@@ -1623,7 +1623,7 @@ async def test_nested_unique_ids_increment(client: AsyncClient):
         client,
         project_name,
         context=context_name,
-        unique_id_parents={"user": 0, "session": 1},
+        entries={"user": 0, "session": 1},
         params={},
     )
     assert res.status_code == 200, res.text
@@ -1636,7 +1636,7 @@ async def test_nested_unique_ids_increment(client: AsyncClient):
         client,
         project_name,
         context=context_name,
-        unique_id_parents={"user": 0},
+        entries={"user": 0},
         params={},
     )
     assert res.status_code == 200, res.text
@@ -1686,10 +1686,8 @@ async def test_nested_ids_batch_creation(client: AsyncClient):
         json={
             "project": project_name,
             "context": context_name,
-            # Create a batch of 5 logs, each with some data
-            "entries": [{"data": f"step_{i}"} for i in range(batch_size)],
-            # All logs in this batch share the same parent
-            "unique_id_parents": {"run_id": 0},
+            # Create a batch of 5 logs, each with some data and parent ID
+            "entries": [{"data": f"step_{i}", "run_id": 0} for i in range(batch_size)],
         },
         headers=HEADERS,
     )

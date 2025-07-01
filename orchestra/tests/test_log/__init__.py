@@ -139,7 +139,6 @@ def _create_log(
     params=None,
     entries=None,
     context=None,
-    unique_id_parents=None,
 ):
     _headers = HEADERS if user == 1 else HEADERS_2
     if entries is None:
@@ -220,7 +219,6 @@ def _create_log(
             "params": params,
             "entries": entries,
             "context": context,
-            "unique_id_parents": unique_id_parents,
         },
         headers=_headers,
     )
