@@ -1,6 +1,7 @@
 import json
 import random
 import re
+import traceback
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -1871,6 +1872,18 @@ def _join_logs(
     """
     try:
         # Build subqueries for both sets of filtering criteria
+        context_a = pair_of_args[0].get("context")
+        context_b = pair_of_args[1].get("context")
+        if not context_a or not context_b:
+            raise ValueError(
+                "Contexts for both queries must be provided in the pair of args. Got: {context_a} and {context_b}",
+            )
+        # replace context_a with 'A' alias and context_b with 'B' alias
+        join_expr = join_expr.replace(context_a, "A").replace(context_b, "B")
+        if columns is not None:
+            columns = [
+                col.replace(context_a, "A").replace(context_b, "B") for col in columns
+            ]
         subq_a, fields_a = _build_log_subquery(
             args=pair_of_args[0],
             project_name=project_name,
@@ -1928,4 +1941,4 @@ def _join_logs(
         return new_log_ids
 
     except Exception as e:
-        raise ValueError(f"Failed to join logs: {str(e)}")
+        raise ValueError(f"Failed to join logs: {traceback.format_exc()}")
