@@ -164,7 +164,7 @@ def create_assistant(
     # Determine total cost as base creation cost
     # plus premium for each social account added
     total_creation_cost = settings.assistant_creation_cost
-    if assistant_in.whatsapp_number:
+    if assistant_in.user_whatsapp_number:
         total_creation_cost += settings.assistant_creation_cost
 
     # Phase 1: Pre-checks and prepare assistant data
@@ -198,7 +198,7 @@ def create_assistant(
             phone=assistant_in.phone,
             email=assistant_in.email,
             country=assistant_in.country,
-            whatsapp_number=assistant_in.whatsapp_number,
+            user_whatsapp_number=assistant_in.user_whatsapp_number,
         )
 
         # Commit the assistant creation before infrastructure setup
@@ -253,9 +253,9 @@ def create_assistant(
                 print(f"PHONE CREATED: {created_phone}")
 
                 # Step 4: create whatsapp sender if number is provided
-                if assistant_in.whatsapp_number:
+                if assistant_in.user_whatsapp_number:
                     whatsapp_response = create_whatsapp_sender(
-                        assistant_in.whatsapp_number,
+                        assistant_in.user_whatsapp_number,
                         assistant_in.first_name,
                         assistant_in.surname,
                     )
@@ -263,8 +263,10 @@ def create_assistant(
                         raise Exception(
                             f"WhatsApp sender creation failed: {whatsapp_response['detail']}",
                         )
-                    created_whatsapp = assistant_in.whatsapp_number
-                    print(f"WHATSAPP SENDER CREATED FOR: {created_whatsapp}")
+                    created_whatsapp = whatsapp_response.get("sid")
+                    print(
+                        f"WHATSAPP SENDER CREATED FOR: {assistant_in.whatsapp_number}"
+                    )
 
                 # Step 5: create pubsub topic
                 pubsub_response = create_pubsub_topic(str(assistant_id))
@@ -314,7 +316,8 @@ def create_assistant(
                     email=created_email,
                     phone=created_phone,
                     user_phone=assistant_in.user_phone,
-                    whatsapp_number=assistant_in.whatsapp_number,
+                    user_whatsapp_number=assistant_in.user_whatsapp_number,
+                    assistant_whatsapp_number=created_whatsapp,
                 )
                 # Commit the infrastructure updates
                 session.commit()
@@ -453,7 +456,8 @@ def create_assistant(
             email=assistant.email,
             voice_id=assistant.voice_id,
             country=assistant.country,
-            whatsapp_number=assistant.whatsapp_number,
+            user_whatsapp_number=assistant.user_whatsapp_number,
+            assistant_whatsapp_number=assistant.assistant_whatsapp_number,
             user_phone=assistant.user_phone,
         ),
     )
@@ -561,7 +565,8 @@ def list_assistants(
                     updated_at=a.updated_at,
                     phone=a.phone,
                     user_phone=a.user_phone,
-                    whatsapp_number=a.whatsapp_number,
+                    user_whatsapp_number=a.user_whatsapp_number,
+                    assistant_whatsapp_number=a.assistant_whatsapp_number,
                     email=a.email,
                     voice_id=a.voice_id,
                 )
@@ -793,7 +798,9 @@ def update_assistant_config(
             about=update.about,
             phone=update.phone,
             email=update.email,
-            whatsapp_number=update.whatsapp_number,
+            user_phone=update.user_phone,
+            user_whatsapp_number=update.user_whatsapp_number,
+            assistant_whatsapp_number=update.assistant_whatsapp_number,
             weekly_limit=weekly_limit,
             max_parallel=update.max_parallel,
             voice_id=update.voice_id,
@@ -820,7 +827,8 @@ def update_assistant_config(
                 updated_at=updated.updated_at,
                 phone=updated.phone,
                 email=updated.email,
-                whatsapp_number=updated.whatsapp_number,
+                user_whatsapp_number=updated.user_whatsapp_number,
+                assistant_whatsapp_number=updated.assistant_whatsapp_number,
                 user_phone=updated.user_phone,
                 voice_id=updated.voice_id,
             ),
