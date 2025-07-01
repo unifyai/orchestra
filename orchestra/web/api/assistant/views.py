@@ -53,7 +53,6 @@ from orchestra.web.api.utils.assistant_infra import (
     create_email,
     create_phone_number,
     create_pubsub_topic,
-    create_whatsapp_sender,
     delete_cloud_run_job,
     delete_email,
     delete_phone_number,
@@ -253,22 +252,9 @@ def create_assistant(
                 created_phone = phone_response.get("phoneNumber")
                 print(f"PHONE CREATED: {created_phone}")
 
-                # Step 4: create whatsapp sender if number is provided
+                # Step 4: assign whatsapp sender if whatsapp number is provided
                 if assistant_in.user_whatsapp_number:
-                    print("WHATSAPP SENDER CREATED")
-                    # whatsapp_response = create_whatsapp_sender(
-                    #     assistant_in.user_whatsapp_number,
-                    #     assistant_in.first_name,
-                    #     assistant_in.surname,
-                    # )
-                    # if "detail" in whatsapp_response:
-                    #     raise Exception(
-                    #         f"WhatsApp sender creation failed: {whatsapp_response['detail']}",
-                    #     )
-                    # created_whatsapp = whatsapp_response.get("sid")
-                    # print(
-                    #     f"WHATSAPP SENDER CREATED FOR: {assistant_in.whatsapp_number}"
-                    # )
+                    print("[PLACEHOLDER] - WHATSAPP SENDER ASSIGNED")
 
                 # Step 5: create pubsub topic
                 pubsub_response = create_pubsub_topic(str(assistant_id))
@@ -788,13 +774,41 @@ def update_assistant_config(
     Allows partial updates to an assistant's configuration. Only the fields
     provided in the request will be updated, while others remain unchanged.
     """
-    dao = AssistantDAO(session)
+    user_id = request.state.user_id
+    users_dao = UsersDAO(session)
+    assistant_dao = AssistantDAO(session)
+
     try:
         weekly_limit: Optional[Decimal] = None
         if update.weekly_limit is not None:
             weekly_limit = Decimal(update.weekly_limit)
 
-        updated = dao.update_assistant(
+        # Create / update social account:
+        # 1- Directly update from input value if provided, or
+        # 2- Check if the assistant doesn't have a user account already and if a user account value is provided
+        # 3- If so and if user has enough credits (production), assign the whatsapp account to the assistant
+        assistant_whatsapp_number = (
+            update.assistant_whatsapp_number
+            if update.assistant_whatsapp_number
+            else None
+        )
+        if not update.assistant_whatsapp_number:
+            assistant = assistant_dao.get_assistant_by_id(
+                user_id=user_id,
+                agent_id=assistant_id,
+            )
+            if not assistant.user_whatsapp_number and update.user_whatsapp_number:
+                if not settings.is_staging:
+                    user = users_dao.get_user_with_id(user_id)
+                    # Cost to create a social account
+                    if user.credits < settings.assistant_creation_cost:
+                        raise HTTPException(
+                            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                            detail="Insufficient credits to create a whatsapp number.",
+                        )
+                print("[PLACEHOLDER] - WHATSAPP SENDER ASSIGNED")
+
+        updated = assistant_dao.update_assistant(
             user_id=request.state.user_id,
             agent_id=assistant_id,
             about=update.about,
@@ -802,7 +816,7 @@ def update_assistant_config(
             email=update.email,
             user_phone=update.user_phone,
             user_whatsapp_number=update.user_whatsapp_number,
-            assistant_whatsapp_number=update.assistant_whatsapp_number,
+            assistant_whatsapp_number=assistant_whatsapp_number,
             weekly_limit=weekly_limit,
             max_parallel=update.max_parallel,
             voice_id=update.voice_id,
@@ -830,7 +844,7 @@ def update_assistant_config(
                 phone=updated.phone,
                 email=updated.email,
                 user_whatsapp_number=updated.user_whatsapp_number,
-                assistant_whatsapp_number=updated.assistant_whatsapp_number,
+                assistant_whatsapp_number=assistant_whatsapp_number,
                 user_phone=updated.user_phone,
                 voice_id=updated.voice_id,
             ),
