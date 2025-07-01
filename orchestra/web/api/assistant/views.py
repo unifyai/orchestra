@@ -161,11 +161,18 @@ def create_assistant(
     api_key = api_keys[0][0].key
     assistant = None
 
+    # Determine total cost as base creation cost
+    # plus premium for each social account added
+    total_creation_cost = settings.assistant_creation_cost
+    if assistant_in.whatsapp_number:
+        total_creation_cost += settings.assistant_creation_cost
+
     # Phase 1: Pre-checks and prepare assistant data
     try:
         if not settings.is_staging:
             user = users_dao.get_user_with_id(user_id)
-            if user.credits < settings.assistant_creation_cost:
+
+            if user.credits < total_creation_cost:
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail="Insufficient credits to create an assistant.",
@@ -408,7 +415,7 @@ def create_assistant(
             # Refresh session before credit operation to ensure connection is valid
             users_dao.recharge_credit(
                 user_id=user_id,
-                quantity=-float(settings.assistant_creation_cost),
+                quantity=-float(total_creation_cost),
             )
             session.commit()
         except Exception as e_commit:
