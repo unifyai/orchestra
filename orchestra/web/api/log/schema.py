@@ -91,7 +91,10 @@ class CreateLogConfig(BaseModel):
         "for batch processing. When using lists for both params and entries, their lengths must match. "
         "Values must be JSON serializable. If a `explicit_types` dictionary is present, its values "
         "will override the inferred types of the entries. The explicit_types dictionary can also specify if a field is mutable via a 'mutable' boolean flag, or unique via a 'unique' boolean flag. "
-        "For enum types, use the EnumType model with 'values' list and optional 'restrict' flag. Omit 'values' to create an open enum (auto-seeding).",
+        "For enum types, use the EnumType model with 'values' list and optional 'restrict' flag. Omit 'values' to create an open enum (auto-seeding). "
+        "For contexts with nested unique IDs, parent ID values for the leftmost N-1 unique columns can be supplied as normal param keys. "
+        "The rightmost column is always auto-incremented. For example, if unique columns are ['user', 'session', 'step'], "
+        "you can provide 'user' and 'session' values in params, and 'step' will be auto-generated.",
         json_schema_extra={
             "examples": [
                 {
@@ -120,6 +123,11 @@ class CreateLogConfig(BaseModel):
                     {"system-prompt": "prompt1"},
                     {"system-prompt": "prompt2"},
                 ],
+                # Example with nested unique IDs - providing parent IDs directly
+                [
+                    {"user": 100, "session": 4, "system-prompt": "prompt1"},
+                    {"user": 100, "session": 4, "system-prompt": "prompt2"},
+                ],
             ],
         },
     )
@@ -130,7 +138,10 @@ class CreateLogConfig(BaseModel):
         "for batch processing. When using lists for both params and entries, their lengths must match. "
         "Values must be JSON serializable. If a `explicit_types` dictionary is present, "
         "its values will override the inferred types of the entries. The explicit_types dictionary can also specify if a field is mutable via a 'mutable' boolean flag, or unique via a 'unique' boolean flag. "
-        "For enum types, use the EnumType model with 'values' list and optional 'restrict' flag. Omit 'values' to create an open enum (auto-seeding).",
+        "For enum types, use the EnumType model with 'values' list and optional 'restrict' flag. Omit 'values' to create an open enum (auto-seeding). "
+        "For contexts with nested unique IDs, parent ID values for the leftmost N-1 unique columns can be supplied as normal entry keys. "
+        "The rightmost column is always auto-incremented. For example, if unique columns are ['user', 'session', 'step'], "
+        "you can provide 'user' and 'session' values in entries, and 'step' will be auto-generated.",
         json_schema_extra={
             "examples": [
                 {
@@ -156,13 +167,13 @@ class CreateLogConfig(BaseModel):
                     {"input": "test1", "score": 0.8},
                     {"input": "test2", "score": 0.9},
                 ],
+                # Example with nested unique IDs - providing parent IDs directly
+                [
+                    {"user": 100, "session": 4, "data": "step1"},
+                    {"user": 100, "session": 4, "data": "step2"},
+                ],
             ],
         },
-    )
-    unique_id_parents: Optional[Dict[str, Union[str, int]]] = Field(
-        default=None,
-        description="Parent IDs for generating a nested unique ID. The keys must match the parent columns in the unique ID list.",
-        example={"user": 100, "session": 4},
     )
 
 
