@@ -3,6 +3,7 @@ import time
 from decimal import Decimal
 from typing import List, Optional
 
+import requests
 from fastapi import (
     APIRouter,
     Depends,
@@ -36,6 +37,7 @@ from orchestra.web.api.assistant.schema import (
     AssistantCreate,
     AssistantPhotoUploadResponse,
     AssistantRead,
+    AssistantStatus,
     AssistantUpdate,
     InfoResponse,
     PhotoGenerateRequest,
@@ -2329,3 +2331,86 @@ async def admin_list_assistant_emails(
     """Return every non-null email address that has been set on an Assistant."""
     emails = dao.list_all_assistant_emails()
     return InfoResponse(info=emails)
+
+
+@admin_router.get(
+    "/assistant/{assistant_id}/status",
+    response_model=InfoResponse[AssistantStatus],
+    status_code=status.HTTP_200_OK,
+    summary="Admin: Get assistant service status",
+    description="Retrieves the live status of a specific assistant's running service. Prioritizes a configured admin key, but can fall back to the request's auth header.",
+    tags=["Assistants", "Admin"],
+    responses={
+        200: {
+            "description": "Assistant status retrieved successfully.",
+        },
+        404: {
+            "description": "Assistant service not found or not responding.",
+        },
+        500: {
+            "description": "Configuration or authorization error.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "ASSISTANT_ADMIN_KEY is not configured, and a valid Bearer token was not provided in the request header as a fallback.",
+                    },
+                },
+            },
+        },
+        503: {
+            "description": "Could not connect to the assistant service.",
+        },
+    },
+)
+def admin_get_assistant_status(
+    assistant_id: str,
+    request: Request,
+) -> InfoResponse[AssistantStatus]:
+    """
+    Get the live status of an assistant's dedicated service.
+    """
+
+    # Prioritize the key from settings if unity admin key
+    # needs to be different from the orchestra admin key.
+    # Otherwise use the key provided in the auth header.
+    auth_header = None
+    if settings.UNITY_ADMIN_KEY:
+        auth_header = f"Bearer {settings.UNITY_ADMIN_KEY}"
+    else:
+        incoming_auth_header = request.headers.get("Authorization")
+        if incoming_auth_header:
+            auth_header = incoming_auth_header
+    if not auth_header:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Admin key is not configured.",
+        )
+
+    service_url = (
+        f"https://unity-{assistant_id}-262420637606.us-central1.run.app/status"
+    )
+    headers = {"Authorization": auth_header}
+
+    try:
+        response = requests.get(service_url, headers=headers, timeout=10)
+        response.raise_for_status()
+        return InfoResponse(info=response.json())
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 404:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Assistant service for ID '{assistant_id}' not found or failed to respond.",
+            )
+        try:
+            detail = e.response.json().get("detail", str(e))
+        except requests.exceptions.JSONDecodeError:
+            detail = str(e)
+        raise HTTPException(
+            status_code=e.response.status_code,
+            detail=f"Assistant service returned an error: {detail}",
+        )
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Connection to assistant service failed: {str(e)}",
+        )
