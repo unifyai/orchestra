@@ -57,6 +57,7 @@ from orchestra.web.api.utils.assistant_infra import (
     delete_email,
     delete_phone_number,
     delete_pubsub_topic,
+    get_social_platforms_costs,
     stop_cloud_run_job,
     watch_email,
 )
@@ -162,9 +163,29 @@ def create_assistant(
 
     # Determine total cost as base creation cost
     # plus premium for each social account added
-    total_creation_cost = settings.assistant_creation_cost
     if assistant_in.user_whatsapp_number:
-        total_creation_cost += settings.assistant_creation_cost
+        try:
+            platforms_response = get_social_platforms_costs()
+            platforms = platforms_response.get("platforms")
+
+            if not isinstance(platforms, dict):
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Could not parse social platform costs. Expected a dictionary, got: {platforms}",
+                )
+            whatsapp_cost = platforms.get("whatsapp")
+            if whatsapp_cost is None:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="WhatsApp cost not found in social platform costs response.",
+                )
+            total_creation_cost += Decimal(whatsapp_cost)
+        except Exception as e_costs:
+
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to fetch or process social platform costs. Details: {str(e_costs)}",
+            )
 
     # Phase 1: Pre-checks and prepare assistant data
     try:
@@ -777,6 +798,7 @@ def update_assistant_config(
     user_id = request.state.user_id
     users_dao = UsersDAO(session)
     assistant_dao = AssistantDAO(session)
+
     # Check assistant existence before any updates
     existing_assistant = assistant_dao.get_assistant_by_id(
         user_id=request.state.user_id,
@@ -794,25 +816,55 @@ def update_assistant_config(
             weekly_limit = Decimal(update.weekly_limit)
 
         # Create / update social account:
-        # 1- Directly update from input value if provided
-        # 2- Otherwise, use existing_assistant safely
+        # 1- Directly update from input value if provided, or
+        # 2- Check if the assistant doesn't have a user account already and if a user account value is provided
         # 3- If so and if user has enough credits (production), assign the whatsapp account to the assistant
-        assistant_whatsapp_number = update.assistant_whatsapp_number or None
+        assistant_whatsapp_number = (
+            update.assistant_whatsapp_number
+            if update.assistant_whatsapp_number
+            else None
+        )
         if not update.assistant_whatsapp_number:
-            # Use existing_assistant, which is guaranteed non-null
-            if (
-                not existing_assistant.user_whatsapp_number
-                and update.user_whatsapp_number
-            ):
+            assistant = assistant_dao.get_assistant_by_id(
+                user_id=user_id,
+                agent_id=assistant_id,
+            )
+            if not assistant.user_whatsapp_number and update.user_whatsapp_number:
                 if not settings.is_staging:
-                    user = users_dao.get_user_with_id(user_id)
                     # Cost to create a social account
-                    if user.credits < settings.assistant_creation_cost:
+                    try:
+                        platforms_response = get_social_platforms_costs()
+                        platforms = platforms_response.get("platforms")
+
+                        if not isinstance(platforms, dict):
+                            raise HTTPException(
+                                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                detail=f"Could not parse social platform costs. Expected a dictionary, got: {platforms}",
+                            )
+                        cost = platforms.get("whatsapp")
+                        if cost is None:
+                            raise HTTPException(
+                                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                detail="WhatsApp cost not found in social platform costs response.",
+                            )
+                    except Exception as e_costs:
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"Failed to fetch or process social platform costs. Details: {str(e_costs)}",
+                        )
+                    user = users_dao.get_user_with_id(user_id)
+                    decimal_cost = Decimal(cost)
+                    if user.credits < decimal_cost:
                         raise HTTPException(
                             status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                            detail="Insufficient credits to create a whatsapp number.",
+                            detail="Insufficient credits to add a WhatsApp number.",
                         )
-            print("[PLACEHOLDER] - WHATSAPP SENDER ASSIGNED")
+                    users_dao.recharge_credit(
+                        user_id=user_id,
+                        quantity=-float(decimal_cost),
+                    )
+
+                print("[PLACEHOLDER] - WHATSAPP SENDER ASSIGNED")
 
         updated = assistant_dao.update_assistant(
             user_id=request.state.user_id,

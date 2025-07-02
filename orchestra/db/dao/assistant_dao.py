@@ -171,7 +171,7 @@ class AssistantDAO:
             stmt = stmt.where(Assistant.user_whatsapp_number == user_whatsapp_number)
         if assistant_whatsapp_number is not None:
             stmt = stmt.where(
-                Assistant.assistant_whatsapp_number == assistant_whatsapp_number,
+                Assistant.assistant_whatsapp_number == assistant_whatsapp_number
             )
         if email is not None:
             stmt = stmt.where(Assistant.email == email)
