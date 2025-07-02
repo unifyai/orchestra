@@ -463,6 +463,14 @@ def admin_list_assistants(
         None,
         description="Only return assistants whose email address matches this value.",
     ),
+    user_whatsapp_number: Optional[str] = Query(
+        None,
+        description="Only return assistants whose user WhatsApp number matches this value.",
+    ),
+    assistant_whatsapp_number: Optional[str] = Query(
+        None,
+        description="Only return assistants whose assistant WhatsApp number matches this value.",
+    ),
     session=Depends(get_db_session),
 ) -> InfoResponse[List[AssistantRead]]:
     """
@@ -475,7 +483,12 @@ def admin_list_assistants(
     phone = normalize_phone_parameter(phone)
     dao = AssistantDAO(session)
     try:
-        assistants = dao.list_all_assistants(phone=phone, email=email)
+        assistants = dao.list_all_assistants(
+            phone=phone,
+            email=email,
+            user_whatsapp_number=user_whatsapp_number,
+            assistant_whatsapp_number=assistant_whatsapp_number,
+        )
         return InfoResponse(
             info=[
                 AssistantRead(
@@ -493,7 +506,8 @@ def admin_list_assistants(
                     phone=a.phone,
                     user_phone=a.user_phone,
                     email=a.email,
-                    whatsapp_sid=a.whatsapp_sid,
+                    user_whatsapp_number=a.user_whatsapp_number,
+                    assistant_whatsapp_number=a.assistant_whatsapp_number,
                     voice_id=a.voice_id,
                 )
                 for a in assistants
