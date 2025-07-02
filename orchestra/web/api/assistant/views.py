@@ -57,6 +57,7 @@ from orchestra.web.api.utils.assistant_infra import (
     delete_email,
     delete_phone_number,
     delete_pubsub_topic,
+    get_social_platforms_costs,
     stop_cloud_run_job,
     watch_email,
 )
@@ -164,7 +165,28 @@ def create_assistant(
     # plus premium for each social account added
     total_creation_cost = settings.assistant_creation_cost
     if assistant_in.user_whatsapp_number:
-        total_creation_cost += settings.assistant_creation_cost
+        try:
+            platforms_response = get_social_platforms_costs()
+            platforms = platforms_response.get("platforms")
+
+            if not isinstance(platforms, dict):
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Could not parse social platform costs. Expected a dictionary, got: {platforms}",
+                )
+            whatsapp_cost = platforms.get("whatsapp")
+            if whatsapp_cost is None:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="WhatsApp cost not found in social platform costs response.",
+                )
+            total_creation_cost += Decimal(whatsapp_cost)
+        except Exception as e_costs:
+
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to fetch or process social platform costs. Details: {str(e_costs)}",
+            )
 
     # Phase 1: Pre-checks and prepare assistant data
     try:
@@ -799,13 +821,39 @@ def update_assistant_config(
             )
             if not assistant.user_whatsapp_number and update.user_whatsapp_number:
                 if not settings.is_staging:
-                    user = users_dao.get_user_with_id(user_id)
                     # Cost to create a social account
-                    if user.credits < settings.assistant_creation_cost:
+                    try:
+                        platforms_response = get_social_platforms_costs()
+                        platforms = platforms_response.get("platforms")
+
+                        if not isinstance(platforms, dict):
+                            raise HTTPException(
+                                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                detail=f"Could not parse social platform costs. Expected a dictionary, got: {platforms}",
+                            )
+                        cost = platforms.get("whatsapp")
+                        if cost is None:
+                            raise HTTPException(
+                                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                detail="WhatsApp cost not found in social platform costs response.",
+                            )
+                    except Exception as e_costs:
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"Failed to fetch or process social platform costs. Details: {str(e_costs)}",
+                        )
+                    user = users_dao.get_user_with_id(user_id)
+                    decimal_cost = Decimal(cost)
+                    if user.credits < decimal_cost:
                         raise HTTPException(
                             status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                            detail="Insufficient credits to create a whatsapp number.",
+                            detail="Insufficient credits to add a WhatsApp number.",
                         )
+                    users_dao.recharge_credit(
+                        user_id=user_id,
+                        quantity=-float(decimal_cost),
+                    )
+
                 print("[PLACEHOLDER] - WHATSAPP SENDER ASSIGNED")
 
         updated = assistant_dao.update_assistant(
