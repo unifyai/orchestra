@@ -357,7 +357,7 @@ def _get_logs_query(
     except (IndexError, AttributeError):
         raise not_found(f"Project {project}")
 
-    # Phase 1: filtering, sorting, pagination, etc.
+    # Phase 1: filtering, sorting, pagination, etc.
     log_event_query = session.query(LogEvent.id).filter(
         LogEvent.project_id == project_id,
     )
@@ -1730,6 +1730,8 @@ def _create_logs_from_joined_rows(
     result_rows,
     project_id: int,
     context_id: int,
+    field_type_dao: FieldTypeDAO,
+    context_dao: ContextDAO,
     session,
 ) -> List[int]:
     """
@@ -1739,6 +1741,8 @@ def _create_logs_from_joined_rows(
         result_rows: Result rows from the join query
         project_id: ID of the project
         context_id: ID of the context
+        field_type_dao: FieldTypeDAO instance for field type operations
+        context_dao: ContextDAO instance for context operations
         session: SQLAlchemy session
 
     Returns:
@@ -1747,7 +1751,18 @@ def _create_logs_from_joined_rows(
     new_log_ids = []
     now = datetime.now(timezone.utc)
 
-    # Prepare bulk insert collections
+    # Get the context object to check if it's versioned
+    context_obj = session.get(Context, context_id)
+
+    # Get existing field types for the project/context
+    field_types = field_type_dao.get_field_types(
+        project_id,
+        return_mutable=True,
+        context_id=context_id,
+    )
+
+    # Prepare collections for bulk operations
+    new_field_types = []
     log_events = []
     log_event_contexts = []
     logs = []
@@ -1795,6 +1810,37 @@ def _create_logs_from_joined_rows(
 
         # Create individual Log entries for each column in the joined result
         for col, val in row_dict.items():
+            # Check if field type exists, create if not
+            if col not in field_types:
+                # Determine if mutable based on versioned context
+                mutable = context_obj and context_obj.is_versioned
+
+                # Add to new field types collection
+                new_field_types.append(
+                    {
+                        "project_id": project_id,
+                        "field_name": col,
+                        "value": val,
+                        "mutable": mutable,
+                        "unique": False,  # Default to non-unique for joined fields
+                        "field_category": "entry",  # Joined fields are entries
+                        "context_id": context_id,
+                    },
+                )
+            else:
+                # Enforce type consistency for existing fields
+                field_info = field_types.get(col)
+                if field_info:
+                    entered_type = LogDAO.infer_type(col, val)
+                    expected_type = field_info["field_type"]
+
+                    if expected_type and expected_type != "NoneType":
+                        if entered_type != expected_type and entered_type != "NoneType":
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"Type mismatch for field '{col}' in joined result: expected {expected_type}, got {entered_type}",
+                            )
+
             inferred_type = LogDAO.infer_type(col, val)
             logs.append(
                 Log(
@@ -1818,6 +1864,13 @@ def _create_logs_from_joined_rows(
                 )
 
         new_log_ids.append(log_event.id)
+
+    # Bulk create new field types if any
+    try:
+        if new_field_types:
+            field_type_dao.bulk_create_field_types(new_field_types)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     # Bulk insert related records
     session.bulk_save_objects(log_event_contexts)
@@ -1932,6 +1985,8 @@ def _join_logs(
             result_rows=result_rows,
             project_id=project_id,
             context_id=context_id,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
             session=session,
         )
 
