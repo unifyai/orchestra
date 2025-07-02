@@ -153,7 +153,7 @@ def create_assistant(
     assistant_dao = AssistantDAO(session)
     api_key_dao = ApiKeyDAO(session)
     api_keys = api_key_dao.filter(user_id=user_id)
-    if not api_key:
+    if not api_keys:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Unauthorized. Please contact support to get an API key.",
@@ -799,6 +799,17 @@ def update_assistant_config(
     user_id = request.state.user_id
     users_dao = UsersDAO(session)
     assistant_dao = AssistantDAO(session)
+
+    # Check assistant existence before any updates
+    existing_assistant = assistant_dao.get_assistant_by_id(
+        user_id=request.state.user_id,
+        agent_id=assistant_id,
+    )
+    if not existing_assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
 
     try:
         weekly_limit: Optional[Decimal] = None
