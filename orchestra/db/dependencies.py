@@ -155,7 +155,24 @@ def before_cursor_execute(conn, cursor, statement, parameters, context, executem
 
     # Add attributes to span - including standardized user context
     span.set_attribute("db.system", "postgresql")
-    span.set_attribute("db.statement", statement)
+    # Truncate statement to avoid hitting collector limits
+    truncated_statement = (
+        statement[:4000] + "..." if len(statement) > 4000 else statement
+    )
+    span.set_attribute("db.statement", truncated_statement)
+
+    # Add query parameters, with truncation
+    if parameters:
+        try:
+            # Convert parameters to a string representation
+            params_str = str(parameters)
+            if len(params_str) > 1024:
+                params_str = params_str[:1024] + "..."
+            span.set_attribute("db.parameters", params_str)
+        except Exception:
+            # In case of serialization errors, record a placeholder
+            span.set_attribute("db.parameters", "[unserializable]")
+
     span.set_attribute("db.query_type", query_type)
     span.set_attribute("db.table", table)
     span.set_attribute("db.user_id", user_id)
