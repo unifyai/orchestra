@@ -1931,6 +1931,14 @@ def _join_logs(
             raise ValueError(
                 "Contexts for both queries must be provided in the pair of args. Got: {context_a} and {context_b}",
             )
+
+        filter_expr_a = pair_of_args[0].get("filter_expr")
+        filter_expr_b = pair_of_args[1].get("filter_expr")
+        if filter_expr_a:
+            pair_of_args[0]["filter_expr"] = filter_expr_a.replace(context_a + ".", "")
+        if filter_expr_b:
+            pair_of_args[1]["filter_expr"] = filter_expr_b.replace(context_b + ".", "")
+
         # replace context_a with 'A' alias and context_b with 'B' alias
         join_expr = join_expr.replace(context_a, "A").replace(context_b, "B")
         if columns is not None:
