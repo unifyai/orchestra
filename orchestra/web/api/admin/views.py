@@ -466,6 +466,10 @@ def admin_list_assistants(
         None,
         description="Only return assistants whose phone number matches this E.164-style value (leading '+' is URL-encoded).",
     ),
+    user_phone: Optional[str] = Query(
+        None,
+        description="Only return assistants whose user phone number matches this value.",
+    ),
     email: Optional[str] = Query(
         None,
         description="Only return assistants whose email address matches this value.",
@@ -492,6 +496,7 @@ def admin_list_assistants(
     try:
         assistants = dao.list_all_assistants(
             phone=phone,
+            user_phone=user_phone,
             email=email,
             user_whatsapp_number=user_whatsapp_number,
             assistant_whatsapp_number=assistant_whatsapp_number,
@@ -539,6 +544,10 @@ def admin_list_assistants_for_user(
         None,
         description="Only return assistants whose phone number matches this value.",
     ),
+    user_phone: Optional[str] = Query(
+        None,
+        description="Only return assistants whose user phone number matches this value.",
+    ),
     email: Optional[str] = Query(
         None,
         description="Only return assistants whose email address matches this value.",
@@ -561,6 +570,7 @@ def admin_list_assistants_for_user(
         assistants = dao.list_assistants_for_user(
             user_id=user_id,
             phone=phone,
+            user_phone=user_phone,
             email=email,
             user_whatsapp_number=user_whatsapp_number,
             assistant_whatsapp_number=assistant_whatsapp_number,

@@ -73,6 +73,7 @@ class AssistantDAO:
         self,
         user_id: str,
         phone: Optional[str] = None,
+        user_phone: Optional[str] = None,
         email: Optional[str] = None,
         user_whatsapp_number: Optional[str] = None,
         assistant_whatsapp_number: Optional[str] = None,
@@ -83,6 +84,8 @@ class AssistantDAO:
         stmt = select(Assistant).where(Assistant.user_id == user_id)
         if phone is not None:
             stmt = stmt.where(Assistant.phone == phone)
+        if user_phone is not None:
+            stmt = stmt.where(Assistant.user_phone == user_phone)
         if email is not None:
             stmt = stmt.where(Assistant.email == email)
         if user_whatsapp_number is not None:
@@ -171,7 +174,7 @@ class AssistantDAO:
             stmt = stmt.where(Assistant.user_whatsapp_number == user_whatsapp_number)
         if assistant_whatsapp_number is not None:
             stmt = stmt.where(
-                Assistant.assistant_whatsapp_number == assistant_whatsapp_number
+                Assistant.assistant_whatsapp_number == assistant_whatsapp_number,
             )
         if email is not None:
             stmt = stmt.where(Assistant.email == email)
