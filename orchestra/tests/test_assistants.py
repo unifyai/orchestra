@@ -707,13 +707,19 @@ async def test_admin_list_assistants_for_user(client: AsyncClient):
     # Do not create assistant for user2; expect no assistants for user2
 
     # Verify admin endpoint returns only user1's assistants
-    res1 = await client.get(f"/v0/admin/assistant/{user1_id}", headers=ADMIN_HEADERS)
+    res1 = await client.get(
+        f"/v0/admin/assistant/user/{user1_id}",
+        headers=ADMIN_HEADERS,
+    )
     assert res1.status_code == 200
     info1 = res1.json()["info"]
     assert len(info1) == 1 and info1[0]["agent_id"] == aid1
 
     # Verify admin endpoint returns no assistants for user2
-    res2 = await client.get(f"/v0/admin/assistant/{user2['id']}", headers=ADMIN_HEADERS)
+    res2 = await client.get(
+        f"/v0/admin/assistant/user/{user2['id']}",
+        headers=ADMIN_HEADERS,
+    )
     assert res2.status_code == 200
     info2 = res2.json()["info"]
     assert isinstance(info2, list)

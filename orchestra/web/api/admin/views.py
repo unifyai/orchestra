@@ -528,7 +528,7 @@ def admin_list_assistants(
 
 
 @router.get(
-    "/assistant/{user_id}",
+    "/assistant/user/{user_id}",
     response_model=InfoResponse[List[AssistantRead]],
     summary="Admin: list all assistants for a user",
     description="Retrieve all assistants for the specified user_id, optionally filtered by phone, email, or WhatsApp numbers.",
