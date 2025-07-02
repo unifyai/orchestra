@@ -250,6 +250,61 @@ class AssistantUpdate(BaseModel):
         }
 
 
+class AssistantStatus(BaseModel):
+    """
+    Schema for the status response from an assistant's running service.
+    """
+
+    running: bool = Field(
+        ...,
+        description="Whether the assistant service process is currently running.",
+    )
+    uptime_seconds: float = Field(..., description="Service uptime in seconds.")
+    process_id: Optional[int] = Field(
+        None,
+        description="The process ID of the assistant service.",
+    )
+    assistant_id: str = Field(
+        ...,
+        description="The ID of the assistant, as configured in its environment.",
+    )
+    shutdown_reason: Optional[str] = Field(
+        None,
+        description="The reason for the last shutdown, if applicable.",
+    )
+    inactivity_timeout_minutes: int = Field(
+        ...,
+        description="The configured inactivity timeout in minutes.",
+    )
+    message: Optional[str] = Field(
+        None,
+        description="An additional human-readable status message.",
+    )
+
+    class Config:
+        orm_mode = True
+        schema_extra = {
+            "example_running": {
+                "running": True,
+                "uptime_seconds": 3600.5,
+                "process_id": 12345,
+                "assistant_id": "123",
+                "shutdown_reason": None,
+                "inactivity_timeout_minutes": 6,
+                "message": None,
+            },
+            "example_inactive": {
+                "running": False,
+                "uptime_seconds": 0,
+                "process_id": None,
+                "assistant_id": "123",
+                "shutdown_reason": "inactivity_timeout",
+                "inactivity_timeout_minutes": 6,
+                "message": "Service shut down due to 6 minutes of inactivity",
+            },
+        }
+
+
 class RecordingCreate(BaseModel):
     recording_raw: str = Field(
         ...,
