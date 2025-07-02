@@ -777,6 +777,16 @@ def update_assistant_config(
     user_id = request.state.user_id
     users_dao = UsersDAO(session)
     assistant_dao = AssistantDAO(session)
+    # Check assistant existence before any updates
+    existing_assistant = assistant_dao.get_assistant_by_id(
+        user_id=request.state.user_id,
+        agent_id=assistant_id,
+    )
+    if not existing_assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
 
     try:
         weekly_limit: Optional[Decimal] = None
@@ -784,20 +794,16 @@ def update_assistant_config(
             weekly_limit = Decimal(update.weekly_limit)
 
         # Create / update social account:
-        # 1- Directly update from input value if provided, or
-        # 2- Check if the assistant doesn't have a user account already and if a user account value is provided
+        # 1- Directly update from input value if provided
+        # 2- Otherwise, use existing_assistant safely
         # 3- If so and if user has enough credits (production), assign the whatsapp account to the assistant
-        assistant_whatsapp_number = (
-            update.assistant_whatsapp_number
-            if update.assistant_whatsapp_number
-            else None
-        )
+        assistant_whatsapp_number = update.assistant_whatsapp_number or None
         if not update.assistant_whatsapp_number:
-            assistant = assistant_dao.get_assistant_by_id(
-                user_id=user_id,
-                agent_id=assistant_id,
-            )
-            if not assistant.user_whatsapp_number and update.user_whatsapp_number:
+            # Use existing_assistant, which is guaranteed non-null
+            if (
+                not existing_assistant.user_whatsapp_number
+                and update.user_whatsapp_number
+            ):
                 if not settings.is_staging:
                     user = users_dao.get_user_with_id(user_id)
                     # Cost to create a social account
@@ -806,7 +812,7 @@ def update_assistant_config(
                             status_code=status.HTTP_402_PAYMENT_REQUIRED,
                             detail="Insufficient credits to create a whatsapp number.",
                         )
-                print("[PLACEHOLDER] - WHATSAPP SENDER ASSIGNED")
+            print("[PLACEHOLDER] - WHATSAPP SENDER ASSIGNED")
 
         updated = assistant_dao.update_assistant(
             user_id=request.state.user_id,
