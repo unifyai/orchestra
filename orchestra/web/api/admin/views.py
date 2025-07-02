@@ -3,12 +3,13 @@ import subprocess
 import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import stripe
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.param_functions import Depends
 from google.cloud.storage import Client
+from sqlalchemy import select
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
@@ -18,6 +19,8 @@ from orchestra.db.dao.credit_card_fingerprint import CreditCardFingerprintDAO
 from orchestra.db.dao.custom_router_dao import CustomRouterDAO
 from orchestra.db.dao.datapoint_dao import DatapointDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
+from orchestra.db.dao.log_dao import LogDAO
+from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.metric_dao import MetricDAO
 from orchestra.db.dao.modality_dao import ModalityDAO
 from orchestra.db.dao.model_dao import ModelDAO
@@ -29,13 +32,16 @@ from orchestra.db.dao.recharge_type_dao import RechargeTypeDAO
 from orchestra.db.dao.task_dao import TaskDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import (  # noqa: WPS235
+from orchestra.db.models.orchestra_models import (
     BenchmarkRun,
+    Context,
     CreditCardFingerprint,
     Datapoint,
     Endpoint,
+    LogEvent,
     Metric,
     Modality,
+    Project,
     Recharge,
     RechargeStatus,
     RechargeType,
@@ -44,6 +50,7 @@ from orchestra.db.models.orchestra_models import (  # noqa: WPS235
 )
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
     BenchmarkRunModelResponse,
+    Contact,
     CreditCardFingerprintModelResponse,
     CustomRouterRequest,
     DatapointModelRequest,
@@ -518,6 +525,98 @@ def admin_list_assistants(
             status_code=400,
             detail=f"Error fetching assistants: {str(e)}",
         )
+
+
+@router.get(
+    "/contacts",
+    response_model=List[Contact],
+    description="List all contact-context logs, optionally filtered by email, phone, or WhatsApp number",
+)
+def admin_list_contacts(
+    email_address: Optional[str] = Query(None, description="Filter by email_address"),
+    phone_number: Optional[str] = Query(None, description="Filter by phone_number"),
+    whatsapp_number: Optional[str] = Query(
+        None,
+        description="Filter by whatsapp_number",
+    ),
+    session=Depends(get_db_session),
+) -> List[Contact]:
+    """
+    Retrieve all contact logs stored in any context containing "contacts". Supports optional filtering on email, phone, or WhatsApp number.
+    """
+    # 3) Find all context IDs whose name contains 'contacts' (case-insensitive)
+    ctx_ids = (
+        session.execute(select(Context.id).where(Context.name.ilike("%contacts%")))
+        .scalars()
+        .all()
+    )
+    if not ctx_ids:
+        return []
+
+    # 4) Build field filters
+    filters = {}
+    if email_address is not None:
+        filters["email_address"] = email_address
+    if phone_number is not None:
+        filters["phone_number"] = phone_number
+    if whatsapp_number is not None:
+        filters["whatsapp_number"] = whatsapp_number
+
+    # 5) Retrieve matching log_event IDs
+    log_event_dao = LogEventDAO(session)
+    log_dao = LogDAO(session, ContextDAO(session))
+    if filters:
+        event_ids = log_dao.get_ids_by_filter(
+            project_id=None,
+            filters=filters,
+            context_ids=ctx_ids,
+        )
+    else:
+        event_ids = []
+        for cid in ctx_ids:
+            rows = log_event_dao.filter(context_id=cid)
+            for r in rows:
+                evt = r[0]
+                event_ids.append(evt.id)
+    if not event_ids:
+        return []
+
+    # 6) Fetch log entries and assemble contacts per event
+    raw_entries = log_dao.filter(log_event_id=event_ids)
+    grouped: Dict[int, Dict[str, Any]] = {}
+    for log_rec, _ts in raw_entries:
+        eid = log_rec.log_event_id
+        grouped.setdefault(eid, {})[log_rec.key] = log_rec.value
+
+    # 7) Fetch user_id for each log_event via project
+    rows = session.execute(
+        select(LogEvent.id, Project.user_id)
+        .join(Project, LogEvent.project_id == Project.id)
+        .where(LogEvent.id.in_(event_ids)),
+    )
+    user_map = {evt: uid for evt, uid in rows}
+
+    # 8) Build final contact list with user_id
+    results = []
+    for eid, data in grouped.items():
+        contact: Dict[str, Any] = {}
+        custom: Dict[str, Any] = {}
+        for k, v in data.items():
+            if k in (
+                "first_name",
+                "surname",
+                "email_address",
+                "phone_number",
+                "whatsapp_number",
+                "description",
+            ):
+                contact[k] = v
+            else:
+                custom[k] = v
+        contact["custom_fields"] = custom
+        contact["user_id"] = user_map.get(eid)
+        results.append(contact)
+    return results
 
 
 @router.put("/create_datapoint")
