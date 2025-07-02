@@ -279,8 +279,10 @@ class LogDAO:
         if not filters:
             return []
 
-        # Start with a query for log events in the project
-        query = select(LogEvent.id).where(LogEvent.project_id == project_id)
+        # Start with a query for log events; apply project filter if provided
+        query = select(LogEvent.id)
+        if project_id is not None:
+            query = query.where(LogEvent.project_id == project_id)
 
         # If context_ids are provided, filter by those contexts
         if context_ids:
