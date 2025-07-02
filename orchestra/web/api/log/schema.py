@@ -540,9 +540,9 @@ class JoinLogsRequest(BaseModel):
         description="Name for the new context where joined logs will be stored",
         example="Derived/A_B",
     )
-    columns: Optional[List[str]] = Field(
+    columns: Optional[Dict[str, str]] = Field(
         default=None,
-        description="Optional list of columns to include in the result",
-        example=["A.user_id", "B.score"],
+        description="Optional dictionary mapping source columns to new column names for the result. The key is the source column (e.g., 'A.user_id') and the value is the desired alias in the new log (e.g., 'user_identifier'). If omitted, all columns will be selected and prefixed with 'A_' or 'B_'.",
+        example={"A.user_id": "user_identifier", "B.score": "user_score"},
     )
     project: str = Field(..., description="Name of the project")
