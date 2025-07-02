@@ -152,7 +152,7 @@ def create_assistant(
     assistant_dao = AssistantDAO(session)
     api_key_dao = ApiKeyDAO(session)
     api_keys = api_key_dao.filter(user_id=user_id)
-    if not api_key:
+    if not api_keys:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Unauthorized. Please contact support to get an API key.",
