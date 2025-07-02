@@ -1945,6 +1945,7 @@ def _join_logs(
                 )
                 new_columns[processed_source_col] = new_alias
             columns = new_columns
+
         subq_a, fields_a = _build_log_subquery(
             args=pair_of_args[0],
             project_name=project_name,
