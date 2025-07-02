@@ -542,11 +542,11 @@ def admin_list_contacts(
     session=Depends(get_db_session),
 ) -> List[Contact]:
     """
-    Retrieve all contact logs stored in any context containing "contacts". Supports optional filtering on email, phone, or WhatsApp number.
+    Retrieve all contact logs stored in any context containing "Contacts" (case-sensitive). Supports optional filtering on email, phone, or WhatsApp number.
     """
-    # 3) Find all context IDs whose name contains 'contacts' (case-insensitive)
+    # 3) Find all context IDs whose name contains 'Contacts' (case-sensitive)
     ctx_ids = (
-        session.execute(select(Context.id).where(Context.name.ilike("%contacts%")))
+        session.execute(select(Context.id).where(Context.name.like("%Contacts%")))
         .scalars()
         .all()
     )
