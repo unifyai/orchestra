@@ -163,6 +163,7 @@ def create_assistant(
 
     # Determine total cost as base creation cost
     # plus premium for each social account added
+    total_creation_cost = settings.assistant_creation_cost
     if assistant_in.user_whatsapp_number:
         try:
             platforms_response = get_social_platforms_costs()
