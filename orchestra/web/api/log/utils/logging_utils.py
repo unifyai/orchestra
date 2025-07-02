@@ -1600,7 +1600,7 @@ def _construct_join_query(
     subq_b,
     join_expr: str,
     mode: str,
-    columns: Optional[List[str]] = None,
+    columns: Optional[Dict[str, str]] = None,
     fields_a: Optional[Dict[str, Any]] = None,
     fields_b: Optional[Dict[str, Any]] = None,
     session=None,
@@ -1613,7 +1613,7 @@ def _construct_join_query(
         subq_b: Second subquery (aliased as 'B')
         join_expr: SQL expression for the join condition
         mode: Type of join ('inner', 'left', 'right', or 'outer')
-        columns: Optional list of column names to include
+        columns: Optional dictionary mapping source columns to new column names
 
     Returns:
         SQLAlchemy select statement representing the join
@@ -1658,38 +1658,33 @@ def _construct_join_query(
         raise ValueError(f"Error processing join expression: {e}")
     select_columns = []
     if columns:
-        for col_name in columns:
-            # Parse the column name to determine the source table and actual column
-            if "." in col_name:
-                table_alias, actual_col = col_name.split(".", 1)
-                if table_alias.upper() == "A" and hasattr(subq_a.c, actual_col):
+        for source_col, new_alias in columns.items():
+            if "." not in source_col:
+                raise ValueError(
+                    f"Column '{source_col}' must be prefixed with table alias 'A.' or 'B.'",
+                )
+
+            table_alias, actual_col = source_col.split(".", 1)
+            if table_alias.upper() == "A":
+                if hasattr(subq_a.c, actual_col):
                     select_columns.append(
-                        getattr(subq_a.c, actual_col).label(f"A_{actual_col}"),
-                    )
-                elif table_alias.upper() == "B" and hasattr(subq_b.c, actual_col):
-                    select_columns.append(
-                        getattr(subq_b.c, actual_col).label(f"B_{actual_col}"),
+                        getattr(subq_a.c, actual_col).label(new_alias),
                     )
                 else:
-                    raise ValueError(
-                        f"Column '{col_name}' not found in the specified table",
+                    raise ValueError(f"Column '{actual_col}' not found in source A")
+            elif table_alias.upper() == "B":
+                if hasattr(subq_b.c, actual_col):
+                    select_columns.append(
+                        getattr(subq_b.c, actual_col).label(new_alias),
                     )
+                else:
+                    raise ValueError(f"Column '{actual_col}' not found in source B")
             else:
-                # If no table specified, check both tables
-                if hasattr(subq_a.c, col_name):
-                    select_columns.append(
-                        getattr(subq_a.c, col_name).label(f"A_{col_name}"),
-                    )
-                elif hasattr(subq_b.c, col_name):
-                    select_columns.append(
-                        getattr(subq_b.c, col_name).label(f"B_{col_name}"),
-                    )
-                else:
-                    raise ValueError(
-                        f"Column '{col_name}' not found in either table",
-                    )
+                raise ValueError(
+                    f"Invalid table alias '{table_alias}' in column '{source_col}'",
+                )
     else:
-        # Select all columns from both tables
+        # Select all columns from both tables, prefixing to avoid name clashes
         select_columns.extend(
             [
                 getattr(subq_a.c, col_name).label(f"A_{col_name}")
@@ -1887,7 +1882,7 @@ def _join_logs(
     join_expr: str,
     mode: str,
     context_id: int,
-    columns: Optional[List[str]] = None,
+    columns: Optional[Dict[str, str]] = None,
     request_fastapi: Optional[Request] = None,
     project_dao: ProjectDAO = None,
     field_type_dao: FieldTypeDAO = None,
@@ -1909,8 +1904,8 @@ def _join_logs(
                    (e.g., 'A.user_id = B.user_id')
         mode: Type of join to perform ('inner', 'left', 'right', or 'outer')
         context_id: ID of the context where joined logs will be stored
-        columns: Optional list of column names to include in the joined result
-                 Format can be either 'column_name' or 'A.column_name'/'B.column_name'
+        columns: Optional dictionary mapping source columns to new column names.
+                 Format should be {'A.column_name': 'new_name', 'B.column_name': 'other_name'}
         request_fastapi: FastAPI request object for accessing user state
         project_dao: ProjectDAO instance for project operations
         field_type_dao: FieldTypeDAO instance for field type operations
@@ -1942,9 +1937,14 @@ def _join_logs(
         # replace context_a with 'A' alias and context_b with 'B' alias
         join_expr = join_expr.replace(context_a, "A").replace(context_b, "B")
         if columns is not None:
-            columns = [
-                col.replace(context_a, "A").replace(context_b, "B") for col in columns
-            ]
+            new_columns = {}
+            for source_col, new_alias in columns.items():
+                processed_source_col = source_col.replace(context_a, "A").replace(
+                    context_b,
+                    "B",
+                )
+                new_columns[processed_source_col] = new_alias
+            columns = new_columns
         subq_a, fields_a = _build_log_subquery(
             args=pair_of_args[0],
             project_name=project_name,
