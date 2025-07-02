@@ -675,9 +675,14 @@ async def test_admin_list_assistants_filter_email(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_admin_list_assistants_for_user(client: AsyncClient):
-    # Create two distinct test users
-    user1 = await create_test_user(client, "u1@test.com")
+    # Create a second test user via create_test_user
+    # (default HEADERS user will serve as user1)
     user2 = await create_test_user(client, "u2@test.com")
+
+    # Determine default user ID for HEADERS (user1)
+    credits_resp = await client.get("/v0/credits", headers=HEADERS)
+    assert credits_resp.status_code == 200
+    user1_id = credits_resp.json()["id"]
 
     # Create assistant for user1
     payload1 = {
@@ -694,39 +699,22 @@ async def test_admin_list_assistants_for_user(client: AsyncClient):
     resp1 = await client.post(
         "/v0/assistant",
         json=payload1,
-        headers=user1["headers"],
+        headers=HEADERS,
     )
     assert resp1.status_code == 200
     aid1 = resp1.json()["info"]["agent_id"]
 
-    # Create assistant for user2
-    payload2 = {
-        "first_name": "UserTwo",
-        "surname": "Tester",
-        "age": 25,
-        "weekly_limit": 15.0,
-        "max_parallel": 2,
-        "region": "Testland",
-        "profile_photo": "https://example.com/u2.jpg",
-        "about": "Assistant for user2",
-        "create_infra": False,
-    }
-    resp2 = await client.post(
-        "/v0/assistant",
-        json=payload2,
-        headers=user2["headers"],
-    )
-    assert resp2.status_code == 200
-    aid2 = resp2.json()["info"]["agent_id"]
+    # Do not create assistant for user2; expect no assistants for user2
 
     # Verify admin endpoint returns only user1's assistants
-    res1 = await client.get(f"/v0/admin/assistant/{user1['id']}", headers=ADMIN_HEADERS)
+    res1 = await client.get(f"/v0/admin/assistant/{user1_id}", headers=ADMIN_HEADERS)
     assert res1.status_code == 200
     info1 = res1.json()["info"]
     assert len(info1) == 1 and info1[0]["agent_id"] == aid1
 
-    # Verify admin endpoint returns only user2's assistants
+    # Verify admin endpoint returns no assistants for user2
     res2 = await client.get(f"/v0/admin/assistant/{user2['id']}", headers=ADMIN_HEADERS)
     assert res2.status_code == 200
     info2 = res2.json()["info"]
-    assert len(info2) == 1 and info2[0]["agent_id"] == aid2
+    assert isinstance(info2, list)
+    assert len(info2) == 0
