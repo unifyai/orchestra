@@ -256,3 +256,12 @@ def get_cloud_run_job_status(assistant_id: str):
         f"{COMMS_URL}/infra/job/status",
         params={"assistant_id": assistant_id},
     ).json()
+
+
+def get_social_platforms_costs():
+    """
+    Fetch available social platforms and their costs.
+    """
+    return requests.get(
+        f"{COMMS_URL}/social/available-platforms",
+    ).json()
