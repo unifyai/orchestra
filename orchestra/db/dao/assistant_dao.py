@@ -74,6 +74,8 @@ class AssistantDAO:
         user_id: str,
         phone: Optional[str] = None,
         email: Optional[str] = None,
+        user_whatsapp_number: Optional[str] = None,
+        assistant_whatsapp_number: Optional[str] = None,
     ) -> List[Assistant]:
         """
         List all Assistants belonging to a specific user.
@@ -83,6 +85,12 @@ class AssistantDAO:
             stmt = stmt.where(Assistant.phone == phone)
         if email is not None:
             stmt = stmt.where(Assistant.email == email)
+        if user_whatsapp_number is not None:
+            stmt = stmt.where(Assistant.user_whatsapp_number == user_whatsapp_number)
+        if assistant_whatsapp_number is not None:
+            stmt = stmt.where(
+                Assistant.assistant_whatsapp_number == assistant_whatsapp_number,
+            )
         result = self.session.execute(stmt).scalars().all()
         return result
 
@@ -163,7 +171,7 @@ class AssistantDAO:
             stmt = stmt.where(Assistant.user_whatsapp_number == user_whatsapp_number)
         if assistant_whatsapp_number is not None:
             stmt = stmt.where(
-                Assistant.assistant_whatsapp_number == assistant_whatsapp_number
+                Assistant.assistant_whatsapp_number == assistant_whatsapp_number,
             )
         if email is not None:
             stmt = stmt.where(Assistant.email == email)

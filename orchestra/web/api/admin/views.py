@@ -528,6 +528,75 @@ def admin_list_assistants(
 
 
 @router.get(
+    "/assistant/{user_id}",
+    response_model=InfoResponse[List[AssistantRead]],
+    summary="Admin: list all assistants for a user",
+    description="Retrieve all assistants for the specified user_id, optionally filtered by phone, email, or WhatsApp numbers.",
+)
+def admin_list_assistants_for_user(
+    user_id: str,
+    phone: Optional[str] = Query(
+        None,
+        description="Only return assistants whose phone number matches this value.",
+    ),
+    email: Optional[str] = Query(
+        None,
+        description="Only return assistants whose email address matches this value.",
+    ),
+    user_whatsapp_number: Optional[str] = Query(
+        None,
+        description="Only return assistants whose user WhatsApp number matches this value.",
+    ),
+    assistant_whatsapp_number: Optional[str] = Query(
+        None,
+        description="Only return assistants whose assistant WhatsApp number matches this value.",
+    ),
+    session=Depends(get_db_session),
+) -> InfoResponse[List[AssistantRead]]:
+    """List all assistants belonging to a given user, with optional filtering."""
+    # Normalize phone parameter to handle URL-decoded '+' characters
+    phone = normalize_phone_parameter(phone)
+    dao = AssistantDAO(session)
+    try:
+        assistants = dao.list_assistants_for_user(
+            user_id=user_id,
+            phone=phone,
+            email=email,
+            user_whatsapp_number=user_whatsapp_number,
+            assistant_whatsapp_number=assistant_whatsapp_number,
+        )
+        return InfoResponse(
+            info=[
+                AssistantRead(
+                    agent_id=str(a.agent_id),
+                    first_name=a.first_name,
+                    surname=a.surname,
+                    age=a.age,
+                    region=a.region,
+                    profile_photo=a.profile_photo,
+                    about=a.about,
+                    weekly_limit=float(a.weekly_limit),
+                    max_parallel=a.max_parallel,
+                    created_at=a.created_at,
+                    updated_at=a.updated_at,
+                    phone=a.phone,
+                    user_phone=a.user_phone,
+                    email=a.email,
+                    user_whatsapp_number=a.user_whatsapp_number,
+                    assistant_whatsapp_number=a.assistant_whatsapp_number,
+                    voice_id=a.voice_id,
+                )
+                for a in assistants
+            ],
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Error fetching assistants for user {user_id}: {str(e)}",
+        )
+
+
+@router.get(
     "/contacts",
     response_model=List[Contact],
     description="List all contact-context logs, optionally filtered by email, phone, or WhatsApp number",
