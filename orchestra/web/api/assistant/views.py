@@ -51,6 +51,7 @@ from orchestra.web.api.assistant.schema import (
     VoiceRead,
 )
 from orchestra.web.api.utils.assistant_infra import (
+    assign_whatsapp_sender,
     create_cloud_run_job,
     create_email,
     create_phone_number,
@@ -867,7 +868,9 @@ def update_assistant_config(
                         quantity=-float(decimal_cost),
                     )
 
-                print("[PLACEHOLDER] - WHATSAPP SENDER ASSIGNED")
+                assistant_whatsapp_number = assign_whatsapp_sender(
+                    update.user_whatsapp_number,
+                )["whatsapp_number"]
 
         updated = assistant_dao.update_assistant(
             user_id=request.state.user_id,
