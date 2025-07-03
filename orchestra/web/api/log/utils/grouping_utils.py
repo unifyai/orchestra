@@ -319,7 +319,6 @@ def _get_all_filtered_log_event_ids(
     context_dao: ContextDAO,
     field_type_dao: FieldTypeDAO,
     session=Depends(get_db_session),
-    return_versions: bool = False,
     as_subquery: bool = False,
 ) -> Union[Tuple[List[int], int], Tuple[Subquery, int]]:
     """
@@ -350,78 +349,12 @@ def _get_all_filtered_log_event_ids(
             detail="Cannot set both from_ids and exclude_ids.",
         )
 
-    # Handle ID filtering differently based on return_versions
-    if return_versions:
-        pass
-        # TODO(yusha): implement this with the new LogVersion table
-        # if from_ids:
-        #     try:
-        #         # Validate from_ids format for versioned logs
-        #         from_ids = json.loads(from_ids)
-        #         if not isinstance(from_ids, list):
-        #             raise ValueError(
-        #                 "from_ids must be a list when return_versions is True",
-        #             )
-        #         for item in from_ids:
-        #             if (
-        #                 not isinstance(item, dict)
-        #                 or "id" not in item
-        #                 or "version" not in item
-        #             ):
-        #                 raise ValueError(
-        #                     "Each item in from_ids must have 'id' and 'version' keys",
-        #                 )
-        #         allowed_pairs = [(item["id"], item["version"]) for item in from_ids]
-        #         # Apply filtering at the Log/LogHistory level since we need version info
-        #         filtered_logs_q = filtered_logs_q.filter(
-        #             tuple_(
-        #                 LogVersion.log_event_id,
-        #                 LogVersion.context_version,
-        #             ).in_(allowed_pairs),
-        #         )
-        #     except ValueError as e:
-        #         raise HTTPException(
-        #             status_code=400,
-        #             detail=f"Invalid from_ids format for versioned logs: {str(e)}",
-        #         )
-        # if exclude_ids:
-        #     try:
-        #         # Validate exclude_ids format for versioned logs
-        #         exclude_ids = json.loads(exclude_ids)
-        #         if not isinstance(exclude_ids, list):
-        #             raise ValueError(
-        #                 "exclude_ids must be a list when return_versions is True",
-        #             )
-        #         for item in exclude_ids:
-        #             if (
-        #                 not isinstance(item, dict)
-        #                 or "id" not in item
-        #                 or "version" not in item
-        #             ):
-        #                 raise ValueError(
-        #                     "Each item in exclude_ids must have 'id' and 'version' keys",
-        #                 )
-        #         excluded_pairs = [(item["id"], item["version"]) for item in exclude_ids]
-        #         # Apply filtering at the Log/LogHistory level since we need version info
-        #         filtered_logs_q = filtered_logs_q.filter(
-        #             ~tuple_(
-        #                 LogVersion.log_event_id,
-        #                 LogVersion.context_version,
-        #             ).in_(excluded_pairs),
-        #         )
-        #     except ValueError as e:
-        #         raise HTTPException(
-        #             status_code=400,
-        #             detail=f"Invalid exclude_ids format for versioned logs: {str(e)}",
-        #         )
-    else:
-        # For non-versioned queries, use simple log_event_id filtering
-        if from_ids:
-            include_ids = [int(x) for x in from_ids.split("&")]
-            log_event_query = log_event_query.filter(LogEvent.id.in_(include_ids))
-        elif exclude_ids:
-            exclude_set = [int(x) for x in exclude_ids.split("&")]
-            log_event_query = log_event_query.filter(LogEvent.id.notin_(exclude_set))
+    if from_ids:
+        include_ids = [int(x) for x in from_ids.split("&")]
+        log_event_query = log_event_query.filter(LogEvent.id.in_(include_ids))
+    elif exclude_ids:
+        exclude_set = [int(x) for x in exclude_ids.split("&")]
+        log_event_query = log_event_query.filter(LogEvent.id.notin_(exclude_set))
 
     context_name = "" if not context else context
     context_obj = context_dao.filter(name=context_name, project_id=project_id)
@@ -522,7 +455,6 @@ def _fetch_logs_for_event_ids(
     context_dao: ContextDAO,
     session=Depends(get_db_session),
     latest_timestamp: bool = False,
-    return_versions: bool = False,
 ):
     """
     Given a known list of event_ids, retrieve the union of Log + DerivedLog rows
@@ -544,13 +476,8 @@ def _fetch_logs_for_event_ids(
             .cte("event_ids_cte")
         )
     else:
-        event_ids_cte = event_ids  # already a sub‑query with “id”
+        event_ids_cte = event_ids  # already a sub‑query with "id"
 
-    unified_logs_for_sort = _build_unified_logs_subquery(
-        session=session,
-        relevant_log_events=event_ids_cte,
-        return_versions=return_versions,
-    )
     context_name = "" if not context else context
     ctx_id = (
         context_dao.filter(name=context_name, project_id=project_id)[0][0].id
@@ -562,7 +489,13 @@ def _fetch_logs_for_event_ids(
     sort_val_sqs: List[Subquery] = []
     sort_criteria: List[Any] = []
 
+    # Only build unified logs for sorting if we have sorting criteria
     if sorting:
+        unified_logs_for_sort = _build_unified_logs_subquery(
+            session=session,
+            relevant_log_events=event_ids_cte,
+        )
+
         sort_dict = json.loads(sorting)
         for sort_key, mode in sort_dict.items():
             if is_image_field(sort_key, field_types):
@@ -598,20 +531,34 @@ def _fetch_logs_for_event_ids(
 
     # deterministic tie‑breaker
     sort_criteria.append(desc(event_ids_cte.c.id))
-    # join the sort sub‑queries before pagination
-    joined = event_ids_cte
-    for sq in sort_val_sqs:
-        joined = joined.outerjoin(sq, sq.c.log_event_id == event_ids_cte.c.id)
 
-    seq_col = func.row_number().over(order_by=sort_criteria).label("row_num")
-    pag_query = (
-        session.query(
-            event_ids_cte.c.id.label("id"),
-            seq_col,
+    # Build pagination query
+    if sorting and sort_val_sqs:
+        # join the sort sub‑queries before pagination
+        joined = event_ids_cte
+        for sq in sort_val_sqs:
+            joined = joined.outerjoin(sq, sq.c.log_event_id == event_ids_cte.c.id)
+
+        pag_query = (
+            session.query(
+                event_ids_cte.c.id.label("id"),
+                func.row_number().over(order_by=sort_criteria).label("row_num"),
+            )
+            .select_from(joined)
+            .order_by(*sort_criteria)
         )
-        .select_from(joined)
-        .order_by(seq_col)
-    )
+    else:
+        # No sorting, simple pagination
+        pag_query = session.query(
+            event_ids_cte.c.id.label("id"),
+            func.row_number().over(order_by=desc(event_ids_cte.c.id)).label("row_num"),
+        ).order_by(desc(event_ids_cte.c.id))
+
+    # Get total count before applying limit/offset
+    if isinstance(event_ids, list):
+        total_count = len(event_ids)
+    else:
+        total_count = session.query(func.count()).select_from(event_ids_cte).scalar()
 
     if limit:
         pag_query = pag_query.limit(limit)
@@ -621,20 +568,20 @@ def _fetch_logs_for_event_ids(
     paginated_ids_subq = pag_query.subquery("paginated_ids_subq")
 
     if latest_timestamp:
-        max_ts = (
-            session.query(func.max(unified_logs_for_sort.c.updated_at))
-            .join(
-                paginated_ids_subq,
-                paginated_ids_subq.c.id == unified_logs_for_sort.c.log_event_id,
-            )
-            .scalar()
+        # Build unified logs only for timestamp check
+        unified_logs_for_timestamp = _build_unified_logs_subquery(
+            session=session,
+            relevant_log_events=paginated_ids_subq,
         )
+        max_ts = session.query(
+            func.max(unified_logs_for_timestamp.c.updated_at),
+        ).scalar()
         return max_ts.isoformat() if max_ts else None
 
+    # Build unified logs ONLY for the paginated IDs
     unified_logs_limited = _build_unified_logs_limited(
         session,
         paginated_ids_subq,
-        return_versions,
     )
 
     exclude_params = exclude_entries = False
@@ -677,10 +624,7 @@ def _fetch_logs_for_event_ids(
 
     filtered_logs_subq = filtered_q.subquery("filtered_logs_subq")
 
-    total_count = session.query(
-        func.count(func.distinct(filtered_logs_subq.c.log_event_id)),
-    ).scalar()
-
+    # Get final logs - total_count already calculated above
     raw_rows = _get_final_logs(session, filtered_logs_subq, paginated_ids_subq)
 
     results = [
@@ -734,7 +678,6 @@ def _handle_group_depth_level(
     group_limit,
     group_offset,
     level,
-    return_versions,
 ):
 
     current_group_key = group_by[level]
@@ -755,7 +698,6 @@ def _handle_group_depth_level(
     unified = _build_unified_logs_subquery(
         session=session,
         relevant_log_events=event_ids_cte,
-        return_versions=return_versions,
     )
 
     # Group by value and filter on the raw key
@@ -897,7 +839,6 @@ def _handle_group_depth_level(
     present_value_q = _build_unified_logs_subquery(
         session=session,
         relevant_log_events=event_ids_cte,
-        return_versions=return_versions,
         key=raw_key,
     )
     missing_ids_q = session.query(event_ids_cte.c.id).filter(
@@ -948,7 +889,6 @@ def _build_grouped_data(
     value_limit: Optional[int] = None,
     groups_only: bool = False,
     return_timestamps: bool = False,
-    return_versions: bool = False,
     parent_group_key: Optional[str] = "",
 ) -> Dict[str, Any]:
     """
@@ -971,7 +911,6 @@ def _build_grouped_data(
             limit=limit,
             offset=offset,
             parent_fields=parent_group_key,
-            return_versions=return_versions,
             project_dao=project_dao,
             field_type_dao=field_type_dao,
             context_dao=context_dao,
@@ -1022,7 +961,6 @@ def _build_grouped_data(
             group_limit=group_limit,
             group_offset=group_offset,
             level=level,
-            return_versions=return_versions,
         )
 
     current_group_key = group_by[level]
@@ -1059,7 +997,6 @@ def _build_grouped_data(
     unified = _build_unified_logs_subquery(
         session=session,
         relevant_log_events=event_ids_cte,
-        return_versions=return_versions,
     )
 
     # Group by value and filter on the raw key
@@ -1211,7 +1148,6 @@ def _build_grouped_data(
             value_limit=value_limit,
             groups_only=groups_only,
             return_timestamps=return_timestamps,
-            return_versions=return_versions,
             parent_group_key=(
                 "&".join([parent_group_key, raw_key]) if parent_group_key else raw_key
             ),
@@ -1223,7 +1159,6 @@ def _build_grouped_data(
     present_value_q = _build_unified_logs_subquery(
         session=session,
         relevant_log_events=event_ids_cte,
-        return_versions=return_versions,
         key=raw_key,
     )
     missing_ids_q = session.query(event_ids_cte.c.id).filter(
@@ -1257,7 +1192,6 @@ def _build_grouped_data(
             value_limit=value_limit,
             groups_only=groups_only,
             return_timestamps=return_timestamps,
-            return_versions=return_versions,
             parent_group_key=(
                 "&".join([parent_group_key, raw_key]) if parent_group_key else raw_key
             ),

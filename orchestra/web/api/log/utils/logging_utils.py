@@ -20,7 +20,7 @@ from sqlalchemy import (
     literal,
     select,
     text,
-    tuple_,
+    true,
 )
 from sqlalchemy.sql.expression import ColumnClause
 from sqlalchemy.sql.selectable import Subquery
@@ -62,6 +62,68 @@ __all__ = [
     "get_or_create_usage_project",
     "log_chat_completion_event",
 ]
+
+
+def _paginate_events(
+    session,
+    base_event_q,
+    order_by_cols,
+    limit,
+    offset,
+    randomize=False,
+    seed="42",
+    has_joins=False,
+):
+    """
+    Fast, index-friendly pagination helper that:
+    1. Materializes all filtered LogEvent IDs into a sub-query
+    2. Gets the total row count before slicing
+    3. Returns a second sub-query with row_number for order preservation
+    """
+    # If we have joins (for sorting), we need to handle differently
+    if has_joins and order_by_cols:
+        # For joined queries, get count from distinct IDs
+        id_col = base_event_q.column_descriptions[0]["expr"]
+        total_count = base_event_q.distinct().count()
+
+        # Build paginated query with joins preserved
+        pag_query = base_event_q.add_columns(
+            func.row_number().over(order_by=order_by_cols).label("row_num"),
+        ).order_by(*order_by_cols)
+
+        if limit:
+            pag_query = pag_query.limit(limit)
+        if offset:
+            pag_query = pag_query.offset(offset)
+
+        return pag_query.subquery("paginated_ids_subq"), total_count
+
+    # Original logic for simple queries
+    relevant_sq = base_event_q.subquery("relevant_log_events")
+
+    # Get total count with a cheap index scan
+    total_count = session.query(func.count()).select_from(relevant_sq).scalar()
+
+    # Build the ordered/limited ID list
+    if randomize:
+        random_key = func.md5(cast(relevant_sq.c.id, String) + literal(seed))
+        order_by_cols = [random_key]
+    if not order_by_cols:
+        order_by_cols = [desc(relevant_sq.c.id)]
+
+    paginated_sq = select(
+        relevant_sq.c.id.label("id"),
+        func.row_number().over(order_by=order_by_cols).label("row_num"),
+    ).order_by(*order_by_cols)
+
+    if limit:
+        paginated_sq = paginated_sq.limit(limit)
+    if offset:
+        paginated_sq = paginated_sq.offset(offset)
+
+    return paginated_sq.subquery("paginated_ids_subq"), total_count
+
+
 #########################
 # Logs Utils            #
 #########################
@@ -169,7 +231,6 @@ def log_chat_completion_event(
 def _build_unified_logs_limited(
     session,
     ids_subq: Subquery,
-    return_versions: bool = False,
 ) -> Subquery:
     """
     Phase 2 helper: build unified logs subquery limited to the specified log_event_ids.
@@ -177,7 +238,6 @@ def _build_unified_logs_limited(
     return _build_unified_logs_subquery(
         session=session,
         relevant_log_events=ids_subq,
-        return_versions=return_versions,
     )
 
 
@@ -213,6 +273,95 @@ def _build_sort_criteria(
     return sort_expr
 
 
+def _build_sort_clauses(
+    session,
+    log_event_query,
+    field_types,
+    sorting,
+    unified_logs_for_sort,
+    sort_val_sqs,
+    sort_criteria,
+):
+    """
+    Helper function to build sorting clauses for log queries.
+    Extracts the sorting logic from _get_logs_query for reusability.
+    """
+    if sorting:
+        sort_dict = json.loads(sorting)
+
+        for sort_key, mode in sort_dict.items():
+            if is_image_field(sort_key, field_types):
+                continue
+            if mode not in ("ascending", "descending"):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Sort mode must be 'ascending' or 'descending', got {mode}.",
+                )
+            try:
+                expr_dict = str_filter_exp_to_dict(
+                    sort_key,
+                    field_names=list(field_types.keys()),
+                )
+            except Exception:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid sort expression '{sort_key}'",
+                )
+
+            if expr_dict.get("type", None) == "identifier":
+                # static field sorting
+                cast_expr = _build_sort_criteria(
+                    unified_logs_for_sort.c.value,
+                    sort_key,
+                    field_types,
+                )
+
+                sort_val_sq = (
+                    select(
+                        unified_logs_for_sort.c.log_event_id.label("log_event_id"),
+                        cast_expr.label("val"),
+                    )
+                    .where(unified_logs_for_sort.c.key == sort_key)
+                    .order_by(
+                        unified_logs_for_sort.c.log_event_id,
+                        unified_logs_for_sort.c.updated_at.desc(),
+                    )
+                    .distinct(unified_logs_for_sort.c.log_event_id)
+                    .subquery(f"sort_{sort_key}_sq")
+                )
+
+                sort_val_sqs.append(sort_val_sq)
+
+                # remember ORDER‑BY expression
+                direction = asc if mode == "ascending" else desc
+                sort_criteria.append(direction(sort_val_sq.c.val).nulls_last())
+            else:
+                # dynamic expression sorting
+                event_ids_subq = log_event_query.subquery(name="event_ids_subq")
+                sort_expr = build_sql_query(
+                    expr_dict,
+                    LogEvent,
+                    session,
+                    log_event_ids=event_ids_subq,
+                )
+                rand = random.randint(1, 1000000)
+                base_sq = sort_expr.alias(f"sort_base_{rand}")
+                sort_val_sq = (
+                    select(
+                        base_sq.c.log_event_id.label("log_event_id"),
+                        base_sq.c.value.label("val"),
+                    )
+                    .where(base_sq.c.log_event_id.in_(select(event_ids_subq.c.id)))
+                    .subquery(f"sort_expr_{rand}")
+                )
+
+                sort_val_sqs.append(sort_val_sq)
+
+                # Add to ORDER BY clauses
+                direction = asc if mode == "ascending" else desc
+                sort_criteria.append(direction(sort_val_sq.c.val).nulls_last())
+
+
 def _apply_post_filters(
     base_q,
     ul_table,
@@ -222,7 +371,6 @@ def _apply_post_filters(
     exclude_fields,
     exclude_params,
     exclude_entries,
-    return_versions,
 ):
 
     if from_ids and exclude_ids:
@@ -231,68 +379,16 @@ def _apply_post_filters(
             detail="Cannot set both from_ids and exclude_ids.",
         )
 
-    if return_versions:
-        if from_ids:
-            try:
-                from_ids_json = json.loads(from_ids)
-                if not isinstance(from_ids_json, list):
-                    raise ValueError(
-                        "from_ids must be a list when return_versions is True",
-                    )
-                allowed_pairs = [
-                    (item["id"], item["version"]) for item in from_ids_json
-                ]
-                base_q = base_q.filter(
-                    tuple_(
-                        ul_table.c.log_event_id,
-                        (
-                            ul_table.c.context_version
-                            if "context_version" in ul_table.c
-                            else ul_table.c.param_version
-                        ),
-                    ).in_(allowed_pairs),
-                )
-            except Exception as e:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid from_ids format for versioned logs: {str(e)}",
-                )
-        if exclude_ids:
-            try:
-                exclude_ids_json = json.loads(exclude_ids)
-                if not isinstance(exclude_ids_json, list):
-                    raise ValueError(
-                        "exclude_ids must be a list when return_versions is True",
-                    )
-                excluded_pairs = [
-                    (item["id"], item["version"]) for item in exclude_ids_json
-                ]
-                base_q = base_q.filter(
-                    ~tuple_(
-                        ul_table.c.log_event_id,
-                        (
-                            ul_table.c.context_version
-                            if "context_version" in ul_table.c
-                            else ul_table.c.param_version
-                        ),
-                    ).in_(excluded_pairs),
-                )
-            except Exception as e:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid exclude_ids format for versioned logs: {str(e)}",
-                )
-    else:
-        if from_ids:
-            include_ids = [int(x) for x in from_ids.split("&")]
-            base_q = base_q.filter(
-                ul_table.c.log_event_id.in_(include_ids),
-            )
-        elif exclude_ids:
-            exclude_set = [int(x) for x in exclude_ids.split("&")]
-            base_q = base_q.filter(
-                ul_table.c.log_event_id.notin_(exclude_set),
-            )
+    if from_ids:
+        include_ids = [int(x) for x in from_ids.split("&")]
+        base_q = base_q.filter(
+            ul_table.c.log_event_id.in_(include_ids),
+        )
+    elif exclude_ids:
+        exclude_set = [int(x) for x in exclude_ids.split("&")]
+        base_q = base_q.filter(
+            ul_table.c.log_event_id.notin_(exclude_set),
+        )
 
     if exclude_params:
         base_q = base_q.filter(
@@ -341,7 +437,6 @@ def _get_logs_query(
     context_dao: ContextDAO,
     session=Depends(get_db_session),
     latest_timestamp=False,
-    return_versions: bool = False,
     randomize: bool = False,
     seed: Optional[str] = "42",
 ):
@@ -422,6 +517,56 @@ def _get_logs_query(
             else:
                 log_event_query = log_event_query.filter(condition)
 
+    # Apply from_ids/exclude_ids filters early since they filter on log_event_id
+    if from_ids and exclude_ids:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot set both from_ids and exclude_ids.",
+        )
+
+    if from_ids:
+        include_ids = [int(x) for x in from_ids.split("&")]
+        log_event_query = log_event_query.filter(
+            LogEvent.id.in_(include_ids),
+        )
+    elif exclude_ids:
+        exclude_set = [int(x) for x in exclude_ids.split("&")]
+        log_event_query = log_event_query.filter(
+            LogEvent.id.notin_(exclude_set),
+        )
+
+    # Apply field filters at log event level
+    if from_fields and exclude_fields:
+        raise HTTPException(
+            status_code=400,
+            detail="Only one of from_fields or exclude_fields can be set.",
+        )
+
+    if from_fields:
+        # Filter to only include log events that have at least one of the specified fields
+        allowed_fields = from_fields.split("&")
+        exists_subq = (
+            session.query(Log.log_event_id)
+            .filter(
+                Log.log_event_id == LogEvent.id,
+                Log.key.in_(allowed_fields),
+            )
+            .exists()
+        )
+        log_event_query = log_event_query.filter(exists_subq)
+    elif exclude_fields:
+        # Filter to only include log events that have at least one field NOT in the excluded list
+        excluded_fields = exclude_fields.split("&")
+        exists_subq = (
+            session.query(Log.log_event_id)
+            .filter(
+                Log.log_event_id == LogEvent.id,
+                Log.key.notin_(excluded_fields),
+            )
+            .exists()
+        )
+        log_event_query = log_event_query.filter(exists_subq)
+
     # FIXME: potential duplicate logic
     if context:
         context_obj = context_dao.filter(name=context, project_id=project_id)
@@ -442,172 +587,86 @@ def _get_logs_query(
     context_obj = context_obj[0][0]
     ctx_id_val = context_obj.id
 
-    if return_versions and not context_obj.is_versioned:
-        raise HTTPException(
-            status_code=400,
-            detail="Cannot return versions for unversioned context",
+    # ---- Phase-1: gather all event IDs that match user filters ------------
+    # Note: filter_expr has already been applied to log_event_query
+
+    # Build ORDER BY expressions
+    sort_val_sqs: List[Subquery] = []
+    sort_criteria: List[Any] = []
+
+    if not randomize and sorting:
+        # For sorting, we need unified logs to get field values
+        relevant_log_events = log_event_query.subquery(name="relevant_log_events")
+        unified_logs_for_sort = _build_unified_logs_subquery(
+            session=session,
+            relevant_log_events=relevant_log_events,
         )
 
-    # Turn into a subquery => these are the log_event_ids we care about so far
-    relevant_log_events = log_event_query.subquery(name="relevant_log_events")
-    unified_logs_for_sort = _build_unified_logs_subquery(
-        session=session,
-        relevant_log_events=relevant_log_events,
-        return_versions=return_versions,
-    )
-
-    if not randomize:
-        # Standard sorting logic
-        sort_val_sqs: List[Subquery] = []
-        sort_criteria: List[Any] = []
-
-        if sorting:
-            sort_dict = json.loads(sorting)
-
-            for sort_key, mode in sort_dict.items():
-                if is_image_field(sort_key, field_types):
-                    continue
-                if mode not in ("ascending", "descending"):
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Sort mode must be 'ascending' or 'descending', got {mode}.",
-                    )
-                try:
-                    expr_dict = str_filter_exp_to_dict(
-                        sort_key,
-                        field_names=list(field_types.keys()),
-                    )
-                except Exception:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Invalid sort expression '{sort_key}'",
-                    )
-
-                if expr_dict.get("type", None) == "identifier":
-                    # static field sorting
-                    cast_expr = _build_sort_criteria(
-                        unified_logs_for_sort.c.value,
-                        sort_key,
-                        field_types,
-                    )
-
-                    sort_val_sq = (
-                        select(
-                            unified_logs_for_sort.c.log_event_id.label("log_event_id"),
-                            cast_expr.label("val"),
-                        )
-                        .where(unified_logs_for_sort.c.key == sort_key)
-                        .order_by(
-                            unified_logs_for_sort.c.log_event_id,
-                            unified_logs_for_sort.c.updated_at.desc(),
-                        )
-                        .distinct(unified_logs_for_sort.c.log_event_id)
-                        .subquery(f"sort_{sort_key}_sq")
-                    )
-
-                    sort_val_sqs.append(sort_val_sq)
-
-                    # --- 2. remember ORDER‑BY expression
-                    direction = asc if mode == "ascending" else desc
-                    sort_criteria.append(direction(sort_val_sq.c.val).nulls_last())
-                else:
-                    # dynamic expression sorting
-                    event_ids_subq = log_event_query.subquery(name="event_ids_subq")
-                    sort_expr = build_sql_query(
-                        expr_dict,
-                        LogEvent,
-                        session,
-                        log_event_ids=event_ids_subq,
-                    )
-                    rand = random.randint(1, 1000000)
-                    base_sq = sort_expr.alias(f"sort_base_{rand}")
-                    sort_val_sq = (
-                        select(
-                            base_sq.c.log_event_id.label("log_event_id"),
-                            base_sq.c.value.label("val"),
-                        )
-                        .where(base_sq.c.log_event_id.in_(select(event_ids_subq.c.id)))
-                        .subquery(f"sort_expr_{rand}")
-                    )
-
-                    sort_val_sqs.append(sort_val_sq)
-
-                    # Add to ORDER BY clauses
-                    direction = asc if mode == "ascending" else desc
-                    sort_criteria.append(direction(sort_val_sq.c.val).nulls_last())
+        _build_sort_clauses(
+            session,
+            log_event_query,
+            field_types,
+            sorting,
+            unified_logs_for_sort,
+            sort_val_sqs,
+            sort_criteria,
+        )
 
         # Always add deterministic tie‑breaker
         sort_criteria.append(desc(relevant_log_events.c.id))
 
-        # Bring the sort sub‑queries into the FROM‑clause
+        # Join sort subqueries with log events
         joined_events = relevant_log_events
         for sq in sort_val_sqs:
             joined_events = joined_events.outerjoin(
                 sq,
                 sq.c.log_event_id == relevant_log_events.c.id,
             )
-        pag_query = (
-            session.query(
-                relevant_log_events.c.id.label("id"),
-                func.row_number().over(order_by=sort_criteria).label("row_num"),
-            )
-            .select_from(joined_events)
-            .order_by(*sort_criteria)
+
+        # Build query with sort info and proper joins
+        base_event_q = session.query(relevant_log_events.c.id).select_from(
+            joined_events,
         )
 
-        if limit:
-            pag_query = pag_query.limit(limit)
-        if offset:
-            pag_query = pag_query.offset(offset)
-
+        # For _paginate_events, we need to pass the joined query and sort criteria
+        # This will ensure proper ordering without cartesian products
     else:
-        # Deterministic random ordering using fixed seed
-        # Create a deterministic random key by hashing the ID with a fixed seed
-        random_key = func.md5(
-            cast(relevant_log_events.c.id, String) + literal(seed),
-        )
+        # No sorting needed, just use the filtered events
+        base_event_q = log_event_query
 
-        # Use the random key for both the window function and ORDER BY
-        pag_query = (
-            session.query(
-                relevant_log_events.c.id.label("id"),
-                func.row_number().over(order_by=[random_key]).label("row_num"),
-            )
-            .select_from(relevant_log_events)
-            .order_by(random_key)
-        )
+    # ---- Phase-2: total_count + page -------------------------------
+    # Check if we have joins (when sorting is enabled)
+    has_joins = bool(sorting) and not randomize
 
-        if limit:
-            pag_query = pag_query.limit(limit)
-        if offset:
-            pag_query = pag_query.offset(offset)
+    paginated_ids_subq, total_count = _paginate_events(
+        session,
+        base_event_q,
+        sort_criteria,
+        limit,
+        offset,
+        randomize=randomize,
+        seed=seed,
+        has_joins=has_joins,
+    )
 
-    paginated_ids_subq = pag_query.subquery(name="paginated_ids_subq")
-
-    # Phase 2: latest_timestamp, from_ids, exclude_ids, etc.
+    # Phase 3: Handle special cases
     if latest_timestamp:
-        max_updated_at = (
-            session.query(func.max(unified_logs_for_sort.c.updated_at))
-            .join(
-                paginated_ids_subq,
-                paginated_ids_subq.c.id == unified_logs_for_sort.c.log_event_id,
-            )
-            .scalar()
+        # Build unified logs only for timestamp check
+        unified_logs_for_timestamp = _build_unified_logs_subquery(
+            session=session,
+            relevant_log_events=paginated_ids_subq,
         )
+        max_updated_at = session.query(
+            func.max(unified_logs_for_timestamp.c.updated_at),
+        ).scalar()
         return max_updated_at.isoformat() if max_updated_at else None
 
-    # Otherwise, build limited unified logs for hydration
+    # ---- Phase-4: build unified logs ONLY for the paginated IDs ----
     unified_logs_limited = _build_unified_logs_limited(
         session,
         paginated_ids_subq,
-        return_versions,
     )
-    unified_logs_all = _build_unified_logs_limited(  # no LIMIT/OFFSET
-        session,
-        relevant_log_events,
-        return_versions,
-    )
-    total_filter_q = session.query(unified_logs_all).filter(True)
+
     filtered_logs_q = session.query(unified_logs_limited).filter(True)
 
     context_len = 0
@@ -632,39 +691,20 @@ def _get_logs_query(
         filtered_logs_q = filtered_logs_q.filter(
             unified_logs_limited.c.key.startswith(column_context),
         )
-        total_filter_q = total_filter_q.filter(
-            unified_logs_all.c.key.startswith(column_context),
-        )
 
     filtered_logs_q = _apply_post_filters(
         filtered_logs_q,
         unified_logs_limited,
-        from_ids=from_ids,
-        exclude_ids=exclude_ids,
+        from_ids=None,  # Already applied to log_event_query
+        exclude_ids=None,  # Already applied to log_event_query
         exclude_params=exclude_params,
         exclude_entries=exclude_entries,
-        from_fields=from_fields,
-        exclude_fields=exclude_fields,
-        return_versions=return_versions,
+        from_fields=from_fields,  # Still need to filter the actual fields returned
+        exclude_fields=exclude_fields,  # Still need to filter the actual fields returned
     )
     filtered_logs_subq = filtered_logs_q.subquery(name="filtered_logs_subq")
 
-    total_logs_q = _apply_post_filters(
-        total_filter_q,
-        unified_logs_all,
-        from_ids=from_ids,
-        exclude_ids=exclude_ids,
-        exclude_params=exclude_params,
-        exclude_entries=exclude_entries,
-        from_fields=from_fields,
-        exclude_fields=exclude_fields,
-        return_versions=return_versions,
-    )
-    total_logs_subq = total_logs_q.subquery(name="total_logs_subq")
-    # 5) Fetch final hydrated rows
-    total_count = session.query(
-        func.count(func.distinct(total_logs_subq.c.log_event_id)),
-    ).scalar()
+    # Get final logs - total_count already calculated in _paginate_events
     raw_rows = _get_final_logs(session, filtered_logs_subq, paginated_ids_subq)
 
     results = []
@@ -1123,16 +1163,14 @@ def _build_unified_logs_subquery(
     event_ids: Optional[Subquery] = None,
     relevant_log_events: Optional[Subquery] = None,
     key: str = None,
-    return_versions: bool = False,
 ) -> Subquery:
     """
-    Build a unified subquery that combines base logs and derived logs based on return_versions parameter.
+    Build a unified subquery that combines base logs and derived logs.
 
     Args:
         session: The database session
         event_ids: Optional list of event IDs to filter by directly
         relevant_log_events: Optional subquery containing relevant log event IDs to join with
-        return_versions: Whether to include version history in the query
 
     Returns:
         A unified subquery combining base and derived logs
@@ -1150,54 +1188,20 @@ def _build_unified_logs_subquery(
             return query.filter(table.key == key)
         return query
 
-    if return_versions:
-        pass
-        # TODO(yusha): implement this with the new LogVersion table
-        # # get latest version + all history logs
-        # base_logs_q_current = session.query(
-        #     Log.id.label("id"),
-        #     Log.log_event_id.label("log_event_id"),
-        #     Log.key.label("key"),
-        #     Log.value.label("value"),
-        #     Log.inferred_type.label("inferred_type"),
-        #     Log.param_version.label("param_version"),
-        #     cast(None, Integer).label("context_version"),
-        #     Log.updated_at.label("updated_at"),
-        #     LogEvent.created_at.label("created_at"),
-        #     literal("current").label("source_type"),
-        # ).join(LogEvent, LogEvent.id == Log.log_event_id)
-        # base_logs_q_current = _apply_event_filter(base_logs_q_current, Log)
-
-        # base_logs_q_history = session.query(
-        #     LogVersion.id.label("id"),
-        #     LogVersion.log_event_id.label("log_event_id"),
-        #     LogVersion.key.label("key"),
-        #     LogVersion.value.label("value"),
-        #     LogVersion.inferred_type.label("inferred_type"),
-        #     cast(None, Integer).label("param_version"),
-        #     LogVersion.context_version.label("context_version"),
-        #     LogVersion.updated_at.label("updated_at"),
-        #     LogEvent.created_at.label("created_at"),
-        #     literal("history").label("source_type"),
-        # ).join(LogEvent, LogEvent.id == LogVersion.log_event_id)
-        # base_logs_q_history = _apply_event_filter(base_logs_q_history, LogVersion)
-
-        # base_logs_q = base_logs_q_current.union_all(base_logs_q_history)
-    else:
-        # get only the latest version of the logs
-        base_logs_q = session.query(
-            Log.id.label("id"),
-            Log.log_event_id.label("log_event_id"),
-            Log.key.label("key"),
-            Log.value.label("value"),
-            Log.inferred_type.label("inferred_type"),
-            Log.param_version.label("param_version"),
-            cast(None, Integer).label("context_version"),
-            Log.updated_at.label("updated_at"),
-            LogEvent.created_at.label("created_at"),
-            literal("base").label("source_type"),
-        ).join(LogEvent, LogEvent.id == Log.log_event_id)
-        base_logs_q = _apply_event_filter(base_logs_q, Log)
+    # get only the latest version of the logs
+    base_logs_q = session.query(
+        Log.id.label("id"),
+        Log.log_event_id.label("log_event_id"),
+        Log.key.label("key"),
+        Log.value.label("value"),
+        Log.inferred_type.label("inferred_type"),
+        Log.param_version.label("param_version"),
+        cast(None, Integer).label("context_version"),
+        Log.updated_at.label("updated_at"),
+        LogEvent.created_at.label("created_at"),
+        literal("base").label("source_type"),
+    ).join(LogEvent, LogEvent.id == Log.log_event_id)
+    base_logs_q = _apply_event_filter(base_logs_q, Log)
 
     derived_logs_q = session.query(
         DerivedLog.id.label("id"),
@@ -1414,22 +1418,52 @@ def _format_flat_logs(rows, context_len, value_limit, field_order_map):
 
 def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
     """
-    Returns final rows with the JSONLog value (if available) restored.
+    Return fully-hydrated rows, using LATERAL sub-queries so the JSON
+    side-tables are probed with indexes instead of being full-scanned.
     """
-    # Outer join JSONLog and JSONLogHistory based on source_type
+
+    # ── current JSON value ────────────────────────────────────────────────
+    jl_lateral = (
+        select(JSONLog.value.label("jl_val"))
+        .where(
+            and_(
+                JSONLog.log_event_id == filtered_logs_subq.c.log_event_id,
+                JSONLog.key == filtered_logs_subq.c.key,
+            ),
+        )
+        .limit(1)  # only one row exists anyway
+        .lateral()  # turn SELECT into a LATERAL
+        .alias("jl_lateral")
+    )
+
+    # ── latest history value ──────────────────────────────────────────────
+    jlh_lateral = (
+        select(JSONLogHistory.value.label("jlh_val"))
+        .where(
+            and_(
+                JSONLogHistory.log_event_id == filtered_logs_subq.c.log_event_id,
+                JSONLogHistory.key == filtered_logs_subq.c.key,
+            ),
+        )
+        .order_by(JSONLogHistory.version.desc())
+        .limit(1)
+        .lateral()
+        .alias("jlh_lateral")
+    )
+
+    # -- Main query --------------------------------------------------------------
     final_logs_query = (
         session.query(
             filtered_logs_subq.c.id,
             filtered_logs_subq.c.log_event_id,
             filtered_logs_subq.c.key,
-            # Use coalesce to select the appropriate JSON value based on source_type
             func.coalesce(
                 case(
                     (
                         filtered_logs_subq.c.source_type == "history",
-                        JSONLogHistory.value,
+                        jlh_lateral.c.jlh_val,
                     ),
-                    else_=JSONLog.value,
+                    else_=jl_lateral.c.jl_val,
                 ),
                 cast(filtered_logs_subq.c.value, JSON),
             ).label("value"),
@@ -1439,53 +1473,16 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
             filtered_logs_subq.c.created_at,
             filtered_logs_subq.c.source_type,
         )
-        .outerjoin(
-            JSONLog,
-            and_(
-                JSONLog.log_event_id == filtered_logs_subq.c.log_event_id,
-                JSONLog.key == filtered_logs_subq.c.key,
-                filtered_logs_subq.c.source_type != "history",
-            ),
-        )
-        .outerjoin(
-            JSONLogHistory,
-            and_(
-                JSONLogHistory.log_event_id == filtered_logs_subq.c.log_event_id,
-                JSONLogHistory.key == filtered_logs_subq.c.key,
-                filtered_logs_subq.c.source_type == "history",
-            ),
-        )
+        # keep page order information first
         .join(
             paginated_ids_subq,
             paginated_ids_subq.c.id == filtered_logs_subq.c.log_event_id,
         )
+        # probe the side tables
+        .outerjoin(jl_lateral, true())
+        .outerjoin(jlh_lateral, true())
         .order_by(paginated_ids_subq.c.row_num, filtered_logs_subq.c.created_at)
     )
-
-    if False:
-        from sqlalchemy import text
-
-        try:
-            import json
-
-            # Execute EXPLAIN ANALYZE with the same parameters
-            compiled_sql = final_logs_query.statement.compile(
-                dialect=session.bind.dialect,
-                compile_kwargs={"literal_binds": True},
-            ).string
-            compiled_sql = (
-                "EXPLAIN (ANALYZE, BUFFERS, TIMING, COSTS, VERBOSE, FORMAT JSON) "
-                + compiled_sql
-            )
-            explain_query = text(compiled_sql)
-            explain_result = session.execute(explain_query)
-            explain_output = explain_result.fetchone()[0]
-            with open("explain_analyze.json", "w") as f:
-                f.write(compiled_sql + "\n")
-                f.write(json.dumps(explain_output, indent=4))
-                print("Explain analyze written to explain_analyze.json")
-        except Exception as explain_error:
-            print(f"Error getting explain analyze: {explain_error}")
 
     return final_logs_query.all()
 
