@@ -489,6 +489,7 @@ def _handle_functions(
                     literal("bool").label("inferred_type"),
                 )
                 .select_from(log_event_alias)
+                .where(log_event_alias.id.in_(select(log_event_ids.c.id)))
                 .subquery()
             )
             return exists_subq
