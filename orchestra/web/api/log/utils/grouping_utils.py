@@ -476,12 +476,8 @@ def _fetch_logs_for_event_ids(
             .cte("event_ids_cte")
         )
     else:
-        event_ids_cte = event_ids  # already a sub‑query with “id”
+        event_ids_cte = event_ids  # already a sub‑query with "id"
 
-    unified_logs_for_sort = _build_unified_logs_subquery(
-        session=session,
-        relevant_log_events=event_ids_cte,
-    )
     context_name = "" if not context else context
     ctx_id = (
         context_dao.filter(name=context_name, project_id=project_id)[0][0].id
@@ -493,7 +489,13 @@ def _fetch_logs_for_event_ids(
     sort_val_sqs: List[Subquery] = []
     sort_criteria: List[Any] = []
 
+    # Only build unified logs for sorting if we have sorting criteria
     if sorting:
+        unified_logs_for_sort = _build_unified_logs_subquery(
+            session=session,
+            relevant_log_events=event_ids_cte,
+        )
+
         sort_dict = json.loads(sorting)
         for sort_key, mode in sort_dict.items():
             if is_image_field(sort_key, field_types):
@@ -529,20 +531,34 @@ def _fetch_logs_for_event_ids(
 
     # deterministic tie‑breaker
     sort_criteria.append(desc(event_ids_cte.c.id))
-    # join the sort sub‑queries before pagination
-    joined = event_ids_cte
-    for sq in sort_val_sqs:
-        joined = joined.outerjoin(sq, sq.c.log_event_id == event_ids_cte.c.id)
 
-    seq_col = func.row_number().over(order_by=sort_criteria).label("row_num")
-    pag_query = (
-        session.query(
-            event_ids_cte.c.id.label("id"),
-            seq_col,
+    # Build pagination query
+    if sorting and sort_val_sqs:
+        # join the sort sub‑queries before pagination
+        joined = event_ids_cte
+        for sq in sort_val_sqs:
+            joined = joined.outerjoin(sq, sq.c.log_event_id == event_ids_cte.c.id)
+
+        pag_query = (
+            session.query(
+                event_ids_cte.c.id.label("id"),
+                func.row_number().over(order_by=sort_criteria).label("row_num"),
+            )
+            .select_from(joined)
+            .order_by(*sort_criteria)
         )
-        .select_from(joined)
-        .order_by(seq_col)
-    )
+    else:
+        # No sorting, simple pagination
+        pag_query = session.query(
+            event_ids_cte.c.id.label("id"),
+            func.row_number().over(order_by=desc(event_ids_cte.c.id)).label("row_num"),
+        ).order_by(desc(event_ids_cte.c.id))
+
+    # Get total count before applying limit/offset
+    if isinstance(event_ids, list):
+        total_count = len(event_ids)
+    else:
+        total_count = session.query(func.count()).select_from(event_ids_cte).scalar()
 
     if limit:
         pag_query = pag_query.limit(limit)
@@ -552,16 +568,17 @@ def _fetch_logs_for_event_ids(
     paginated_ids_subq = pag_query.subquery("paginated_ids_subq")
 
     if latest_timestamp:
-        max_ts = (
-            session.query(func.max(unified_logs_for_sort.c.updated_at))
-            .join(
-                paginated_ids_subq,
-                paginated_ids_subq.c.id == unified_logs_for_sort.c.log_event_id,
-            )
-            .scalar()
+        # Build unified logs only for timestamp check
+        unified_logs_for_timestamp = _build_unified_logs_subquery(
+            session=session,
+            relevant_log_events=paginated_ids_subq,
         )
+        max_ts = session.query(
+            func.max(unified_logs_for_timestamp.c.updated_at),
+        ).scalar()
         return max_ts.isoformat() if max_ts else None
 
+    # Build unified logs ONLY for the paginated IDs
     unified_logs_limited = _build_unified_logs_limited(
         session,
         paginated_ids_subq,
@@ -607,10 +624,7 @@ def _fetch_logs_for_event_ids(
 
     filtered_logs_subq = filtered_q.subquery("filtered_logs_subq")
 
-    total_count = session.query(
-        func.count(func.distinct(filtered_logs_subq.c.log_event_id)),
-    ).scalar()
-
+    # Get final logs - total_count already calculated above
     raw_rows = _get_final_logs(session, filtered_logs_subq, paginated_ids_subq)
 
     results = [
