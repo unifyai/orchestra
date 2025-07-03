@@ -725,6 +725,7 @@ async def test_admin_list_assistants_for_user(client: AsyncClient):
     assert isinstance(info2, list)
     assert len(info2) == 0
 
+
 @pytest.mark.anyio
 async def test_admin_update_assistant_whatsapp_number_and_user_whatsapp(
     client: AsyncClient,

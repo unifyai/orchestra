@@ -638,7 +638,7 @@ def admin_update_assistant(
         ),
     )
 
-  
+
 @router.get(
     "/assistant/user/{user_id}",
     response_model=InfoResponse[List[AssistantRead]],
