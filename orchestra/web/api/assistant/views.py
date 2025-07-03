@@ -234,7 +234,7 @@ def create_assistant(
         created_email = None
         created_phone = None
         created_pubsub = None
-        created_whatsapp = None
+        assigned_whatsapp = None
         created_job = None
         started_job = False
 
@@ -279,7 +279,9 @@ def create_assistant(
 
                 # Step 4: assign whatsapp sender if whatsapp number is provided
                 if assistant_in.user_whatsapp_number:
-                    print("[PLACEHOLDER] - WHATSAPP SENDER ASSIGNED")
+                    assigned_whatsapp = assign_whatsapp_sender(
+                        assistant_in.user_whatsapp_number,
+                    )["whatsapp_number"]
 
                 # Step 5: create pubsub topic
                 pubsub_response = create_pubsub_topic(str(assistant_id))
@@ -330,7 +332,7 @@ def create_assistant(
                     phone=created_phone,
                     user_phone=assistant_in.user_phone,
                     user_whatsapp_number=assistant_in.user_whatsapp_number,
-                    assistant_whatsapp_number=created_whatsapp,
+                    assistant_whatsapp_number=assigned_whatsapp,
                 )
                 # Commit the infrastructure updates
                 session.commit()
