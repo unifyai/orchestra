@@ -20,6 +20,7 @@ from sqlalchemy import (
     literal,
     select,
     text,
+    true,
 )
 from sqlalchemy.sql.expression import ColumnClause
 from sqlalchemy.sql.selectable import Subquery
@@ -1417,22 +1418,52 @@ def _format_flat_logs(rows, context_len, value_limit, field_order_map):
 
 def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
     """
-    Returns final rows with the JSONLog value (if available) restored.
+    Return fully-hydrated rows, using LATERAL sub-queries so the JSON
+    side-tables are probed with indexes instead of being full-scanned.
     """
-    # Outer join JSONLog and JSONLogHistory based on source_type
+
+    # ── current JSON value ────────────────────────────────────────────────
+    jl_lateral = (
+        select(JSONLog.value.label("jl_val"))
+        .where(
+            and_(
+                JSONLog.log_event_id == filtered_logs_subq.c.log_event_id,
+                JSONLog.key == filtered_logs_subq.c.key,
+            ),
+        )
+        .limit(1)  # only one row exists anyway
+        .lateral()  # turn SELECT into a LATERAL
+        .alias("jl_lateral")
+    )
+
+    # ── latest history value ──────────────────────────────────────────────
+    jlh_lateral = (
+        select(JSONLogHistory.value.label("jlh_val"))
+        .where(
+            and_(
+                JSONLogHistory.log_event_id == filtered_logs_subq.c.log_event_id,
+                JSONLogHistory.key == filtered_logs_subq.c.key,
+            ),
+        )
+        .order_by(JSONLogHistory.version.desc())
+        .limit(1)
+        .lateral()
+        .alias("jlh_lateral")
+    )
+
+    # -- Main query --------------------------------------------------------------
     final_logs_query = (
         session.query(
             filtered_logs_subq.c.id,
             filtered_logs_subq.c.log_event_id,
             filtered_logs_subq.c.key,
-            # Use coalesce to select the appropriate JSON value based on source_type
             func.coalesce(
                 case(
                     (
                         filtered_logs_subq.c.source_type == "history",
-                        JSONLogHistory.value,
+                        jlh_lateral.c.jlh_val,
                     ),
-                    else_=JSONLog.value,
+                    else_=jl_lateral.c.jl_val,
                 ),
                 cast(filtered_logs_subq.c.value, JSON),
             ).label("value"),
@@ -1442,53 +1473,16 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
             filtered_logs_subq.c.created_at,
             filtered_logs_subq.c.source_type,
         )
-        .outerjoin(
-            JSONLog,
-            and_(
-                JSONLog.log_event_id == filtered_logs_subq.c.log_event_id,
-                JSONLog.key == filtered_logs_subq.c.key,
-                filtered_logs_subq.c.source_type != "history",
-            ),
-        )
-        .outerjoin(
-            JSONLogHistory,
-            and_(
-                JSONLogHistory.log_event_id == filtered_logs_subq.c.log_event_id,
-                JSONLogHistory.key == filtered_logs_subq.c.key,
-                filtered_logs_subq.c.source_type == "history",
-            ),
-        )
+        # keep page order information first
         .join(
             paginated_ids_subq,
             paginated_ids_subq.c.id == filtered_logs_subq.c.log_event_id,
         )
+        # probe the side tables
+        .outerjoin(jl_lateral, true())
+        .outerjoin(jlh_lateral, true())
         .order_by(paginated_ids_subq.c.row_num, filtered_logs_subq.c.created_at)
     )
-
-    if False:
-        from sqlalchemy import text
-
-        try:
-            import json
-
-            # Execute EXPLAIN ANALYZE with the same parameters
-            compiled_sql = final_logs_query.statement.compile(
-                dialect=session.bind.dialect,
-                compile_kwargs={"literal_binds": True},
-            ).string
-            compiled_sql = (
-                "EXPLAIN (ANALYZE, BUFFERS, TIMING, COSTS, VERBOSE, FORMAT JSON) "
-                + compiled_sql
-            )
-            explain_query = text(compiled_sql)
-            explain_result = session.execute(explain_query)
-            explain_output = explain_result.fetchone()[0]
-            with open("explain_analyze.json", "w") as f:
-                f.write(compiled_sql + "\n")
-                f.write(json.dumps(explain_output, indent=4))
-                print("Explain analyze written to explain_analyze.json")
-        except Exception as explain_error:
-            print(f"Error getting explain analyze: {explain_error}")
 
     return final_logs_query.all()
 
