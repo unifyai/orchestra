@@ -2161,10 +2161,6 @@ def get_logs(
         description="Static context to filter logs by.",
         example="training",
     ),
-    return_versions: bool = Query(
-        False,
-        description="Whether to return all versions of logs. Only valid for versioned contexts.",
-    ),
     group_threshold: Optional[int] = Query(
         None,
         description="When set, entries that appear in at least this many logs will be grouped together.",
@@ -2279,7 +2275,6 @@ def get_logs(
 
       3. **Return IDs only mode**:
          - If return_ids_only is True, returns only the log event ids.
-         - If return_versions is also True, returns a list of objects with both id and version information.
 
       4. **Dynamic expression sorting**:
          - In addition to static field-based sorting, you can use dynamic expressions for sorting.
@@ -2291,15 +2286,6 @@ def get_logs(
       - Additionally, it includes either `logs` (in monolithic or nested grouping mode) or `groups` (in flat grouping mode)
         as specified by the arguments.
 
-    If return_versions=True:
-    - Returns all versions of logs in versioned contexts
-    - from_ids and exclude_ids must be provided as lists of objects with 'id' and 'version' keys
-    - Each object must have format: `{"id": log_event_id, "version": version_number}`
-    - This is only valid for logs in versioned contexts
-
-    If return_versions=False (default):
-    - Returns only the latest version of each log
-    - from_ids and exclude_ids should be strings of '&'-separated log event IDs
     """
     # Instantiate DAOs with shared session
     organization_member_dao = OrganizationMemberDAO(session)
@@ -2345,30 +2331,10 @@ def get_logs(
             field_type_dao=field_type_dao,
             context_dao=context_dao,
             session=session,
-            return_versions=return_versions,
             randomize=randomize,
             seed=seed,
         )
         if return_ids_only:
-            if return_versions:
-                # Return list of objects with both id and version information
-                id_version_map = {}
-                for row in all_rows:
-                    event_id = row[7]  # log_event_id
-                    version = row[4]  # context_version
-                    if event_id not in id_version_map:
-                        id_version_map[event_id] = set()
-                    if version is not None:
-                        id_version_map[event_id].add(version)
-
-                result = []
-                for event_id, versions in id_version_map.items():
-                    if versions:
-                        for version in versions:
-                            result.append({"id": event_id, "version": version})
-                    else:
-                        result.append({"id": event_id})
-                return result
             return list(
                 dict.fromkeys(row[7] for row in all_rows),
             )  # Return unique log_event_ids
@@ -2410,7 +2376,6 @@ def get_logs(
         context=context,
         filter_expr=filter_expr,
         from_ids=from_ids,
-        return_versions=return_versions,
         exclude_ids=exclude_ids,
         project_dao=project_dao,
         context_dao=context_dao,
@@ -2466,7 +2431,6 @@ def get_logs(
             value_limit=value_limit,
             groups_only=groups_only,
             return_timestamps=return_timestamps,
-            return_versions=return_versions,
         )
 
         final_result = {
@@ -2496,7 +2460,6 @@ def get_logs(
             project_dao=project_dao,
             field_type_dao=field_type_dao,
             context_dao=context_dao,
-            return_versions=return_versions,
             session=session,
         )
         logs_out, _ = _format_flat_logs(rows, context_len, value_limit, field_order_map)
