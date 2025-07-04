@@ -51,6 +51,7 @@ from orchestra.web.api.assistant.schema import (
     VoiceRead,
 )
 from orchestra.web.api.utils.assistant_infra import (
+    assign_whatsapp_sender,
     create_cloud_run_service,
     create_email,
     create_phone_number,
@@ -232,7 +233,7 @@ def create_assistant(
         created_email = None
         created_phone = None
         created_pubsub = None
-        created_whatsapp = None
+        assigned_whatsapp = None
         created_service = None
 
         if assistant_in.create_infra:
@@ -276,7 +277,9 @@ def create_assistant(
 
                 # Step 4: assign whatsapp sender if whatsapp number is provided
                 if assistant_in.user_whatsapp_number:
-                    print("[PLACEHOLDER] - WHATSAPP SENDER ASSIGNED")
+                    assigned_whatsapp = assign_whatsapp_sender(
+                        assistant_in.user_whatsapp_number,
+                    )["whatsapp_number"]
 
                 # Step 5: create pubsub topic
                 pubsub_response = create_pubsub_topic(str(assistant_id))
@@ -318,7 +321,7 @@ def create_assistant(
                     phone=created_phone,
                     user_phone=assistant_in.user_phone,
                     user_whatsapp_number=assistant_in.user_whatsapp_number,
-                    assistant_whatsapp_number=created_whatsapp,
+                    assistant_whatsapp_number=assigned_whatsapp,
                 )
                 # Commit the infrastructure updates
                 session.commit()
@@ -795,55 +798,51 @@ def update_assistant_config(
             weekly_limit = Decimal(update.weekly_limit)
 
         # Create / update social account:
-        # 1- Directly update from input value if provided, or
-        # 2- Check if the assistant doesn't have a user account already and if a user account value is provided
-        # 3- If so and if user has enough credits (production), assign the whatsapp account to the assistant
+        # 1- Check if the assistant doesn't have a user account already and if a user account value is provided
+        # 2- If so and if user has enough credits (production), assign the whatsapp account to the assistant
         assistant_whatsapp_number = (
-            update.assistant_whatsapp_number
-            if update.assistant_whatsapp_number
+            existing_assistant.assistant_whatsapp_number
+            if existing_assistant.assistant_whatsapp_number
             else None
         )
-        if not update.assistant_whatsapp_number:
-            assistant = assistant_dao.get_assistant_by_id(
-                user_id=user_id,
-                agent_id=assistant_id,
-            )
-            if not assistant.user_whatsapp_number and update.user_whatsapp_number:
-                if not settings.is_staging:
-                    # Cost to create a social account
-                    try:
-                        platforms_response = get_social_platforms_costs()
-                        platforms = platforms_response.get("platforms")
+        if update.user_whatsapp_number and not existing_assistant.user_whatsapp_number:
+            if not settings.is_staging:
+                # Cost to create a social account
+                try:
+                    platforms_response = get_social_platforms_costs()
+                    platforms = platforms_response.get("platforms")
 
-                        if not isinstance(platforms, dict):
-                            raise HTTPException(
-                                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                detail=f"Could not parse social platform costs. Expected a dictionary, got: {platforms}",
-                            )
-                        cost = platforms.get("whatsapp")
-                        if cost is None:
-                            raise HTTPException(
-                                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                detail="WhatsApp cost not found in social platform costs response.",
-                            )
-                    except Exception as e_costs:
+                    if not isinstance(platforms, dict):
                         raise HTTPException(
                             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail=f"Failed to fetch or process social platform costs. Details: {str(e_costs)}",
+                            detail=f"Could not parse social platform costs. Expected a dictionary, got: {platforms}",
                         )
-                    user = users_dao.get_user_with_id(user_id)
-                    decimal_cost = Decimal(cost)
-                    if user.credits < decimal_cost:
+                    cost = platforms.get("whatsapp")
+                    if cost is None:
                         raise HTTPException(
-                            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                            detail="Insufficient credits to add a WhatsApp number.",
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="WhatsApp cost not found in social platform costs response.",
                         )
-                    users_dao.recharge_credit(
-                        user_id=user_id,
-                        quantity=-float(decimal_cost),
+                except Exception as e_costs:
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail=f"Failed to fetch or process social platform costs. Details: {str(e_costs)}",
                     )
+                user = users_dao.get_user_with_id(user_id)
+                decimal_cost = Decimal(cost)
+                if user.credits < decimal_cost:
+                    raise HTTPException(
+                        status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                        detail="Insufficient credits to add a WhatsApp number.",
+                    )
+                users_dao.recharge_credit(
+                    user_id=user_id,
+                    quantity=-float(decimal_cost),
+                )
 
-                print("[PLACEHOLDER] - WHATSAPP SENDER ASSIGNED")
+            assistant_whatsapp_number = assign_whatsapp_sender(
+                update.user_whatsapp_number,
+            )["whatsapp_number"]
 
         updated = assistant_dao.update_assistant(
             user_id=request.state.user_id,

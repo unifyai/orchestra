@@ -3,11 +3,10 @@ import subprocess
 import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 import stripe
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.param_functions import Depends
 from google.cloud.storage import Client
 from sqlalchemy import select
@@ -75,11 +74,7 @@ from orchestra.web.api.admin.schema import (  # noqa: WPS235
     TaskModelResponse,
     UsersModelResponse,
 )
-from orchestra.web.api.assistant.schema import (
-    AssistantRead,
-    AssistantUpdate,
-    InfoResponse,
-)
+from orchestra.web.api.assistant.schema import AssistantRead, InfoResponse
 from orchestra.web.api.assistant.views import normalize_phone_parameter
 
 router = APIRouter()
@@ -491,12 +486,10 @@ def admin_list_assistants(
 ) -> InfoResponse[List[AssistantRead]]:
     """
     List all assistants in the system with optional filtering by phone or email.
-
-    This admin endpoint returns all assistants across all users, with optional
-    filtering capabilities for phone numbers and email addresses.
     """
-    # Normalize phone parameter to handle URL-decoded '+' characters
+    # Normalize filter parameters to handle URL-decoded '+' characters
     phone = normalize_phone_parameter(phone)
+    user_phone = normalize_phone_parameter(user_phone)
     user_whatsapp_number = normalize_phone_parameter(user_whatsapp_number)
     assistant_whatsapp_number = normalize_phone_parameter(assistant_whatsapp_number)
     dao = AssistantDAO(session)
@@ -546,7 +539,6 @@ def admin_list_assistants(
     description="Update a single assistant based on unique filter parameters.",
 )
 def admin_update_assistant(
-    update: AssistantUpdate = Body(...),
     phone: Optional[str] = Query(
         None,
         description="Filter: assistant phone number",
@@ -567,17 +559,26 @@ def admin_update_assistant(
         None,
         description="Filter: assistant WhatsApp number",
     ),
+    new_assistant_whatsapp_number: Optional[str] = Query(
+        None,
+        description="New WhatsApp number for the assistant",
+    ),
     session=Depends(get_db_session),
 ) -> InfoResponse[AssistantRead]:
     """
     Update a single assistant based on filter parameters.
     """
-    # Normalize phone parameter
+    # Normalize filter parameters and the new WhatsApp number to handle URL-decoded '+' characters
     phone = normalize_phone_parameter(phone)
+    user_phone = normalize_phone_parameter(user_phone)
     user_whatsapp_number = normalize_phone_parameter(user_whatsapp_number)
     assistant_whatsapp_number = normalize_phone_parameter(assistant_whatsapp_number)
+    new_assistant_whatsapp_number = normalize_phone_parameter(
+        new_assistant_whatsapp_number,
+    )
+
+    # Find the assistant to update
     dao = AssistantDAO(session)
-    # Find matching assistants
     assistants = dao.list_all_assistants(
         phone=phone,
         user_phone=user_phone,
@@ -594,24 +595,14 @@ def admin_update_assistant(
         )
     a = assistants[0]
 
-    # Perform update
+    # Update only the assistant WhatsApp number
     updated = dao.update_assistant(
         user_id=a.user_id,
         agent_id=a.agent_id,
-        weekly_limit=Decimal(update.weekly_limit)
-        if update.weekly_limit is not None
-        else None,
-        max_parallel=update.max_parallel,
-        about=update.about,
-        phone=update.phone,
-        user_phone=update.user_phone,
-        email=update.email,
-        user_whatsapp_number=update.user_whatsapp_number,
-        assistant_whatsapp_number=update.assistant_whatsapp_number,
-        voice_id=update.voice_id,
-        country=update.country,
+        assistant_whatsapp_number=new_assistant_whatsapp_number,
     )
     session.commit()
+
     # Return updated assistant
     return InfoResponse(
         info=AssistantRead(

@@ -216,11 +216,6 @@ class AssistantUpdate(BaseModel):
         description="WhatsApp number of the user",
         example="+15559876543",
     )
-    assistant_whatsapp_number: Optional[str] = Field(
-        None,
-        description="WhatsApp number of the assistant",
-        example="+15559876543",
-    )
     voice_id: Optional[str] = Field(  # This is Cartesia's voice ID
         None,
         description="Id of the voice (Cartesia ID) to use for the assistant",

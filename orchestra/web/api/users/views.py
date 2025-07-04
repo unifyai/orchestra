@@ -31,15 +31,28 @@ from orchestra.web.api.users.schema import (
     AssistantHiringApprovalUserStatus,
     AssistantHiringOneTimeLinkClaimTokenRequest,
     AssistantHiringOneTimeLinkResponse,
+    BusinessAddress,
+    BusinessVerificationRequest,
     FreezeAccountByStripeIdRequest,
     FreezeAccountRequest,
     QueryLoggingStatus,
     StripeIdRequest,
+    UpdateAccountTypeRequest,
+    UpdateBusinessInfoRequest,
     UpdateQueryLoggingRequest,
+    UserBusinessStatusResponse,
     UserRequest,
+)
+from orchestra.web.api.utils.business_validation import (
+    format_business_address,
+    format_business_classification,
 )
 from orchestra.web.api.utils.email import send_email_async
 from orchestra.web.api.utils.http_responses import not_found
+from orchestra.web.api.utils.tax_id_validator import (
+    TaxIDValidator,
+    validate_tax_id_for_country,
+)
 
 admin_router = APIRouter()
 router = APIRouter()
@@ -112,6 +125,7 @@ async def get_user(
         "organization": {"name": org_name, "level": org_level},
         "assistant_hiring_approval": user[0][0].assistant_hiring_approval,
         "has_claimed_approval_link": user[0][0].has_claimed_approval_link,
+        "business_classification": format_business_classification(user[0][0]),
     }
 
 
@@ -147,6 +161,7 @@ async def get_user_by_email(
         "organization": {"name": org_name, "level": org_level},
         "assistant_hiring_approval": user[0][0].assistant_hiring_approval,
         "has_claimed_approval_link": user[0][0].has_claimed_approval_link,
+        "business_classification": format_business_classification(user[0][0]),
     }
 
 
@@ -190,6 +205,7 @@ async def get_user_by_account(
         "organization": {"name": org_name, "level": org_level},
         "assistant_hiring_approval": user[0][0].assistant_hiring_approval,
         "has_claimed_approval_link": user[0][0].has_claimed_approval_link,
+        "business_classification": format_business_classification(user[0][0]),
     }
 
 
@@ -287,7 +303,7 @@ async def reset_user_quotas(
 
 
 @admin_router.put("/auth-user/quotas/reset/all")
-async def reset_user_quotas(
+async def reset_all_user_quotas(
     session: Session = Depends(get_db_session),
 ):
     auth_user_dao = AuthUserDAO(session)
@@ -412,7 +428,7 @@ async def reset_api_key(
 
 
 @admin_router.get("/organization/list")
-async def create_organization(
+async def list_organization(
     name: str,
     session: Session = Depends(get_db_session),
 ):
@@ -534,6 +550,259 @@ async def update_query_logging_status(
     auth_user_dao.update(id=user_id, queries_enabled=body.enabled)
 
     return QueryLoggingStatus(enabled=body.enabled)
+
+
+# -- Business Classification Endpoints --
+
+
+@router.get("/user/business-status", response_model=UserBusinessStatusResponse)
+async def get_user_business_status(
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """Get the current user's business classification status."""
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    auth_user_dao = AuthUserDAO(session)
+    user_row = auth_user_dao.get_by_id(user_id)
+
+    if not user_row:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    auth_user = user_row[0]
+
+    # Use standardized business validation
+    business_address = format_business_address(auth_user)
+
+    # Convert dict to BusinessAddress object if address exists
+    business_address_obj = None
+    if business_address:
+        business_address_obj = BusinessAddress(
+            address_line1=business_address["address_line1"],
+            address_line2=business_address["address_line2"],
+            city=business_address["city"],
+            state=business_address["state"],
+            country=business_address["country"],
+            postal_code=business_address["postal_code"],
+        )
+
+    return UserBusinessStatusResponse(
+        account_type=auth_user.account_type,
+        business_name=auth_user.business_name,
+        tax_id=auth_user.tax_id,
+        business_type=auth_user.business_type,
+        business_verified=auth_user.business_verified,
+        tax_exempt=auth_user.tax_exempt,
+        tax_jurisdiction=auth_user.tax_jurisdiction,
+        business_address=business_address_obj,
+    )
+
+
+@router.put("/user/account-type")
+async def update_user_account_type(
+    request: Request,
+    body: UpdateAccountTypeRequest,
+    session: Session = Depends(get_db_session),
+):
+    """Update user account type (individual vs business)."""
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    auth_user_dao = AuthUserDAO(session)
+
+    try:
+        if body.account_type == "business" and body.business_info:
+            # Update to business account with business information
+            auth_user_dao.update_account_type(
+                user_id=user_id,
+                account_type=body.account_type,
+                business_name=body.business_info.business_name,
+                tax_id=body.business_info.tax_id,
+                business_type=body.business_info.business_type,
+                business_address_line1=body.business_info.business_address.address_line1,
+                business_address_line2=body.business_info.business_address.address_line2,
+                business_city=body.business_info.business_address.city,
+                business_state=body.business_info.business_address.state,
+                business_country=body.business_info.business_address.country,
+                business_postal_code=body.business_info.business_address.postal_code,
+                tax_exempt=body.business_info.tax_exempt,
+            )
+        else:
+            # Update to individual account (clears business info)
+            auth_user_dao.update_account_type(
+                user_id=user_id,
+                account_type=body.account_type,
+            )
+
+        return {"message": f"Account type updated to {body.account_type} successfully"}
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.patch("/user/business-info")
+async def update_user_business_info(
+    request: Request,
+    body: UpdateBusinessInfoRequest,
+    session: Session = Depends(get_db_session),
+):
+    """Update business information for business accounts."""
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    auth_user_dao = AuthUserDAO(session)
+
+    try:
+        auth_user_dao.update_business_info(
+            user_id=user_id,
+            business_name=body.business_name,
+            tax_id=body.tax_id,
+            business_type=body.business_type,
+            business_address_line1=body.business_address.address_line1
+            if body.business_address
+            else None,
+            business_address_line2=body.business_address.address_line2
+            if body.business_address
+            else None,
+            business_city=body.business_address.city if body.business_address else None,
+            business_state=body.business_address.state
+            if body.business_address
+            else None,
+            business_country=body.business_address.country
+            if body.business_address
+            else None,
+            business_postal_code=body.business_address.postal_code
+            if body.business_address
+            else None,
+            tax_exempt=body.tax_exempt,
+        )
+
+        return {"message": "Business information updated successfully"}
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@admin_router.post("/auth-user/verify-business")
+async def verify_business_account(
+    body: BusinessVerificationRequest,
+    session: Session = Depends(get_db_session),
+):
+    """Admin endpoint to verify a business account."""
+    auth_user_dao = AuthUserDAO(session)
+
+    try:
+        # TODO: Add actual business verification logic here
+        # This could include:
+        # - Tax ID validation via external services
+        # - Business registration verification
+        # - Address verification
+
+        auth_user_dao.set_business_verified(
+            user_id=body.user_id,
+            verified=True,
+            tax_jurisdiction="Determined by verification process",  # Replace with actual logic
+        )
+
+        return {"message": f"Business account {body.user_id} verified successfully"}
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@admin_router.get("/auth-user/business-accounts")
+async def list_business_accounts(
+    verified: Optional[bool] = Query(None, description="Filter by verification status"),
+    limit: int = Query(50, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    session: Session = Depends(get_db_session),
+):
+    """Admin endpoint to list business accounts."""
+    auth_user_dao = AuthUserDAO(session)
+
+    if verified is not None:
+        users = auth_user_dao.get_business_users_by_verification_status(
+            verified=verified,
+            limit=limit,
+            offset=offset,
+        )
+    else:
+        users = auth_user_dao.get_users_by_account_type(
+            account_type="business",
+            limit=limit,
+            offset=offset,
+        )
+
+    return [
+        {
+            "id": user.id,
+            "email": user.email,
+            "business_name": user.business_name,
+            "tax_id": user.tax_id,
+            "business_verified": user.business_verified,
+            "tax_exempt": user.tax_exempt,
+            "created_at": user.created_at,
+        }
+        for user in users
+    ]
+
+
+@router.post("/user/create-with-business-info")
+async def create_user_with_business_info(
+    body: UpdateAccountTypeRequest,
+    session: Session = Depends(get_db_session),
+):
+    """Create a new user with business classification (for signup flow)."""
+    auth_user_dao = AuthUserDAO(session)
+
+    # Check if user already exists
+    existing_user = auth_user_dao.filter(email=body.email)
+    if existing_user:
+        raise HTTPException(
+            status_code=400,
+            detail="A user with this email already exists.",
+        )
+
+    try:
+        if body.account_type == "business" and body.business_info:
+            # Create business user
+            auth_user_dao.create(
+                email=body.email,
+                name=body.name,
+                last_name=body.last_name,
+                account_type=body.account_type,
+                business_name=body.business_info.business_name,
+                tax_id=body.business_info.tax_id,
+                business_type=body.business_info.business_type,
+                business_address_line1=body.business_info.business_address.address_line1,
+                business_address_line2=body.business_info.business_address.address_line2,
+                business_city=body.business_info.business_address.city,
+                business_state=body.business_info.business_address.state,
+                business_country=body.business_info.business_address.country,
+                business_postal_code=body.business_info.business_address.postal_code,
+                tax_exempt=body.business_info.tax_exempt,
+            )
+        else:
+            # Create individual user
+            auth_user_dao.create(
+                email=body.email,
+                name=body.name,
+                last_name=body.last_name,
+                account_type=body.account_type or "individual",
+            )
+
+        session.commit()
+        return {
+            "message": f"User created successfully with account type: {body.account_type}",
+        }
+
+    except ValueError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # -- Manage the approval status for user access to hiring assistants --
@@ -895,3 +1164,36 @@ async def delete_assistant_hiring_one_time_link(
         raise not_found("One-time approval link")
     session.commit()
     return None
+
+
+@router.post("/user/validate-tax-id")
+async def validate_tax_id(
+    request: Request,
+    tax_id: str = Query(..., description="Tax ID to validate"),
+    country: str = Query(..., description="Two-letter country code"),
+    session: Session = Depends(get_db_session),
+):
+    """Validate a tax ID format for a specific country."""
+    try:
+        validation_result = validate_tax_id_for_country(tax_id, country)
+
+        return {
+            "tax_id": tax_id,
+            "country": country.upper(),
+            "is_valid": validation_result["is_valid"],
+            "formatted_tax_id": validation_result["formatted_tax_id"],
+            "error": validation_result["error"],
+            "supported_countries": TaxIDValidator.get_supported_countries(),
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Validation error: {str(e)}")
+
+
+@router.get("/user/supported-tax-countries")
+async def get_supported_tax_countries():
+    """Get list of countries supported for tax ID validation."""
+    return {
+        "supported_countries": TaxIDValidator.get_supported_countries(),
+        "total_countries": len(TaxIDValidator.get_supported_countries()),
+    }

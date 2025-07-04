@@ -19,6 +19,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
+from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dao.webhook_log_dao import WebhookLogDAO
@@ -492,6 +493,167 @@ def process_review_event(event: Dict, session: Session) -> Response:
 
 
 # ──────────────────────────────────────────────────────────────────────────
+def process_customer_tax_id_event(event: Dict, session: Session) -> Response:
+    """Business logic for customer.tax_id.* events from Stripe."""
+    data = event["data"]["object"]
+    event_id: str = event["id"]
+
+    # Idempotency guard
+    if session.query(WebhookLog).filter_by(event_id=event_id).first():
+        return Response(status_code=200)
+
+    session.add(
+        WebhookLog(
+            id=str(uuid.uuid4()),
+            event_id=event_id,
+            event_type=event["type"],
+        ),
+    )
+    session.flush()
+
+    # Extract tax ID information
+    customer_id = data.get("customer")
+    tax_id_value = data.get("value")
+    tax_id_type = data.get("type")
+
+    if not customer_id:
+        print(
+            f"WARNING: Tax ID event missing customer_id. "
+            f"Event ID: {event_id}, Customer ID: {customer_id}",
+        )
+        session.commit()
+        return Response(status_code=200)
+
+    # For deletion events, tax_id_value might be None, which is OK
+    if event["type"] != "customer.tax_id.deleted" and not tax_id_value:
+        print(
+            f"WARNING: Tax ID event missing value (required for create/update). "
+            f"Event ID: {event_id}, Customer ID: {customer_id}, Event Type: {event['type']}",
+        )
+        session.commit()
+        return Response(status_code=200)
+
+    try:
+        # Find user by Stripe customer ID
+        users_dao = UsersDAO(session)
+        auth_user_dao = AuthUserDAO(session)
+
+        billing_user = users_dao.get_user_by_stripe_id(customer_id)
+        if not billing_user:
+            print(
+                f"WARNING: No user found for Stripe customer ID. "
+                f"Customer ID: {customer_id}, Event ID: {event_id}",
+            )
+            session.commit()
+            return Response(status_code=200)
+
+        # Get auth user to check if it's a business account
+        auth_user_row = auth_user_dao.get_by_id(billing_user.id)
+        if not auth_user_row:
+            print(
+                f"WARNING: No auth user found for billing user. "
+                f"User ID: {billing_user.id}, Event ID: {event_id}",
+            )
+            session.commit()
+            return Response(status_code=200)
+
+        auth_user = auth_user_row[0]
+
+        # Only process for business accounts
+        if auth_user.account_type != "business":
+            print(
+                f"INFO: Tax ID event for non-business account, skipping. "
+                f"User ID: {billing_user.id}, Account Type: {auth_user.account_type}, Event ID: {event_id}",
+            )
+            session.commit()
+            return Response(status_code=200)
+
+        # Handle different event types
+        if event["type"] == "customer.tax_id.created":
+            # Update the user's tax ID from Stripe
+            auth_user_dao.update(
+                id=billing_user.id,
+                tax_id=tax_id_value,
+            )
+
+            # Determine and set tax jurisdiction based on tax ID type
+            tax_jurisdiction = None
+            if tax_id_type == "eu_vat":
+                tax_jurisdiction = "EU"
+            elif tax_id_type == "gb_vat":
+                tax_jurisdiction = "UK"
+            elif tax_id_type == "au_abn":
+                tax_jurisdiction = "AU"
+            elif tax_id_type == "us_ein":
+                tax_jurisdiction = "US"
+            elif tax_id_type == "ca_gst_hst":
+                tax_jurisdiction = "CA"
+
+            if tax_jurisdiction:
+                auth_user_dao.update(
+                    id=billing_user.id,
+                    tax_jurisdiction=tax_jurisdiction,
+                )
+
+            logger.info(
+                {
+                    "message": "Tax ID synced from Stripe to database",
+                    "user_id": billing_user.id,
+                    "tax_id_type": tax_id_type,
+                    "tax_jurisdiction": tax_jurisdiction,
+                    "event_id": event_id,
+                },
+            )
+
+        elif event["type"] == "customer.tax_id.updated":
+            # Update the user's tax ID from Stripe
+            auth_user_dao.update(
+                id=billing_user.id,
+                tax_id=tax_id_value,
+            )
+
+            logger.info(
+                {
+                    "message": "Tax ID updated from Stripe",
+                    "user_id": billing_user.id,
+                    "tax_id_type": tax_id_type,
+                    "event_id": event_id,
+                },
+            )
+
+        elif event["type"] == "customer.tax_id.deleted":
+            # Clear the user's tax ID
+            auth_user_dao.update(
+                id=billing_user.id,
+                tax_id=None,
+                tax_jurisdiction=None,
+            )
+
+            logger.info(
+                {
+                    "message": "Tax ID cleared from database after Stripe deletion",
+                    "user_id": billing_user.id,
+                    "event_id": event_id,
+                },
+            )
+
+        session.commit()
+        return Response(status_code=200)
+
+    except Exception as e:
+        logger.error(
+            {
+                "message": "Error processing tax ID event",
+                "event_id": event_id,
+                "customer_id": customer_id,
+                "error": str(e),
+            },
+        )
+        session.rollback()
+        raise
+
+
+# ──────────────────────────────────────────────────────────────────────────
 def handle_event_core(event: Dict, session: Session) -> Response:  # noqa: D401
     """Main dispatcher for all Stripe webhook events."""
     event_type = event.get("type", "")
@@ -503,6 +665,8 @@ def handle_event_core(event: Dict, session: Session) -> Response:  # noqa: D401
         return process_review_event(event, session)
     elif event_type.startswith("charge."):
         return process_charge_event(event, session)
+    elif event_type.startswith("customer.tax_id."):
+        return process_customer_tax_id_event(event, session)
     else:
         # Log unhandled events for idempotency
         webhook_log_dao = WebhookLogDAO(session)

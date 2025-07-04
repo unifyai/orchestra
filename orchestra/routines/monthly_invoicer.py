@@ -135,21 +135,76 @@ def _invoice_month_with_session(
             )
 
             # 2. create invoice which pulls the pending items
-            invoice = stripe.Invoice.create(
-                customer=user.stripe_customer_id,
-                automatic_tax={"enabled": True},  # Enable automatic tax collection
-                auto_advance=True,
-                pending_invoice_items_behavior="include",
-                description=f"{total_cr} credits used in {year}-{month:02d}",
-                metadata={
+            # Get the auth user for business tax information
+            from orchestra.db.dao.auth_user_dao import AuthUserDAO
+
+            auth_user_dao = AuthUserDAO(session)
+            auth_user_row = auth_user_dao.get_by_id(user_id)
+            auth_user = auth_user_row[0] if auth_user_row else None
+
+            # Prepare customer tax IDs for business accounts
+            customer_tax_ids = []
+            if auth_user and auth_user.account_type == "business" and auth_user.tax_id:
+                # Determine tax ID type based on the tax ID format/country
+                tax_id_type = "eu_vat"  # Default to EU VAT
+
+                # Simple heuristic to determine tax ID type
+                if auth_user.business_country == "GB":
+                    tax_id_type = "gb_vat"
+                elif auth_user.business_country == "AU":
+                    tax_id_type = "au_abn"
+                elif auth_user.business_country == "US":
+                    tax_id_type = "us_ein"
+                elif auth_user.business_country == "CA":
+                    tax_id_type = "ca_gst_hst"
+
+                customer_tax_ids = [
+                    {
+                        "type": tax_id_type,
+                        "value": auth_user.tax_id,
+                    },
+                ]
+
+            invoice_params = {
+                "customer": user.stripe_customer_id,
+                "automatic_tax": {"enabled": True},  # Enable automatic tax collection
+                "auto_advance": True,
+                "pending_invoice_items_behavior": "include",
+                "description": f"{total_cr} credits used in {year}-{month:02d}",
+                "metadata": {
                     "invoice_group": str(group_day),
                     "user_id": user_id,
                     "period": f"{year}-{month:02d}",
                 },
-                idempotency_key=idem_base,
-            )
+                "idempotency_key": idem_base,
+            }
 
-        except Exception as e:  # e.g. network / Stripe error
+            # Add customer tax IDs if available for business accounts
+            if customer_tax_ids:
+                invoice_params["customer_tax_ids"] = customer_tax_ids
+
+            invoice = stripe.Invoice.create(**invoice_params)
+
+        except stripe.error.StripeError as e:
+            print(
+                f"ERROR: Stripe error for user {user_id}: {str(e)}. "
+                f"Error code: {getattr(e, 'code', 'unknown')}, Type: {getattr(e, 'type', 'unknown')}. "
+                f"Period: {year}-{month:02d}",
+            )
+            session.rollback()
+            raise
+        except ValueError as e:
+            print(
+                f"ERROR: Validation error for user {user_id}: {str(e)}. "
+                f"Period: {year}-{month:02d}",
+            )
+            session.rollback()
+            raise
+        except Exception as e:
+            print(
+                f"ERROR: Unexpected error for user {user_id}: {str(e)}. "
+                f"Period: {year}-{month:02d}. Error type: {type(e).__name__}",
+            )
             session.rollback()
             raise
 
