@@ -27,7 +27,7 @@ def create_phone_number(country: str = "US"):
     ).json()
 
 
-def create_whatsapp_sender(phone_number: str, first_name: str, last_name: str):
+def assign_whatsapp_sender(user_whatsapp_number: str):
     """
     Create a WhatsApp sender by making a POST request to the comms endpoint.
 
@@ -43,13 +43,7 @@ def create_whatsapp_sender(phone_number: str, first_name: str, last_name: str):
         f"{COMMS_URL}/whatsapp/create",
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         json={
-            "phone_number": phone_number,
-            "first_name": first_name,
-            "last_name": last_name,
-            "callback_url": (
-                "https://us-central1-responsive-city-458413-a2"
-                ".cloudfunctions.net/twilio-whatsapp-webhook"
-            ),
+            "user_whatsapp_number": user_whatsapp_number,
         },
     ).json()
 
