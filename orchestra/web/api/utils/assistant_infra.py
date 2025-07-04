@@ -1,6 +1,9 @@
+import os
+
 import requests
 
 COMMS_URL = "https://unity-comms-app-262420637606.us-central1.run.app"
+ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 
 def create_phone_number(country: str = "US"):
@@ -15,6 +18,7 @@ def create_phone_number(country: str = "US"):
     """
     return requests.post(
         f"{COMMS_URL}/phone/create",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         json={
             "voice_url": "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/twilio-call-webhook",
             "sms_url": "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/twilio-msg-webhook",
@@ -37,6 +41,7 @@ def create_whatsapp_sender(phone_number: str, first_name: str, last_name: str):
     """
     return requests.post(
         f"{COMMS_URL}/whatsapp/create",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         json={
             "phone_number": phone_number,
             "first_name": first_name,
@@ -61,6 +66,7 @@ def delete_phone_number(phone_number: str):
     """
     return requests.delete(
         f"{COMMS_URL}/phone/delete",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         json={"PhoneNumber": phone_number},
     ).json()
 
@@ -79,6 +85,7 @@ def create_email(local: str, first_name: str, last_name: str):
     """
     return requests.post(
         f"{COMMS_URL}/email/create",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         json={
             "local": local,
             "first_name": first_name,
@@ -99,6 +106,7 @@ def delete_email(email: str):
     """
     return requests.delete(
         f"{COMMS_URL}/email/delete",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         json={"primary_email": email},
     ).json()
 
@@ -116,6 +124,7 @@ def watch_email(email: str):
     print(f"Watching email: {email}")
     return requests.post(
         f"{COMMS_URL}/email/watch",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         json={"primary_email": email},
     ).json()
 
@@ -132,6 +141,7 @@ def create_pubsub_topic(assistant_id: str):
     """
     return requests.post(
         f"{COMMS_URL}/infra/pubsub/topic",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         data={"assistant_id": assistant_id},
     ).json()
 
@@ -146,12 +156,9 @@ def delete_pubsub_topic(assistant_id: str):
     Returns:
         JSON response from the pubsub topic deletion endpoint
     """
-    url = f"{COMMS_URL}/infra/pubsub/topic"
-    payload = {
-        "assistant_id": assistant_id,
-    }
     return requests.delete(
         f"{COMMS_URL}/infra/pubsub/topic",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         data={"assistant_id": assistant_id},
     ).json()
 
@@ -178,6 +185,7 @@ def create_cloud_run_job(
     """
     return requests.post(
         f"{COMMS_URL}/infra/job/create",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         data={
             "api_key": api_key,
             "assistant_id": assistant_id,
@@ -200,6 +208,7 @@ def delete_cloud_run_job(assistant_id: str):
     """
     return requests.delete(
         f"{COMMS_URL}/infra/job/delete",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         data={"assistant_id": assistant_id},
     ).json()
 
@@ -216,6 +225,7 @@ def start_cloud_run_job(assistant_id: str):
     """
     return requests.post(
         f"{COMMS_URL}/infra/job/control",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         data={
             "assistant_id": assistant_id,
             "action": "start",
@@ -235,6 +245,7 @@ def stop_cloud_run_job(assistant_id: str):
     """
     return requests.post(
         f"{COMMS_URL}/infra/job/control",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         data={
             "assistant_id": assistant_id,
             "action": "stop",
@@ -254,6 +265,7 @@ def get_cloud_run_job_status(assistant_id: str):
     """
     return requests.get(
         f"{COMMS_URL}/infra/job/status",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         params={"assistant_id": assistant_id},
     ).json()
 
@@ -264,4 +276,5 @@ def get_social_platforms_costs():
     """
     return requests.get(
         f"{COMMS_URL}/social/available-platforms",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
     ).json()
