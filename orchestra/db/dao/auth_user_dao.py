@@ -119,85 +119,85 @@ class AuthUserDAO:
     def update(  # noqa: WPS211, WPS213, WPS231, C901
         self,
         id: int,  # noqa: WPS125
-        name: Optional[str] = "__not_provided__",
-        last_name: Optional[str] = "__not_provided__",
-        job_title: Optional[str] = "__not_provided__",
-        image: Optional[str] = "__not_provided__",
-        tier: Optional[str] = "__not_provided__",
-        queries_enabled: Optional[bool] = "__not_provided__",
-        evaluations_enabled: Optional[bool] = "__not_provided__",
-        has_claimed_approval_link: Optional[bool] = "__not_provided__",
-        assistant_hiring_approval: Optional[str] = "__not_provided__",
-        account_type: Optional[str] = "__not_provided__",
-        business_name: Optional[str] = "__not_provided__",
-        tax_id: Optional[str] = "__not_provided__",
-        business_type: Optional[str] = "__not_provided__",
-        business_address_line1: Optional[str] = "__not_provided__",
-        business_address_line2: Optional[str] = "__not_provided__",
-        business_city: Optional[str] = "__not_provided__",
-        business_state: Optional[str] = "__not_provided__",
-        business_country: Optional[str] = "__not_provided__",
-        business_postal_code: Optional[str] = "__not_provided__",
-        tax_exempt: Optional[bool] = "__not_provided__",
-        business_verified: Optional[bool] = "__not_provided__",
-        tax_jurisdiction: Optional[str] = "__not_provided__",
+        name: Optional[str] = ...,
+        last_name: Optional[str] = ...,
+        job_title: Optional[str] = ...,
+        image: Optional[str] = ...,
+        tier: Optional[str] = ...,
+        queries_enabled: Optional[bool] = ...,
+        evaluations_enabled: Optional[bool] = ...,
+        has_claimed_approval_link: Optional[bool] = ...,
+        assistant_hiring_approval: Optional[str] = ...,
+        account_type: Optional[str] = ...,
+        business_name: Optional[str] = ...,
+        tax_id: Optional[str] = ...,
+        business_type: Optional[str] = ...,
+        business_address_line1: Optional[str] = ...,
+        business_address_line2: Optional[str] = ...,
+        business_city: Optional[str] = ...,
+        business_state: Optional[str] = ...,
+        business_country: Optional[str] = ...,
+        business_postal_code: Optional[str] = ...,
+        tax_exempt: Optional[bool] = ...,
+        business_verified: Optional[bool] = ...,
+        tax_jurisdiction: Optional[str] = ...,
     ) -> None:
         query = select(AuthUser)
         query = query.where(AuthUser.id == id)
         raw = self.session.execute(query)
         entry = raw.scalars().first()
         if entry is not None:
-            if name != "__not_provided__":
+            if name is not ...:
                 setattr(entry, "name", name)
-            if last_name != "__not_provided__":
+            if last_name is not ...:
                 setattr(entry, "last_name", last_name)
-            if job_title != "__not_provided__":
+            if job_title is not ...:
                 setattr(entry, "job_title", job_title)
-            if image != "__not_provided__":
+            if image is not ...:
                 setattr(entry, "image", image)
-            if tier != "__not_provided__":
+            if tier is not ...:
                 setattr(entry, "tier", tier)
-            if queries_enabled != "__not_provided__":
+            if queries_enabled is not ...:
                 setattr(entry, "queries_enabled", queries_enabled)
-            if evaluations_enabled != "__not_provided__":
+            if evaluations_enabled is not ...:
                 setattr(entry, "evaluations_enabled", evaluations_enabled)
-            if assistant_hiring_approval != "__not_provided__":
+            if assistant_hiring_approval is not ...:
                 if assistant_hiring_approval not in ASSISTANT_HIRING_APPROVAL_STATUSES:
                     raise ValueError(
                         f"Unsupported hiring approval status: {assistant_hiring_approval}",
                     )
                 setattr(entry, "assistant_hiring_approval", assistant_hiring_approval)
-            if has_claimed_approval_link != "__not_provided__":
+            if has_claimed_approval_link is not ...:
                 setattr(entry, "has_claimed_approval_link", has_claimed_approval_link)
 
             # Business classification fields
-            if account_type != "__not_provided__":
+            if account_type is not ...:
                 if account_type not in ["individual", "business"]:
                     raise ValueError("account_type must be 'individual' or 'business'")
                 setattr(entry, "account_type", account_type)
-            if business_name != "__not_provided__":
+            if business_name is not ...:
                 setattr(entry, "business_name", business_name)
-            if tax_id != "__not_provided__":
+            if tax_id is not ...:
                 setattr(entry, "tax_id", tax_id)
-            if business_type != "__not_provided__":
+            if business_type is not ...:
                 setattr(entry, "business_type", business_type)
-            if business_address_line1 != "__not_provided__":
+            if business_address_line1 is not ...:
                 setattr(entry, "business_address_line1", business_address_line1)
-            if business_address_line2 != "__not_provided__":
+            if business_address_line2 is not ...:
                 setattr(entry, "business_address_line2", business_address_line2)
-            if business_city != "__not_provided__":
+            if business_city is not ...:
                 setattr(entry, "business_city", business_city)
-            if business_state != "__not_provided__":
+            if business_state is not ...:
                 setattr(entry, "business_state", business_state)
-            if business_country != "__not_provided__":
+            if business_country is not ...:
                 setattr(entry, "business_country", business_country)
-            if business_postal_code != "__not_provided__":
+            if business_postal_code is not ...:
                 setattr(entry, "business_postal_code", business_postal_code)
-            if tax_exempt != "__not_provided__":
+            if tax_exempt is not ...:
                 setattr(entry, "tax_exempt", tax_exempt)
-            if business_verified != "__not_provided__":
+            if business_verified is not ...:
                 setattr(entry, "business_verified", business_verified)
-            if tax_jurisdiction != "__not_provided__":
+            if tax_jurisdiction is not ...:
                 setattr(entry, "tax_jurisdiction", tax_jurisdiction)
 
             self.session.commit()
