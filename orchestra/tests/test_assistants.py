@@ -730,18 +730,9 @@ async def test_admin_list_assistants_for_user(client: AsyncClient):
 async def test_admin_update_assistant_whatsapp_number_and_user_whatsapp(
     client: AsyncClient,
 ):
-    # Determine default user ID for HEADERS (user1)
-    credits_resp = await client.get("/v0/credits", headers=HEADERS)
-    assert credits_resp.status_code == 200
-    user1_id = credits_resp.json()["id"]
-
     # Create two assistants with distinct phone, user_phone, and user_whatsapp_number for filtering
     initial_phone1 = "+15550000001"
-    initial_user_phone1 = "+155500000101"
-    initial_user_whatsapp1 = "+155500000201"
     initial_phone2 = "+15550000002"
-    initial_user_phone2 = "+155500000102"
-    initial_user_whatsapp2 = "+155500000202"
 
     payload1 = {
         "first_name": "Alice",
@@ -753,7 +744,6 @@ async def test_admin_update_assistant_whatsapp_number_and_user_whatsapp(
         "profile_photo": "https://example.com/a1.jpg",
         "about": "First assistant",
         "phone": initial_phone1,
-        "user_phone": initial_user_phone1,
         "create_infra": False,
     }
     resp1 = await client.post(
@@ -774,7 +764,6 @@ async def test_admin_update_assistant_whatsapp_number_and_user_whatsapp(
         "profile_photo": "https://example.com/a2.jpg",
         "about": "Second assistant",
         "phone": initial_phone2,
-        "user_phone": initial_user_phone2,
         "create_infra": False,
     }
     resp2 = await client.post(
@@ -785,33 +774,10 @@ async def test_admin_update_assistant_whatsapp_number_and_user_whatsapp(
     assert resp2.status_code == 200
     aid2 = resp2.json()["info"]["agent_id"]
 
-    # Set initial assistant_whatsapp_number for both via config endpoint
-    init_assistant_whatsapp1 = "+155500000301"
-    config_resp1 = await client.patch(
-        f"/v0/assistant/{aid1}/config",
-        json={
-            "assistant_whatsapp_number": init_assistant_whatsapp1,
-            "user_whatsapp_number": initial_user_whatsapp1,
-        },
-        headers=HEADERS,
-    )
-    assert config_resp1.status_code == 200
-    init_assistant_whatsapp2 = "+155500000302"
-    config_resp2 = await client.patch(
-        f"/v0/assistant/{aid2}/config",
-        json={
-            "assistant_whatsapp_number": init_assistant_whatsapp2,
-            "user_whatsapp_number": initial_user_whatsapp2,
-        },
-        headers=HEADERS,
-    )
-    assert config_resp2.status_code == 200
-
-    # Now test admin_update_assistant filtering by initial assistant_whatsapp and user_whatsapp, and updating new values
+    # Now test admin_update_assistant filtering
     new_assistant_whatsapp = "+15551234567"
     update_resp = await client.patch(
-        f"/v0/admin/assistant?assistant_whatsapp_number={init_assistant_whatsapp1}&user_whatsapp_number={initial_user_whatsapp1}",
-        json={"assistant_whatsapp_number": new_assistant_whatsapp},
+        f"/v0/admin/assistant?phone={initial_phone1}&new_assistant_whatsapp_number={new_assistant_whatsapp}",
         headers=ADMIN_HEADERS,
     )
     assert update_resp.status_code == 200
@@ -821,8 +787,7 @@ async def test_admin_update_assistant_whatsapp_number_and_user_whatsapp(
 
     # Verify via listing endpoint that only the updated assistant is returned by the new filters
     list_resp = await client.get(
-        f"/v0/admin/assistant?assistant_whatsapp_number={new_assistant_whatsapp}"
-        f"&user_whatsapp_number={initial_user_whatsapp1}",
+        f"/v0/admin/assistant?phone={initial_phone1}&assistant_whatsapp_number={new_assistant_whatsapp}",
         headers=ADMIN_HEADERS,
     )
     assert list_resp.status_code == 200
