@@ -1,6 +1,9 @@
+import os
+
 import requests
 
 COMMS_URL = "https://unity-comms-app-262420637606.us-central1.run.app"
+ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 
 def create_phone_number(country: str = "US"):
@@ -15,6 +18,7 @@ def create_phone_number(country: str = "US"):
     """
     return requests.post(
         f"{COMMS_URL}/phone/create",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         json={
             "voice_url": "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/twilio-call-webhook",
             "sms_url": "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/twilio-msg-webhook",
@@ -36,7 +40,8 @@ def assign_whatsapp_sender(user_whatsapp_number: str):
         JSON response from the WhatsApp creation endpoint
     """
     return requests.post(
-        f"{COMMS_URL}/whatsapp/assign",
+        f"{COMMS_URL}/whatsapp/create",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         json={
             "user_whatsapp_number": user_whatsapp_number,
         },
@@ -55,6 +60,7 @@ def delete_phone_number(phone_number: str):
     """
     return requests.delete(
         f"{COMMS_URL}/phone/delete",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         json={"PhoneNumber": phone_number},
     ).json()
 
@@ -73,6 +79,7 @@ def create_email(local: str, first_name: str, last_name: str):
     """
     return requests.post(
         f"{COMMS_URL}/email/create",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         json={
             "local": local,
             "first_name": first_name,
@@ -93,6 +100,7 @@ def delete_email(email: str):
     """
     return requests.delete(
         f"{COMMS_URL}/email/delete",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         json={"primary_email": email},
     ).json()
 
@@ -110,6 +118,7 @@ def watch_email(email: str):
     print(f"Watching email: {email}")
     return requests.post(
         f"{COMMS_URL}/email/watch",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         json={"primary_email": email},
     ).json()
 
@@ -126,6 +135,7 @@ def create_pubsub_topic(assistant_id: str):
     """
     return requests.post(
         f"{COMMS_URL}/infra/pubsub/topic",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         data={"assistant_id": assistant_id},
     ).json()
 
@@ -140,17 +150,14 @@ def delete_pubsub_topic(assistant_id: str):
     Returns:
         JSON response from the pubsub topic deletion endpoint
     """
-    url = f"{COMMS_URL}/infra/pubsub/topic"
-    payload = {
-        "assistant_id": assistant_id,
-    }
     return requests.delete(
         f"{COMMS_URL}/infra/pubsub/topic",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         data={"assistant_id": assistant_id},
     ).json()
 
 
-def create_cloud_run_job(
+def create_cloud_run_service(
     api_key: str,
     assistant_id: str,
     user_name: str,
@@ -158,7 +165,7 @@ def create_cloud_run_job(
     user_number: str,
 ):
     """
-    Create a Cloud Run job by making a POST request to the comms endpoint.
+    Create a Cloud Run service by making a POST request to the comms endpoint.
 
     Args:
         api_key (str): The API key of the user
@@ -168,10 +175,11 @@ def create_cloud_run_job(
         user_number (str): The user's phone number
 
     Returns:
-        JSON response from the Cloud Run job creation endpoint
+        JSON response from the Cloud Run service creation endpoint
     """
     return requests.post(
-        f"{COMMS_URL}/infra/job/create",
+        f"{COMMS_URL}/infra/service/create",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         data={
             "api_key": api_key,
             "assistant_id": assistant_id,
@@ -182,73 +190,20 @@ def create_cloud_run_job(
     ).json()
 
 
-def delete_cloud_run_job(assistant_id: str):
+def delete_cloud_run_service(assistant_id: str):
     """
-    Delete a Cloud Run job by making a DELETE request to the comms endpoint.
+    Delete a Cloud Run service by making a DELETE request to the comms endpoint.
 
     Args:
         assistant_id (str): The ID of the assistant
 
     Returns:
-        JSON response from the Cloud Run job deletion endpoint
+        JSON response from the Cloud Run service deletion endpoint
     """
     return requests.delete(
-        f"{COMMS_URL}/infra/job/delete",
+        f"{COMMS_URL}/infra/service/delete",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         data={"assistant_id": assistant_id},
-    ).json()
-
-
-def start_cloud_run_job(assistant_id: str):
-    """
-    Start a Cloud Run job by making a POST request to the comms endpoint.
-
-    Args:
-        assistant_id (str): The ID of the assistant
-
-    Returns:
-        JSON response from the Cloud Run job start endpoint
-    """
-    return requests.post(
-        f"{COMMS_URL}/infra/job/control",
-        data={
-            "assistant_id": assistant_id,
-            "action": "start",
-        },
-    ).json()
-
-
-def stop_cloud_run_job(assistant_id: str):
-    """
-    Stop a Cloud Run job by making a POST request to the comms endpoint.
-
-    Args:
-        assistant_id (str): The ID of the assistant
-
-    Returns:
-        JSON response from the Cloud Run job stop endpoint
-    """
-    return requests.post(
-        f"{COMMS_URL}/infra/job/control",
-        data={
-            "assistant_id": assistant_id,
-            "action": "stop",
-        },
-    ).json()
-
-
-def get_cloud_run_job_status(assistant_id: str):
-    """
-    Get the status of a Cloud Run job by making a GET request to the comms endpoint.
-
-    Args:
-        assistant_id (str): The ID of the assistant
-
-    Returns:
-        JSON response containing the Cloud Run job status
-    """
-    return requests.get(
-        f"{COMMS_URL}/infra/job/status",
-        params={"assistant_id": assistant_id},
     ).json()
 
 
@@ -258,4 +213,5 @@ def get_social_platforms_costs():
     """
     return requests.get(
         f"{COMMS_URL}/social/available-platforms",
+        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
     ).json()

@@ -52,16 +52,15 @@ from orchestra.web.api.assistant.schema import (
 )
 from orchestra.web.api.utils.assistant_infra import (
     assign_whatsapp_sender,
-    create_cloud_run_job,
+    create_cloud_run_service,
     create_email,
     create_phone_number,
     create_pubsub_topic,
-    delete_cloud_run_job,
+    delete_cloud_run_service,
     delete_email,
     delete_phone_number,
     delete_pubsub_topic,
     get_social_platforms_costs,
-    stop_cloud_run_job,
     watch_email,
 )
 
@@ -235,8 +234,7 @@ def create_assistant(
         created_phone = None
         created_pubsub = None
         assigned_whatsapp = None
-        created_job = None
-        started_job = False
+        created_service = None
 
         if assistant_in.create_infra:
             try:
@@ -293,7 +291,7 @@ def create_assistant(
                 print(f"PUBSUB CREATED: {assistant_id}")
 
                 # Step 6: create cloud run job
-                job_response = create_cloud_run_job(
+                job_response = create_cloud_run_service(
                     api_key=api_key,
                     assistant_id=str(assistant_id),
                     user_name=f"{assistant_in.first_name} {assistant_in.surname}",
@@ -304,17 +302,8 @@ def create_assistant(
                     raise Exception(
                         f"Cloud Run job creation failed: {job_response['detail']}",
                     )
-                created_job = True
-                print(f"JOB CREATED: {assistant_id}")
-
-                # Step 7: start cloud run job
-                # start_response = start_cloud_run_job(str(assistant_id))
-                # if "detail" in start_response:
-                #     raise Exception(
-                #         f"Cloud Run job start failed: {start_response['detail']}",
-                #     )
-                # started_job = True
-                # print(f"JOB STARTED: {assistant_id}")
+                created_service = True
+                print(f"SERVICE CREATED: {assistant_id}")
 
                 # Refresh database session after long infrastructure operations
                 logging.info(
@@ -360,19 +349,12 @@ def create_assistant(
                 rollback_errors = []
 
                 # Rollback infrastructure in reverse order (these could be async)
-                if started_job:
+                if created_service:
                     try:
-                        stop_cloud_run_job(str(assistant_id))
+                        delete_cloud_run_service(str(assistant_id))
                     except Exception as e:
-                        rollback_errors.append(f"Failed to stop job: {str(e)}")
-                print(f"JOB STOPPED: {assistant_id}")
-
-                if created_job:
-                    try:
-                        delete_cloud_run_job(str(assistant_id))
-                    except Exception as e:
-                        rollback_errors.append(f"Failed to delete job: {str(e)}")
-                print(f"JOB DELETED: {assistant_id}")
+                        rollback_errors.append(f"Failed to delete service: {str(e)}")
+                print(f"SERVICE DELETED: {assistant_id}")
 
                 if created_pubsub:
                     try:
@@ -666,18 +648,12 @@ def delete_assistant(
         # Wait before starting other infra cleanup (same as rollback operations)
         time.sleep(10)
 
+        # Delete cloud run service
         try:
-            stop_cloud_run_job(str(assistant_id))
+            delete_cloud_run_service(str(assistant_id))
         except Exception as e:
-            cleanup_errors.append(f"Failed to stop job: {str(e)}")
-        print(f"JOB STOPPED: {assistant_id}")
-
-        # Delete cloud run job
-        try:
-            delete_cloud_run_job(str(assistant_id))
-        except Exception as e:
-            cleanup_errors.append(f"Failed to delete job: {str(e)}")
-        print(f"JOB DELETED: {assistant_id}")
+            cleanup_errors.append(f"Failed to delete service: {str(e)}")
+        print(f"SERVICE DELETED: {assistant_id}")
 
         # Delete pubsub topic
         try:
