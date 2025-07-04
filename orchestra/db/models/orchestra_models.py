@@ -484,6 +484,43 @@ class AuthUser(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
 
+    # Business classification fields for B2B/B2C tax compliance
+    account_type = Column(
+        String(20),
+        nullable=False,
+        server_default="individual",
+    )  # 'individual' or 'business'
+    business_name = Column(
+        String(255),
+        nullable=True,
+    )  # Company name for business accounts
+    tax_id = Column(String(100), nullable=True)  # Tax ID/VAT number for businesses
+    business_type = Column(
+        String(50),
+        nullable=True,
+    )  # 'corporation', 'llc', 'partnership', etc.
+
+    # Business address fields (for tax jurisdiction)
+    business_address_line1 = Column(String(255), nullable=True)
+    business_address_line2 = Column(String(255), nullable=True)
+    business_city = Column(String(100), nullable=True)
+    business_state = Column(String(100), nullable=True)
+    business_country = Column(String(100), nullable=True)
+    business_postal_code = Column(String(20), nullable=True)
+
+    # Tax compliance flags
+    tax_exempt = Column(
+        Boolean,
+        nullable=False,
+        server_default="false",
+    )  # Tax-exempt status
+    business_verified = Column(
+        Boolean,
+        nullable=False,
+        server_default="false",
+    )  # Verification status
+    tax_jurisdiction = Column(String(100), nullable=True)  # Computed tax jurisdiction
+
     # Relationships
     interfaces = relationship(
         "Interface",
@@ -496,6 +533,32 @@ class AuthUser(Base):
         back_populates="user",
         cascade="all, delete-orphan",
         passive_deletes=True,
+    )
+
+    __table_args__ = (
+        # Check constraint for account_type
+        sa.CheckConstraint(
+            "account_type IN ('individual', 'business')",
+            name="ck_auth_user_account_type",
+        ),
+        # Index for efficient filtering by account type
+        Index("idx_auth_user_account_type", "account_type"),
+        # Unique constraint on tax_id (where not null)
+        Index(
+            "idx_auth_user_tax_id",
+            "tax_id",
+            unique=True,
+            postgresql_where=text("tax_id IS NOT NULL"),
+        ),
+        # Additional indexes for common business classification queries
+        Index("idx_auth_user_business_verified", "business_verified"),
+        Index("idx_auth_user_business_country", "business_country"),
+        Index(
+            "idx_auth_user_account_type_verified",
+            "account_type",
+            "business_verified",
+        ),
+        Index("idx_auth_user_tax_jurisdiction", "tax_jurisdiction"),
     )
 
 

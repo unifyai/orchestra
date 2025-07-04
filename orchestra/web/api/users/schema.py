@@ -1,7 +1,9 @@
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
+
+from orchestra.web.api.utils.tax_id_validator import validate_tax_id_for_country
 
 
 class UserRequest(BaseModel):
@@ -78,3 +80,96 @@ class AssistantHiringOneTimeLinkResponse(BaseModel):
     expires_at: datetime
     claimed_at: Optional[datetime] = None
     user_id: Optional[str] = None
+
+
+# -- Business Classification for B2B/B2C Tax Compliance --
+
+
+class BusinessAddress(BaseModel):
+    """Business address information for tax purposes."""
+
+    address_line1: str
+    address_line2: Optional[str] = None
+    city: str
+    state: Optional[str] = None
+    country: str
+    postal_code: Optional[str] = None
+
+
+class BusinessInfo(BaseModel):
+    """Business information for B2B accounts."""
+
+    business_name: str
+    tax_id: Optional[str] = None
+    business_type: str  # 'corporation', 'llc', 'partnership', 'sole_proprietorship', etc.
+    business_address: BusinessAddress
+    tax_exempt: bool = False
+
+    @model_validator(mode="after")
+    def validate_tax_id_format(self):
+        """Validate tax ID format based on country."""
+        if not self.tax_id:
+            return self
+
+        country = self.business_address.country
+
+        # Validate using python-stdnum
+        validation_result = validate_tax_id_for_country(self.tax_id, country)
+
+        if not validation_result["is_valid"]:
+            raise ValueError(
+                f"Invalid tax ID for {country}: {validation_result['error']}",
+            )
+
+        # Update with the formatted tax ID
+        self.tax_id = validation_result["formatted_tax_id"] or self.tax_id
+        return self
+
+
+class UpdateAccountTypeRequest(BaseModel):
+    """Request to update user account type."""
+
+    account_type: Literal["individual", "business"]
+    business_info: Optional[BusinessInfo] = None
+
+    # User details (needed for user creation flow)
+    email: Optional[str] = None
+    name: Optional[str] = None
+    last_name: Optional[str] = None
+
+    @field_validator("business_info")
+    @classmethod
+    def validate_business_info(cls, v, info):
+        """Ensure business_info is provided when account_type is 'business'."""
+        if info.data.get("account_type") == "business" and not v:
+            raise ValueError("business_info is required for business accounts")
+        return v
+
+
+class UpdateBusinessInfoRequest(BaseModel):
+    """Request to update business information."""
+
+    business_name: Optional[str] = None
+    tax_id: Optional[str] = None
+    business_type: Optional[str] = None
+    business_address: Optional[BusinessAddress] = None
+    tax_exempt: Optional[bool] = None
+
+
+class BusinessVerificationRequest(BaseModel):
+    """Request to verify business information."""
+
+    user_id: str
+
+
+class UserBusinessStatusResponse(BaseModel):
+    """Response containing user's business classification status."""
+
+    account_type: str
+    business_name: Optional[str] = None
+    tax_id: Optional[str] = None
+    business_type: Optional[str] = None
+    business_verified: bool
+    tax_exempt: bool
+    tax_jurisdiction: Optional[str] = None
+    business_address: Optional[BusinessAddress] = None
