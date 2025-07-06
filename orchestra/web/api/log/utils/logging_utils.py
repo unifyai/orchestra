@@ -21,6 +21,7 @@ from sqlalchemy import (
     select,
     text,
     true,
+    union_all,
 )
 from sqlalchemy.sql.expression import ColumnClause
 from sqlalchemy.sql.selectable import Subquery
@@ -43,6 +44,7 @@ from orchestra.db.models.orchestra_models import (
     Project,
 )
 from orchestra.settings import settings
+from orchestra.web.api.log.python2SQL.operators import _create_truthiness_condition
 from orchestra.web.api.log.schema import CreateLogConfig
 from orchestra.web.api.utils.http_responses import not_found
 
@@ -419,6 +421,28 @@ def _apply_post_filters(
     return base_q
 
 
+def flatten_and_conditions(filter_dict):
+    """Recursively flattens a nested 'and' filter dict into a list of conditions."""
+    conditions = []
+    if isinstance(filter_dict, dict) and filter_dict.get("operand") == "and":
+        conditions.extend(flatten_and_conditions(filter_dict.get("lhs")))
+        conditions.extend(flatten_and_conditions(filter_dict.get("rhs")))
+    elif filter_dict:
+        conditions.append(filter_dict)
+    return conditions
+
+
+def flatten_or_conditions(filter_dict):
+    """Recursively flattens a nested 'or' filter dict into a list of conditions."""
+    conditions = []
+    if isinstance(filter_dict, dict) and filter_dict.get("operand") == "or":
+        conditions.extend(flatten_or_conditions(filter_dict.get("lhs")))
+        conditions.extend(flatten_or_conditions(filter_dict.get("rhs")))
+    elif filter_dict:
+        conditions.append(filter_dict)
+    return conditions
+
+
 def _get_logs_query(
     request_fastapi: Request,
     project: str,
@@ -493,29 +517,98 @@ def _get_logs_query(
                             validate_filter_dict.parent = fd
                             validate_filter_dict(v)
 
-            validate_filter_dict(filter_dict)
+            # Define a subquery for event IDs to pass to the query builder
             event_ids_subq = log_event_query.subquery(name="event_ids_subq")
-            condition = build_sql_query(
-                filter_dict,
-                LogEvent,
-                session,
-                log_event_ids=event_ids_subq,
-            )
-            if isinstance(condition, Subquery):
-                log_event_query = log_event_query.filter(
-                    exists(
-                        select(1)
-                        .select_from(condition)
-                        .where(
-                            and_(
-                                condition.c.log_event_id == LogEvent.id,
-                                condition.c.value.is_(True),
+
+            # --- OPTIMIZATION FOR 'OR' ---
+            if isinstance(filter_dict, dict) and filter_dict.get("operand") == "or":
+                or_conditions = flatten_or_conditions(filter_dict)
+                matching_id_subqueries = []
+
+                for condition_dict in or_conditions:
+                    validate_filter_dict(condition_dict)
+                    condition_sql = build_sql_query(
+                        condition_dict,
+                        LogEvent,
+                        session,
+                        log_event_ids=event_ids_subq,
+                    )
+                    if isinstance(condition_sql, Subquery):
+                        truthiness_clause = _create_truthiness_condition(
+                            condition_sql,
+                            session,
+                        )
+                        matching_ids = select(condition_sql.c.log_event_id).where(
+                            truthiness_clause,
+                        )
+                        matching_id_subqueries.append(matching_ids)
+
+                if matching_id_subqueries:
+                    unioned_ids_subq = union_all(*matching_id_subqueries).subquery()
+                    log_event_query = log_event_query.filter(
+                        LogEvent.id.in_(select(unioned_ids_subq)),
+                    )
+
+            # --- OPTIMIZATION FOR 'AND' ---
+            elif isinstance(filter_dict, dict) and filter_dict.get("operand") == "and":
+                and_conditions = flatten_and_conditions(filter_dict)
+
+                for condition_dict in and_conditions:
+                    validate_filter_dict(condition_dict)
+                    condition_sql = build_sql_query(
+                        condition_dict,
+                        LogEvent,
+                        session,
+                        log_event_ids=event_ids_subq,
+                    )
+                    if isinstance(condition_sql, Subquery):
+                        truthiness_clause = _create_truthiness_condition(
+                            condition_sql,
+                            session,
+                        )
+                        log_event_query = log_event_query.filter(
+                            exists(
+                                select(1)
+                                .select_from(condition_sql)
+                                .where(
+                                    and_(
+                                        condition_sql.c.log_event_id == LogEvent.id,
+                                        truthiness_clause,
+                                    ),
+                                ),
+                            ),
+                        )
+                    else:
+                        log_event_query = log_event_query.filter(condition_sql)
+
+            # --- FALLBACK FOR SINGLE CONDITIONS OR OTHER OPERATORS ---
+            else:
+                validate_filter_dict(filter_dict)
+                condition_sql = build_sql_query(
+                    filter_dict,
+                    LogEvent,
+                    session,
+                    log_event_ids=event_ids_subq,
+                )
+                if isinstance(condition_sql, Subquery):
+                    truthiness_clause = _create_truthiness_condition(
+                        condition_sql,
+                        session,
+                    )
+                    log_event_query = log_event_query.filter(
+                        exists(
+                            select(1)
+                            .select_from(condition_sql)
+                            .where(
+                                and_(
+                                    condition_sql.c.log_event_id == LogEvent.id,
+                                    truthiness_clause,
+                                ),
                             ),
                         ),
-                    ),
-                )
-            else:
-                log_event_query = log_event_query.filter(condition)
+                    )
+                else:
+                    log_event_query = log_event_query.filter(condition_sql)
 
     # Apply from_ids/exclude_ids filters early since they filter on log_event_id
     if from_ids and exclude_ids:
