@@ -148,6 +148,16 @@ class AssistantRead(AssistantCreate):
         description="WhatsApp number of the assistant",
         example="+15551234567",
     )
+    tts_provider: Optional[str] = Field(
+        "cartesia",
+        description="TTS provider of the assistant",
+        example="cartesia",
+    )
+    api_key: Optional[str] = Field(
+        None,
+        description="API key of the assistant",
+        example="1234567890",
+    )
 
     class Config:
         orm_mode = True
@@ -167,10 +177,12 @@ class AssistantRead(AssistantCreate):
                 "user_phone": "+15551234567",
                 "user_whatsapp_number": "+15551234567",
                 "assistant_whatsapp_number": "+15551234567",
+                "tts_provider": "cartesia",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "agent_id": "12345",
                 "created_at": "2025-04-25T10:30:00Z",
                 "updated_at": "2025-04-26T14:15:00Z",
+                "api_key": "1234567890",
             },
         }
 

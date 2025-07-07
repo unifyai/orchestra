@@ -536,13 +536,20 @@ def list_assistants(
     # Correct for URL-decoded '+' in query parameters.
     phone = normalize_phone_parameter(phone)
 
-    dao = AssistantDAO(session)
+    assistant_dao = AssistantDAO(session)
     try:
-        assistants = dao.list_assistants_for_user(
+        assistants = assistant_dao.list_assistants_for_user(
             request.state.user_id,
             phone=phone,
             email=email,
         )
+        voice_dao = VoiceDAO(session)
+        tts_providers = [
+            voice_dao.get_voice(a.voice_id).provider
+            if a.voice_id is not None
+            else "cartesia"
+            for a in assistants
+        ]
         return InfoResponse(
             info=[
                 AssistantRead(
@@ -565,9 +572,10 @@ def list_assistants(
                     user_whatsapp_number=a.user_whatsapp_number,
                     assistant_whatsapp_number=a.assistant_whatsapp_number,
                     email=a.email,
+                    tts_provider=tts_providers[i],
                     voice_id=a.voice_id,
                 )
-                for a in assistants
+                for i, a in enumerate(assistants)
             ],
         )
     except Exception as e:
