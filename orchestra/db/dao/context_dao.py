@@ -525,6 +525,13 @@ class ContextDAO:
         if not context or not context.is_versioned:
             raise ValueError("Context is not versioned.")
 
+        # Get the current HEAD commit
+        current_head = context.current_commit_hash
+
+        # If context has no commits yet, use the project's current commit as the parent
+        if current_head is None and context.project:
+            current_head = context.project.current_commit_hash
+
         # 1. Generate a unique commit hash
         commit_hash = hashlib.sha256(
             f"context_{context_id}{datetime.now(timezone.utc)}".encode(),
@@ -536,8 +543,66 @@ class ContextDAO:
             commit_hash=commit_hash,
             commit_message=commit_message,
             project_version=None,  # This is a context-only commit
+            prev_commit_hash=current_head,
         )
+
+        # Update the previous version's next_commit_hash array if it exists
+        if current_head:
+            # Try to find a context version first
+            prev_context_version = (
+                self.session.query(ContextVersion)
+                .filter_by(
+                    context_id=context_id,
+                    commit_hash=current_head,
+                )
+                .with_for_update()
+                .one_or_none()
+            )
+
+            if prev_context_version:
+                if commit_hash not in prev_context_version.next_commit_hash:
+                    prev_context_version.next_commit_hash = (
+                        prev_context_version.next_commit_hash + [commit_hash]
+                    )
+            else:
+                # If not found, it might be a project version
+                prev_project_version = (
+                    self.session.query(ProjectVersion)
+                    .filter_by(
+                        project_id=context.project_id,
+                        commit_hash=current_head,
+                    )
+                    .with_for_update()
+                    .one_or_none()
+                )
+
+                if prev_project_version:
+                    # For project versions, we update the context version that was created as part of that project commit
+                    context_version_in_project = (
+                        self.session.query(ContextVersion)
+                        .filter_by(
+                            context_id=context_id,
+                            project_version_id=prev_project_version.id,
+                        )
+                        .with_for_update()
+                        .one_or_none()
+                    )
+
+                    if context_version_in_project:
+                        if (
+                            commit_hash
+                            not in context_version_in_project.next_commit_hash
+                        ):
+                            context_version_in_project.next_commit_hash = (
+                                context_version_in_project.next_commit_hash
+                                + [commit_hash]
+                            )
+
         context.updated_at = datetime.now(timezone.utc)
+
+        # Update the context's HEAD pointer
+        context.current_commit_hash = commit_hash
+
         self.session.commit()
         return commit_hash
 
@@ -564,6 +629,10 @@ class ContextDAO:
             # Phase 1: Restore the state.
             self.rollback_to_version(context_id, context_version.id)
             context.updated_at = datetime.now(timezone.utc)
+
+            # Move the HEAD pointer to the target commit
+            context.current_commit_hash = commit_hash
+
             self.session.commit()
 
             # Phase 2: Garbage collection in a new transaction.
@@ -599,6 +668,8 @@ class ContextDAO:
                     "commit_message": v.commit_message,
                     "created_at": v.archived_at.isoformat(),
                     "type": "project" if v.project_version_id else "context",
+                    "prev_commit_hash": v.prev_commit_hash,
+                    "next_commit_hash": v.next_commit_hash,
                 },
             )
 
@@ -610,6 +681,7 @@ class ContextDAO:
         commit_hash: str,
         commit_message: Optional[str] = None,
         project_version: Optional[ProjectVersion] = None,
+        prev_commit_hash: Optional[str] = None,
     ) -> None:
         """Creates a snapshot of the context's current state."""
         if not context.is_versioned:
@@ -623,9 +695,26 @@ class ContextDAO:
             description=context.description,
             commit_hash=commit_hash,
             commit_message=commit_message,
+            prev_commit_hash=prev_commit_hash,
         )
         self.session.add(context_version)
         self.session.flush()  # Flush to get the context_version.id
+
+        # Update the previous version's next_commit_hash array if it exists
+        if prev_commit_hash:
+            prev_version = (
+                self.session.query(ContextVersion)
+                .filter_by(
+                    context_id=context.id,
+                    commit_hash=prev_commit_hash,
+                )
+                .with_for_update()
+                .one()
+            )
+            if commit_hash not in prev_version.next_commit_hash:
+                prev_version.next_commit_hash = prev_version.next_commit_hash + [
+                    commit_hash,
+                ]
 
         # 2. Get all current logs for the context
         logs_to_version = (
