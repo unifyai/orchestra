@@ -125,3 +125,5 @@ class ContextCommitHistory(BaseModel):
     commit_message: Optional[str] = None
     created_at: str
     type: Literal["project", "context"]
+    prev_commit_hash: Optional[str] = None
+    next_commit_hash: List[str] = []

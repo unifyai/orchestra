@@ -205,6 +205,9 @@ class ProjectDAO:
         if not project or not project.is_versioned:
             raise ValueError("Project is not versioned.")
 
+        # Get the current HEAD commit
+        current_head = project.current_commit_hash
+
         # 1. Generate a commit hash and create the ProjectVersion
         commit_hash = hashlib.sha256(
             f"{project_id}{datetime.now(timezone.utc)}".encode(),
@@ -214,9 +217,26 @@ class ProjectDAO:
             project_id=project_id,
             commit_hash=commit_hash,
             commit_message=commit_message,
+            prev_commit_hash=current_head,
         )
         self.session.add(project_version)
         self.session.flush()  # Flush to get the project_version.id
+
+        # Update the previous version's next_commit_hash array if it exists
+        if current_head:
+            prev_version = (
+                self.session.query(ProjectVersion)
+                .filter_by(
+                    project_id=project_id,
+                    commit_hash=current_head,
+                )
+                .with_for_update()
+                .one()
+            )
+            if commit_hash not in prev_version.next_commit_hash:
+                prev_version.next_commit_hash = prev_version.next_commit_hash + [
+                    commit_hash,
+                ]
 
         # 2. Find all versioned contexts and create a snapshot for each
         contexts = (
@@ -230,8 +250,12 @@ class ProjectDAO:
                 commit_hash=commit_hash,
                 commit_message=commit_message,
                 project_version=project_version,
+                prev_commit_hash=context.current_commit_hash,
             )
         project.updated_at = datetime.now(timezone.utc)
+
+        # Update the project's HEAD pointer
+        project.current_commit_hash = commit_hash
 
         self.session.commit()
         return commit_hash
@@ -267,6 +291,10 @@ class ProjectDAO:
             self.context_dao.rollback(cv.context_id, cv.commit_hash)
 
         project.updated_at = datetime.now(timezone.utc)
+
+        # Move the HEAD pointer to the target commit
+        project.current_commit_hash = commit_hash
+
         self.session.commit()
 
     def get_commit_history(self, project_id: int) -> List[dict]:
@@ -288,6 +316,8 @@ class ProjectDAO:
                 "commit_hash": v.commit_hash,
                 "commit_message": v.commit_message,
                 "created_at": v.created_at.isoformat(),
+                "prev_commit_hash": v.prev_commit_hash,
+                "next_commit_hash": v.next_commit_hash,
             }
             for v in versions
         ]
