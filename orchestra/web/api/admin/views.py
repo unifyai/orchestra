@@ -31,6 +31,7 @@ from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.recharge_type_dao import RechargeTypeDAO
 from orchestra.db.dao.task_dao import TaskDAO
 from orchestra.db.dao.users_dao import UsersDAO
+from orchestra.db.dao.voice_dao import VoiceDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     BenchmarkRun,
@@ -492,15 +493,24 @@ def admin_list_assistants(
     user_phone = normalize_phone_parameter(user_phone)
     user_whatsapp_number = normalize_phone_parameter(user_whatsapp_number)
     assistant_whatsapp_number = normalize_phone_parameter(assistant_whatsapp_number)
-    dao = AssistantDAO(session)
+    assistant_dao = AssistantDAO(session)
+    voice_dao = VoiceDAO(session)
+    api_key_dao = ApiKeyDAO(session)
     try:
-        assistants = dao.list_all_assistants(
+        assistants = assistant_dao.list_all_assistants(
             phone=phone,
             user_phone=user_phone,
             email=email,
             user_whatsapp_number=user_whatsapp_number,
             assistant_whatsapp_number=assistant_whatsapp_number,
         )
+        tts_providers = [
+            voice_dao.get_voice(a.voice_id).provider
+            if a.voice_id is not None
+            else "cartesia"
+            for a in assistants
+        ]
+        api_keys = [api_key_dao.filter(user_id=a.user_id)[0][0].key for a in assistants]
         return InfoResponse(
             info=[
                 AssistantRead(
@@ -520,9 +530,11 @@ def admin_list_assistants(
                     email=a.email,
                     user_whatsapp_number=a.user_whatsapp_number,
                     assistant_whatsapp_number=a.assistant_whatsapp_number,
+                    tts_provider=tts_providers[i],
                     voice_id=a.voice_id,
+                    api_key=api_keys[i],
                 )
-                for a in assistants
+                for i, a in enumerate(assistants)
             ],
         )
     except Exception as e:
