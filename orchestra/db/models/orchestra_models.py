@@ -660,6 +660,7 @@ class Project(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
     is_versioned = Column(Boolean, nullable=False, server_default="f")
+    current_commit_hash = Column(String, nullable=True)
     contexts = relationship("Context", back_populates="project", passive_deletes=True)
     interfaces = relationship(
         "Interface",
@@ -698,6 +699,8 @@ class ProjectVersion(Base):
         index=True,
     )
     commit_hash = Column(String, nullable=False, unique=True)
+    prev_commit_hash = Column(String, nullable=True)
+    next_commit_hash = Column(JSONB, nullable=False, server_default="[]")
     commit_message = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     # Relationship to its ContextVersions
@@ -740,6 +743,7 @@ class Context(Base):
     is_versioned = Column(Boolean, nullable=False, server_default="f")
     allow_duplicates = Column(Boolean, nullable=False, server_default="t")
     unique_id_names = Column(JSONB, nullable=False, server_default="[]")
+    current_commit_hash = Column(String, nullable=True)
 
     project = relationship("Project", back_populates="contexts")
     log_events = relationship(
@@ -780,6 +784,8 @@ class ContextVersion(Base):
     description = Column(String, nullable=True)
     archived_at = Column(TIMESTAMP, server_default=func.now())
     commit_hash = Column(String, nullable=False)
+    prev_commit_hash = Column(String, nullable=True)
+    next_commit_hash = Column(JSONB, nullable=False, server_default="[]")
     commit_message = Column(String, nullable=True)
 
     # Relationship to its ProjectVersion
