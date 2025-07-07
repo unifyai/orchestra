@@ -545,7 +545,7 @@ def list_assistants(
         )
         voice_dao = VoiceDAO(session)
         tts_providers = [
-            voice_dao.get_voice(a.voice_id).provider
+            voice_dao.get_voice_by_id(a.user_id, a.voice_id).provider
             if a.voice_id is not None
             else "cartesia"
             for a in assistants
