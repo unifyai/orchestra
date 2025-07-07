@@ -1225,7 +1225,6 @@ def create_logs_internal(
                 )
     if context_obj and context_obj.is_versioned:
         context_obj.updated_at = datetime.now(timezone.utc)
-        context_dao.session.commit()
 
     # Build row_ids payload
     row_ids_payload = None
