@@ -106,7 +106,7 @@ supported_models = {
     "gemma-3-27b-it": {
         "endpoint": "deepinfra/google/gemma-3-27b-it",
         "context_window": 128000,
-        "cost": {"prompt": 0.1, "completion": 0.19},
+        "cost": {"prompt": 0.09, "completion": 0.17},
     },
     "gemma-3-12b-it": {
         "endpoint": "deepinfra/google/gemma-3-12b-it",
@@ -136,7 +136,7 @@ supported_models = {
     "mistral-nemo": {
         "endpoint": "deepinfra/mistralai/Mistral-Nemo-Instruct-2407",
         "context_window": 128000,
-        "cost": {"prompt": 0.01, "completion": 0.011},
+        "cost": {"prompt": 0.008, "completion": 0.001},
     },
     "qwen-3-235b-a22b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen3-235B-A22B",
