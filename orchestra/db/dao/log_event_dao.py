@@ -120,8 +120,7 @@ class LogEventDAO:
                             sequential_id_logs,
                         )
 
-        self.session.commit()
-
+        self.session.flush()
         if return_row_ids:
             return (log_event_ids, row_ids)
         else:
