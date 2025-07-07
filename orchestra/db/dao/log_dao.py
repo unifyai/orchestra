@@ -828,7 +828,7 @@ class LogDAO:
                 )
                 self.session.execute(stmt_json)
 
-            self.session.commit()
+            self.session.flush()
 
         except Exception as e:
             raise e
