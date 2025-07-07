@@ -120,21 +120,9 @@ def _invoice_month_with_session(
         try:
             idem_base = f"{user_id}-{group_day}"
 
-            # 1. create invoice-item using amount instead of price to avoid custom_unit_amount issues
-            stripe.InvoiceItem.create(
-                customer=user.stripe_customer_id,
-                amount=int(total_usd * 100),  # Convert to cents
-                currency="usd",
-                description=f"{total_cr} credits used in {year}-{month:02d}",
-                metadata={
-                    "invoice_group": str(group_day),
-                    "user_id": user_id,
-                    "period": f"{year}-{month:02d}",
-                },
-                idempotency_key=idem_base + "-item",
-            )
+            # Skip creating invoice items since auto-recharge already creates them immediately
+            # Just create the invoice which will automatically include all pending invoice items
 
-            # 2. create invoice which pulls the pending items
             # Get the auth user for business tax information
             from orchestra.db.dao.auth_user_dao import AuthUserDAO
 
@@ -170,7 +158,7 @@ def _invoice_month_with_session(
                 "automatic_tax": {"enabled": True},  # Enable automatic tax collection
                 "auto_advance": True,
                 "pending_invoice_items_behavior": "include",
-                "description": f"{total_cr} credits used in {year}-{month:02d}",
+                "description": f"Monthly invoice for {year}-{month:02d}",
                 "metadata": {
                     "invoice_group": str(group_day),
                     "user_id": user_id,
