@@ -319,6 +319,17 @@ async def test_commit_history_endpoints(client: AsyncClient):
     assert messages == ["project commit 2", "context only commit", "project commit 1"]
     assert types == ["project", "context", "project"]
 
+    # Verify new branching fields are present in existing endpoints
+    for commit in proj_history:
+        assert "prev_commit_hash" in commit
+        assert "next_commit_hash" in commit
+        assert isinstance(commit["next_commit_hash"], list)
+
+    for commit in ctx_history:
+        assert "prev_commit_hash" in commit
+        assert "next_commit_hash" in commit
+        assert isinstance(commit["next_commit_hash"], list)
+
 
 @pytest.mark.anyio
 async def test_project_rollback_ignores_context_commits(client: AsyncClient):
@@ -394,3 +405,366 @@ async def test_project_rollback_ignores_context_commits(client: AsyncClient):
     # --- Verify state is "A", not "B" ---
     logs_final = await fetch_logs(client, project_name, context=context_name)
     assert logs_final[0]["entries"]["val"] == "A"
+
+
+@pytest.mark.anyio
+async def test_project_level_branching(client: AsyncClient):
+    """
+    Tests project-level version branching functionality:
+    1. Create a log and commit (commit A)
+    2. Update the log and commit (commit B)
+    3. Update the log again and commit (commit C)
+    4. Rollback to commit A
+    5. Update the log with different content and commit (commit D)
+    6. Verify the branching structure in commit history
+    """
+    project_name = "test_project_branching"
+    context_name = "branching_context"
+
+    # Setup: Create a versioned project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name, "is_versioned": True},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "is_versioned": True},
+        headers=HEADERS,
+    )
+
+    # --- Commit A: Initial log ---
+    await _create_log(
+        client,
+        project_name,
+        context={"name": context_name},
+        entries={"value": "initial"},
+    )
+    commit_a_res = await client.post(
+        f"/v0/project/{project_name}/commit",
+        json={"commit_message": "Commit A - Initial"},
+        headers=HEADERS,
+    )
+    assert commit_a_res.status_code == 200
+    commit_a_hash = commit_a_res.json()["commit_hash"]
+
+    # --- Commit B: Update log ---
+    logs_a = await fetch_logs(client, project_name, context=context_name)
+    await _update_logs(
+        client,
+        [logs_a[0]["id"]],
+        {"value": "updated_b"},
+        context={"name": context_name},
+        overwrite=True,
+    )
+    commit_b_res = await client.post(
+        f"/v0/project/{project_name}/commit",
+        json={"commit_message": "Commit B - First update"},
+        headers=HEADERS,
+    )
+    assert commit_b_res.status_code == 200
+    commit_b_hash = commit_b_res.json()["commit_hash"]
+
+    # --- Commit C: Update log again ---
+    logs_b = await fetch_logs(client, project_name, context=context_name)
+    await _update_logs(
+        client,
+        [logs_b[0]["id"]],
+        {"value": "updated_c"},
+        context={"name": context_name},
+        overwrite=True,
+    )
+    commit_c_res = await client.post(
+        f"/v0/project/{project_name}/commit",
+        json={"commit_message": "Commit C - Second update"},
+        headers=HEADERS,
+    )
+    assert commit_c_res.status_code == 200
+    commit_c_hash = commit_c_res.json()["commit_hash"]
+
+    # --- Rollback to commit A ---
+    await client.post(
+        f"/v0/project/{project_name}/rollback",
+        json={"commit_hash": commit_a_hash},
+        headers=HEADERS,
+    )
+
+    # --- Commit D: Update with different content (creates branch) ---
+    logs_after_rollback = await fetch_logs(client, project_name, context=context_name)
+    await _update_logs(
+        client,
+        [logs_after_rollback[0]["id"]],
+        {"value": "branched_d"},
+        context={"name": context_name},
+        overwrite=True,
+    )
+    commit_d_res = await client.post(
+        f"/v0/project/{project_name}/commit",
+        json={"commit_message": "Commit D - Branched update"},
+        headers=HEADERS,
+    )
+    assert commit_d_res.status_code == 200
+    commit_d_hash = commit_d_res.json()["commit_hash"]
+
+    # --- Verify branching structure ---
+    history_res = await client.get(
+        f"/v0/project/{project_name}/commits",
+        headers=HEADERS,
+    )
+    assert history_res.status_code == 200
+    history = history_res.json()
+
+    # Create a lookup for commits by hash
+    commits_by_hash = {commit["commit_hash"]: commit for commit in history}
+
+    # Verify commit A has both B and D as next commits
+    commit_a = commits_by_hash[commit_a_hash]
+    assert set(commit_a["next_commit_hash"]) == {commit_b_hash, commit_d_hash}
+    assert commit_a["prev_commit_hash"] is None
+
+    # Verify commit B has A as previous commit
+    commit_b = commits_by_hash[commit_b_hash]
+    assert commit_b["prev_commit_hash"] == commit_a_hash
+    assert commit_b["next_commit_hash"] == [commit_c_hash]
+
+    # Verify commit C has B as previous commit
+    commit_c = commits_by_hash[commit_c_hash]
+    assert commit_c["prev_commit_hash"] == commit_b_hash
+    assert commit_c["next_commit_hash"] == []
+
+    # Verify commit D has A as previous commit
+    commit_d = commits_by_hash[commit_d_hash]
+    assert commit_d["prev_commit_hash"] == commit_a_hash
+    assert commit_d["next_commit_hash"] == []
+
+
+@pytest.mark.anyio
+async def test_context_level_branching(client: AsyncClient):
+    """
+    Tests context-level version branching functionality using context-specific endpoints.
+    Mirrors the project-level branching test but uses context commit/rollback endpoints.
+    """
+    project_name = "test_context_branching"
+    context_name = "context_branching"
+
+    # Setup: Create a versioned project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name, "is_versioned": True},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "is_versioned": True},
+        headers=HEADERS,
+    )
+
+    # --- Commit A: Initial log ---
+    await _create_log(
+        client,
+        project_name,
+        context={"name": context_name},
+        entries={"value": "initial_context"},
+    )
+    commit_a_res = await client.post(
+        f"/v0/project/{project_name}/contexts/{context_name}/commit",
+        json={"commit_message": "Context Commit A - Initial"},
+        headers=HEADERS,
+    )
+    assert commit_a_res.status_code == 200
+    commit_a_hash = commit_a_res.json()["commit_hash"]
+
+    # --- Commit B: Update log ---
+    logs_a = await fetch_logs(client, project_name, context=context_name)
+    await _update_logs(
+        client,
+        [logs_a[0]["id"]],
+        {"value": "updated_context_b"},
+        context={"name": context_name},
+        overwrite=True,
+    )
+    commit_b_res = await client.post(
+        f"/v0/project/{project_name}/contexts/{context_name}/commit",
+        json={"commit_message": "Context Commit B - First update"},
+        headers=HEADERS,
+    )
+    assert commit_b_res.status_code == 200
+    commit_b_hash = commit_b_res.json()["commit_hash"]
+
+    # --- Commit C: Update log again ---
+    logs_b = await fetch_logs(client, project_name, context=context_name)
+    await _update_logs(
+        client,
+        [logs_b[0]["id"]],
+        {"value": "updated_context_c"},
+        context={"name": context_name},
+        overwrite=True,
+    )
+    commit_c_res = await client.post(
+        f"/v0/project/{project_name}/contexts/{context_name}/commit",
+        json={"commit_message": "Context Commit C - Second update"},
+        headers=HEADERS,
+    )
+    assert commit_c_res.status_code == 200
+    commit_c_hash = commit_c_res.json()["commit_hash"]
+
+    # --- Rollback to commit A ---
+    await client.post(
+        f"/v0/project/{project_name}/contexts/{context_name}/rollback",
+        json={"commit_hash": commit_a_hash},
+        headers=HEADERS,
+    )
+
+    # --- Commit D: Update with different content (creates branch) ---
+    logs_after_rollback = await fetch_logs(client, project_name, context=context_name)
+    await _update_logs(
+        client,
+        [logs_after_rollback[0]["id"]],
+        {"value": "branched_context_d"},
+        context={"name": context_name},
+        overwrite=True,
+    )
+    commit_d_res = await client.post(
+        f"/v0/project/{project_name}/contexts/{context_name}/commit",
+        json={"commit_message": "Context Commit D - Branched update"},
+        headers=HEADERS,
+    )
+    assert commit_d_res.status_code == 200
+    commit_d_hash = commit_d_res.json()["commit_hash"]
+
+    # --- Verify branching structure ---
+    history_res = await client.get(
+        f"/v0/project/{project_name}/contexts/{context_name}/commits",
+        headers=HEADERS,
+    )
+    assert history_res.status_code == 200
+    history = history_res.json()
+
+    # Create a lookup for commits by hash
+    commits_by_hash = {commit["commit_hash"]: commit for commit in history}
+
+    # Verify commit A has both B and D as next commits
+    commit_a = commits_by_hash[commit_a_hash]
+    assert set(commit_a["next_commit_hash"]) == {commit_b_hash, commit_d_hash}
+    assert commit_a["prev_commit_hash"] is None
+
+    # Verify commit B has A as previous commit
+    commit_b = commits_by_hash[commit_b_hash]
+    assert commit_b["prev_commit_hash"] == commit_a_hash
+    assert commit_b["next_commit_hash"] == [commit_c_hash]
+
+    # Verify commit C has B as previous commit
+    commit_c = commits_by_hash[commit_c_hash]
+    assert commit_c["prev_commit_hash"] == commit_b_hash
+    assert commit_c["next_commit_hash"] == []
+
+    # Verify commit D has A as previous commit
+    commit_d = commits_by_hash[commit_d_hash]
+    assert commit_d["prev_commit_hash"] == commit_a_hash
+    assert commit_d["next_commit_hash"] == []
+
+
+@pytest.mark.anyio
+async def test_branching_history_endpoints(client: AsyncClient):
+    """
+    Tests that commit history endpoints return the correct branching information
+    and that the new fields are present even in linear histories.
+    """
+    project_name = "test_branching_history"
+    context_name = "history_branching_context"
+
+    # Setup: Create a versioned project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name, "is_versioned": True},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "is_versioned": True},
+        headers=HEADERS,
+    )
+
+    # Create a simple branching scenario
+    await _create_log(
+        client,
+        project_name,
+        context={"name": context_name},
+        entries={"value": "base"},
+    )
+
+    # Project commit
+    proj_commit_res = await client.post(
+        f"/v0/project/{project_name}/commit",
+        json={"commit_message": "Project base commit"},
+        headers=HEADERS,
+    )
+    assert proj_commit_res.status_code == 200
+    proj_commit_hash = proj_commit_res.json()["commit_hash"]
+
+    # Context-only commit
+    logs = await fetch_logs(client, project_name, context=context_name)
+    await _update_logs(
+        client,
+        [logs[0]["id"]],
+        {"value": "context_update"},
+        context={"name": context_name},
+        overwrite=True,
+    )
+    ctx_commit_res = await client.post(
+        f"/v0/project/{project_name}/contexts/{context_name}/commit",
+        json={"commit_message": "Context only commit"},
+        headers=HEADERS,
+    )
+    assert ctx_commit_res.status_code == 200
+    ctx_commit_hash = ctx_commit_res.json()["commit_hash"]
+
+    # --- Test Project History Endpoint ---
+    proj_history_res = await client.get(
+        f"/v0/project/{project_name}/commits",
+        headers=HEADERS,
+    )
+    assert proj_history_res.status_code == 200
+    proj_history = proj_history_res.json()
+
+    # Verify new fields are present
+    for commit in proj_history:
+        assert "prev_commit_hash" in commit
+        assert "next_commit_hash" in commit
+        assert isinstance(commit["next_commit_hash"], list)
+
+    # Verify the project commit has correct branching info
+    proj_commit = next(c for c in proj_history if c["commit_hash"] == proj_commit_hash)
+    assert proj_commit["prev_commit_hash"] is None  # First commit
+    assert proj_commit["next_commit_hash"] == []  # No project-level children
+
+    # --- Test Context History Endpoint ---
+    ctx_history_res = await client.get(
+        f"/v0/project/{project_name}/contexts/{context_name}/commits",
+        headers=HEADERS,
+    )
+    assert ctx_history_res.status_code == 200
+    ctx_history = ctx_history_res.json()
+
+    # Verify new fields are present
+    for commit in ctx_history:
+        assert "prev_commit_hash" in commit
+        assert "next_commit_hash" in commit
+        assert isinstance(commit["next_commit_hash"], list)
+        assert "type" in commit  # Context history includes type field
+
+    # Verify the context commit has correct branching info
+    ctx_commit = next(c for c in ctx_history if c["commit_hash"] == ctx_commit_hash)
+    assert (
+        ctx_commit["prev_commit_hash"] == proj_commit_hash
+    )  # Points to project commit
+    assert ctx_commit["next_commit_hash"] == []  # No children
+    assert ctx_commit["type"] == "context"
+
+    # Verify the project commit in context history
+    proj_in_ctx = next(c for c in ctx_history if c["commit_hash"] == proj_commit_hash)
+    assert proj_in_ctx["prev_commit_hash"] is None
+    assert (
+        ctx_commit_hash in proj_in_ctx["next_commit_hash"]
+    )  # Has context commit as child
+    assert proj_in_ctx["type"] == "project"
