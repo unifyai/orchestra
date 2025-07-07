@@ -123,6 +123,8 @@ class ProjectCommitHistory(BaseModel):
     commit_hash: str
     commit_message: Optional[str] = None
     created_at: str
+    prev_commit_hash: Optional[str] = None
+    next_commit_hash: List[str] = []
 
 
 class ExportProjectTemplateRequest(BaseModel):
