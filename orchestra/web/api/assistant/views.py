@@ -52,11 +52,9 @@ from orchestra.web.api.assistant.schema import (
 )
 from orchestra.web.api.utils.assistant_infra import (
     assign_whatsapp_sender,
-    create_cloud_run_service,
     create_email,
     create_phone_number,
     create_pubsub_topic,
-    delete_cloud_run_service,
     delete_email,
     delete_phone_number,
     delete_pubsub_topic,
@@ -290,21 +288,6 @@ def create_assistant(
                 created_pubsub = True
                 print(f"PUBSUB CREATED: {assistant_id}")
 
-                # Step 6: create cloud run job
-                job_response = create_cloud_run_service(
-                    api_key=api_key,
-                    assistant_id=str(assistant_id),
-                    user_name=f"{assistant_in.first_name} {assistant_in.surname}",
-                    assistant_number=created_phone,
-                    user_number=assistant_in.user_phone,
-                )
-                if "detail" in job_response:
-                    raise Exception(
-                        f"Cloud Run job creation failed: {job_response['detail']}",
-                    )
-                created_service = True
-                print(f"SERVICE CREATED: {assistant_id}")
-
                 # Refresh database session after long infrastructure operations
                 logging.info(
                     f"Refreshing database session after infrastructure setup for assistant {assistant_id}",
@@ -347,14 +330,6 @@ def create_assistant(
 
                 # Rollback infrastructure in reverse order
                 rollback_errors = []
-
-                # Rollback infrastructure in reverse order (these could be async)
-                if created_service:
-                    try:
-                        delete_cloud_run_service(str(assistant_id))
-                    except Exception as e:
-                        rollback_errors.append(f"Failed to delete service: {str(e)}")
-                print(f"SERVICE DELETED: {assistant_id}")
 
                 if created_pubsub:
                     try:
@@ -655,13 +630,6 @@ def delete_assistant(
 
         # Wait before starting other infra cleanup (same as rollback operations)
         time.sleep(10)
-
-        # Delete cloud run service
-        try:
-            delete_cloud_run_service(str(assistant_id))
-        except Exception as e:
-            cleanup_errors.append(f"Failed to delete service: {str(e)}")
-        print(f"SERVICE DELETED: {assistant_id}")
 
         # Delete pubsub topic
         try:
