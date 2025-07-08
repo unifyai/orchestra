@@ -157,56 +157,6 @@ def delete_pubsub_topic(assistant_id: str):
     ).json()
 
 
-def create_cloud_run_service(
-    api_key: str,
-    assistant_id: str,
-    user_name: str,
-    assistant_number: str,
-    user_number: str,
-):
-    """
-    Create a Cloud Run service by making a POST request to the comms endpoint.
-
-    Args:
-        api_key (str): The API key of the user
-        assistant_id (str): The ID of the assistant
-        user_name (str): The user's name
-        assistant_number (str): The assistant's phone number
-        user_number (str): The user's phone number
-
-    Returns:
-        JSON response from the Cloud Run service creation endpoint
-    """
-    return requests.post(
-        f"{COMMS_URL}/infra/service/create",
-        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-        data={
-            "api_key": api_key,
-            "assistant_id": assistant_id,
-            "user_name": user_name,
-            "assistant_number": assistant_number,
-            "user_number": user_number,
-        },
-    ).json()
-
-
-def delete_cloud_run_service(assistant_id: str):
-    """
-    Delete a Cloud Run service by making a DELETE request to the comms endpoint.
-
-    Args:
-        assistant_id (str): The ID of the assistant
-
-    Returns:
-        JSON response from the Cloud Run service deletion endpoint
-    """
-    return requests.delete(
-        f"{COMMS_URL}/infra/service/delete",
-        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-        data={"assistant_id": assistant_id},
-    ).json()
-
-
 def get_social_platforms_costs():
     """
     Fetch available social platforms and their costs.
