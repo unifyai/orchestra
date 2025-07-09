@@ -190,14 +190,13 @@ def create_assistant(
 
     # Phase 1: Pre-checks and prepare assistant data
     try:
-        if not settings.is_staging:
-            user = users_dao.get_user_with_id(user_id)
+        user = users_dao.get_user_with_id(user_id)
 
-            if user.credits < total_creation_cost:
-                raise HTTPException(
-                    status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                    detail="Insufficient credits to create an assistant.",
-                )
+        if user.credits < total_creation_cost:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail="Insufficient credits to create an assistant.",
+            )
 
         parsed_weekly_limit = (
             Decimal(assistant_in.weekly_limit)
@@ -232,7 +231,6 @@ def create_assistant(
         created_phone = None
         created_pubsub = None
         assigned_whatsapp = None
-        created_service = None
 
         if assistant_in.create_infra:
             try:
