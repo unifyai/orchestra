@@ -62,7 +62,7 @@ class AssistantCreate(BaseModel):
         example="Mathematician and writer known for work on Analytical Engine",
     )
     country: Optional[str] = Field(
-        None,
+        "US",
         description="Country code for phone number provisioning (e.g., US, GB)",
         example="US",
     )
