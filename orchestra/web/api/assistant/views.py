@@ -265,7 +265,8 @@ def create_assistant(
                 print(f"EMAIL WATCHED: {created_email}")
 
                 # Step 3: create phone number
-                phone_response = create_phone_number(country=assistant_in.country)
+                country = assistant_in.country if assistant_in.country else "US"
+                phone_response = create_phone_number(country=country)
                 if "detail" in phone_response:
                     raise Exception(
                         f"Phone number creation failed: {phone_response['detail']}",
@@ -317,6 +318,8 @@ def create_assistant(
                 )
 
             except Exception as infra_error:
+                print(f"INFRA ERROR: {infra_error}")
+
                 # can't rollback infra if the setup isn't complete so need to wait
                 time.sleep(10)
 
