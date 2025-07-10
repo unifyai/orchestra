@@ -2,7 +2,7 @@ import os
 
 import requests
 
-COMMS_URL = "https://unity-comms-app-262420637606.us-central1.run.app"
+COMMS_URL = os.environ.get("UNITY_COMMS_URL")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 
