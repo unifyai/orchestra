@@ -265,7 +265,10 @@ def create_assistant(
 
                 # Step 3: create phone number
                 country = assistant_in.country if assistant_in.country else "US"
-                phone_response = create_phone_number(country=country)
+                phone_response = create_phone_number(
+                    country=country,
+                    is_staging=settings.is_staging,
+                )
                 if "detail" in phone_response:
                     raise Exception(
                         f"Phone number creation failed: {phone_response['detail']}",
@@ -277,10 +280,14 @@ def create_assistant(
                 if assistant_in.user_whatsapp_number:
                     assigned_whatsapp = assign_whatsapp_sender(
                         assistant_in.user_whatsapp_number,
+                        is_staging=settings.is_staging,
                     )["whatsapp_number"]
 
                 # Step 5: create pubsub topic
-                pubsub_response = create_pubsub_topic(str(assistant_id))
+                pubsub_response = create_pubsub_topic(
+                    str(assistant_id),
+                    is_staging=settings.is_staging,
+                )
                 if "detail" in pubsub_response:
                     raise Exception(
                         f"Pubsub topic creation failed: {pubsub_response['detail']}",
@@ -335,7 +342,10 @@ def create_assistant(
 
                 if created_pubsub:
                     try:
-                        delete_pubsub_topic(str(assistant_id))
+                        delete_pubsub_topic(
+                            str(assistant_id),
+                            is_staging=settings.is_staging,
+                        )
                     except Exception as e:
                         rollback_errors.append(
                             f"Failed to delete pubsub topic: {str(e)}",
@@ -635,7 +645,7 @@ def delete_assistant(
 
         # Delete pubsub topic
         try:
-            delete_pubsub_topic(str(assistant_id))
+            delete_pubsub_topic(str(assistant_id), is_staging=settings.is_staging)
         except Exception as e:
             cleanup_errors.append(f"Failed to delete pubsub topic: {str(e)}")
         print(f"PUBSUB DELETED: {assistant_id}")
@@ -820,6 +830,7 @@ def update_assistant_config(
 
             assistant_whatsapp_number = assign_whatsapp_sender(
                 update.user_whatsapp_number,
+                is_staging=settings.is_staging,
             )["whatsapp_number"]
 
         updated = assistant_dao.update_assistant(
