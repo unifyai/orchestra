@@ -6,44 +6,59 @@ COMMS_URL = os.environ.get("UNITY_COMMS_URL")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 
-def create_phone_number(country: str = "US"):
+def create_phone_number(country: str = "US", is_staging: bool = False):
     """
     Create a phone number for the user by making a POST request to the comms endpoint.
 
     Args:
         country (str): The country code for phone number provisioning (e.g., "US", "GB").
+        is_staging (bool): Whether to create the phone number in staging or prod
 
     Returns:
         JSON response from the phone creation endpoint
     """
+    voice_url = "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/" + (
+        "twilio-call-webhook" if not is_staging else "twilio-call-webhook-staging"
+    )
+    sms_url = "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/" + (
+        "twilio-msg-webhook" if not is_staging else "twilio-msg-webhook-staging"
+    )
     return requests.post(
         f"{COMMS_URL}/phone/create",
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         json={
-            "voice_url": "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/twilio-call-webhook",
-            "sms_url": "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/twilio-msg-webhook",
+            "voice_url": voice_url,
+            "sms_url": sms_url,
             "country": country,
         },
     ).json()
 
 
-def assign_whatsapp_sender(user_whatsapp_number: str):
+def assign_whatsapp_sender(user_whatsapp_number: str, is_staging: bool = False):
     """
     Create a WhatsApp sender by making a POST request to the comms endpoint.
 
     Args:
-        phone_number (str): The phone number for WhatsApp
-        first_name (str): User's first name
-        last_name (str): User's last name
+        user_whatsapp_number (str): The WhatsApp number to assign
+        is_staging (bool): Whether to create the WhatsApp sender in staging or prod
 
     Returns:
         JSON response from the WhatsApp creation endpoint
     """
+    callback_url = (
+        "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/"
+        + (
+            "twilio-whatsapp-webhook"
+            if not is_staging
+            else "twilio-whatsapp-webhook-staging"
+        )
+    )
     return requests.post(
         f"{COMMS_URL}/whatsapp/create",
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         json={
             "user_whatsapp_number": user_whatsapp_number,
+            "callback_url": callback_url,
         },
     ).json()
 
@@ -105,12 +120,13 @@ def delete_email(email: str):
     ).json()
 
 
-def watch_email(email: str):
+def watch_email(email: str, is_staging: bool = False):
     """
     Watch an email by making a POST request to the comms endpoint.
 
     Args:
         email (str): The email to watch
+        is_staging (bool): Whether to watch the email in staging or prod
 
     Returns:
         JSON response from the email watch endpoint
@@ -119,41 +135,50 @@ def watch_email(email: str):
     return requests.post(
         f"{COMMS_URL}/email/watch",
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-        json={"primary_email": email},
+        json={
+            "primary_email": email,
+            "topic": "email-notifications-staging"
+            if is_staging
+            else "email-notifications",
+        },
     ).json()
 
 
-def create_pubsub_topic(assistant_id: str):
+def create_pubsub_topic(assistant_id: str, is_staging: bool = False):
     """
     Create a pubsub topic for the assistant by making a POST request to the comms endpoint.
 
     Args:
         assistant_id (str): The ID of the assistant
+        is_staging (bool): Whether to create the topic in staging or prod
 
     Returns:
         JSON response from the pubsub topic creation endpoint
     """
+    topic_name = f"unity-{assistant_id}" + ("-staging" if is_staging else "")
     return requests.post(
         f"{COMMS_URL}/infra/pubsub/topic",
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-        data={"assistant_id": assistant_id},
+        data={"topic_name": topic_name},
     ).json()
 
 
-def delete_pubsub_topic(assistant_id: str):
+def delete_pubsub_topic(assistant_id: str, is_staging: bool = False):
     """
     Delete a pubsub topic for the assistant by making a DELETE request to the comms endpoint.
 
     Args:
         assistant_id (str): The ID of the assistant
+        is_staging (bool): Whether to delete the topic in staging or prod
 
     Returns:
         JSON response from the pubsub topic deletion endpoint
     """
+    topic_name = f"unity-{assistant_id}" + ("-staging" if is_staging else "")
     return requests.delete(
         f"{COMMS_URL}/infra/pubsub/topic",
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-        data={"assistant_id": assistant_id},
+        data={"topic_name": topic_name},
     ).json()
 
 
