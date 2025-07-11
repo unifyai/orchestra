@@ -84,7 +84,7 @@ options:
   defaultLogsBucketBehavior: REGIONAL_USER_OWNED_BUCKET
 substitutions:
   _JOB_REGION: europe-west3
-  _SERVICE_NAME: orchestra
+  _SERVICE_NAME: orchestra-staging
   _TRIGGER_ID: 0bfee4b7-25c8-453a-8484-fca72480864c
   REPO_NAME: orchestra
   _DEPLOY_REGION: europe-west1
