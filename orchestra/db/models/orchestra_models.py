@@ -481,6 +481,7 @@ class AuthUser(Base):
         server_default=None,
     )
     has_claimed_approval_link = Column(Boolean, nullable=False, server_default="false")
+    onboarded = Column(Boolean, nullable=False, server_default=sa.false())
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
 
