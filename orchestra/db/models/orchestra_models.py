@@ -520,6 +520,7 @@ class AuthUser(Base):
         server_default="false",
     )  # Verification status
     tax_jurisdiction = Column(String(100), nullable=True)  # Computed tax jurisdiction
+    onboarded = Column(Boolean, nullable=False, server_default="false")
 
     # Relationships
     interfaces = relationship(
