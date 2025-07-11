@@ -128,6 +128,7 @@ class AuthUserDAO:
         evaluations_enabled: Optional[bool] = ...,
         has_claimed_approval_link: Optional[bool] = ...,
         assistant_hiring_approval: Optional[str] = ...,
+        onboarded: Optional[bool] = ...,
         account_type: Optional[str] = ...,
         business_name: Optional[str] = ...,
         tax_id: Optional[str] = ...,
@@ -169,6 +170,9 @@ class AuthUserDAO:
                 setattr(entry, "assistant_hiring_approval", assistant_hiring_approval)
             if has_claimed_approval_link is not ...:
                 setattr(entry, "has_claimed_approval_link", has_claimed_approval_link)
+
+            if onboarded is not ...:
+                setattr(entry, "onboarded", onboarded)
 
             # Business classification fields
             if account_type is not ...:
