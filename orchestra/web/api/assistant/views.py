@@ -1200,7 +1200,7 @@ def register_voice(
         ):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Voice with ID '{voice_in.voice_id}' already exists in the database.",
+                detail=f"Voice with ID '{voice_in.voice_id}' already exists for this user.",
             )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1369,7 +1369,7 @@ async def clone_voice(
     response_model=InfoResponse[List[VoiceRead]],
     status_code=status.HTTP_200_OK,
     summary="List voices",
-    description="Returns a list of all assistant voices created, and all globally registered preset voices.",
+    description="Returns a list of all assistant voices created for the user.",
     responses={
         200: {
             "description": "List of voices retrieved successfully",

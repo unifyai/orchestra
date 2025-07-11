@@ -12,6 +12,7 @@ from sqlalchemy import (
     Date,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     Numeric,
@@ -1211,9 +1212,16 @@ class Assistant(Base):
     )
     voice_id = sa.Column(
         sa.String,
-        sa.ForeignKey("voices.voice_id", ondelete="SET NULL"),
         nullable=True,
         index=True,
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["user_id", "voice_id"],
+            ["voices.user_id", "voices.voice_id"],
+            name="fk_assistants_voices",
+        ),
     )
 
 
@@ -1233,10 +1241,13 @@ class Voice(Base):
 
     __tablename__ = "voices"
 
-    voice_id = Column(String, primary_key=True)  # This will store Cartesia's voice ID
+    voice_id = Column(
+        String, primary_key=True
+    )  # This will store the TTS provider's voice ID
     user_id = Column(
         String,
         ForeignKey("auth_user.id", ondelete="CASCADE"),
+        primary_key=True,
         nullable=False,
         index=True,
     )
