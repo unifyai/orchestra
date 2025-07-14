@@ -158,7 +158,6 @@ def create_assistant(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Unauthorized. Please contact support to get an API key.",
         )
-    api_key = api_keys[0][0].key
     assistant = None
 
     # Determine total cost as base creation cost

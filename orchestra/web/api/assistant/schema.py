@@ -158,6 +158,16 @@ class AssistantRead(AssistantCreate):
         description="API key of the assistant",
         example="1234567890",
     )
+    user_first_name: Optional[str] = Field(
+        None,
+        description="First name of the user",
+        example="Ada",
+    )
+    user_last_name: Optional[str] = Field(
+        None,
+        description="Last name of the user",
+        example="Lovelace",
+    )
 
     class Config:
         orm_mode = True
@@ -183,6 +193,8 @@ class AssistantRead(AssistantCreate):
                 "created_at": "2025-04-25T10:30:00Z",
                 "updated_at": "2025-04-26T14:15:00Z",
                 "api_key": "1234567890",
+                "user_first_name": "Ada",
+                "user_last_name": "Lovelace",
             },
         }
 
