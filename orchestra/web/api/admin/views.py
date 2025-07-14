@@ -581,6 +581,10 @@ def admin_update_assistant(
         None,
         description="New WhatsApp number for the assistant",
     ),
+    new_user_whatsapp_number: Optional[str] = Query(
+        None,
+        description="New WhatsApp number for the user",
+    ),
     session=Depends(get_db_session),
 ) -> InfoResponse[AssistantRead]:
     """
@@ -593,6 +597,9 @@ def admin_update_assistant(
     assistant_whatsapp_number = normalize_phone_parameter(assistant_whatsapp_number)
     new_assistant_whatsapp_number = normalize_phone_parameter(
         new_assistant_whatsapp_number,
+    )
+    new_user_whatsapp_number = normalize_phone_parameter(
+        new_user_whatsapp_number,
     )
 
     # Find the assistant to update
@@ -618,6 +625,7 @@ def admin_update_assistant(
         user_id=a.user_id,
         agent_id=a.agent_id,
         assistant_whatsapp_number=new_assistant_whatsapp_number,
+        user_whatsapp_number=new_user_whatsapp_number,
     )
     session.commit()
 
@@ -755,9 +763,9 @@ def admin_list_contacts(
     if email_address is not None:
         filters["email_address"] = email_address
     if phone_number is not None:
-        filters["phone_number"] = phone_number
+        filters["phone_number"] = normalize_phone_parameter(phone_number)
     if whatsapp_number is not None:
-        filters["whatsapp_number"] = whatsapp_number
+        filters["whatsapp_number"] = normalize_phone_parameter(whatsapp_number)
 
     # 5) Retrieve matching log_event IDs
     log_event_dao = LogEventDAO(session)
