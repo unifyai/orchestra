@@ -886,12 +886,9 @@ async def set_user_assistant_hiring_status(
                 <html>
                 <body>
                     <p>Hey {email_recipient}, Dan from Unify here,</p>
-                    <br/>
                     <p>Just wanted to let you know that your request has been approved.</p>
                     <p>You can now <a href="https://console.unify.ai/team">hire your first AI assistant</a>! 🤖</p>
-                    <br/>
                     <p>Let me know if there's anything I can help with as you get started :)</p>
-                    <br/>
                     <p>My inbox is always open,<br>
                     Dan</p>
                 </body>
