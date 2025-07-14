@@ -514,7 +514,7 @@ def admin_list_assistants(
         ]
         api_keys = [api_key_dao.filter(user_id=a.user_id)[0][0].key for a in assistants]
         user_ids = [a.user_id for a in assistants]
-        auth_users = [auth_user_dao.get_by_id(user_id) for user_id in user_ids]
+        auth_users = [auth_user_dao.get_by_id(user_id)[0] for user_id in user_ids]
         return InfoResponse(
             info=[
                 AssistantRead(
