@@ -13,6 +13,7 @@ from sqlalchemy import select
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
+from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.credit_card_fingerprint import CreditCardFingerprintDAO
@@ -496,6 +497,7 @@ def admin_list_assistants(
     assistant_dao = AssistantDAO(session)
     voice_dao = VoiceDAO(session)
     api_key_dao = ApiKeyDAO(session)
+    auth_user_dao = AuthUserDAO(session)
     try:
         assistants = assistant_dao.list_all_assistants(
             phone=phone,
@@ -511,6 +513,8 @@ def admin_list_assistants(
             for a in assistants
         ]
         api_keys = [api_key_dao.filter(user_id=a.user_id)[0][0].key for a in assistants]
+        user_ids = [a.user_id for a in assistants]
+        auth_users = [auth_user_dao.get_by_id(user_id) for user_id in user_ids]
         return InfoResponse(
             info=[
                 AssistantRead(
@@ -533,6 +537,8 @@ def admin_list_assistants(
                     tts_provider=tts_providers[i],
                     voice_id=a.voice_id,
                     api_key=api_keys[i],
+                    user_first_name=auth_users[i].name,
+                    user_last_name=auth_users[i].last_name,
                 )
                 for i, a in enumerate(assistants)
             ],
