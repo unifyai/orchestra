@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Dict, Generic, List, Literal, Optional, TypeVar
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, root_validator
 from pydantic.generics import GenericModel
 
 T = TypeVar("T")
@@ -535,11 +535,15 @@ class VoiceGenerateRequest(BaseModel):
 
 
 class VoiceDesignGeneratePreviewsRequest(BaseModel):
-    voice_description: str = Field(
-        ...,
+    voice_description: Optional[str] = Field(
+        None,
         min_length=20,
         max_length=1000,
-        description="Text prompt describing the desired voice characteristics (e.g., 'A deep, resonant male voice with a British accent, suitable for narration.').",
+        description="Text prompt describing the desired voice characteristics (e.g., 'A deep, resonant male voice with a British accent, suitable for narration.'). If `bio` is provided, this field can be used to add more specific voice instructions.",
+    )
+    bio: Optional[str] = Field(
+        None,
+        description="A biography or background of the character to generate a voice description from. Used with `voice_description` to generate a richer prompt for the TTS provider.",
     )
     text: Optional[str] = Field(
         None,
@@ -556,6 +560,12 @@ class VoiceDesignGeneratePreviewsRequest(BaseModel):
         description="Optional: Model to use for voice generation.",
     )
 
+    @root_validator
+    def check_description_or_bio(cls, values):
+        if not values.get("voice_description") and not values.get("bio"):
+            raise ValueError("Either 'voice_description' or 'bio' must be provided.")
+        return values
+
     class Config:
         schema_extra = {
             "example": {
@@ -563,6 +573,11 @@ class VoiceDesignGeneratePreviewsRequest(BaseModel):
                 "text": "The quick brown fox jumps over the lazy dog. This is a sample text to hear how the designed voice sounds.",
                 "auto_generate_text": False,
                 "model_id": "eleven_multilingual_ttv_v2",
+            },
+            "example_with_bio": {
+                "bio": "Ada Lovelace, born in 1815, was an English mathematician and writer, chiefly known for her work on Charles Babbage's proposed mechanical general-purpose computer, the Analytical Engine. She was the first to recognise that the machine had applications beyond pure calculation, and published the first algorithm intended to be carried out by such a machine.",
+                "voice_description": "A clear, intelligent, and slightly formal British accent from the 19th century.",
+                "text": "I am a mathematician, and a writer. I see the poetry in science.",
             },
         }
 

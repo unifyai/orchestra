@@ -1656,12 +1656,38 @@ async def design_voice_generate_previews_endpoint(
     request: Request,
     session: Session = Depends(get_db_session),
     elevenlabs_service: ElevenLabsService = Depends(),
+    openai_service: OpenAIService = Depends(),
 ) -> InfoResponse[VoiceDesignGeneratePreviewsAPIResponse]:
     user_id = request.state.user_id
+    final_voice_description = request_data.voice_description
 
     try:
+        # If a bio is provided, use OpenAI to generate a more detailed description
+        if request_data.bio:
+            try:
+                final_voice_description = (
+                    openai_service.generate_voice_description_from_bio(
+                        bio=request_data.bio,
+                        description_hint=request_data.voice_description,
+                    )
+                )
+            except OpenAIAPIError as e:
+                logging.error(
+                    f"OpenAI API error during voice description generation: {e.detail}",
+                )
+                raise HTTPException(
+                    status_code=e.status_code,
+                    detail=f"Failed to generate voice description from bio: {e.detail}",
+                )
+
+        if not final_voice_description:
+            # This should be caught by the pydantic validator, but as a safeguard.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A voice description is required. Provide 'voice_description' or 'bio'.",
+            )
         el_response_data = elevenlabs_service.design_voice_generate_previews(
-            voice_description=request_data.voice_description,
+            voice_description=final_voice_description,
             text_for_preview=request_data.text,
             auto_generate_text_flag=request_data.auto_generate_text,
             model_id_for_design=request_data.model_id,
