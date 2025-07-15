@@ -168,6 +168,11 @@ class AssistantRead(AssistantCreate):
         description="Last name of the user",
         example="Lovelace",
     )
+    user_email: Optional[str] = Field(
+        None,
+        description="Email of the user",
+        example="ada.lovelace@unify.ai",
+    )
 
     class Config:
         orm_mode = True
@@ -195,6 +200,7 @@ class AssistantRead(AssistantCreate):
                 "api_key": "1234567890",
                 "user_first_name": "Ada",
                 "user_last_name": "Lovelace",
+                "user_email": "ada.lovelace@unify.ai",
             },
         }
 
