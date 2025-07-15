@@ -539,6 +539,7 @@ def admin_list_assistants(
                     api_key=api_keys[i],
                     user_first_name=auth_users[i].name,
                     user_last_name=auth_users[i].last_name,
+                    user_email=auth_users[i].email,
                 )
                 for i, a in enumerate(assistants)
             ],
