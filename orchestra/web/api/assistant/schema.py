@@ -621,13 +621,21 @@ class VoiceDesignCreateFromPreviewRequest(BaseModel):
         ...,
         description="Description for the new voice.",
     )
+    audio_base_64: Optional[str] = Field(
+        None,
+        description="Base64 encoded audio sample from the selected voice preview. If provided, it's used for language detection.",
+    )
+    media_type: Optional[str] = Field(
+        None,
+        description="MIME type of the audio sample, e.g., 'audio/mpeg'. Assumed 'audio/mpeg' if sample is provided but this is omitted.",
+    )
     labels: Optional[Dict[str, str]] = Field(
         None,
         description="Optional labels for ElevenLabs when creating the voice.",
     )
     language: Optional[str] = Field(
         None,
-        description="Language of the voice. If not provided, it will be auto-detected from the voice_description.",
+        description="Language of the voice. If not provided, it will be auto-detected from the provided audio preview, or from the description if no audio is provided.",
     )
     gender: Optional[str] = Field(
         None,
@@ -636,13 +644,21 @@ class VoiceDesignCreateFromPreviewRequest(BaseModel):
 
     class Config:
         schema_extra = {
-            "example": {
+            "example_with_audio": {
                 "generated_voice_id": "temp_preview_id_from_step1",
                 "voice_name": "My New Designed Voice",
                 "voice_description": "A custom voice designed from text.",
-                "language": "en",
+                "audio_base_64": "UklGRiSAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQyAAAAA...",
+                "media_type": "audio/mpeg",
                 "gender": "male",
                 "labels": {"use_case": "audiobook"},
+            },
+            "example_without_audio": {
+                "generated_voice_id": "temp_preview_id_from_step1",
+                "voice_name": "Another Designed Voice",
+                "voice_description": "A deep, resonant voice for narration.",
+                "gender": "male",
+                "labels": {"use_case": "narration"},
             },
         }
 
