@@ -560,7 +560,7 @@ class VoiceDesignGeneratePreviewsRequest(BaseModel):
         description="Optional: Model to use for voice generation.",
     )
 
-    @model_validator
+    @model_validator(mode="after")
     def check_description_or_bio(cls, values):
         if not values.get("voice_description") and not values.get("bio"):
             raise ValueError("Either 'voice_description' or 'bio' must be provided.")
