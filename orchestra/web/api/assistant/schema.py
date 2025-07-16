@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Dict, Generic, List, Literal, Optional, TypeVar
 
-from pydantic import BaseModel, Field, HttpUrl, model_validator
+from pydantic import BaseModel, Field, HttpUrl
 from pydantic.generics import GenericModel
 
 T = TypeVar("T")
@@ -539,11 +539,11 @@ class VoiceDesignGeneratePreviewsRequest(BaseModel):
         None,
         min_length=20,
         max_length=1000,
-        description="Text prompt describing the desired voice characteristics (e.g., 'A deep, resonant male voice with a British accent, suitable for narration.'). If `bio` is provided, this field can be used to add more specific voice instructions.",
+        description="Text prompt describing the desired voice characteristics (e.g., 'A deep, resonant male voice with a British accent, suitable for narration.'). If `bio` is provided, this field can be used to add more specific voice instructions. At least one of bio or voice_description should be provided.",
     )
     bio: Optional[str] = Field(
         None,
-        description="A biography or background of the character to generate a voice description from. Used with `voice_description` to generate a richer prompt for the TTS provider.",
+        description="A biography or background of the character to generate a voice description from. Used with `voice_description` to generate a richer prompt for the TTS provider. At least one of bio or voice_description should be provided.",
     )
     text: Optional[str] = Field(
         None,
@@ -559,12 +559,6 @@ class VoiceDesignGeneratePreviewsRequest(BaseModel):
         None,
         description="Optional: Model to use for voice generation.",
     )
-
-    @model_validator(mode="after")
-    def check_description_or_bio(cls, values):
-        if not values.get("voice_description") and not values.get("bio"):
-            raise ValueError("Either 'voice_description' or 'bio' must be provided.")
-        return values
 
     class Config:
         schema_extra = {
