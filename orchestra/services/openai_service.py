@@ -167,6 +167,7 @@ class OpenAIService:
         You are an expert in creating voice prompts for Text-to-Speech (TTS) models like ElevenLabs.
         Your task is to generate a concise, descriptive voice prompt based on the provided biography and an optional description hint.
         The voice prompt should describe the voice's characteristics, such as accent, tone, age, and style.
+        The final description MUST be between 20 and 1000 characters long.
         Focus on creating a description that a TTS model can interpret to generate a specific voice.
         Respond with a JSON object containing a single key, 'voice_description'.
         """

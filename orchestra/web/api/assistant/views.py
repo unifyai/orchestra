@@ -1671,6 +1671,14 @@ async def design_voice_generate_previews_endpoint(
                         description_hint=request_data.voice_description,
                     )
                 )
+                if not (20 <= len(final_voice_description) <= 1000):
+                    logging.error(
+                        f"OpenAI-generated voice description has invalid length ({len(final_voice_description)} chars). Content: '{final_voice_description}'",
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Failed to generate a voice description with the required length (20-1000 characters). Please try again.",
+                    )
             except OpenAIAPIError as e:
                 logging.error(
                     f"OpenAI API error during voice description generation: {e.detail}",
