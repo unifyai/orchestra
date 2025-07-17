@@ -1,10 +1,10 @@
 from typing import List, Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import Voice
+from orchestra.db.models.orchestra_models import Assistant, Voice
 
 
 class VoiceDAO:
@@ -26,7 +26,8 @@ class VoiceDAO:
         provider: str = "cartesia",
     ) -> Voice:
         """
-        Create a new Voice for the given user, using Cartesia's voice_id as primary key.
+        Create a new Voice for the given user.
+        The combination of user_id and voice_id is unique.
         """
         voice = Voice(
             voice_id=voice_id,
@@ -43,7 +44,7 @@ class VoiceDAO:
 
     def get_voice_by_id(self, user_id: str, voice_id: str) -> Optional[Voice]:
         """
-        Retrieve a Voice by user and its (Cartesia) voice_id.
+        Retrieve a Voice by user and its TTS provider voice_id.
         """
         stmt = select(Voice).where(
             Voice.voice_id == voice_id,
@@ -62,10 +63,19 @@ class VoiceDAO:
 
     def delete_voice(self, user_id: str, voice_id: str) -> None:
         """
-        Delete a Voice by user and its (Cartesia) voice_id.
+        Delete a Voice by user and its TTS provider voice_id.
         """
         voice = self.get_voice_by_id(user_id, voice_id)
         if voice:
+            # Manually nullify voice_id in referencing assistants for this user.
+            stmt = (
+                update(Assistant)
+                .where(Assistant.user_id == user_id)
+                .where(Assistant.voice_id == voice_id)
+                .values(voice_id=None)
+            )
+            self.session.execute(stmt)
+
             self.session.delete(voice)
         else:
             raise HTTPException(

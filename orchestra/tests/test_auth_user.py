@@ -441,5 +441,75 @@ async def test_default_unity_resources_on_user_creation(client: AsyncClient):
     assert tasks_tile is not None, "Tasks table tile not found"
 
 
+@pytest.mark.anyio
+async def test_onboarding_status_workflow(client: AsyncClient):
+    """
+    Test the full onboarding status workflow:
+    1. Create a user.
+    2. Get initial status (should be False).
+    3. Update status to True.
+    4. Verify updated status.
+    5. Verify status is included in main user endpoint.
+    """
+    # 1. Create a test user and get their API key
+    create_response = await client.post(
+        "/v0/admin/auth-user",
+        json={"email": "onboarding@test.com"},
+        headers=HEADERS,
+    )
+    assert create_response.status_code == 200, create_response.json()
+    user_id = create_response.json()["id"]
+
+    user_info_response = await client.get(
+        f"/v0/admin/auth-user/by-user-id?user_id={user_id}",
+        headers=HEADERS,
+    )
+    assert user_info_response.status_code == 200, user_info_response.json()
+    api_key = user_info_response.json()["apiKey"]
+    user_headers = {"Authorization": f"Bearer {api_key}"}
+
+    # 2. Get initial onboarding status
+    response = await client.get("/v0/user/onboarding-status", headers=user_headers)
+    assert response.status_code == 200
+    assert response.json() == {"onboarded": False}
+
+    # 3. Update onboarding status to True
+    update_payload = {"onboarded": True}
+    response = await client.put(
+        "/v0/user/onboarding-status",
+        json=update_payload,
+        headers=user_headers,
+    )
+    assert response.status_code == 200
+    assert response.json() == {"message": "Onboarding status updated successfully"}
+
+    # 4. Verify updated status
+    response = await client.get("/v0/user/onboarding-status", headers=user_headers)
+    assert response.status_code == 200
+    assert response.json() == {"onboarded": True}
+
+    # 5. Verify onboarding status is included in admin user info endpoint
+    response = await client.get(
+        f"/v0/admin/auth-user/by-user-id?user_id={user_id}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    user_data = response.json()
+    assert user_data["onboarded"] is True
+
+    # 6. Test updating back to False
+    update_payload = {"onboarded": False}
+    response = await client.put(
+        "/v0/user/onboarding-status",
+        json=update_payload,
+        headers=user_headers,
+    )
+    assert response.status_code == 200
+
+    response = await client.get("/v0/user/onboarding-status", headers=user_headers)
+    assert response.status_code == 200
+    assert response.json() == {"onboarded": False}
+
+
 if __name__ == "__main__":
     pass

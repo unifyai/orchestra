@@ -20,6 +20,12 @@ class LanguageDetectionResponse(BaseModel):
     language_code: str
 
 
+class VoiceDescriptionResponse(BaseModel):
+    """Pydantic model for the voice description output from OpenAI."""
+
+    voice_description: str
+
+
 class OpenAIService:
     """
     Service for interacting with the OpenAI API.
@@ -147,4 +153,70 @@ class OpenAIService:
             raise OpenAIAPIError(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=f"An error occurred with the language detection service: {str(e)}",
+            ) from e
+
+    def generate_voice_description_from_bio(
+        self,
+        bio: str,
+        description_hint: Optional[str] = None,
+    ) -> str:
+        """
+        Generates a detailed voice description for a TTS model based on a character bio and an optional hint.
+        """
+        system_prompt = """
+        You are an expert in creating voice prompts for Text-to-Speech (TTS) models like ElevenLabs.
+        Your task is to generate a concise, descriptive voice prompt based on the provided biography and an optional description hint.
+        The voice prompt should describe the voice's characteristics, such as accent, tone, age, and style.
+        The final description MUST be between 20 and 1000 characters long.
+        Focus on creating a description that a TTS model can interpret to generate a specific voice.
+        Respond with a JSON object containing a single key, 'voice_description'.
+        """
+
+        user_content = f"Character Biography:\n---\n{bio}\n---\n"
+        if description_hint:
+            user_content += (
+                f"\nAdditional Voice Description Hint:\n---\n{description_hint}\n---"
+            )
+
+        try:
+            response = self.client.beta.chat.completions.parse(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
+                ],
+                response_format=VoiceDescriptionResponse,
+            )
+            response_content = response.choices[0].message.content
+            if not response_content:
+                logging.error(
+                    "OpenAI returned an empty response for voice description generation.",
+                )
+                raise OpenAIAPIError(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="OpenAI returned an empty response for voice description generation.",
+                )
+
+            # Parse the JSON string and validate with Pydantic
+            parsed_json = json.loads(response_content)
+            validated_response = VoiceDescriptionResponse(**parsed_json)
+            return validated_response.voice_description
+
+        except json.JSONDecodeError as e:
+            logging.error(
+                f"Failed to parse JSON from OpenAI response: {response_content}",
+                exc_info=True,
+            )
+            raise OpenAIAPIError(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to parse voice description response from OpenAI.",
+            ) from e
+        except Exception as e:
+            logging.error(
+                f"An error occurred with OpenAI API request for voice description: {e}",
+                exc_info=True,
+            )
+            raise OpenAIAPIError(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"An error occurred with the voice description generation service: {str(e)}",
             ) from e

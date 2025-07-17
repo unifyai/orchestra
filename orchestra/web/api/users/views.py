@@ -35,10 +35,12 @@ from orchestra.web.api.users.schema import (
     BusinessVerificationRequest,
     FreezeAccountByStripeIdRequest,
     FreezeAccountRequest,
+    OnboardingStatusResponse,
     QueryLoggingStatus,
     StripeIdRequest,
     UpdateAccountTypeRequest,
     UpdateBusinessInfoRequest,
+    UpdateOnboardingStatusRequest,
     UpdateQueryLoggingRequest,
     UserBusinessStatusResponse,
     UserRequest,
@@ -126,6 +128,7 @@ async def get_user(
         "assistant_hiring_approval": user[0][0].assistant_hiring_approval,
         "has_claimed_approval_link": user[0][0].has_claimed_approval_link,
         "business_classification": format_business_classification(user[0][0]),
+        "onboarded": user[0][0].onboarded,
     }
 
 
@@ -162,6 +165,7 @@ async def get_user_by_email(
         "assistant_hiring_approval": user[0][0].assistant_hiring_approval,
         "has_claimed_approval_link": user[0][0].has_claimed_approval_link,
         "business_classification": format_business_classification(user[0][0]),
+        "onboarded": user[0][0].onboarded,
     }
 
 
@@ -206,6 +210,7 @@ async def get_user_by_account(
         "assistant_hiring_approval": user[0][0].assistant_hiring_approval,
         "has_claimed_approval_link": user[0][0].has_claimed_approval_link,
         "business_classification": format_business_classification(user[0][0]),
+        "onboarded": user[0][0].onboarded,
     }
 
 
@@ -881,12 +886,9 @@ async def set_user_assistant_hiring_status(
                 <html>
                 <body>
                     <p>Hey {email_recipient}, Dan from Unify here,</p>
-                    <br/>
                     <p>Just wanted to let you know that your request has been approved.</p>
                     <p>You can now <a href="https://console.unify.ai/team">hire your first AI assistant</a>! 🤖</p>
-                    <br/>
                     <p>Let me know if there's anything I can help with as you get started :)</p>
-                    <br/>
                     <p>My inbox is always open,<br>
                     Dan</p>
                 </body>
@@ -1197,3 +1199,36 @@ async def get_supported_tax_countries():
         "supported_countries": TaxIDValidator.get_supported_countries(),
         "total_countries": len(TaxIDValidator.get_supported_countries()),
     }
+
+
+@router.get("/user/onboarding-status", response_model=OnboardingStatusResponse)
+async def get_onboarding_status(
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """Get the current user's onboarding status."""
+    auth_user_dao = AuthUserDAO(session)
+    user_row = auth_user_dao.get_by_id(request.state.user_id)
+    if not user_row:
+        raise not_found("User")
+
+    auth_user = user_row[0]
+    return OnboardingStatusResponse(onboarded=auth_user.onboarded)
+
+
+@router.put("/user/onboarding-status")
+async def update_onboarding_status(
+    request: Request,
+    body: UpdateOnboardingStatusRequest,
+    session: Session = Depends(get_db_session),
+):
+    """Update the current user's onboarding status."""
+    auth_user_dao = AuthUserDAO(session)
+    user_row = auth_user_dao.get_by_id(request.state.user_id)
+    if not user_row:
+        raise not_found("User")
+
+    auth_user_dao.update(id=request.state.user_id, onboarded=body.onboarded)
+    session.commit()
+
+    return {"message": "Onboarding status updated successfully"}

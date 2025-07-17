@@ -113,7 +113,7 @@ class ReplicateService:
         Generates a video from an image and audio using zsxkib/sonic model.
         """
         try:
-            model_identifier = "zsxkib/sonic"
+            model_identifier = "zsxkib/sonic:a2aad29ea95f19747a5ea22ab14fc6594654506e5815f7f5ba4293e888d3e20f"
             model_input: Dict[str, Any] = {
                 "image": image_url,
                 "audio": audio_url,

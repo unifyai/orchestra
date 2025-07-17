@@ -156,8 +156,20 @@ class UpdateBusinessInfoRequest(BaseModel):
     tax_exempt: Optional[bool] = None
 
 
+class OnboardingStatusResponse(BaseModel):
+    """Response containing user's onboarding status."""
+
+    onboarded: bool
+
+
+class UpdateOnboardingStatusRequest(BaseModel):
+    """Request to update user's onboarding status."""
+
+    onboarded: bool
+
+
 class BusinessVerificationRequest(BaseModel):
-    """Request to verify business information."""
+    """Request to verify a business account."""
 
     user_id: str
 
