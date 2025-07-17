@@ -34,7 +34,7 @@ class ImmutableFieldError(Exception):
 def _is_date_string(value: str) -> bool:
     """
     Check if a string can be parsed as a date in various formats including:
-    -<y_bin_46>-MM-DD (ISO 8601)
+    - YYYY-MM-DD (ISO 8601)
     - MM/DD/YYYY
     - DD/MM/YYYY
     - DD-MM-YYYY
@@ -206,6 +206,14 @@ class LogDAO:
         except Exception as e:
             raise ValueError(f"Failed to upload image to bucket: {str(e)}")
 
+    def upload_audio_to_bucket(self, audio_base64: str) -> str:
+        """Upload audio to bucket and return the URL."""
+        try:
+            url, _ = self.bucket_service.upload_audio(audio_base64)
+            return url
+        except Exception as e:
+            raise ValueError(f"Failed to upload audio to bucket: {str(e)}")
+
     def get_image_from_bucket(self, url: str) -> Optional[str]:
         """Retrieve image from bucket and return as base64."""
         try:
@@ -215,6 +223,16 @@ class LogDAO:
             return base64_content
         except Exception as e:
             raise ValueError(f"Failed to retrieve image from bucket: {str(e)}")
+
+    def get_audio_from_bucket(self, url: str) -> Optional[str]:
+        """Retrieve audio from bucket and return as base64."""
+        try:
+            # Extract filename from URL
+            filename = url.split("/")[-1]
+            base64_content = self.bucket_service.get_audio(filename)
+            return base64_content
+        except Exception as e:
+            raise ValueError(f"Failed to retrieve audio from bucket: {str(e)}")
 
     @staticmethod
     def possible_img(raw_k):
@@ -228,8 +246,20 @@ class LogDAO:
         )
 
     @staticmethod
+    def possible_audio(raw_k):
+        lower = raw_k.lower()
+        return (
+            "audio" in lower
+            or "sound" in lower
+            or "voice" in lower
+            or "speech" in lower
+            or "recording" in lower
+        )
+
+    @staticmethod
     def infer_type(raw_k, raw_v):
         maybe_img = LogDAO.possible_img(raw_k)
+        maybe_audio = LogDAO.possible_audio(raw_k)
         if isinstance(raw_v, str):
             try:
                 if _is_time_string(raw_v):
@@ -242,18 +272,34 @@ class LogDAO:
                 datetime.fromisoformat(raw_v)
                 return "datetime"
             except:
-                if not maybe_img:
+                lower_v = raw_v.lower()
+                if lower_v.endswith((".mp3", ".wav")):
+                    return "audio"
+                if not maybe_img and not maybe_audio:
                     return "str"
+
                 binary = raw_v.encode("utf-8")
                 try:
                     assert base64.b64encode(base64.b64decode(binary)) == binary
-                    return "image"
+                    if maybe_audio:
+                        return "audio"
+                    if maybe_img:
+                        return "image"
                 except:
-                    lower = raw_v.lower()
-                    if lower.startswith("http") and (
-                        lower.endswith(".png")
-                        or lower.endswith(".jpg")
-                        or lower.endswith(".jpeg")
+                    if (
+                        maybe_audio
+                        and lower_v.startswith("http")
+                        and (lower_v.endswith(".mp3") or lower_v.endswith(".wav"))
+                    ):
+                        return "audio"
+                    if (
+                        maybe_img
+                        and lower_v.startswith("http")
+                        and (
+                            lower_v.endswith(".png")
+                            or lower_v.endswith(".jpg")
+                            or lower_v.endswith(".jpeg")
+                        )
                     ):
                         return "image"
                     return "str"
@@ -710,13 +756,20 @@ class LogDAO:
                 elif inferred_type is None:
                     inferred_type = self.infer_type(key, value)
 
-                # Handle image uploads
+                # Handle image and audio uploads
                 if (
                     inferred_type == "image"
                     and isinstance(value, str)
                     and not value.lower().startswith("http")
                 ):
                     value = self.upload_image_to_bucket(value)
+                elif (
+                    inferred_type == "audio"
+                    and isinstance(value, str)
+                    and not value.lower().endswith((".mp3", ".wav"))
+                    and not value.lower().startswith("http")
+                ):
+                    value = self.upload_audio_to_bucket(value)
                 if inferred_type == "datetime" and isinstance(value, str):
                     value = normalize_timestamp(value)
 
@@ -1182,7 +1235,7 @@ class LogDAO:
                 elif inferred_type is None:
                     inferred_type = self.infer_type(key, value)
 
-                # Handle image uploads
+                # Handle image and audio uploads
                 json_value = value
                 if (
                     inferred_type == "image"
@@ -1190,6 +1243,13 @@ class LogDAO:
                     and not value.lower().startswith("http")
                 ):
                     json_value = self.upload_image_to_bucket(value)
+                elif (
+                    inferred_type == "audio"
+                    and isinstance(value, str)
+                    and not value.lower().endswith((".mp3", ".wav"))
+                    and not value.lower().startswith("http")
+                ):
+                    json_value = self.upload_audio_to_bucket(value)
 
                 # Check if log exists
                 existing_log = existing_log_map.get(group_key)

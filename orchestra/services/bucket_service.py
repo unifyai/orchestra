@@ -105,6 +105,49 @@ class BucketService:
         except exceptions.GoogleAPIError as e:
             raise Exception(f"Failed to upload image: {str(e)}")
 
+    def upload_audio(self, base64_audio: str) -> Tuple[str, str]:
+        """
+        Upload a base64 encoded audio file to the bucket.
+
+        Args:
+            base64_audio: Base64 encoded audio string
+
+        Returns:
+            Tuple containing the audio URL and filename
+
+        Raises:
+            ValueError: If the base64 audio is invalid
+            Exception: If upload fails
+        """
+        try:
+            # Remove potential base64 prefix if present
+            if "," in base64_audio:
+                base64_audio = base64_audio.split(",")[1]
+
+            # Decode base64 audio
+            audio_content = base64.b64decode(base64_audio)
+
+            # Generate unique filename
+            filename = self._generate_unique_filename(audio_content)
+
+            # Upload to GCS
+            blob = self.bucket.blob(filename)
+            # A more generic content type, or one inferred from the base64 prefix if available
+            blob.upload_from_string(
+                audio_content,
+                content_type="audio/wav",  # Assume WAV for now, could be made more sophisticated
+            )
+
+            # Generate URL
+            url = blob.public_url
+
+            return url, filename
+
+        except base64.binascii.Error:
+            raise ValueError("Invalid base64 audio content")
+        except exceptions.GoogleAPIError as e:
+            raise Exception(f"Failed to upload audio: {str(e)}")
+
     def upload_recording(self, content: bytes, content_type: str) -> Tuple[str, str]:
         """
         Upload raw audio bytes to GCS and return (url, filename).
@@ -159,6 +202,31 @@ class BucketService:
             return None
         except exceptions.GoogleAPIError as e:
             raise Exception(f"Failed to retrieve image: {str(e)}")
+
+    def get_audio(self, filename: str) -> Optional[str]:
+        """
+        Retrieve an audio file from the bucket and return it as base64.
+
+        Args:
+            filename: The filename of the audio in the bucket
+
+        Returns:
+            Base64 encoded audio string or None if not found
+
+        Raises:
+            Exception: If download fails
+        """
+        try:
+            blob = self.bucket.blob(filename)
+            audio_content = blob.download_as_bytes()
+            base64_audio = base64.b64encode(audio_content).decode("utf-8")
+
+            return base64_audio
+
+        except exceptions.NotFound:
+            return None
+        except exceptions.GoogleAPIError as e:
+            raise Exception(f"Failed to retrieve audio: {str(e)}")
 
     def delete_image(self, filename: str) -> bool:
         """
