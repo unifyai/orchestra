@@ -1,3 +1,4 @@
+import base64
 import logging
 import time
 from decimal import Decimal
@@ -158,7 +159,6 @@ def create_assistant(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Unauthorized. Please contact support to get an API key.",
         )
-    api_key = api_keys[0][0].key
     assistant = None
 
     # Determine total cost as base creation cost
@@ -1200,7 +1200,7 @@ def register_voice(
         ):
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Voice with ID '{voice_in.voice_id}' already exists in the database.",
+                detail=f"Voice with ID '{voice_in.voice_id}' already exists for this user.",
             )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1369,7 +1369,7 @@ async def clone_voice(
     response_model=InfoResponse[List[VoiceRead]],
     status_code=status.HTTP_200_OK,
     summary="List voices",
-    description="Returns a list of all assistant voices created, and all globally registered preset voices.",
+    description="Returns a list of all assistant voices created for the user.",
     responses={
         200: {
             "description": "List of voices retrieved successfully",
@@ -1657,12 +1657,46 @@ async def design_voice_generate_previews_endpoint(
     request: Request,
     session: Session = Depends(get_db_session),
     elevenlabs_service: ElevenLabsService = Depends(),
+    openai_service: OpenAIService = Depends(),
 ) -> InfoResponse[VoiceDesignGeneratePreviewsAPIResponse]:
     user_id = request.state.user_id
+    final_voice_description = request_data.voice_description
 
     try:
+        # If a bio is provided, use OpenAI to generate a more detailed description
+        if request_data.bio:
+            try:
+                final_voice_description = (
+                    openai_service.generate_voice_description_from_bio(
+                        bio=request_data.bio,
+                        description_hint=request_data.voice_description,
+                    )
+                )
+                if not (20 <= len(final_voice_description) <= 1000):
+                    logging.error(
+                        f"OpenAI-generated voice description has invalid length ({len(final_voice_description)} chars). Content: '{final_voice_description}'",
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Failed to generate a voice description with the required length (20-1000 characters). Please try again.",
+                    )
+            except OpenAIAPIError as e:
+                logging.error(
+                    f"OpenAI API error during voice description generation: {e.detail}",
+                )
+                raise HTTPException(
+                    status_code=e.status_code,
+                    detail=f"Failed to generate voice description from bio: {e.detail}",
+                )
+
+        if not final_voice_description:
+            # This should be caught by the pydantic validator, but as a safeguard.
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="A voice description is required. Provide 'voice_description' or 'bio'.",
+            )
         el_response_data = elevenlabs_service.design_voice_generate_previews(
-            voice_description=request_data.voice_description,
+            voice_description=final_voice_description,
             text_for_preview=request_data.text,
             auto_generate_text_flag=request_data.auto_generate_text,
             model_id_for_design=request_data.model_id,
@@ -1706,6 +1740,7 @@ async def design_voice_create_from_preview_endpoint(
     request: Request,
     session: Session = Depends(get_db_session),
     elevenlabs_service: ElevenLabsService = Depends(),
+    deepgram_service: DeepgramService = Depends(),
     openai_service: OpenAIService = Depends(),
 ) -> InfoResponse[VoiceRead]:
     user_id = request.state.user_id
@@ -1715,19 +1750,49 @@ async def design_voice_create_from_preview_endpoint(
 
     try:
         if not voice_language:
-            try:
-                detected_language = openai_service.detect_language_from_text(
-                    request_data.voice_description,
-                )
-                voice_language = detected_language or "en"
-            except OpenAIAPIError as e:
-                logging.error(
-                    f"OpenAI API error during design/create language detection: {e.detail}",
-                )
-                raise HTTPException(
-                    status_code=e.status_code,
-                    detail=f"Language detection failed: {e.detail}",
-                )
+            # Prioritize language detection from audio if provided
+            if request_data.audio_base_64:
+                try:
+                    audio_content = base64.b64decode(request_data.audio_base_64)
+                    # Assume MP3 if media_type is not provided
+                    media_type = request_data.media_type or "audio/mpeg"
+                    detected_language = deepgram_service.detect_language_from_audio(
+                        audio_content=audio_content,
+                        user_id=user_id,
+                        content_type=media_type,
+                    )
+                    voice_language = detected_language or "en"
+                except DeepgramAPIError as e:
+                    logging.error(
+                        f"Deepgram API error during design/create language detection: {e.detail}",
+                    )
+                    raise HTTPException(
+                        status_code=e.status_code,
+                        detail=f"Language detection from audio failed: {e.detail}",
+                    )
+                except Exception as e_decode:
+                    logging.error(
+                        f"Failed to decode base64 audio for language detection: {str(e_decode)}",
+                    )
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Invalid base64 audio data provided.",
+                    )
+            # Fallback to language detection from text description
+            else:
+                try:
+                    detected_language = openai_service.detect_language_from_text(
+                        request_data.voice_description,
+                    )
+                    voice_language = detected_language or "en"
+                except OpenAIAPIError as e:
+                    logging.error(
+                        f"OpenAI API error during design/create language detection: {e.detail}",
+                    )
+                    raise HTTPException(
+                        status_code=e.status_code,
+                        detail=f"Language detection from text failed: {e.detail}",
+                    )
 
         # Step 1: Call ElevenLabs to create the voice from the generated_voice_id
         el_created_voice_data = elevenlabs_service.create_voice_from_generated_id(
@@ -1745,7 +1810,6 @@ async def design_voice_create_from_preview_endpoint(
             )
 
         # Step 2: Save the new voice to our database
-        # Language is taken from the request for our DB, as EL's response might vary.
         db_voice = voice_dao.create_voice(
             user_id=user_id,
             voice_id=new_el_voice_id,
@@ -1772,14 +1836,14 @@ async def design_voice_create_from_preview_endpoint(
             ),
         )
 
-    except (ElevenLabsAPIError, OpenAIAPIError) as e:
+    except (ElevenLabsAPIError, DeepgramAPIError, OpenAIAPIError) as e:
         session.rollback()
         service_name = "External service"
         should_cleanup_el = isinstance(e, ElevenLabsAPIError)
 
         if isinstance(e, ElevenLabsAPIError):
             service_name = "ElevenLabs"
-        elif isinstance(e, OpenAIAPIError):
+        elif isinstance(e, (DeepgramAPIError, OpenAIAPIError)):
             service_name = "Language Detection"
             should_cleanup_el = False  # Don't cleanup if EL was never called
 

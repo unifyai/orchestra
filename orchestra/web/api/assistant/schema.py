@@ -158,6 +158,21 @@ class AssistantRead(AssistantCreate):
         description="API key of the assistant",
         example="1234567890",
     )
+    user_first_name: Optional[str] = Field(
+        None,
+        description="First name of the user",
+        example="Ada",
+    )
+    user_last_name: Optional[str] = Field(
+        None,
+        description="Last name of the user",
+        example="Lovelace",
+    )
+    user_email: Optional[str] = Field(
+        None,
+        description="Email of the user",
+        example="ada.lovelace@unify.ai",
+    )
 
     class Config:
         orm_mode = True
@@ -183,6 +198,9 @@ class AssistantRead(AssistantCreate):
                 "created_at": "2025-04-25T10:30:00Z",
                 "updated_at": "2025-04-26T14:15:00Z",
                 "api_key": "1234567890",
+                "user_first_name": "Ada",
+                "user_last_name": "Lovelace",
+                "user_email": "ada.lovelace@unify.ai",
             },
         }
 
@@ -517,11 +535,15 @@ class VoiceGenerateRequest(BaseModel):
 
 
 class VoiceDesignGeneratePreviewsRequest(BaseModel):
-    voice_description: str = Field(
-        ...,
+    voice_description: Optional[str] = Field(
+        None,
         min_length=20,
         max_length=1000,
-        description="Text prompt describing the desired voice characteristics (e.g., 'A deep, resonant male voice with a British accent, suitable for narration.').",
+        description="Text prompt describing the desired voice characteristics (e.g., 'A deep, resonant male voice with a British accent, suitable for narration.'). If `bio` is provided, this field can be used to add more specific voice instructions. At least one of bio or voice_description should be provided.",
+    )
+    bio: Optional[str] = Field(
+        None,
+        description="A biography or background of the character to generate a voice description from. Used with `voice_description` to generate a richer prompt for the TTS provider. At least one of bio or voice_description should be provided.",
     )
     text: Optional[str] = Field(
         None,
@@ -545,6 +567,11 @@ class VoiceDesignGeneratePreviewsRequest(BaseModel):
                 "text": "The quick brown fox jumps over the lazy dog. This is a sample text to hear how the designed voice sounds.",
                 "auto_generate_text": False,
                 "model_id": "eleven_multilingual_ttv_v2",
+            },
+            "example_with_bio": {
+                "bio": "Ada Lovelace, born in 1815, was an English mathematician and writer, chiefly known for her work on Charles Babbage's proposed mechanical general-purpose computer, the Analytical Engine. She was the first to recognise that the machine had applications beyond pure calculation, and published the first algorithm intended to be carried out by such a machine.",
+                "voice_description": "A clear, intelligent, and slightly formal British accent from the 19th century.",
+                "text": "I am a mathematician, and a writer. I see the poetry in science.",
             },
         }
 
@@ -588,13 +615,21 @@ class VoiceDesignCreateFromPreviewRequest(BaseModel):
         ...,
         description="Description for the new voice.",
     )
+    audio_base_64: Optional[str] = Field(
+        None,
+        description="Base64 encoded audio sample from the selected voice preview. If provided, it's used for language detection.",
+    )
+    media_type: Optional[str] = Field(
+        None,
+        description="MIME type of the audio sample, e.g., 'audio/mpeg'. Assumed 'audio/mpeg' if sample is provided but this is omitted.",
+    )
     labels: Optional[Dict[str, str]] = Field(
         None,
         description="Optional labels for ElevenLabs when creating the voice.",
     )
     language: Optional[str] = Field(
         None,
-        description="Language of the voice. If not provided, it will be auto-detected from the voice_description.",
+        description="Language of the voice. If not provided, it will be auto-detected from the provided audio preview, or from the description if no audio is provided.",
     )
     gender: Optional[str] = Field(
         None,
@@ -603,13 +638,21 @@ class VoiceDesignCreateFromPreviewRequest(BaseModel):
 
     class Config:
         schema_extra = {
-            "example": {
+            "example_with_audio": {
                 "generated_voice_id": "temp_preview_id_from_step1",
                 "voice_name": "My New Designed Voice",
                 "voice_description": "A custom voice designed from text.",
-                "language": "en",
+                "audio_base_64": "UklGRiSAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQyAAAAA...",
+                "media_type": "audio/mpeg",
                 "gender": "male",
                 "labels": {"use_case": "audiobook"},
+            },
+            "example_without_audio": {
+                "generated_voice_id": "temp_preview_id_from_step1",
+                "voice_name": "Another Designed Voice",
+                "voice_description": "A deep, resonant voice for narration.",
+                "gender": "male",
+                "labels": {"use_case": "narration"},
             },
         }
 

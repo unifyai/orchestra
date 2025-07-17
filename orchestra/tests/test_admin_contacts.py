@@ -226,3 +226,14 @@ async def test_admin_list_contacts_multiple_users(client: AsyncClient):
     user_ids = {r["user_id"] for r in results}
     assert user_ids == {user1["id"], user2["id"]}
     assert len(results) == 2
+
+    # Filter by whatsapp_number to return only contact1
+    resp_filtered = await client.get(
+        f"/v0/admin/contacts?whatsapp_number={contact1['whatsapp_number']}",
+        headers=ADMIN_HEADERS,
+    )
+    assert resp_filtered.status_code == status.HTTP_200_OK
+    filtered = resp_filtered.json()
+    assert isinstance(filtered, list)
+    assert len(filtered) == 1
+    assert filtered[0]["whatsapp_number"] == contact1["whatsapp_number"]
