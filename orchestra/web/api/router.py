@@ -100,6 +100,9 @@ api_router.include_router(
 # API_KEY_AUTH endpoints
 
 groupings = {
+    "Assistants": [
+        "Assistants",
+    ],
     "Universal API": [
         "Supported Endpoints",
         "LLM Queries",
@@ -107,7 +110,6 @@ groupings = {
         "Custom Endpoints",
         "Custom API keys",
         "Endpoint Metrics",
-        "Assistants",
     ],
     "Logging": [
         "Datasets",
