@@ -859,7 +859,7 @@ def _handle_index_operator(
                     (json_type == "null", literal("NoneType")),
                     (json_type == "array", literal("list")),
                     (json_type == "object", literal("dict")),
-                    else_=literal("other"),
+                    else_=literal("NoneType"),
                 ).label("inferred_type")
 
         select_cols = [lhs_expr.c.log_event_id.label("log_event_id")]
