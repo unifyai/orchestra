@@ -18,6 +18,7 @@ from sqlalchemy import (
     exists,
     func,
     literal,
+    or_,
     select,
     text,
     true,
@@ -661,7 +662,8 @@ def _get_logs_query(
     if from_fields:
         # Filter to only include log events that have at least one of the specified fields
         allowed_fields = from_fields.split("&")
-        exists_subq = (
+        # Check both Log and DerivedLog tables for matching fields
+        log_exists = (
             session.query(Log.log_event_id)
             .filter(
                 Log.log_event_id == LogEvent.id,
@@ -669,11 +671,22 @@ def _get_logs_query(
             )
             .exists()
         )
-        log_event_query = log_event_query.filter(exists_subq)
+        derived_log_exists = (
+            session.query(DerivedLog.log_event_id)
+            .filter(
+                DerivedLog.log_event_id == LogEvent.id,
+                DerivedLog.key.in_(allowed_fields),
+            )
+            .exists()
+        )
+        log_event_query = log_event_query.filter(
+            or_(log_exists, derived_log_exists),
+        )
     elif exclude_fields:
         # Filter to only include log events that have at least one field NOT in the excluded list
         excluded_fields = exclude_fields.split("&")
-        exists_subq = (
+        # Check both Log and DerivedLog tables for non-excluded fields
+        log_exists = (
             session.query(Log.log_event_id)
             .filter(
                 Log.log_event_id == LogEvent.id,
@@ -681,7 +694,17 @@ def _get_logs_query(
             )
             .exists()
         )
-        log_event_query = log_event_query.filter(exists_subq)
+        derived_log_exists = (
+            session.query(DerivedLog.log_event_id)
+            .filter(
+                DerivedLog.log_event_id == LogEvent.id,
+                DerivedLog.key.notin_(excluded_fields),
+            )
+            .exists()
+        )
+        log_event_query = log_event_query.filter(
+            or_(log_exists, derived_log_exists),
+        )
 
     # FIXME: potential duplicate logic
     if context:
