@@ -1672,9 +1672,9 @@ def _handle_str_method(
             substring = args[0]
             if isinstance(substring, BindParameter):
                 substring_val = substring.value
-                expr = func.position(substring_val, str_val) > 0
+                expr = func.position(str_val, substring_val) > 0
             else:
-                expr = func.position(substring, str_val) > 0
+                expr = func.position(str_val, substring) > 0
         elif method == "match":
             if not args:
                 raise ValueError("match() requires a pattern argument")
@@ -1831,9 +1831,9 @@ def _handle_str_method(
             substring = args[0]
             if isinstance(substring, BindParameter):
                 substring_val = substring.value
-                return func.position(substring_val, str_val) > 0
+                return func.position(str_val, substring_val) > 0
             else:
-                return func.position(substring, str_val) > 0
+                return func.position(str_val, substring) > 0
         elif method == "match":
             if not args:
                 raise ValueError("match() requires a pattern argument")
