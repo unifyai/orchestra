@@ -201,7 +201,7 @@ class LogDAO:
     def upload_image_to_bucket(self, image_base64: str) -> str:
         """Upload image to bucket and return the URL."""
         try:
-            url, _ = self.bucket_service.upload_image(image_base64)
+            url, _ = self.bucket_service.upload_media(image_base64, "image/jpeg")
             return url
         except Exception as e:
             raise ValueError(f"Failed to upload image to bucket: {str(e)}")
@@ -209,7 +209,7 @@ class LogDAO:
     def upload_audio_to_bucket(self, audio_base64: str) -> str:
         """Upload audio to bucket and return the URL."""
         try:
-            url, _ = self.bucket_service.upload_audio(audio_base64)
+            url, _ = self.bucket_service.upload_media(audio_base64, "audio/wav")
             return url
         except Exception as e:
             raise ValueError(f"Failed to upload audio to bucket: {str(e)}")
@@ -219,7 +219,7 @@ class LogDAO:
         try:
             # Extract filename from URL
             filename = url.split("/")[-1]
-            base64_content = self.bucket_service.get_image(filename)
+            base64_content = self.bucket_service.get_media(filename)
             return base64_content
         except Exception as e:
             raise ValueError(f"Failed to retrieve image from bucket: {str(e)}")
@@ -229,7 +229,7 @@ class LogDAO:
         try:
             # Extract filename from URL
             filename = url.split("/")[-1]
-            base64_content = self.bucket_service.get_audio(filename)
+            base64_content = self.bucket_service.get_media(filename)
             return base64_content
         except Exception as e:
             raise ValueError(f"Failed to retrieve audio from bucket: {str(e)}")
@@ -485,7 +485,18 @@ class LogDAO:
     def delete(self, id: int):
         try:
             log = self.session.query(Log).filter_by(id=id).one()
-            # Proceed with log deletion
+
+            if log.inferred_type in ("image", "audio") and isinstance(log.value, str):
+                gcs_url_prefix = (
+                    f"https://storage.googleapis.com/{self.bucket_service.bucket_name}/"
+                )
+                if log.value.startswith(gcs_url_prefix):
+                    try:
+                        filename = log.value.split("/")[-1]
+                        self.bucket_service.delete_image(filename)
+                    except Exception as e:
+                        raise ValueError(f"Failed to delete file from GCS: {str(e)}")
+
             json_log = (
                 self.session.query(JSONLog)
                 .filter_by(log_event_id=log.log_event_id, key=log.key)
@@ -493,11 +504,13 @@ class LogDAO:
             )
             if json_log:
                 self.session.delete(json_log)
+
             self.session.delete(log)
             self.session.commit()
-        except:
+
+        except Exception as e:
             self.session.rollback()
-            raise ValueError
+            raise ValueError(f"Failed to delete log with id {id}: {e}")
 
     def _check_uniqueness(self, entries: List[Dict[str, Any]]):
         unique_field_defs = {}  # (project_id, context_id, key) -> FieldType
