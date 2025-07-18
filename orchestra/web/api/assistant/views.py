@@ -84,7 +84,7 @@ admin_router = APIRouter()
     status_code=status.HTTP_200_OK,
     summary="Create a new assistant",
     description="Creates a new assistant for the authenticated user with the specified configuration. This action will deduct credits from the user account.",
-    tags=["Assistants"],
+    tags=["Assistant Management"],
     responses={
         200: {
             "description": "Assistant created successfully",
@@ -453,7 +453,7 @@ def create_assistant(
     status_code=status.HTTP_200_OK,
     summary="List all assistants",
     description="Returns a list of all assistants belonging to the authenticated user.",
-    tags=["Assistants"],
+    tags=["Assistant Management"],
     responses={
         200: {
             "description": "List of assistants retrieved successfully",
@@ -532,9 +532,11 @@ def list_assistants(
         )
         voice_dao = VoiceDAO(session)
         tts_providers = [
-            voice_dao.get_voice_by_id(a.user_id, a.voice_id).provider
-            if a.voice_id is not None
-            else "cartesia"
+            (
+                voice_dao.get_voice_by_id(a.user_id, a.voice_id).provider
+                if a.voice_id is not None
+                else "cartesia"
+            )
             for a in assistants
         ]
         return InfoResponse(
@@ -577,7 +579,7 @@ def list_assistants(
     status_code=status.HTTP_200_OK,
     summary="Delete an assistant",
     description="Deletes a specific assistant by ID for the authenticated user.",
-    tags=["Assistants"],
+    tags=["Assistant Management"],
     responses={
         200: {
             "description": "Assistant deleted successfully",
@@ -701,7 +703,7 @@ def delete_assistant(
     status_code=status.HTTP_200_OK,
     summary="Update assistant configuration",
     description="Updates the configuration parameters of an existing assistant. Profile photo cannot be updated via this endpoint.",
-    tags=["Assistants"],
+    tags=["Assistant Management"],
     responses={
         200: {
             "description": "Assistant configuration updated successfully",
@@ -889,6 +891,7 @@ def update_assistant_config(
     status_code=status.HTTP_200_OK,
     summary="Add a call recording for an assistant",
     description="Uploads a new call recording for the specified assistant.",
+    tags=["Recordings"],
     responses={
         200: {
             "description": "Recording added successfully",
@@ -971,6 +974,7 @@ async def create_recording(
     status_code=status.HTTP_200_OK,
     summary="List all recordings for an assistant",
     description="Returns a list of all call recordings for the specified assistant.",
+    tags=["Recordings"],
     responses={
         200: {
             "description": "List of recordings retrieved successfully",
@@ -1534,7 +1538,9 @@ def delete_voice(
         voice_dao.delete_voice(user_id=user_id, voice_id=voice_id)
         session.commit()
         return InfoResponse(info="Voice deleted successfully.")
-    except IntegrityError as e_db_integrity:  # Should not happen on delete typically, but good to catch
+    except (
+        IntegrityError
+    ) as e_db_integrity:  # Should not happen on delete typically, but good to catch
         session.rollback()
         logging.error(
             f"DB IntegrityError during voice deletion from DB {voice_id}: {str(e_db_integrity)}",
@@ -1560,7 +1566,7 @@ def delete_voice(
     status_code=status.HTTP_200_OK,
     summary="Generate speech from text",
     description="Generates audio from text using the specified provider and voice.",
-    tags=["Voices", "TTS"],
+    tags=["Voices"],
     responses={
         200: {
             "description": "Audio generated successfully. Content-Type will be audio/mpeg, audio/wav, etc.",
@@ -1911,7 +1917,7 @@ async def design_voice_create_from_preview_endpoint(
     status_code=status.HTTP_201_CREATED,
     summary="Upload photo",
     description="Uploads a profile photo for an assistant and return the storage URL.",
-    tags=["Assistants", "Storage"],
+    tags=["Media"],
 )
 async def upload_assistant_photo(
     request: Request,
@@ -1970,7 +1976,7 @@ async def upload_assistant_photo(
     status_code=status.HTTP_201_CREATED,
     summary="Generate photo",
     description="Generates a new photo using a text prompt and returns the image URL. This action costs credits.",
-    tags=["Assistants", "Storage"],
+    tags=["Media"],
 )
 def generate_assistant_photo(
     request: Request,
@@ -2036,7 +2042,7 @@ def generate_assistant_photo(
     status_code=status.HTTP_201_CREATED,
     summary="Edit photo",
     description="Edits a photo using a text prompt and an input image (URL or file), and returns the image URL. This action costs credits.",
-    tags=["Assistants", "Storage"],
+    tags=["Media"],
 )
 async def edit_assistant_photo(
     request: Request,
@@ -2171,7 +2177,7 @@ async def edit_assistant_photo(
     status_code=status.HTTP_201_CREATED,
     summary="Animate photo",
     description="Generates an animated video of the assistant using an input image and audio. Inputs can be URLs or file uploads. This action costs credits.",
-    tags=["Assistants", "Storage", "Video"],
+    tags=["Media"],
 )
 async def animate_video_endpoint(
     request: Request,

@@ -101,7 +101,10 @@ api_router.include_router(
 
 groupings = {
     "Assistants": [
-        "Assistants",
+        "Assistant Management",
+        "Voices",
+        "Media",
+        "Recordings",
     ],
     "Universal API": [
         "Supported Endpoints",
@@ -162,7 +165,6 @@ api_router.include_router(
 )
 api_router.include_router(
     assistant_router,
-    tags=["Assistants"],
     dependencies=API_KEY_AUTH,
 )
 
