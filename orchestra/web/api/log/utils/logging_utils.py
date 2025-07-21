@@ -61,6 +61,7 @@ __all__ = [
     "_format_flat_logs",
     "_get_final_logs",
     "is_image_field",
+    "is_audio_field",
     "_join_logs",
     "get_or_create_usage_project",
     "log_chat_completion_event",
@@ -293,7 +294,9 @@ def _build_sort_clauses(
         sort_dict = json.loads(sorting)
 
         for sort_key, mode in sort_dict.items():
-            if is_image_field(sort_key, field_types):
+            if is_image_field(sort_key, field_types) or is_audio_field(
+                sort_key, field_types
+            ):
                 continue
             if mode not in ("ascending", "descending"):
                 raise HTTPException(
@@ -511,7 +514,9 @@ def _get_logs_query(
                 if isinstance(fd, dict):
                     if "type" in fd and fd["type"] == "identifier":
                         field = fd.get("value")
-                        if is_image_field(field, field_types):
+                        if is_image_field(field, field_types) or is_audio_field(
+                            field, field_types
+                        ):
                             parent = getattr(validate_filter_dict, "parent", None)
                             if parent and parent.get("operand") not in (
                                 "exists",
@@ -519,7 +524,7 @@ def _get_logs_query(
                             ):
                                 raise HTTPException(
                                     status_code=400,
-                                    detail=f"Field '{field}' is an image type and can only be used with 'exists' operator",
+                                    detail=f"Field '{field}' is a media type and can only be used with 'exists' or 'isNone' operator",
                                 )
                     for k, v in fd.items():
                         if isinstance(v, dict):
@@ -1400,6 +1405,11 @@ def is_image_field(field_name: str, field_types: dict) -> bool:
     return field_types.get(field_name) == "image"
 
 
+def is_audio_field(field_name: str, field_types: dict) -> bool:
+    """Check if a field is an audio type."""
+    return field_types.get(field_name) == "audio"
+
+
 def _format_flat_logs(rows, context_len, value_limit, field_order_map):
     """Helper function to format flat logs using raw query data"""
     formatted = {}
@@ -1440,7 +1450,7 @@ def _format_flat_logs(rows, context_len, value_limit, field_order_map):
             if inferred_type in ["int", "float", "bool"]:
                 return value, False
 
-            if inferred_type == "image":
+            if inferred_type == "image" or inferred_type == "audio":
                 return "", True
 
             if inferred_type in ["list", "dict", "tuple"]:

@@ -63,48 +63,6 @@ class BucketService:
         unique_id = str(uuid.uuid4())[:8]
         return f"{content_hash}_{unique_id}"
 
-    def upload_image(self, base64_image: str) -> Tuple[str, str]:
-        """
-        Upload a base64 encoded image to the bucket.
-
-        Args:
-            base64_image: Base64 encoded image string
-
-        Returns:
-            Tuple containing the image URL and filename
-
-        Raises:
-            ValueError: If the base64 image is invalid
-            Exception: If upload fails
-        """
-        try:
-            # Remove potential base64 prefix
-            if "," in base64_image:
-                base64_image = base64_image.split(",")[1]
-
-            # Decode base64 image
-            image_content = base64.b64decode(base64_image)
-
-            # Generate unique filename
-            filename = self._generate_unique_filename(image_content)
-
-            # Upload to GCS
-            blob = self.bucket.blob(filename)
-            blob.upload_from_string(
-                image_content,
-                content_type="image/jpeg",  # Adjust content type as needed
-            )
-
-            # Generate URL
-            url = blob.public_url
-
-            return url, filename
-
-        except base64.binascii.Error:
-            raise ValueError("Invalid base64 image content")
-        except exceptions.GoogleAPIError as e:
-            raise Exception(f"Failed to upload image: {str(e)}")
-
     def upload_recording(self, content: bytes, content_type: str) -> Tuple[str, str]:
         """
         Upload raw audio bytes to GCS and return (url, filename).
@@ -135,37 +93,82 @@ class BucketService:
         except exceptions.GoogleAPIError as e:
             raise Exception(f"Failed to upload recording: {str(e)}")
 
-    def get_image(self, filename: str) -> Optional[str]:
+    # -------------------------------------------------------------
+    #                   General media operations
+    # -------------------------------------------------------------
+    def upload_media(self, base64_media: str, media_type: str) -> Tuple[str, str]:
         """
-        Retrieve an image from the bucket and return it as base64.
+        Upload a base64 encoded media to the bucket.
 
         Args:
-            filename: The filename of the image in the bucket
+            base64_media: Base64 encoded media string
 
         Returns:
-            Base64 encoded image string or None if not found
+            Tuple containing the media URL and filename
+
+        Raises:
+            ValueError: If the base64 media is invalid
+            Exception: If upload fails
+        """
+        try:
+            # Remove potential base64 prefix
+            if "," in base64_media:
+                base64_media = base64_media.split(",")[1]
+
+            # Decode base64 media
+            media_content = base64.b64decode(base64_media)
+
+            # Generate unique filename
+            filename = self._generate_unique_filename(media_content)
+
+            # Upload to GCS
+            blob = self.bucket.blob(filename)
+            blob.upload_from_string(
+                media_content,
+                content_type=media_type,  # Adjust content type as needed
+            )
+
+            # Generate URL
+            url = blob.public_url
+
+            return url, filename
+
+        except base64.binascii.Error:
+            raise ValueError("Invalid base64 media content")
+        except exceptions.GoogleAPIError as e:
+            raise Exception(f"Failed to upload media: {str(e)}")
+
+    def get_media(self, filename: str) -> Optional[str]:
+        """
+        Retrieve a media from the bucket and return it as base64.
+
+        Args:
+            filename: The filename of the media in the bucket
+
+        Returns:
+            Base64 encoded media string or None if not found
 
         Raises:
             Exception: If download fails
         """
         try:
             blob = self.bucket.blob(filename)
-            image_content = blob.download_as_bytes()
-            base64_image = base64.b64encode(image_content).decode("utf-8")
+            media_content = blob.download_as_bytes()
+            base64_media = base64.b64encode(media_content).decode("utf-8")
 
-            return base64_image
+            return base64_media
 
         except exceptions.NotFound:
             return None
         except exceptions.GoogleAPIError as e:
-            raise Exception(f"Failed to retrieve image: {str(e)}")
+            raise Exception(f"Failed to retrieve media: {str(e)}")
 
-    def delete_image(self, filename: str) -> bool:
+    def delete_media(self, filename: str) -> bool:
         """
-        Delete an image from the bucket.
+        Delete a media from the bucket.
 
         Args:
-            filename: The filename of the image to delete
+            filename: The filename of the media to delete
 
         Returns:
             Boolean indicating success
@@ -179,22 +182,24 @@ class BucketService:
             return True
 
         except exceptions.GoogleAPIError as e:
-            raise Exception(f"Failed to delete image: {str(e)}")
+            raise Exception(f"Failed to delete media: {str(e)}")
 
-    def get_image_url(self, filename: str) -> str:
+    def get_media_url(self, filename: str) -> str:
         """
-        Generate the URL for an image in the bucket.
+        Generate the URL for a media in the bucket.
 
         Args:
-            filename: The filename of the image
+            filename: The filename of the media
 
         Returns:
-            Full URL to the image
+            Full URL to the media
         """
         blob = self.bucket.blob(filename)
         return blob.public_url
 
-    # -- Assistant photos --
+    # -------------------------------------------------------------
+    #            Assistant photo and temp file operations
+    # -------------------------------------------------------------
     def upload_assistant_photo_file(
         self,
         file_content: bytes,

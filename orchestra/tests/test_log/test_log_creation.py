@@ -96,6 +96,51 @@ async def test_create_log_w_image(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_create_log_w_audio(client: AsyncClient):
+    project_name = "eval-project"
+    _ = await _create_project(client, project_name)
+
+    # Create some dummy base64 audio data
+    dummy_audio_bytes = b"RIFF....WAVEfmt ...data........"
+    audio_b64 = base64.b64encode(dummy_audio_bytes).decode("utf-8")
+
+    # Log audio as both a raw base64 string and a URL
+    response = await _create_log(
+        client,
+        project_name,
+        params={},
+        entries={
+            "user_recording": audio_b64,
+            "sound_effect": "https://example.com/sounds/effect.wav",
+        },
+    )
+
+    assert response.status_code == 200, response.json()
+    assert isinstance(response.json()["log_event_ids"][0], int)
+
+    # Verify field types
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200, field_types_response.json()
+    fields = field_types_response.json()
+
+    # Check that both fields were correctly inferred as 'audio'
+    assert fields["user_recording"]["data_type"] == "audio"
+    assert fields["sound_effect"]["data_type"] == "audio"
+
+    # Check other properties
+    assert fields["user_recording"]["field_type"] == "entry"
+    assert fields["user_recording"]["mutable"] is True
+    assert fields["user_recording"]["created_at"] is not None
+
+    assert fields["sound_effect"]["field_type"] == "entry"
+    assert fields["sound_effect"]["mutable"] is True
+    assert fields["sound_effect"]["created_at"] is not None
+
+
+@pytest.mark.anyio
 async def test_create_logs_autoincrement_version(client: AsyncClient):
     project_name = "non-matching-versions"
     _ = await _create_project(client, project_name)
