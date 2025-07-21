@@ -159,6 +159,8 @@ class ContextDAO:
             raise ValueError(f"Context with id {id} not found")
 
     def delete(self, id: int) -> None:
+        from orchestra.db.dao.log_dao import LogDAO
+
         try:
             context = self.session.query(Context).filter_by(id=id).one()
 
