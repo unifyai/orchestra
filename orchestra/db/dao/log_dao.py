@@ -1,5 +1,6 @@
 import base64
 import copy
+import logging
 import re
 from collections import defaultdict
 from datetime import date, datetime, timezone
@@ -9,6 +10,7 @@ from sqlalchemy import alias, and_, cast, func, literal, or_, select, text, upda
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.query import Query
 
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.models.orchestra_models import (
@@ -482,22 +484,58 @@ class LogDAO:
             self.session.rollback()
             raise ValueError(f"Failed to rename field: {str(e)}")
 
-    def delete(self, id: int):
-        try:
-            log = self.session.query(Log).filter_by(id=id).one()
+    def _bulk_delete_gcs_media(self, logs_query: Query):
+        """
+        Finds all image/audio logs in a given query and deletes the
+        corresponding files from GCS.
+        """
+        gcs_url_prefix = (
+            f"https://storage.googleapis.com/{self.bucket_service.bucket_name}/"
+        )
 
-            if log.inferred_type in ("image", "audio") and isinstance(log.value, str):
-                gcs_url_prefix = (
-                    f"https://storage.googleapis.com/{self.bucket_service.bucket_name}/"
-                )
+        # Filter the query to only include logs that might have GCS files
+        media_logs_query = logs_query.filter(
+            Log.inferred_type.in_(("image", "audio")),
+        )
+
+        logs_to_delete = media_logs_query.all()
+        if not logs_to_delete:
+            return
+
+        logging.info(
+            f"Found {len(logs_to_delete)} media log(s) to check for GCS deletion.",
+        )
+
+        for log in logs_to_delete:
+            if isinstance(log.value, str):
+                # Strip potential quotes from JSONB string literal
                 clean_value = log.value.strip("\"'")
                 if clean_value.startswith(gcs_url_prefix):
                     try:
                         filename = clean_value.split("/")[-1]
+                        logging.warning(
+                            f"Deleting GCS file: {filename} for log ID: {log.id}",
+                        )
                         self.bucket_service.delete_media(filename)
                     except Exception as e:
-                        raise ValueError(f"Failed to delete file from GCS: {str(e)}")
+                        # Log the error but don't stop the overall delete process
+                        logging.error(
+                            f"Failed to delete file from GCS for log {log.id}: {str(e)}",
+                        )
 
+    def delete(self, id: int):
+        """Deletes a single Log record and its associated GCS file if applicable."""
+        try:
+            log_query = self.session.query(Log).filter_by(id=id)
+            log = log_query.one_or_none()
+
+            if not log:
+                raise ValueError(f"Log with id {id} not found.")
+
+            # Call the bulk helper to handle GCS deletion
+            self._bulk_delete_gcs_media(log_query)
+
+            # Delete corresponding JSONLog if it exists
             json_log = (
                 self.session.query(JSONLog)
                 .filter_by(log_event_id=log.log_event_id, key=log.key)
@@ -506,6 +544,7 @@ class LogDAO:
             if json_log:
                 self.session.delete(json_log)
 
+            # Delete the log record itself
             self.session.delete(log)
             self.session.commit()
 
