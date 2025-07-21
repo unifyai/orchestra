@@ -490,9 +490,10 @@ class LogDAO:
                 gcs_url_prefix = (
                     f"https://storage.googleapis.com/{self.bucket_service.bucket_name}/"
                 )
-                if log.value.startswith(gcs_url_prefix):
+                clean_value = log.value.strip("\"'")
+                if clean_value.startswith(gcs_url_prefix):
                     try:
-                        filename = log.value.split("/")[-1]
+                        filename = clean_value.split("/")[-1]
                         self.bucket_service.delete_media(filename)
                     except Exception as e:
                         raise ValueError(f"Failed to delete file from GCS: {str(e)}")
