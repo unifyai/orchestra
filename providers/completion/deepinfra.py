@@ -119,7 +119,7 @@ supported_models = {
         "cost": {"prompt": 0.02, "completion": 0.04},
     },
     "mistral-small": {
-        "endpoint": "deepinfra/mistralai/Mistral-Small-3.1-24B-Instruct-2503",
+        "endpoint": "deepinfra/mistralai/Mistral-Small-3.2-24B-Instruct-2506",
         "context_window": 32000,
         "cost": {"prompt": 0.05, "completion": 0.1},
     },
@@ -132,11 +132,6 @@ supported_models = {
         "endpoint": "deepinfra/mistralai/Mistral-7B-Instruct-v0.3",
         "context_window": 32768,
         "cost": {"prompt": 0.028, "completion": 0.054},
-    },
-    "mistral-nemo": {
-        "endpoint": "deepinfra/mistralai/Mistral-Nemo-Instruct-2407",
-        "context_window": 128000,
-        "cost": {"prompt": 0.008, "completion": 0.001},
     },
     "qwen-3-235b-a22b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen3-235B-A22B",
