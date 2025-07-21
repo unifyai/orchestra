@@ -161,15 +161,30 @@ class ContextDAO:
     def delete(self, id: int) -> None:
         try:
             context = self.session.query(Context).filter_by(id=id).one()
+
+            # Delete associated GCS media BEFORE deleting the context
+            log_dao = LogDAO(self.session, self)
+            log_events_subquery = (
+                select(LogEvent.id)
+                .join(LogEventContext)
+                .where(LogEventContext.context_id == id)
+                .subquery()
+            )
+            logs_to_delete_query = self.session.query(Log).filter(
+                Log.log_event_id.in_(select(log_events_subquery.c.id)),
+            )
+            log_dao._bulk_delete_gcs_media(logs_to_delete_query)
+
+            # Proceed with deleting the context from the database
             self.session.delete(context)
             self.session.flush()  # Ensure the context deletion cascades.
+
             # then remove all orphaned log events
             delete_orphaned_log_events(self.session, context.project_id)
             self.session.commit()
         except Exception as e:
-            print(e)
             self.session.rollback()
-            raise ValueError(f"Failed to delete context with id {id}", e)
+            raise ValueError(f"Failed to delete context with id {id}: {e}")
 
     def get_or_create(
         self,
