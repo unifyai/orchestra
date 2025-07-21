@@ -493,7 +493,7 @@ class LogDAO:
                 if log.value.startswith(gcs_url_prefix):
                     try:
                         filename = log.value.split("/")[-1]
-                        self.bucket_service.delete_image(filename)
+                        self.bucket_service.delete_media(filename)
                     except Exception as e:
                         raise ValueError(f"Failed to delete file from GCS: {str(e)}")
 
