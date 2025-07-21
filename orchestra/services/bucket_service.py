@@ -2,6 +2,7 @@ import base64
 import datetime
 import hashlib
 import logging
+import mimetypes
 import os
 import uuid
 from typing import Optional, Tuple
@@ -57,10 +58,12 @@ class BucketService:
             self.assistant_images_bucket_name,
         )
 
-    def _generate_unique_filename(self, content: bytes) -> str:
-        """Generate a unique filename using content hash and UUID."""
+    def _generate_unique_filename(self, content: bytes, extension: str = "") -> str:
+        """Generate a unique filename using content hash, UUID, and an optional extension."""
         content_hash = hashlib.md5(content).hexdigest()
         unique_id = str(uuid.uuid4())[:8]
+        if extension:
+            return f"{content_hash}_{unique_id}.{extension.lstrip('.')}"
         return f"{content_hash}_{unique_id}"
 
     def upload_recording(self, content: bytes, content_type: str) -> Tuple[str, str]:
@@ -102,6 +105,7 @@ class BucketService:
 
         Args:
             base64_media: Base64 encoded media string
+            media_type: The MIME type of the media
 
         Returns:
             Tuple containing the media URL and filename
@@ -118,14 +122,17 @@ class BucketService:
             # Decode base64 media
             media_content = base64.b64decode(base64_media)
 
-            # Generate unique filename
-            filename = self._generate_unique_filename(media_content)
+            # Guess the extension from the media type
+            extension = mimetypes.guess_extension(media_type) or ""
+
+            # Generate unique filename with extension
+            filename = self._generate_unique_filename(media_content, extension)
 
             # Upload to GCS
             blob = self.bucket.blob(filename)
             blob.upload_from_string(
                 media_content,
-                content_type=media_type,  # Adjust content type as needed
+                content_type=media_type,
             )
 
             # Generate URL
