@@ -100,18 +100,18 @@ async def test_create_log_w_audio(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
 
-    # Create some dummy base64 audio data
-    dummy_audio_bytes = b"RIFF....WAVEfmt ...data........"
+    # Use generic dummy bytes, as the content doesn't need to be a valid MP3 for this test.
+    dummy_audio_bytes = b"dummy_mp3_data"
     audio_b64 = base64.b64encode(dummy_audio_bytes).decode("utf-8")
 
-    # Log audio as both a raw base64 string and a URL
+    # Log audio as both a raw base64 string and a URL.
     response = await _create_log(
         client,
         project_name,
         params={},
         entries={
             "user_recording": audio_b64,
-            "sound_effect": "https://example.com/sounds/effect.wav",
+            "sound_effect": "https://example.com/sounds/effect.mp3",
         },
     )
 
