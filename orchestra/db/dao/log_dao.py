@@ -209,7 +209,7 @@ class LogDAO:
     def upload_audio_to_bucket(self, audio_base64: str) -> str:
         """Upload audio to bucket and return the URL."""
         try:
-            url, _ = self.bucket_service.upload_media(audio_base64, "audio/wav")
+            url, _ = self.bucket_service.upload_media(audio_base64, "audio/mpeg")
             return url
         except Exception as e:
             raise ValueError(f"Failed to upload audio to bucket: {str(e)}")
