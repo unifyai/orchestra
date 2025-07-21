@@ -7,6 +7,7 @@ from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
+from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.models.orchestra_models import (
     Context,
     ContextVersion,
