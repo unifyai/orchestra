@@ -519,6 +519,7 @@ def admin_list_assistants(
             info=[
                 AssistantRead(
                     agent_id=str(a.agent_id),
+                    user_id=a.user_id,
                     first_name=a.first_name,
                     surname=a.surname,
                     age=a.age,
@@ -634,6 +635,7 @@ def admin_update_assistant(
     return InfoResponse(
         info=AssistantRead(
             agent_id=str(updated.agent_id),
+            user_id=updated.user_id,
             first_name=updated.first_name,
             surname=updated.surname,
             age=updated.age,
@@ -706,6 +708,7 @@ def admin_list_assistants_for_user(
             info=[
                 AssistantRead(
                     agent_id=str(a.agent_id),
+                    user_id=a.user_id,
                     first_name=a.first_name,
                     surname=a.surname,
                     age=a.age,

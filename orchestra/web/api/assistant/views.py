@@ -422,6 +422,7 @@ def create_assistant(
     return InfoResponse(
         info=AssistantRead(
             agent_id=str(assistant.agent_id),
+            user_id=assistant.user_id,
             first_name=assistant.first_name,
             surname=assistant.surname,
             age=assistant.age,
@@ -543,6 +544,7 @@ def list_assistants(
             info=[
                 AssistantRead(
                     agent_id=str(a.agent_id),
+                    user_id=a.user_id,
                     first_name=a.first_name,
                     surname=a.surname,
                     age=a.age,
@@ -857,6 +859,7 @@ def update_assistant_config(
         return InfoResponse(
             info=AssistantRead(
                 agent_id=str(updated.agent_id),
+                user_id=updated.user_id,
                 first_name=updated.first_name,
                 surname=updated.surname,
                 age=updated.age,
@@ -885,8 +888,8 @@ def update_assistant_config(
         )
 
 
-@router.post(
-    "/assistant/{assistant_id}/recordings",
+@admin_router.post(
+    "/assistant/recordings",
     response_model=InfoResponse[RecordingInfo],
     status_code=status.HTTP_200_OK,
     summary="Add a call recording for an assistant",
@@ -924,9 +927,7 @@ def update_assistant_config(
     },
 )
 async def create_recording(
-    assistant_id: int,
     recording: RecordingCreate,
-    request: Request,
     session: Session = Depends(get_db_session),
 ) -> InfoResponse[RecordingInfo]:
     """
@@ -946,8 +947,8 @@ async def create_recording(
     try:
         mime = recording.content_type or "application/octet-stream"
         recording_model = await recording_service.record_call_from_raw(
-            user_id=request.state.user_id,
-            agent_id=assistant_id,
+            user_id=recording.user_id,
+            agent_id=recording.assistant_id,
             recording_raw=recording.recording_raw,
             content_type=mime,
         )

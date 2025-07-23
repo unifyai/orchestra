@@ -128,6 +128,11 @@ class AssistantRead(AssistantCreate):
         description="Unique identifier for the assistant",
         example="12345",
     )
+    user_id: str = Field(
+        ...,
+        description="ID of the user to associate the assistant with",
+        example="123",
+    )
     created_at: datetime = Field(
         ...,
         description="Timestamp when the assistant was created",
@@ -195,6 +200,7 @@ class AssistantRead(AssistantCreate):
                 "tts_provider": "cartesia",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "agent_id": "12345",
+                "user_id": "123",
                 "created_at": "2025-04-25T10:30:00Z",
                 "updated_at": "2025-04-26T14:15:00Z",
                 "api_key": "1234567890",
