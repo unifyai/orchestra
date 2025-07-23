@@ -539,6 +539,30 @@ async def get_query_logging_status(
     return QueryLoggingStatus(enabled=user.queries_enabled)
 
 
+@router.get("/user/basic-info")
+async def get_user_basic_info(
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """Get basic information for the authenticated user."""
+    auth_user_dao = AuthUserDAO(session)
+    user_id = request.state.user_id
+    user_row = auth_user_dao.get_by_id(user_id)
+
+    if not user_row:
+        raise not_found("User")
+
+    user = user_row[0]
+
+    return {
+        "user_id": user.id,
+        "first": user.name,
+        "last": user.last_name,
+        "email": user.email,
+        "job_title": user.job_title,
+    }
+
+
 @router.patch("/user/query-logging")
 async def update_query_logging_status(
     request: Request,
@@ -667,22 +691,22 @@ async def update_user_business_info(
             business_name=body.business_name,
             tax_id=body.tax_id,
             business_type=body.business_type,
-            business_address_line1=body.business_address.address_line1
-            if body.business_address
-            else None,
-            business_address_line2=body.business_address.address_line2
-            if body.business_address
-            else None,
+            business_address_line1=(
+                body.business_address.address_line1 if body.business_address else None
+            ),
+            business_address_line2=(
+                body.business_address.address_line2 if body.business_address else None
+            ),
             business_city=body.business_address.city if body.business_address else None,
-            business_state=body.business_address.state
-            if body.business_address
-            else None,
-            business_country=body.business_address.country
-            if body.business_address
-            else None,
-            business_postal_code=body.business_address.postal_code
-            if body.business_address
-            else None,
+            business_state=(
+                body.business_address.state if body.business_address else None
+            ),
+            business_country=(
+                body.business_address.country if body.business_address else None
+            ),
+            business_postal_code=(
+                body.business_address.postal_code if body.business_address else None
+            ),
             tax_exempt=body.tax_exempt,
         )
 
