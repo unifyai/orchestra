@@ -337,6 +337,16 @@ class AssistantStatus(BaseModel):
 
 
 class RecordingCreate(BaseModel):
+    user_id: str = Field(
+        ...,
+        description="ID of the user to associate the recording with",
+        example="123",
+    )
+    assistant_id: int = Field(
+        ...,
+        description="ID of the assistant to associate the recording with",
+        example=123,
+    )
     recording_raw: str = Field(
         ...,
         description="Base64-encoded audio payload",
