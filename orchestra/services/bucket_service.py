@@ -82,7 +82,9 @@ class BucketService:
         """
         try:
             # Generate unique filename
-            filename = self._generate_unique_filename(content)
+            filename = "assistant_call_recording/" + self._generate_unique_filename(
+                content,
+            )
 
             # Upload to GCS
             blob = self.bucket.blob(filename)
