@@ -754,7 +754,7 @@ def admin_list_recordings_for_assistant(
 ) -> InfoResponse[List[RecordingInfo]]:
     """List all recordings for an assistant."""
     dao = RecordingDAO(session)
-    recordings = dao.list_recordings_for_assistant(assistant_id)
+    recordings = dao.list_recordings(assistant_id)
     return InfoResponse(info=recordings)
 
 
