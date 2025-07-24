@@ -8,6 +8,7 @@ from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.models.orchestra_models import (
     Context,
+    Log,
     LogEvent,
     LogEventContext,
     Project,
@@ -167,20 +168,32 @@ class LogEventDAO:
                 setattr(entry, "project_id", project_id)
 
     def delete(self, id: Union[int, List[int]]):
-        id = id if isinstance(id, list) else [id]
+        ids = id if isinstance(id, list) else [id]
+        if not ids:
+            return
+
         try:
+            # Delete associated GCS media BEFORE deleting DB records
+            log_dao = LogDAO(self.session, ContextDAO(self.session))
+            logs_to_delete_query = self.session.query(Log).filter(
+                Log.log_event_id.in_(ids),
+            )
+            log_dao._bulk_delete_gcs_media(logs_to_delete_query)
+
             # First, delete the association rows referencing these log events
             self.session.query(LogEventContext).filter(
-                LogEventContext.log_event_id.in_(id),
+                LogEventContext.log_event_id.in_(ids),
             ).delete(synchronize_session=False)
-            # Then, delete the log event(s)
+
+            # Then, delete the log event(s) themselves (which cascades to Log and JSONLog in the DB)
             self.session.query(LogEvent).filter(
-                LogEvent.id.in_(id),
+                LogEvent.id.in_(ids),
             ).delete(synchronize_session=False)
+
             self.session.commit()
-        except:
+        except Exception as e:
             self.session.rollback()
-            raise ValueError
+            raise ValueError(f"Failed to delete log events: {e}")
 
     def get_ts(self, id: int) -> Optional[datetime]:
         query = (

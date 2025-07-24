@@ -6,10 +6,13 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.models.orchestra_models import (
     Context,
     ContextVersion,
+    Log,
+    LogEvent,
     Project,
     ProjectVersion,
 )
@@ -134,11 +137,23 @@ class ProjectDAO:
     def delete(self, id: int):
         try:
             project = self.session.query(Project).filter_by(id=id).one()
+
+            # Delete associated GCS media BEFORE deleting the project
+            log_dao = LogDAO(self.session, self.context_dao)
+            log_events_subquery = (
+                select(LogEvent.id).where(LogEvent.project_id == id).subquery()
+            )
+            logs_to_delete_query = self.session.query(Log).filter(
+                Log.log_event_id.in_(select(log_events_subquery.c.id)),
+            )
+            log_dao._bulk_delete_gcs_media(logs_to_delete_query)
+
+            # Proceed with deleting the project (DB cascades will handle the rest)
             self.session.delete(project)
             self.session.commit()
         except Exception as e:
             self.session.rollback()
-            raise ValueError(f"Failed to delete project with id {id}", e)
+            raise ValueError(f"Failed to delete project with id {id}: {e}")
 
     def filter_by_user_access(
         self,
