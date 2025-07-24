@@ -30,6 +30,7 @@ from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.recharge_type_dao import RechargeTypeDAO
+from orchestra.db.dao.recording_dao import RecordingDAO
 from orchestra.db.dao.task_dao import TaskDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
@@ -76,7 +77,11 @@ from orchestra.web.api.admin.schema import (  # noqa: WPS235
     TaskModelResponse,
     UsersModelResponse,
 )
-from orchestra.web.api.assistant.schema import AssistantRead, InfoResponse
+from orchestra.web.api.assistant.schema import (
+    AssistantRead,
+    InfoResponse,
+    RecordingInfo,
+)
 from orchestra.web.api.assistant.views import normalize_phone_parameter
 
 router = APIRouter()
@@ -734,6 +739,23 @@ def admin_list_assistants_for_user(
             status_code=400,
             detail=f"Error fetching assistants for user {user_id}: {str(e)}",
         )
+
+
+@router.get(
+    "/assistant/{assistant_id}/recordings",
+    response_model=InfoResponse[List[RecordingInfo]],
+    summary="List all recordings for an assistant",
+    description="Returns a list of all call recordings for the specified assistant.",
+    tags=["Recordings"],
+)
+def admin_list_recordings_for_assistant(
+    assistant_id: int,
+    session=Depends(get_db_session),
+) -> InfoResponse[List[RecordingInfo]]:
+    """List all recordings for an assistant."""
+    dao = RecordingDAO(session)
+    recordings = dao.list_recordings_for_assistant(assistant_id)
+    return InfoResponse(info=recordings)
 
 
 @router.get(
