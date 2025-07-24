@@ -37,11 +37,6 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 0.25, "completion": 1.25},
     },
-    "claude-3-sonnet": {
-        "endpoint": "anthropic/claude-3-sonnet-20240229",
-        "context_window": 200000,
-        "cost": {"prompt": 3, "completion": 15},
-    },
     "claude-3-opus": {
         "endpoint": "anthropic/claude-3-opus-20240229",
         "context_window": 200000,
@@ -49,11 +44,6 @@ supported_models = {
     },
     "claude-3.5-sonnet": {
         "endpoint": "anthropic/claude-3-5-sonnet-20241022",
-        "context_window": 200000,
-        "cost": {"prompt": 3, "completion": 15},
-    },
-    "claude-3.5-sonnet-20240620": {
-        "endpoint": "anthropic/claude-3-5-sonnet-20240620",
         "context_window": 200000,
         "cost": {"prompt": 3, "completion": 15},
     },
