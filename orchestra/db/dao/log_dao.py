@@ -1,5 +1,6 @@
 import base64
 import copy
+import logging
 import re
 from collections import defaultdict
 from datetime import date, datetime, timezone
@@ -9,6 +10,7 @@ from sqlalchemy import alias, and_, cast, func, literal, or_, select, text, upda
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.query import Query
 
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.models.orchestra_models import (
@@ -34,7 +36,7 @@ class ImmutableFieldError(Exception):
 def _is_date_string(value: str) -> bool:
     """
     Check if a string can be parsed as a date in various formats including:
-    -<y_bin_46>-MM-DD (ISO 8601)
+    - YYYY-MM-DD (ISO 8601)
     - MM/DD/YYYY
     - DD/MM/YYYY
     - DD-MM-YYYY
@@ -201,20 +203,38 @@ class LogDAO:
     def upload_image_to_bucket(self, image_base64: str) -> str:
         """Upload image to bucket and return the URL."""
         try:
-            url, _ = self.bucket_service.upload_image(image_base64)
+            url, _ = self.bucket_service.upload_media(image_base64, "image/jpeg")
             return url
         except Exception as e:
             raise ValueError(f"Failed to upload image to bucket: {str(e)}")
+
+    def upload_audio_to_bucket(self, audio_base64: str) -> str:
+        """Upload audio to bucket and return the URL."""
+        try:
+            url, _ = self.bucket_service.upload_media(audio_base64, "audio/mpeg")
+            return url
+        except Exception as e:
+            raise ValueError(f"Failed to upload audio to bucket: {str(e)}")
 
     def get_image_from_bucket(self, url: str) -> Optional[str]:
         """Retrieve image from bucket and return as base64."""
         try:
             # Extract filename from URL
             filename = url.split("/")[-1]
-            base64_content = self.bucket_service.get_image(filename)
+            base64_content = self.bucket_service.get_media(filename)
             return base64_content
         except Exception as e:
             raise ValueError(f"Failed to retrieve image from bucket: {str(e)}")
+
+    def get_audio_from_bucket(self, url: str) -> Optional[str]:
+        """Retrieve audio from bucket and return as base64."""
+        try:
+            # Extract filename from URL
+            filename = url.split("/")[-1]
+            base64_content = self.bucket_service.get_media(filename)
+            return base64_content
+        except Exception as e:
+            raise ValueError(f"Failed to retrieve audio from bucket: {str(e)}")
 
     @staticmethod
     def possible_img(raw_k):
@@ -228,8 +248,20 @@ class LogDAO:
         )
 
     @staticmethod
+    def possible_audio(raw_k):
+        lower = raw_k.lower()
+        return (
+            "audio" in lower
+            or "sound" in lower
+            or "voice" in lower
+            or "speech" in lower
+            or "recording" in lower
+        )
+
+    @staticmethod
     def infer_type(raw_k, raw_v):
         maybe_img = LogDAO.possible_img(raw_k)
+        maybe_audio = LogDAO.possible_audio(raw_k)
         if isinstance(raw_v, str):
             try:
                 if _is_time_string(raw_v):
@@ -242,18 +274,34 @@ class LogDAO:
                 datetime.fromisoformat(raw_v)
                 return "datetime"
             except:
-                if not maybe_img:
+                lower_v = raw_v.lower()
+                if lower_v.endswith((".mp3", ".wav")):
+                    return "audio"
+                if not maybe_img and not maybe_audio:
                     return "str"
+
                 binary = raw_v.encode("utf-8")
                 try:
                     assert base64.b64encode(base64.b64decode(binary)) == binary
-                    return "image"
+                    if maybe_audio:
+                        return "audio"
+                    if maybe_img:
+                        return "image"
                 except:
-                    lower = raw_v.lower()
-                    if lower.startswith("http") and (
-                        lower.endswith(".png")
-                        or lower.endswith(".jpg")
-                        or lower.endswith(".jpeg")
+                    if (
+                        maybe_audio
+                        and lower_v.startswith("http")
+                        and (lower_v.endswith(".mp3") or lower_v.endswith(".wav"))
+                    ):
+                        return "audio"
+                    if (
+                        maybe_img
+                        and lower_v.startswith("http")
+                        and (
+                            lower_v.endswith(".png")
+                            or lower_v.endswith(".jpg")
+                            or lower_v.endswith(".jpeg")
+                        )
                     ):
                         return "image"
                     return "str"
@@ -436,10 +484,58 @@ class LogDAO:
             self.session.rollback()
             raise ValueError(f"Failed to rename field: {str(e)}")
 
+    def _bulk_delete_gcs_media(self, logs_query: Query):
+        """
+        Finds all image/audio logs in a given query and deletes the
+        corresponding files from GCS.
+        """
+        gcs_url_prefix = (
+            f"https://storage.googleapis.com/{self.bucket_service.bucket_name}/"
+        )
+
+        # Filter the query to only include logs that might have GCS files
+        media_logs_query = logs_query.filter(
+            Log.inferred_type.in_(("image", "audio")),
+        )
+
+        logs_to_delete = media_logs_query.all()
+        if not logs_to_delete:
+            return
+
+        logging.info(
+            f"Found {len(logs_to_delete)} media log(s) to check for GCS deletion.",
+        )
+
+        for log in logs_to_delete:
+            if isinstance(log.value, str):
+                # Strip potential quotes from JSONB string literal
+                clean_value = log.value.strip("\"'")
+                if clean_value.startswith(gcs_url_prefix):
+                    try:
+                        filename = clean_value.split("/")[-1]
+                        logging.warning(
+                            f"Deleting GCS file: {filename} for log ID: {log.id}",
+                        )
+                        self.bucket_service.delete_media(filename)
+                    except Exception as e:
+                        # Log the error but don't stop the overall delete process
+                        logging.error(
+                            f"Failed to delete file from GCS for log {log.id}: {str(e)}",
+                        )
+
     def delete(self, id: int):
+        """Deletes a single Log record and its associated GCS file if applicable."""
         try:
-            log = self.session.query(Log).filter_by(id=id).one()
-            # Proceed with log deletion
+            log_query = self.session.query(Log).filter_by(id=id)
+            log = log_query.one_or_none()
+
+            if not log:
+                raise ValueError(f"Log with id {id} not found.")
+
+            # Call the bulk helper to handle GCS deletion
+            self._bulk_delete_gcs_media(log_query)
+
+            # Delete corresponding JSONLog if it exists
             json_log = (
                 self.session.query(JSONLog)
                 .filter_by(log_event_id=log.log_event_id, key=log.key)
@@ -447,11 +543,14 @@ class LogDAO:
             )
             if json_log:
                 self.session.delete(json_log)
+
+            # Delete the log record itself
             self.session.delete(log)
             self.session.commit()
-        except:
+
+        except Exception as e:
             self.session.rollback()
-            raise ValueError
+            raise ValueError(f"Failed to delete log with id {id}: {e}")
 
     def _check_uniqueness(self, entries: List[Dict[str, Any]]):
         unique_field_defs = {}  # (project_id, context_id, key) -> FieldType
@@ -710,13 +809,20 @@ class LogDAO:
                 elif inferred_type is None:
                     inferred_type = self.infer_type(key, value)
 
-                # Handle image uploads
+                # Handle image and audio uploads
                 if (
                     inferred_type == "image"
                     and isinstance(value, str)
                     and not value.lower().startswith("http")
                 ):
                     value = self.upload_image_to_bucket(value)
+                elif (
+                    inferred_type == "audio"
+                    and isinstance(value, str)
+                    and not value.lower().endswith((".mp3", ".wav"))
+                    and not value.lower().startswith("http")
+                ):
+                    value = self.upload_audio_to_bucket(value)
                 if inferred_type == "datetime" and isinstance(value, str):
                     value = normalize_timestamp(value)
 
@@ -1182,7 +1288,7 @@ class LogDAO:
                 elif inferred_type is None:
                     inferred_type = self.infer_type(key, value)
 
-                # Handle image uploads
+                # Handle image and audio uploads
                 json_value = value
                 if (
                     inferred_type == "image"
@@ -1190,6 +1296,13 @@ class LogDAO:
                     and not value.lower().startswith("http")
                 ):
                     json_value = self.upload_image_to_bucket(value)
+                elif (
+                    inferred_type == "audio"
+                    and isinstance(value, str)
+                    and not value.lower().endswith((".mp3", ".wav"))
+                    and not value.lower().startswith("http")
+                ):
+                    json_value = self.upload_audio_to_bucket(value)
 
                 # Check if log exists
                 existing_log = existing_log_map.get(group_key)

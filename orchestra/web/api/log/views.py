@@ -20,7 +20,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import JSONResponse
-from sqlalchemy import and_, exists, select, update
+from sqlalchemy import and_, exists, or_, select, update
 from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.dao.context_dao import ContextDAO
@@ -1770,11 +1770,13 @@ def delete_logs(
         # Bulk delete from base logs with a single query
         if body.source_type in ("all", "base"):
             # Use a single DELETE statement for all fields
-            deleted_count = (
-                session.query(Log)
-                .filter(Log.log_event_id.in_(all_log_events_subq), Log.key.in_(fields))
-                .delete(synchronize_session=False)
+            deletion_query = session.query(Log).filter(
+                Log.log_event_id.in_(all_log_events_subq), Log.key.in_(fields)
             )
+            log_dao._bulk_delete_gcs_media(
+                deletion_query
+            )  # Delete GCS files BEFORE deleting DB records
+            deleted_count = deletion_query.delete(synchronize_session=False)
             if deleted_count > 0:
                 context_description.append(
                     f"Deleted {len(fields)} fields from {deleted_count} base logs",
@@ -1908,6 +1910,17 @@ def delete_logs(
 
     # Perform bulk deletions for base logs
     if base_log_deletions and body.source_type in ("all", "base"):
+
+        # Delete GCS files BEFORE deleting DB records
+        combined_filter = or_(
+            *[
+                and_(Log.log_event_id == eid, Log.key == k)
+                for eid, k in base_log_deletions
+            ],
+        )
+        logs_to_delete_query = session.query(Log).filter(combined_filter)
+        log_dao._bulk_delete_gcs_media(logs_to_delete_query)
+
         # Group by key for more efficient deletion
         key_to_event_ids = defaultdict(list)
         for event_id, key in base_log_deletions:
