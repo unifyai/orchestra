@@ -227,6 +227,11 @@ class AssistantUpdate(BaseModel):
         description="Maximum number of parallel tasks the assistant can handle",
         example=3,
     )
+    profile_photo: Optional[str] = Field(
+        None,
+        description="URL to the assistant's profile photo",
+        example="https://example.com/photos/ada.jpg",
+    )
     about: Optional[str] = Field(
         None,
         description="Brief description about the assistant",
@@ -269,6 +274,7 @@ class AssistantUpdate(BaseModel):
             "example": {
                 "weekly_limit": 20.5,
                 "max_parallel": 3,
+                "profile_photo": "https://example.com/photos/ada.jpg",
                 "about": "Award-winning mathematician specializing in algorithm development",
                 "user_phone": "+15551234567",
                 "phone": "+15559876543",
