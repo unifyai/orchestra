@@ -23,14 +23,13 @@ async def test_create_favorite(client: AsyncClient):
     project_name = "proj1"
     await _create_project(client, project_name)
 
-    payload = {"project": project_name, "position": 1, "icon": "star"}
+    payload = {"project": project_name, "position": 1}
     resp = await client.post("/v0/project/favorites", json=payload, headers=HEADERS)
     assert resp.status_code == 201, resp.text
     data = resp.json()
     assert "id" in data and isinstance(data["id"], int)
     assert data["project"] == project_name
     assert data["position"] == 1
-    assert data["icon"] == "star"
 
 
 @pytest.mark.anyio
@@ -40,7 +39,7 @@ async def test_get_favorite_by_id(client: AsyncClient):
     """
     project_name = "proj2"
     await _create_project(client, project_name)
-    payload = {"project": project_name, "position": 2, "icon": "heart"}
+    payload = {"project": project_name, "position": 2}
     post_resp = await client.post(
         "/v0/project/favorites",
         json=payload,
@@ -54,7 +53,6 @@ async def test_get_favorite_by_id(client: AsyncClient):
     assert fav["id"] == fav_id
     assert fav["project"] == project_name
     assert fav["position"] == 2
-    assert fav["icon"] == "heart"
 
 
 @pytest.mark.anyio
@@ -74,7 +72,7 @@ async def test_update_favorite_icon_and_position(client: AsyncClient):
     """
     project_name = "proj3"
     await _create_project(client, project_name)
-    payload = {"project": project_name, "position": 3, "icon": "circle"}
+    payload = {"project": project_name, "position": 3}
     post_resp = await client.post(
         "/v0/project/favorites",
         json=payload,
@@ -82,7 +80,7 @@ async def test_update_favorite_icon_and_position(client: AsyncClient):
     )
     fav_id = post_resp.json()["id"]
 
-    update_payload = {"icon": "square", "position": 4}
+    update_payload = {"position": 4}
     patch_resp = await client.patch(
         f"/v0/project/favorites/{fav_id}",
         json=update_payload,
@@ -91,13 +89,11 @@ async def test_update_favorite_icon_and_position(client: AsyncClient):
     assert patch_resp.status_code == 200
     updated = patch_resp.json()
     assert updated["id"] == fav_id
-    assert updated["icon"] == "square"
     assert updated["position"] == 4
 
     get_resp = await client.get(f"/v0/project/favorites/{fav_id}", headers=HEADERS)
     assert get_resp.status_code == 200
     fav = get_resp.json()
-    assert fav["icon"] == "square"
     assert fav["position"] == 4
 
 
@@ -106,7 +102,7 @@ async def test_update_favorite_not_found(client: AsyncClient):
     """
     PATCH /v0/project/favorites/{id} for a non-existent id should return 404.
     """
-    update_payload = {"icon": "new", "position": 1}
+    update_payload = {"position": 1}
     resp = await client.patch(
         "/v0/project/favorites/8888",
         json=update_payload,
@@ -123,7 +119,7 @@ async def test_delete_favorite(client: AsyncClient):
     """
     project_name = "proj4"
     await _create_project(client, project_name)
-    payload = {"project": project_name, "position": 5, "icon": "triangle"}
+    payload = {"project": project_name, "position": 5}
     post_resp = await client.post(
         "/v0/project/favorites",
         json=payload,
@@ -157,7 +153,7 @@ async def test_nonexistent_project_on_create(client: AsyncClient):
     """
     Posting a favorite for a non-existent project should return 404.
     """
-    payload = {"project": "no_proj", "position": 2, "icon": "heart"}
+    payload = {"project": "no_proj", "position": 2}
     resp = await client.post("/v0/project/favorites", json=payload, headers=HEADERS)
     assert resp.status_code == 404
     assert "Project 'no_proj' not found" in resp.json().get("detail", "")

@@ -37,7 +37,6 @@ class FavoriteProjectDAO:
         self,
         user_id: str,
         project_id: int,
-        icon: str,
         position: int,
     ) -> FavoriteProject:
         """
@@ -52,7 +51,6 @@ class FavoriteProjectDAO:
         favorite = FavoriteProject(
             user_id=user_id,
             project_id=project_id,
-            icon=icon,
             position=position,
         )
         self.session.add(favorite)
@@ -109,7 +107,6 @@ class FavoriteProjectDAO:
         self,
         user_id: str,
         favorite_id: int,
-        icon: str = None,
         position: int = None,
     ) -> FavoriteProject:
         """
@@ -129,8 +126,6 @@ class FavoriteProjectDAO:
         """
         favorite = self.get_by_id(user_id, favorite_id)
 
-        if icon is not None:
-            favorite.icon = icon
         if position is not None:
             favorite.position = position
 
