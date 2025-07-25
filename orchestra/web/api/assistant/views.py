@@ -772,6 +772,11 @@ def update_assistant_config(
     user_id = request.state.user_id
     users_dao = UsersDAO(session)
     assistant_dao = AssistantDAO(session)
+    bucket_service = BucketService()
+
+    # Store the old photo URL before the update
+    old_photo_url = None
+    is_photo_changing = False
 
     # Check assistant existence before any updates
     existing_assistant = assistant_dao.get_assistant_by_id(
@@ -783,6 +788,12 @@ def update_assistant_config(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
         )
+
+    # Determine if the photo is being updated before making changes
+    old_photo_url = existing_assistant.profile_photo
+    is_photo_changing = (
+        update.profile_photo is not None and update.profile_photo != old_photo_url
+    )
 
     try:
         weekly_limit: Optional[Decimal] = None
@@ -857,6 +868,19 @@ def update_assistant_config(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Assistant not found.",
             )
+
+        # If the photo was updated, delete the old one from GCS.
+        if is_photo_changing and old_photo_url and old_photo_url.startswith("gs://"):
+            try:
+                bucket_service.delete_assistant_file(old_photo_url)
+                logging.info(
+                    f"Successfully deleted old profile photo {old_photo_url} for assistant {assistant_id}.",
+                )
+            except Exception as e:
+                logging.error(
+                    f"Failed to delete old profile photo {old_photo_url} for assistant {assistant_id} during update. Error: {str(e)}",
+                )
+
         return InfoResponse(
             info=AssistantRead(
                 agent_id=str(updated.agent_id),
