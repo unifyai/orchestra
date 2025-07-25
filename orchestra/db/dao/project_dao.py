@@ -59,6 +59,7 @@ class ProjectDAO:
         organization_id: Optional[int] = None,
         is_versioned: bool = False,
         description: Optional[str] = None,
+        icon: Optional[str] = "folder",
     ) -> None:
 
         if user_id is None and organization_id is None:
@@ -73,6 +74,7 @@ class ProjectDAO:
                 organization_id=organization_id,
                 is_versioned=is_versioned,
                 description=description,
+                icon=icon,
             ),
         )
 
@@ -102,6 +104,7 @@ class ProjectDAO:
         name: Optional[str] = None,
         user_id: Optional[str] = None,
         organization_id: Optional[int] = None,
+        icon: Optional[str] = None,
         description: Optional[str] = None,
     ) -> None:
         self._validate_description(description)
@@ -119,6 +122,8 @@ class ProjectDAO:
                 setattr(entry, "organization_id", organization_id)
             if description is not None:
                 setattr(entry, "description", description)
+            if icon is not None:
+                setattr(entry, "icon", icon)
 
     def rename(
         self,

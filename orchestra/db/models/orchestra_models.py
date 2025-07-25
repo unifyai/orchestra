@@ -659,6 +659,7 @@ class Project(Base):
     )
     name = Column(String, nullable=False)
     description = Column(String(256), nullable=True)
+    icon = Column(String, nullable=False, server_default="folder")
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
     is_versioned = Column(Boolean, nullable=False, server_default="f")
@@ -1169,7 +1170,6 @@ class FavoriteProject(Base):
         ForeignKey("project.id", ondelete="CASCADE"),
         nullable=False,
     )
-    icon = Column(String, nullable=False)
     position = Column(Integer, nullable=False)
 
     __table_args__ = (
@@ -1242,7 +1242,8 @@ class Voice(Base):
     __tablename__ = "voices"
 
     voice_id = Column(
-        String, primary_key=True
+        String,
+        primary_key=True,
     )  # This will store the TTS provider's voice ID
     user_id = Column(
         String,
