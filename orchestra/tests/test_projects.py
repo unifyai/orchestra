@@ -187,6 +187,27 @@ async def test_update_nonexistent_project(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_update_project_icon(client: AsyncClient):
+    create_url = "/v0/project"
+    update_url = "/v0/project/icon-project"
+    project_data = {"name": "icon-project"}
+
+    # Create new project
+    response = await client.post(create_url, json=project_data, headers=HEADERS)
+    assert response.status_code == 200
+
+    # Update icon
+    update_data = {"icon": "rocket"}
+    resp = await client.patch(update_url, json=update_data, headers=HEADERS)
+    assert resp.status_code == 200
+
+    # Fetch details and confirm icon
+    detail_resp = await client.get(update_url, headers=HEADERS)
+    assert detail_resp.status_code == 200
+    assert detail_resp.json()["icon"] == "rocket"
+
+
+@pytest.mark.anyio
 async def test_get_project_details(client: AsyncClient):
     # Create a project with description
     create_url = "/v0/project"
@@ -1781,6 +1802,27 @@ async def test_import_project_template_with_valid_schema_empty_template(
     assert data["import_stats"]["interfaces"] == 0
     assert data["import_stats"]["tabs"] == 0
     assert data["import_stats"]["tiles"] == 0
+
+
+@pytest.mark.anyio
+async def test_projects_tree(client: AsyncClient):
+    """GET /v0/projects/tree returns list with project icons and interfaces."""
+    # Create project and interface using helper functions
+    project_name = "tree-proj"
+    await _create_project(client, project_name)
+    # create an interface via existing helper
+    from .test_interface import _create_test_interface as _create_ifc
+
+    await _create_ifc(client, name="iface1", project=project_name)
+
+    resp = await client.get("/v0/projects/tree", headers=HEADERS)
+    assert resp.status_code == 200
+    data = resp.json()
+    # Expect at least one entry matching project_name
+    match = next((p for p in data if p["project"] == project_name), None)
+    assert match is not None
+    assert match["icon"] == "folder"  # default
+    assert "iface1" in match["interfaces"]
 
 
 if __name__ == "__main__":
