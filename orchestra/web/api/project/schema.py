@@ -10,7 +10,6 @@ class FavoriteProjectIn(BaseModel):
     """Request model for creating a favorite project."""
 
     project: str = Field(description="The name of the project to favorite")
-    icon: str = Field(description="Icon identifier for the favorite project")
     position: int = Field(description="Position of the project in the favorites list")
 
 
@@ -23,10 +22,6 @@ class FavoriteProjectOut(FavoriteProjectIn):
 class FavoriteProjectUpdate(BaseModel):
     """Request model for updating a favorite project."""
 
-    icon: Optional[str] = Field(
-        None,
-        description="Icon identifier for the favorite project",
-    )
     position: Optional[int] = Field(
         None,
         description="Position of the project in the favorites list",
@@ -49,6 +44,10 @@ class ProjectConfig(BaseModel):
     is_versioned: bool = Field(
         description="Whether the project is versioned",
         default=False,
+    )
+    icon: Optional[str] = Field(
+        None,
+        description="Icon identifier for the project",
     )
     description: Optional[str] = Field(
         None,
@@ -77,6 +76,10 @@ class ProjectUpdate(BaseModel):
         None,
         description="Whether the project is versioned",
     )
+    icon: Optional[str] = Field(
+        None,
+        description="Icon identifier for the project",
+    )
     description: Optional[str] = Field(
         None,
         description="Optional description of the project",
@@ -89,6 +92,7 @@ class ProjectOut(BaseModel):
 
     name: str = Field(description="The name of the project")
     description: Optional[str] = Field(None, description="Description of the project")
+    icon: str = Field(description="Icon identifier for the project")
     is_versioned: bool = Field(description="Whether the project is versioned")
     created_at: Optional[str] = Field(description="When the project was created")
     updated_at: Optional[str] = Field(description="When the project was last updated")
@@ -149,3 +153,11 @@ class ImportProjectTemplateRequest(BaseModel):
     auto_sanitize: bool = True
     overwrite_existing: bool = False
     interface_name_prefix: Optional[str] = None  # Prefix for imported interface names
+
+
+class ProjectTreeItem(BaseModel):
+    project: str
+    icon: str
+    interfaces: List[str]
+    favorite: bool = False
+    position: Optional[int] = None

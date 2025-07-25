@@ -55,6 +55,7 @@ from orchestra.web.api.project.schema import (
     ProjectConfig,
     ProjectOut,
     ProjectRollbackRequest,
+    ProjectTreeItem,
     ProjectUpdate,
     ShareProjectRequest,
 )
@@ -277,19 +278,18 @@ def get_favorites(
     # Convert to response model
     result = []
     for fav in favorites:
-        # Get project name from project_id
+        project_name = str(fav.project_id)
         try:
             project = project_dao.filter(id=fav.project_id)[0][0]
-        except:
-            project = None
-
-        project_name = project.name if project else str(fav.project_id)
+            if project:
+                project_name = project.name
+        except Exception:
+            pass
 
         result.append(
             FavoriteProjectOut(
                 id=fav.id,
                 project=project_name,
-                icon=fav.icon,
                 position=fav.position,
             ),
         )
@@ -364,26 +364,26 @@ def create_favorite(
         favorite_project_dao.create(
             user_id=user_id,
             project_id=project.id,
-            icon=favorite.icon,
             position=favorite.position,
         )
 
-        # Commit changes
         favorite_project_dao.session.commit()
 
-        # Return created favorite
-        return FavoriteProjectOut(
-            id=favorite_project_dao.session.query(FavoriteProject)
+        new_id = (
+            favorite_project_dao.session.query(FavoriteProject)
             .filter_by(user_id=user_id, project_id=project.id)
             .first()
-            .id,
+            .id
+        )
+
+        return FavoriteProjectOut(
+            id=new_id,
             project=favorite.project,
-            icon=favorite.icon,
             position=favorite.position,
         )
-    except ValueError as e:
+    except ValueError:
         favorite_project_dao.session.rollback()
-        raise HTTPException(status_code=400, detail=f"Project is already in favorites")
+        raise HTTPException(status_code=400, detail="Project is already in favorites")
     except Exception as e:
         favorite_project_dao.session.rollback()
         raise HTTPException(
@@ -453,7 +453,6 @@ def get_favorite(
     return FavoriteProjectOut(
         id=favorite.id,
         project=project_name,
-        icon=favorite.icon,
         position=favorite.position,
     )
 
@@ -511,8 +510,6 @@ def update_favorite(
     try:
         # Update fields if provided
         update_data = {}
-        if update.icon is not None:
-            update_data["icon"] = update.icon
         if update.position is not None:
             update_data["position"] = update.position
 
@@ -538,7 +535,6 @@ def update_favorite(
         return FavoriteProjectOut(
             id=updated_favorite.id,
             project=project_name,
-            icon=updated_favorite.icon,
             position=updated_favorite.position,
         )
     except Exception as e:
@@ -658,6 +654,7 @@ def create_project(
             user_id=request_fastapi.state.user_id,
             # TODO: Add organization id when appropriate
             name=request.name,
+            icon=request.icon or "folder",
             is_versioned=request.is_versioned,
             description=request.description,
         )
@@ -911,6 +908,12 @@ def update_project(
                 description=request.description,
             )
 
+        if request.icon is not None:
+            project_dao.update(
+                id=project.id,
+                icon=request.icon,
+            )
+
         return {"info": "Project updated successfully!"}
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
@@ -959,6 +962,7 @@ def get_project(
     return ProjectOut(
         name=project.name,
         description=project.description,
+        icon=project.icon,
         is_versioned=project.is_versioned,
         created_at=project.created_at.isoformat() if project.created_at else None,
         updated_at=project.updated_at.isoformat() if project.updated_at else None,
@@ -997,6 +1001,51 @@ def list_projects(
         user_id=request_fastapi.state.user_id,
     )
     return [p[0].name for p in raw_projects]
+
+
+@router.get("/projects/tree", response_model=List[ProjectTreeItem])
+async def list_projects_tree(
+    request_fastapi: Request,
+    session: Session = Depends(get_db_session),
+):
+    """Return all projects the user can access with their icons and interface names."""
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    interface_dao = InterfaceDAO(session)
+    favorite_project_dao = FavoriteProjectDAO(session)
+
+    projects = project_dao.filter_by_user_access(user_id=request_fastapi.state.user_id)
+    favorites = favorite_project_dao.filter_by_user(request_fastapi.state.user_id)
+    fav_map = {f.project_id: f for f in favorites}
+
+    items: List[ProjectTreeItem] = []
+    for proj_row in projects:
+        proj = proj_row[0]
+        interfaces = interface_dao.get_interfaces(
+            project_id=proj.id,
+            is_checkpoint=False,
+        )
+        fav_entry = fav_map.get(proj.id)
+        items.append(
+            ProjectTreeItem(
+                project=proj.name,
+                icon=proj.icon,
+                interfaces=[i.name for i in interfaces],
+                favorite=fav_entry is not None,
+                position=fav_entry.position if fav_entry else None,
+            ),
+        )
+
+    # Sort: favorites first by position, then non-favorites alphabetically
+    items.sort(
+        key=lambda x: (
+            not x.favorite,
+            x.position if x.position is not None else 1e9,
+            x.project,
+        ),
+    )
+    return items
 
 
 # Template Endpoints for Projects
