@@ -840,6 +840,7 @@ def update_assistant_config(
         updated = assistant_dao.update_assistant(
             user_id=request.state.user_id,
             agent_id=assistant_id,
+            profile_photo=update.profile_photo,
             about=update.about,
             phone=update.phone,
             email=update.email,
