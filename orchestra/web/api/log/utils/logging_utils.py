@@ -1,6 +1,8 @@
 import json
+import logging
 import random
 import re
+import time
 import traceback
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -84,37 +86,71 @@ def _paginate_events(
     2. Gets the total row count before slicing
     3. Returns a second sub-query with row_number for order preservation
     """
+    start_time = time.time()
+    logging.info(
+        f"[_paginate_events] Starting pagination - limit: {limit}, offset: {offset}, has_joins: {has_joins}, randomize: {randomize}",
+    )
+
     # If we have joins (for sorting), we need to handle differently
     if has_joins and order_by_cols:
-        # For joined queries, get count from distinct IDs
-        id_col = base_event_q.column_descriptions[0]["expr"]
-        total_count = base_event_q.distinct().count()
+        logging.info(
+            f"[_paginate_events] Processing joined query with {len(order_by_cols)} order columns",
+        )
 
-        # Build paginated query with joins preserved
+        # Build paginated query with joins preserved (use optimized versions)
+        query_build_start = time.time()
         pag_query = base_event_q.add_columns(
             func.row_number().over(order_by=order_by_cols).label("row_num"),
         ).order_by(*order_by_cols)
 
         if limit:
             pag_query = pag_query.limit(limit)
+            logging.info(f"[_paginate_events] Applied limit: {limit}")
         if offset:
             pag_query = pag_query.offset(offset)
+            logging.info(f"[_paginate_events] Applied offset: {offset}")
 
-        return pag_query.subquery("paginated_ids_subq"), total_count
+        logging.info(
+            f"[_paginate_events] Joined query built in {time.time() - query_build_start:.3f}s",
+        )
+
+        total_time = time.time() - start_time
+        logging.info(
+            f"[_paginate_events] Joined pagination completed in {total_time:.3f}s",
+        )
+        return pag_query.subquery("paginated_ids_subq")
 
     # Original logic for simple queries
+    logging.info(f"[_paginate_events] Processing simple query (non-joined)")
+
+    subquery_start = time.time()
     relevant_sq = base_event_q.subquery("relevant_log_events")
+    logging.info(
+        f"[_paginate_events] Relevant subquery created in {time.time() - subquery_start:.3f}s",
+    )
 
     # Get total count with a cheap index scan
+    count_start = time.time()
     total_count = session.query(func.count()).select_from(relevant_sq).scalar()
+    logging.info(
+        f"[_paginate_events] Count query completed in {time.time() - count_start:.3f}s - total_count: {total_count}",
+    )
 
     # Build the ordered/limited ID list
+    ordering_start = time.time()
     if randomize:
         random_key = func.md5(cast(relevant_sq.c.id, String) + literal(seed))
         order_by_cols = [random_key]
+        logging.info(f"[_paginate_events] Applied randomization with seed: {seed}")
     if not order_by_cols:
         order_by_cols = [desc(relevant_sq.c.id)]
+        logging.info(f"[_paginate_events] Applied default ordering (desc by id)")
 
+    logging.info(
+        f"[_paginate_events] Ordering setup completed in {time.time() - ordering_start:.3f}s with {len(order_by_cols)} order columns",
+    )
+
+    pagination_start = time.time()
     paginated_sq = select(
         relevant_sq.c.id.label("id"),
         func.row_number().over(order_by=order_by_cols).label("row_num"),
@@ -122,10 +158,18 @@ def _paginate_events(
 
     if limit:
         paginated_sq = paginated_sq.limit(limit)
+        logging.info(f"[_paginate_events] Applied limit: {limit}")
     if offset:
         paginated_sq = paginated_sq.offset(offset)
+        logging.info(f"[_paginate_events] Applied offset: {offset}")
 
-    return paginated_sq.subquery("paginated_ids_subq"), total_count
+    logging.info(
+        f"[_paginate_events] Pagination query built in {time.time() - pagination_start:.3f}s",
+    )
+
+    total_time = time.time() - start_time
+    logging.info(f"[_paginate_events] Simple pagination completed in {total_time:.3f}s")
+    return paginated_sq.subquery("paginated_ids_subq")
 
 
 #########################
@@ -290,25 +334,50 @@ def _build_sort_clauses(
     Helper function to build sorting clauses for log queries.
     Extracts the sorting logic from _get_logs_query for reusability.
     """
-    if sorting:
-        sort_dict = json.loads(sorting)
+    start_time = time.time()
+    logging.debug(f"[_build_sort_clauses] Starting sort clauses construction")
 
-        for sort_key, mode in sort_dict.items():
+    if sorting:
+        parse_start = time.time()
+        sort_dict = json.loads(sorting)
+        logging.debug(
+            f"[_build_sort_clauses] Sort expression parsed in {time.time() - parse_start:.3f}s - {len(sort_dict)} sort fields",
+        )
+
+        for i, (sort_key, mode) in enumerate(sort_dict.items()):
+            sort_field_start = time.time()
+            logging.debug(
+                f"[_build_sort_clauses] Processing sort field {i+1}/{len(sort_dict)}: '{sort_key}' ({mode})",
+            )
+
             if is_image_field(sort_key, field_types) or is_audio_field(
-                sort_key, field_types
+                sort_key,
+                field_types,
             ):
+                logging.debug(
+                    f"[_build_sort_clauses] Skipping media field: '{sort_key}'",
+                )
                 continue
             if mode not in ("ascending", "descending"):
                 raise HTTPException(
                     status_code=400,
                     detail=f"Sort mode must be 'ascending' or 'descending', got {mode}.",
                 )
+
+            # Parse expression
+            expr_parse_start = time.time()
             try:
                 expr_dict = str_filter_exp_to_dict(
                     sort_key,
                     field_names=list(field_types.keys()),
                 )
+                logging.debug(
+                    f"[_build_sort_clauses] Sort expression parsed in {time.time() - expr_parse_start:.3f}s",
+                )
             except Exception:
+                logging.error(
+                    f"[_build_sort_clauses] Failed to parse sort expression: '{sort_key}'",
+                )
                 raise HTTPException(
                     status_code=400,
                     detail=f"Invalid sort expression '{sort_key}'",
@@ -316,6 +385,11 @@ def _build_sort_clauses(
 
             if expr_dict.get("type", None) == "identifier":
                 # static field sorting
+                logging.debug(
+                    f"[_build_sort_clauses] Building static field sort for: '{sort_key}'",
+                )
+                static_sort_start = time.time()
+
                 cast_expr = _build_sort_criteria(
                     unified_logs_for_sort.c.value,
                     sort_key,
@@ -341,8 +415,17 @@ def _build_sort_clauses(
                 # remember ORDER‑BY expression
                 direction = asc if mode == "ascending" else desc
                 sort_criteria.append(direction(sort_val_sq.c.val).nulls_last())
+
+                logging.debug(
+                    f"[_build_sort_clauses] Static field sort built in {time.time() - static_sort_start:.3f}s",
+                )
             else:
                 # dynamic expression sorting
+                logging.debug(
+                    f"[_build_sort_clauses] Building dynamic expression sort for: '{sort_key}'",
+                )
+                dynamic_sort_start = time.time()
+
                 event_ids_subq = log_event_query.subquery(name="event_ids_subq")
                 sort_expr = build_sql_query(
                     expr_dict,
@@ -367,6 +450,19 @@ def _build_sort_clauses(
                 direction = asc if mode == "ascending" else desc
                 sort_criteria.append(direction(sort_val_sq.c.val).nulls_last())
 
+                logging.debug(
+                    f"[_build_sort_clauses] Dynamic expression sort built in {time.time() - dynamic_sort_start:.3f}s",
+                )
+
+            logging.debug(
+                f"[_build_sort_clauses] Sort field '{sort_key}' completed in {time.time() - sort_field_start:.3f}s",
+            )
+
+    total_time = time.time() - start_time
+    logging.debug(
+        f"[_build_sort_clauses] All sort clauses built in {total_time:.3f}s - created {len(sort_val_sqs)} subqueries",
+    )
+
 
 def _apply_post_filters(
     base_q,
@@ -378,50 +474,110 @@ def _apply_post_filters(
     exclude_params,
     exclude_entries,
 ):
+    start_time = time.time()
+    logging.info(
+        f"[_apply_post_filters] Starting filter application - from_ids: {from_ids is not None}, exclude_ids: {exclude_ids is not None}, from_fields: {from_fields is not None}, exclude_fields: {exclude_fields is not None}",
+    )
+    logging.info(
+        f"[_apply_post_filters] Parameter filters - exclude_params: {exclude_params}, exclude_entries: {exclude_entries}",
+    )
 
+    # Validate ID filters
+    validation_start = time.time()
     if from_ids and exclude_ids:
+        logging.error(
+            f"[_apply_post_filters] Invalid configuration: both from_ids and exclude_ids specified",
+        )
         raise HTTPException(
             status_code=400,
             detail="Cannot set both from_ids and exclude_ids.",
         )
+    logging.info(
+        f"[_apply_post_filters] Filter validation completed in {time.time() - validation_start:.3f}s",
+    )
 
+    # Apply ID filters
+    id_filter_start = time.time()
     if from_ids:
         include_ids = [int(x) for x in from_ids.split("&")]
+        logging.info(
+            f"[_apply_post_filters] Applying from_ids filter with {len(include_ids)} IDs",
+        )
         base_q = base_q.filter(
             ul_table.c.log_event_id.in_(include_ids),
         )
     elif exclude_ids:
         exclude_set = [int(x) for x in exclude_ids.split("&")]
+        logging.info(
+            f"[_apply_post_filters] Applying exclude_ids filter with {len(exclude_set)} IDs",
+        )
         base_q = base_q.filter(
             ul_table.c.log_event_id.notin_(exclude_set),
         )
+    logging.info(
+        f"[_apply_post_filters] ID filters applied in {time.time() - id_filter_start:.3f}s",
+    )
 
+    # Apply param/entry type filters
+    type_filter_start = time.time()
     if exclude_params:
+        logging.info(
+            f"[_apply_post_filters] Excluding parameters (keeping only entries)",
+        )
         base_q = base_q.filter(
             ul_table.c.param_version.is_(None),
         )
     elif exclude_entries:
+        logging.info(
+            f"[_apply_post_filters] Excluding entries (keeping only parameters)",
+        )
         base_q = base_q.filter(
             ul_table.c.param_version.isnot(None),
         )
+    logging.info(
+        f"[_apply_post_filters] Type filters applied in {time.time() - type_filter_start:.3f}s",
+    )
 
+    # Validate field filters
+    field_validation_start = time.time()
     if from_fields and exclude_fields:
+        logging.error(
+            f"[_apply_post_filters] Invalid configuration: both from_fields and exclude_fields specified",
+        )
         raise HTTPException(
             status_code=400,
             detail="Only one of from_fields or exclude_fields can be set.",
         )
+    logging.info(
+        f"[_apply_post_filters] Field filter validation completed in {time.time() - field_validation_start:.3f}s",
+    )
 
+    # Apply field filters
+    field_filter_start = time.time()
     if from_fields:
         allowed_fields = from_fields.split("&")
+        logging.info(
+            f"[_apply_post_filters] Applying from_fields filter with {len(allowed_fields)} fields: {allowed_fields}",
+        )
         base_q = base_q.filter(
             ul_table.c.key.in_(allowed_fields),
         )
     elif exclude_fields:
         excluded_fields = exclude_fields.split("&")
+        logging.info(
+            f"[_apply_post_filters] Applying exclude_fields filter with {len(excluded_fields)} fields: {excluded_fields}",
+        )
         base_q = base_q.filter(
             ul_table.c.key.notin_(excluded_fields),
         )
+    logging.info(
+        f"[_apply_post_filters] Field filters applied in {time.time() - field_filter_start:.3f}s",
+    )
 
+    total_time = time.time() - start_time
+    logging.info(
+        f"[_apply_post_filters] All filters applied successfully in {total_time:.3f}s",
+    )
     return base_q
 
 
@@ -472,36 +628,80 @@ def _get_logs_query(
     Returns a combined list of base logs (Log) and derived logs (DerivedLog)
     that match the given user filters. See docstring above for details.
     """
+    start_time = time.time()
+    phase_timings = {}  # Track timing for each phase
+    logging.info(
+        f"[_get_logs_query] Starting query - project: {project}, context: {context}, limit: {limit}, offset: {offset}",
+    )
     user_id = request_fastapi.state.user_id
 
     # 1) Validate the project
+    phase_start = time.time()
+    logging.debug(
+        f"[_get_logs_query] Phase 1: Validating project '{project}' for user {user_id}",
+    )
     try:
         project_id = project_dao.get_by_user_and_name(name=project, user_id=user_id).id
+        logging.debug(
+            f"[_get_logs_query] Project validation successful - project_id: {project_id}",
+        )
     except (IndexError, AttributeError):
+        logging.error(
+            f"[_get_logs_query] Project validation failed - project '{project}' not found for user {user_id}",
+        )
         raise not_found(f"Project {project}")
+    phase_duration = time.time() - phase_start
+    phase_timings["Phase 1: Project Validation"] = phase_duration
+    logging.debug(f"[_get_logs_query] Phase 1 completed in {phase_duration:.3f}s")
 
     # Phase 1: filtering, sorting, pagination, etc.
+    phase_start = time.time()
+    logging.debug(
+        f"[_get_logs_query] Phase 2: Setting up log event query and context processing",
+    )
     log_event_query = session.query(LogEvent.id).filter(
         LogEvent.project_id == project_id,
     )
     context_name = "" if not context else context
+    logging.debug(f"[_get_logs_query] Processing context: '{context_name}'")
     context_obj = context_dao.filter(name=context_name, project_id=project_id)
     if context_obj:
         context_id = context_obj[0][0].id
+        logging.debug(f"[_get_logs_query] Context found - context_id: {context_id}")
         log_event_query = log_event_query.join(LogEventContext).filter(
             LogEventContext.context_id == context_id,
         )
     else:
         context_id = None
+        logging.debug(f"[_get_logs_query] No context found - using context_id: None")
+
+    field_types_start = time.time()
     field_types = field_type_dao.get_field_types(project_id, context_id=context_id)
+    logging.debug(
+        f"[_get_logs_query] Retrieved {len(field_types)} field types in {time.time() - field_types_start:.3f}s",
+    )
+    phase_duration = time.time() - phase_start
+    phase_timings["Phase 2: Context & Field Types"] = phase_duration
+    logging.debug(f"[_get_logs_query] Phase 2 completed in {phase_duration:.3f}s")
 
     if filter_expr:
+        phase_start = time.time()
+        logging.debug(
+            f"[_get_logs_query] Phase 3: Processing filter expression: '{filter_expr}'",
+        )
         try:
+            filter_parse_start = time.time()
             filter_dict = str_filter_exp_to_dict(
                 filter_expr,
                 field_names=list(field_types.keys()),
             )
+            logging.debug(
+                f"[_get_logs_query] Filter expression parsed in {time.time() - filter_parse_start:.3f}s",
+            )
         except Exception as e:
+            logging.error(
+                f"[_get_logs_query] Filter expression parsing failed: {str(e)}",
+            )
             session.rollback()
             raise HTTPException(
                 status_code=400,
@@ -509,13 +709,17 @@ def _get_logs_query(
             )
 
         if filter_dict:
+            logging.debug(
+                f"[_get_logs_query] Filter dict created - operand: {filter_dict.get('operand', 'N/A')}",
+            )
 
             def validate_filter_dict(fd):
                 if isinstance(fd, dict):
                     if "type" in fd and fd["type"] == "identifier":
                         field = fd.get("value")
                         if is_image_field(field, field_types) or is_audio_field(
-                            field, field_types
+                            field,
+                            field_types,
                         ):
                             parent = getattr(validate_filter_dict, "parent", None)
                             if parent and parent.get("operand") not in (
@@ -535,12 +739,18 @@ def _get_logs_query(
             event_ids_subq = log_event_query.subquery(name="event_ids_subq")
 
             try:
+                filter_apply_start = time.time()
                 # --- OPTIMIZATION FOR 'OR' ---
                 if isinstance(filter_dict, dict) and filter_dict.get("operand") == "or":
+                    logging.debug(f"[_get_logs_query] Applying OR filter optimization")
                     or_conditions = flatten_or_conditions(filter_dict)
+                    logging.debug(
+                        f"[_get_logs_query] Found {len(or_conditions)} OR conditions",
+                    )
                     matching_id_subqueries = []
 
-                    for condition_dict in or_conditions:
+                    for i, condition_dict in enumerate(or_conditions):
+                        condition_start = time.time()
                         validate_filter_dict(condition_dict)
                         condition_sql = build_sql_query(
                             condition_dict,
@@ -557,11 +767,18 @@ def _get_logs_query(
                                 truthiness_clause,
                             )
                             matching_id_subqueries.append(matching_ids)
+                        logging.debug(
+                            f"[_get_logs_query] OR condition {i+1} processed in {time.time() - condition_start:.3f}s",
+                        )
 
                     if matching_id_subqueries:
+                        union_start = time.time()
                         unioned_ids_subq = union_all(*matching_id_subqueries).subquery()
                         log_event_query = log_event_query.filter(
                             LogEvent.id.in_(select(unioned_ids_subq)),
+                        )
+                        logging.debug(
+                            f"[_get_logs_query] OR union completed in {time.time() - union_start:.3f}s",
                         )
 
                 # --- OPTIMIZATION FOR 'AND' ---
@@ -569,9 +786,14 @@ def _get_logs_query(
                     isinstance(filter_dict, dict)
                     and filter_dict.get("operand") == "and"
                 ):
+                    logging.debug(f"[_get_logs_query] Applying AND filter optimization")
                     and_conditions = flatten_and_conditions(filter_dict)
+                    logging.debug(
+                        f"[_get_logs_query] Found {len(and_conditions)} AND conditions",
+                    )
 
-                    for condition_dict in and_conditions:
+                    for i, condition_dict in enumerate(and_conditions):
+                        condition_start = time.time()
                         validate_filter_dict(condition_dict)
                         condition_sql = build_sql_query(
                             condition_dict,
@@ -598,9 +820,16 @@ def _get_logs_query(
                             )
                         else:
                             log_event_query = log_event_query.filter(condition_sql)
+                        logging.debug(
+                            f"[_get_logs_query] AND condition {i+1} processed in {time.time() - condition_start:.3f}s",
+                        )
 
                 # --- FALLBACK FOR SINGLE CONDITIONS OR OTHER OPERATORS ---
                 else:
+                    logging.debug(
+                        f"[_get_logs_query] Applying fallback filter processing",
+                    )
+                    fallback_start = time.time()
                     validate_filter_dict(filter_dict)
                     condition_sql = build_sql_query(
                         filter_dict,
@@ -627,8 +856,16 @@ def _get_logs_query(
                         )
                     else:
                         log_event_query = log_event_query.filter(condition_sql)
+                    logging.debug(
+                        f"[_get_logs_query] Fallback filter completed in {time.time() - fallback_start:.3f}s",
+                    )
+
+                logging.debug(
+                    f"[_get_logs_query] All filter processing completed in {time.time() - filter_apply_start:.3f}s",
+                )
 
             except Exception as e:
+                logging.error(f"[_get_logs_query] Filter processing error: {str(e)}")
                 session.rollback()
                 # Provide detailed error information
                 error_msg = f"Error processing filter expression: {str(e)}"
@@ -639,7 +876,17 @@ def _get_logs_query(
                     detail=error_msg,
                 )
 
+        phase_duration = time.time() - phase_start
+        phase_timings["Phase 3: Filter Processing"] = phase_duration
+        logging.debug(
+            f"[_get_logs_query] Phase 3 (filter processing) completed in {phase_duration:.3f}s",
+        )
+
     # Apply from_ids/exclude_ids filters early since they filter on log_event_id
+    phase_start = time.time()
+    logging.debug(
+        f"[_get_logs_query] Phase 4: Applying ID filters - from_ids: {from_ids is not None}, exclude_ids: {exclude_ids is not None}",
+    )
     if from_ids and exclude_ids:
         raise HTTPException(
             status_code=400,
@@ -648,16 +895,29 @@ def _get_logs_query(
 
     if from_ids:
         include_ids = [int(x) for x in from_ids.split("&")]
+        logging.debug(
+            f"[_get_logs_query] Applying from_ids filter with {len(include_ids)} IDs",
+        )
         log_event_query = log_event_query.filter(
             LogEvent.id.in_(include_ids),
         )
     elif exclude_ids:
         exclude_set = [int(x) for x in exclude_ids.split("&")]
+        logging.debug(
+            f"[_get_logs_query] Applying exclude_ids filter with {len(exclude_set)} IDs",
+        )
         log_event_query = log_event_query.filter(
             LogEvent.id.notin_(exclude_set),
         )
+    phase_duration = time.time() - phase_start
+    phase_timings["Phase 4: ID Filters"] = phase_duration
+    logging.debug(f"[_get_logs_query] Phase 4 completed in {phase_duration:.3f}s")
 
     # Apply field filters at log event level
+    phase_start = time.time()
+    logging.debug(
+        f"[_get_logs_query] Phase 5: Applying field filters - from_fields: {from_fields is not None}, exclude_fields: {exclude_fields is not None}",
+    )
     if from_fields and exclude_fields:
         raise HTTPException(
             status_code=400,
@@ -667,6 +927,9 @@ def _get_logs_query(
     if from_fields:
         # Filter to only include log events that have at least one of the specified fields
         allowed_fields = from_fields.split("&")
+        logging.debug(
+            f"[_get_logs_query] Applying from_fields filter with {len(allowed_fields)} fields: {allowed_fields}",
+        )
         # Check both Log and DerivedLog tables for matching fields
         log_exists = (
             session.query(Log.log_event_id)
@@ -690,6 +953,9 @@ def _get_logs_query(
     elif exclude_fields:
         # Filter to only include log events that have at least one field NOT in the excluded list
         excluded_fields = exclude_fields.split("&")
+        logging.debug(
+            f"[_get_logs_query] Applying exclude_fields filter with {len(excluded_fields)} fields: {excluded_fields}",
+        )
         # Check both Log and DerivedLog tables for non-excluded fields
         log_exists = (
             session.query(Log.log_event_id)
@@ -710,8 +976,13 @@ def _get_logs_query(
         log_event_query = log_event_query.filter(
             or_(log_exists, derived_log_exists),
         )
+    phase_duration = time.time() - phase_start
+    phase_timings["Phase 5: Field Filters"] = phase_duration
+    logging.debug(f"[_get_logs_query] Phase 5 completed in {phase_duration:.3f}s")
 
     # FIXME: potential duplicate logic
+    phase_start = time.time()
+    logging.debug(f"[_get_logs_query] Phase 6: Context validation and sorting setup")
     if context:
         context_obj = context_dao.filter(name=context, project_id=project_id)
     else:
@@ -719,17 +990,33 @@ def _get_logs_query(
         if not context_obj:
             if latest_timestamp:
                 project_obj = project_dao.filter(name=project, user_id=user_id)
+                logging.debug(
+                    f"[_get_logs_query] Returning latest timestamp for project without context",
+                )
+                total_time = time.time() - start_time
+                logging.info(
+                    f"[_get_logs_query] Early return (latest timestamp) - total time: {total_time:.3f}s",
+                )
                 return project_obj[0][0].created_at.isoformat()
             else:
+                logging.debug(
+                    f"[_get_logs_query] No context found, returning empty result",
+                )
+                total_time = time.time() - start_time
+                logging.info(
+                    f"[_get_logs_query] Early return (no context) - total time: {total_time:.3f}s",
+                )
                 return [], 0, 0
 
     if not context_obj:
+        logging.error(f"[_get_logs_query] Context '{context}' not found")
         raise HTTPException(
             status_code=404,
             detail=f"Context '{context}' not found",
         )
     context_obj = context_obj[0][0]
     ctx_id_val = context_obj.id
+    logging.debug(f"[_get_logs_query] Using context_id: {ctx_id_val}")
 
     # ---- Phase-1: gather all event IDs that match user filters ------------
     # Note: filter_expr has already been applied to log_event_query
@@ -739,13 +1026,30 @@ def _get_logs_query(
     sort_criteria: List[Any] = []
 
     if not randomize and sorting:
-        # For sorting, we need unified logs to get field values
+        logging.debug(
+            f"[_get_logs_query] Setting up sorting with expression: {sorting}",
+        )
+        sort_start = time.time()
+
+        # Step 1: Create relevant log events subquery
+        subquery_start = time.time()
         relevant_log_events = log_event_query.subquery(name="relevant_log_events")
+        logging.debug(
+            f"[_get_logs_query] [SORT] Relevant log events subquery created in {time.time() - subquery_start:.3f}s",
+        )
+
+        # Step 2: Build unified logs for sorting
+        unified_start = time.time()
         unified_logs_for_sort = _build_unified_logs_subquery(
             session=session,
             relevant_log_events=relevant_log_events,
         )
+        logging.debug(
+            f"[_get_logs_query] [SORT] Unified logs for sorting built in {time.time() - unified_start:.3f}s",
+        )
 
+        # Step 3: Build sort clauses
+        sort_clauses_start = time.time()
         _build_sort_clauses(
             session,
             log_event_query,
@@ -755,34 +1059,74 @@ def _get_logs_query(
             sort_val_sqs,
             sort_criteria,
         )
+        logging.debug(
+            f"[_get_logs_query] [SORT] Sort clauses built in {time.time() - sort_clauses_start:.3f}s - created {len(sort_val_sqs)} sort subqueries",
+        )
 
-        # Always add deterministic tie‑breaker
+        # Step 4: Add deterministic tie-breaker
+        tiebreaker_start = time.time()
         sort_criteria.append(desc(relevant_log_events.c.id))
+        logging.debug(
+            f"[_get_logs_query] [SORT] Tie-breaker added in {time.time() - tiebreaker_start:.3f}s",
+        )
 
-        # Join sort subqueries with log events
+        # Step 5: Join sort subqueries with log events
+        join_start = time.time()
         joined_events = relevant_log_events
-        for sq in sort_val_sqs:
+        for i, sq in enumerate(sort_val_sqs):
+            sq_join_start = time.time()
             joined_events = joined_events.outerjoin(
                 sq,
                 sq.c.log_event_id == relevant_log_events.c.id,
             )
+            logging.debug(
+                f"[_get_logs_query] [SORT] Sort subquery {i+1} joined in {time.time() - sq_join_start:.3f}s",
+            )
+        logging.debug(
+            f"[_get_logs_query] [SORT] All sort subqueries joined in {time.time() - join_start:.3f}s",
+        )
 
-        # Build query with sort info and proper joins
+        # Step 6: Build final query with sort info
+        final_query_start = time.time()
         base_event_q = session.query(relevant_log_events.c.id).select_from(
             joined_events,
+        )
+        logging.debug(
+            f"[_get_logs_query] [SORT] Final sorted query built in {time.time() - final_query_start:.3f}s",
+        )
+
+        total_sort_time = time.time() - sort_start
+        logging.debug(
+            f"[_get_logs_query] Sorting setup completed in {total_sort_time:.3f}s with {len(sort_val_sqs)} sort subqueries",
         )
 
         # For _paginate_events, we need to pass the joined query and sort criteria
         # This will ensure proper ordering without cartesian products
     else:
         # No sorting needed, just use the filtered events
+        logging.debug(
+            f"[_get_logs_query] No sorting required - randomize: {randomize}, sorting: {sorting is not None}",
+        )
         base_event_q = log_event_query
 
+    phase_duration = time.time() - phase_start
+    phase_timings["Phase 6: Context & Sorting Setup"] = phase_duration
+    logging.debug(f"[_get_logs_query] Phase 6 completed in {phase_duration:.3f}s")
+
     # ---- Phase-2: total_count + page -------------------------------
+    phase_start = time.time()
+    logging.info(
+        f"[_get_logs_query] Phase 7: Pagination - limit: {limit}, offset: {offset}, randomize: {randomize}",
+    )
     # Check if we have joins (when sorting is enabled)
     has_joins = bool(sorting) and not randomize
+    logging.info(f"[_get_logs_query] Pagination with joins: {has_joins}")
 
-    paginated_ids_subq, total_count = _paginate_events(
+    # Calculate total count using the query without any joins or sorting
+    total_count = log_event_query.distinct().count()
+
+    # Paginate the events
+    paginated_ids_subq = _paginate_events(
         session,
         base_event_q,
         sort_criteria,
@@ -792,9 +1136,17 @@ def _get_logs_query(
         seed=seed,
         has_joins=has_joins,
     )
+    logging.info(f"[_get_logs_query] Pagination completed - total_count: {total_count}")
+    phase_duration = time.time() - phase_start
+    phase_timings["Phase 7: Pagination"] = phase_duration
+    logging.info(f"[_get_logs_query] Phase 7 completed in {phase_duration:.3f}s")
 
     # Phase 3: Handle special cases
     if latest_timestamp:
+        phase_start = time.time()
+        logging.debug(
+            f"[_get_logs_query] Phase 8: Handling latest_timestamp special case",
+        )
         # Build unified logs only for timestamp check
         unified_logs_for_timestamp = _build_unified_logs_subquery(
             session=session,
@@ -803,20 +1155,37 @@ def _get_logs_query(
         max_updated_at = session.query(
             func.max(unified_logs_for_timestamp.c.updated_at),
         ).scalar()
-        return max_updated_at.isoformat() if max_updated_at else None
+        result = max_updated_at.isoformat() if max_updated_at else None
+        logging.debug(f"[_get_logs_query] Latest timestamp result: {result}")
+        phase_duration = time.time() - phase_start
+        phase_timings["Phase 8: Latest Timestamp"] = phase_duration
+        logging.debug(f"[_get_logs_query] Phase 8 completed in {phase_duration:.3f}s")
+        return result
 
     # ---- Phase-4: build unified logs ONLY for the paginated IDs ----
+    phase_start = time.time()
+    logging.debug(
+        f"[_get_logs_query] Phase 9: Building unified logs for paginated results",
+    )
     unified_logs_limited = _build_unified_logs_limited(
         session,
         paginated_ids_subq,
     )
+    phase_duration = time.time() - phase_start
+    phase_timings["Phase 9: Build Unified Logs"] = phase_duration
+    logging.debug(f"[_get_logs_query] Phase 9 completed in {phase_duration:.3f}s")
 
+    phase_start = time.time()
+    logging.info(
+        f"[_get_logs_query] Phase 10: Applying final filters and column context processing",
+    )
     filtered_logs_q = session.query(unified_logs_limited).filter(True)
 
     context_len = 0
     exclude_params = False
     exclude_entries = False
     if column_context is not None:
+        logging.info(f"[_get_logs_query] Processing column_context: '{column_context}'")
         split_context = column_context.split("/")
         exclude_params = "entries" in split_context
         exclude_entries = "params" in split_context
@@ -831,11 +1200,15 @@ def _get_logs_query(
         if column_context and column_context[-1] != "/":
             column_context += "/"
         context_len = len(column_context or "")
+        logging.info(
+            f"[_get_logs_query] Column context processed - exclude_params: {exclude_params}, exclude_entries: {exclude_entries}, context_len: {context_len}",
+        )
     if column_context:
         filtered_logs_q = filtered_logs_q.filter(
             unified_logs_limited.c.key.startswith(column_context),
         )
 
+    filter_start = time.time()
     filtered_logs_q = _apply_post_filters(
         filtered_logs_q,
         unified_logs_limited,
@@ -846,11 +1219,19 @@ def _get_logs_query(
         from_fields=from_fields,  # Still need to filter the actual fields returned
         exclude_fields=exclude_fields,  # Still need to filter the actual fields returned
     )
+    logging.info(
+        f"[_get_logs_query] Post filters applied in {time.time() - filter_start:.3f}s",
+    )
     filtered_logs_subq = filtered_logs_q.subquery(name="filtered_logs_subq")
 
     # Get final logs - total_count already calculated in _paginate_events
+    final_logs_start = time.time()
     raw_rows = _get_final_logs(session, filtered_logs_subq, paginated_ids_subq)
+    logging.info(
+        f"[_get_logs_query] Final logs retrieved - {len(raw_rows)} rows in {time.time() - final_logs_start:.3f}s",
+    )
 
+    result_processing_start = time.time()
     results = []
     for (
         row_id,
@@ -876,6 +1257,27 @@ def _get_logs_query(
             ),
         )
 
+    logging.info(
+        f"[_get_logs_query] Result processing completed in {time.time() - result_processing_start:.3f}s",
+    )
+    phase_duration = time.time() - phase_start
+    phase_timings["Phase 10: Final Processing"] = phase_duration
+    logging.info(f"[_get_logs_query] Phase 10 completed in {phase_duration:.3f}s")
+
+    total_time = time.time() - start_time
+
+    # Sort phases by time taken (descending) and log the timing breakdown
+    sorted_phases = sorted(phase_timings.items(), key=lambda x: x[1], reverse=True)
+    logging.info(f"[_get_logs_query] TIMING BREAKDOWN (sorted by duration):")
+    for phase_name, duration in sorted_phases:
+        percentage = (duration / total_time) * 100 if total_time > 0 else 0
+        logging.info(
+            f"[_get_logs_query]   {phase_name}: {duration:.3f}s ({percentage:.1f}%)",
+        )
+
+    logging.info(
+        f"[_get_logs_query] Query completed - total time: {total_time:.3f}s, results: {len(results)} rows, total_count: {total_count}",
+    )
     return results, context_len, total_count
 
 
@@ -1318,6 +1720,11 @@ def _build_unified_logs_subquery(
     Returns:
         A unified subquery combining base and derived logs
     """
+    start_time = time.time()
+    logging.debug(
+        f"[_build_unified_logs_subquery] Starting - event_ids: {event_ids is not None}, relevant_log_events: {relevant_log_events is not None}, key: {key}",
+    )
+
     if event_ids is None and relevant_log_events is None:
         raise ValueError("Either event_ids or relevant_log_events must be provided")
 
@@ -1365,7 +1772,7 @@ def _build_unified_logs_subquery(
         name="unified_logs",
     )
     # re-label columns to avoid anonymous column names
-    return select(
+    result = select(
         unified_logs_subq.c[unified_logs_subq.c.keys()[0]].label("id"),
         unified_logs_subq.c[unified_logs_subq.c.keys()[1]].label("log_event_id"),
         unified_logs_subq.c[unified_logs_subq.c.keys()[2]].label("key"),
@@ -1377,6 +1784,11 @@ def _build_unified_logs_subquery(
         unified_logs_subq.c[unified_logs_subq.c.keys()[8]].label("created_at"),
         unified_logs_subq.c[unified_logs_subq.c.keys()[9]].label("source_type"),
     ).subquery("unified_logs")
+
+    logging.debug(
+        f"[_build_unified_logs_subquery] Completed in {time.time() - start_time:.3f}s",
+    )
+    return result
 
 
 ######################
@@ -1412,6 +1824,10 @@ def is_audio_field(field_name: str, field_types: dict) -> bool:
 
 def _format_flat_logs(rows, context_len, value_limit, field_order_map):
     """Helper function to format flat logs using raw query data"""
+    start_time = time.time()
+    logging.debug(
+        f"[_format_flat_logs] Starting - {len(rows)} rows, value_limit: {value_limit}, context_len: {context_len}",
+    )
     formatted = {}
 
     for (
@@ -1561,6 +1977,9 @@ def _format_flat_logs(rows, context_len, value_limit, field_order_map):
             },
         )
 
+    logging.debug(
+        f"[_format_flat_logs] Completed in {time.time() - start_time:.3f}s - formatted {len(logs_out)} logs",
+    )
     return logs_out, params_out
 
 
@@ -1569,8 +1988,17 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
     Return fully-hydrated rows, using LATERAL sub-queries so the JSON
     side-tables are probed with indexes instead of being full-scanned.
     """
+    start_time = time.time()
+    logging.info(
+        f"[_get_final_logs] Starting final logs retrieval with LATERAL subqueries",
+    )
 
     # ── current JSON value ────────────────────────────────────────────────
+    lateral_setup_start = time.time()
+    logging.info(
+        f"[_get_final_logs] Building LATERAL subqueries for JSON value retrieval",
+    )
+
     jl_lateral = (
         select(JSONLog.value.label("jl_val"))
         .where(
@@ -1583,6 +2011,7 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
         .lateral()  # turn SELECT into a LATERAL
         .alias("jl_lateral")
     )
+    logging.info(f"[_get_final_logs] JSONLog LATERAL subquery created")
 
     # ── latest history value ──────────────────────────────────────────────
     jlh_lateral = (
@@ -1598,8 +2027,15 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
         .lateral()
         .alias("jlh_lateral")
     )
+    logging.info(f"[_get_final_logs] JSONLogHistory LATERAL subquery created")
+    logging.info(
+        f"[_get_final_logs] LATERAL subqueries setup completed in {time.time() - lateral_setup_start:.3f}s",
+    )
 
     # -- Main query --------------------------------------------------------------
+    main_query_start = time.time()
+    logging.info(f"[_get_final_logs] Building main query with coalesce logic and joins")
+
     final_logs_query = (
         session.query(
             filtered_logs_subq.c.id,
@@ -1631,8 +2067,51 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
         .outerjoin(jlh_lateral, true())
         .order_by(paginated_ids_subq.c.row_num, filtered_logs_subq.c.created_at)
     )
+    logging.info(
+        f"[_get_final_logs] Main query built in {time.time() - main_query_start:.3f}s",
+    )
 
-    return final_logs_query.all()
+    # Execute the query
+    execution_start = time.time()
+    logging.info(
+        f"[_get_final_logs] Executing final query with LATERAL joins: {final_logs_query}",
+    )
+
+    # from sqlalchemy import text
+    # try:
+    #     import json
+
+    #     # Execute EXPLAIN ANALYZE with the same parameters
+    #     compiled_sql = final_logs_query.statement.compile(
+    #         dialect=session.bind.dialect,
+    #         compile_kwargs={"literal_binds": True},
+    #     ).string
+    #     compiled_sql = (
+    #         "EXPLAIN (ANALYZE, BUFFERS, TIMING, COSTS, VERBOSE, FORMAT JSON) "
+    #         + compiled_sql
+    #     )
+    #     explain_query = text(compiled_sql)
+    #     explain_result = session.execute(explain_query)
+    #     explain_output = explain_result.fetchone()[0]
+    #     with open("explain_analyze.json", "w") as f:
+    #         f.write(compiled_sql + "\n")
+    #         f.write(json.dumps(explain_output, indent=4))
+    #         print("Explain analyze written to explain_analyze.json")
+    # except Exception as explain_error:
+    #     print(f"Error getting explain analyze: {explain_error}")
+
+    result = final_logs_query.all()
+    execution_time = time.time() - execution_start
+
+    total_time = time.time() - start_time
+    logging.info(
+        f"[_get_final_logs] Query executed in {execution_time:.3f}s - retrieved {len(result)} final log rows",
+    )
+    logging.info(
+        f"[_get_final_logs] Complete final logs retrieval finished in {total_time:.3f}s",
+    )
+
+    return result
 
 
 #### JOIN LOG ####
