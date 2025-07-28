@@ -119,6 +119,16 @@ admin_router = APIRouter()
                 },
             },
         },
+        409: {
+            "description": "Conflict",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "An assistant with the name 'Alice Smith' already exists for this user.",
+                    },
+                },
+            },
+        },
         422: {
             "description": "Validation Error",
             "content": {
@@ -386,6 +396,17 @@ def create_assistant(
                     detail=error_msg,
                 )
 
+    except IntegrityError as e:
+        session.rollback()
+        if "uq_user_assistant_name" in str(e).lower():
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"An assistant with the name '{assistant_in.first_name} {assistant_in.surname}' already exists for this user.",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Database error creating assistant: {str(e)}",
+        )
     except HTTPException:
         raise
     except Exception as e_prepare:
