@@ -124,12 +124,6 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 0.25, "completion": 1.25},
     },
-    "claude-3-opus": {
-        "endpoint": "vertex_ai/claude-3-opus@20240229",
-        "region": "us-east5",
-        "context_window": 200000,
-        "cost": {"prompt": 15, "completion": 75},
-    },
     "claude-3.5-sonnet": {
         "endpoint": "vertex_ai/claude-3-5-sonnet-v2@20241022",
         "region": "us-east5",
