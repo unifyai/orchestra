@@ -77,6 +77,7 @@ class CallRecordingService:
         agent_id: int,
         recording_raw: str,
         content_type: Optional[str] = None,
+        is_staging: bool = False,
     ) -> CallRecording:
         """
         1) Verify assistant exists
@@ -112,7 +113,11 @@ class CallRecordingService:
 
         # 4) Upload recording to bucket
         try:
-            url, filename = self.bucket_service.upload_recording(content, content_type)
+            url, filename = self.bucket_service.upload_recording(
+                content,
+                content_type,
+                is_staging=is_staging,
+            )
         except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

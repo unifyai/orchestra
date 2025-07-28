@@ -997,6 +997,7 @@ async def create_recording(
             agent_id=recording.assistant_id,
             recording_raw=recording.recording_raw,
             content_type=mime,
+            is_staging=settings.is_staging,
         )
 
         return InfoResponse(
