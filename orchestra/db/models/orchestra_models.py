@@ -1222,6 +1222,9 @@ class Assistant(Base):
             ["voices.user_id", "voices.voice_id"],
             name="fk_assistants_voices",
         ),
+        UniqueConstraint(
+            "user_id", "first_name", "surname", name="uq_user_assistant_name"
+        ),
     )
 
 
