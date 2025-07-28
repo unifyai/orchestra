@@ -824,11 +824,11 @@ async def test_create_assistant_duplicate_name_fails(client: AsyncClient):
     assert body["detail"] == expected_error
 
     # Verify that a different user CAN create an assistant with the same name
-    user2_headers = await create_test_user(
+    user2 = await create_test_user(
         client,
         "user2-for-duplicate-test@example.com",
-        return_headers=True,
     )
+    user2_headers = user2["headers"]
     resp3 = await client.post("/v0/assistant", json=payload, headers=user2_headers)
     assert (
         resp3.status_code == 200
