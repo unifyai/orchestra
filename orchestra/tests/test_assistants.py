@@ -795,3 +795,44 @@ async def test_admin_update_assistant_whatsapp_number_and_user_whatsapp(
     assert len(infos) == 1
     assert infos[0]["agent_id"] == aid1
     assert all(i["agent_id"] != aid2 for i in infos)
+
+
+@pytest.mark.anyio
+async def test_create_assistant_duplicate_name_fails(client: AsyncClient):
+    # `POST /v0/assistant` with a duplicate name for the same user should fail.
+    payload = {
+        "first_name": "David",
+        "surname": "Miller",
+        "age": 35,
+        "weekly_limit": 20.0,
+        "max_parallel": 2,
+        "region": "North America",
+        "about": "A test assistant.",
+        "create_infra": False,
+    }
+
+    # First creation should succeed
+    resp1 = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert resp1.status_code == 200, f"First assistant creation failed: {resp1.text}"
+
+    # Second creation with the same name for the same user should fail
+    resp2 = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert resp2.status_code == 409
+    body = resp2.json()
+    assert "detail" in body
+    expected_error = f"An assistant with the name '{payload['first_name']} {payload['surname']}' already exists for this user."
+    assert body["detail"] == expected_error
+
+    # Verify that a different user CAN create an assistant with the same name
+    user2_headers = await create_test_user(
+        client,
+        "user2-for-duplicate-test@example.com",
+        return_headers=True,
+    )
+    resp3 = await client.post("/v0/assistant", json=payload, headers=user2_headers)
+    assert (
+        resp3.status_code == 200
+    ), f"Second user failed to create assistant with same name: {resp3.text}"
+    data3 = resp3.json()["info"]
+    assert data3["first_name"] == payload["first_name"]
+    assert data3["surname"] == payload["surname"]
