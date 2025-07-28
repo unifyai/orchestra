@@ -1194,6 +1194,7 @@ class Assistant(Base):
     age = Column(Integer, nullable=True)
     region = Column(String, nullable=True)
     profile_photo = Column(String, nullable=True)
+    profile_video = Column(String, nullable=True)
     about = Column(String, nullable=True)
     country = Column(String, nullable=True)
     weekly_limit = Column(Numeric, nullable=True)
@@ -1223,7 +1224,10 @@ class Assistant(Base):
             name="fk_assistants_voices",
         ),
         UniqueConstraint(
-            "user_id", "first_name", "surname", name="uq_user_assistant_name"
+            "user_id",
+            "first_name",
+            "surname",
+            name="uq_user_assistant_name",
         ),
     )
 

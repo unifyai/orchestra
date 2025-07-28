@@ -23,7 +23,8 @@ class AssistantDAO:
         surname: str,
         age: int,
         region: str,
-        profile_photo: str,
+        profile_photo: Optional[str] = None,
+        profile_video: Optional[str] = None,
         about: str,
         weekly_limit: Decimal,
         max_parallel: int,
@@ -44,6 +45,7 @@ class AssistantDAO:
             age=age,
             region=region,
             profile_photo=profile_photo,
+            profile_video=profile_video,
             about=about,
             weekly_limit=weekly_limit,
             max_parallel=max_parallel,
@@ -124,6 +126,8 @@ class AssistantDAO:
         assistant_whatsapp_number: Optional[str] = None,
         voice_id: Optional[str] = None,
         country: Optional[str] = None,
+        profile_photo: Optional[str] = None,
+        profile_video: Optional[str] = None,
     ) -> Optional[Assistant]:
         """
         Update configuration for an existing Assistant.
@@ -151,6 +155,10 @@ class AssistantDAO:
             assistant.voice_id = voice_id
         if country is not None:
             assistant.country = country
+        if profile_photo is not None:
+            assistant.profile_photo = profile_photo
+        if profile_video is not None:
+            assistant.profile_video = profile_video
         self.session.add(assistant)
         return assistant
 
