@@ -66,7 +66,12 @@ class BucketService:
             return f"{content_hash}_{unique_id}.{extension.lstrip('.')}"
         return f"{content_hash}_{unique_id}"
 
-    def upload_recording(self, content: bytes, content_type: str) -> Tuple[str, str]:
+    def upload_recording(
+        self,
+        content: bytes,
+        content_type: str,
+        is_staging: bool = False,
+    ) -> Tuple[str, str]:
         """
         Upload raw audio bytes to GCS and return (url, filename).
 
@@ -82,9 +87,11 @@ class BucketService:
         """
         try:
             # Generate unique filename
-            filename = "assistant_call_recording/" + self._generate_unique_filename(
-                content,
-            )
+            unique_filename = self._generate_unique_filename(content)
+            if is_staging:
+                filename = "assistant_call_recording_staging/" + unique_filename
+            else:
+                filename = "assistant_call_recording/" + unique_filename
 
             # Upload to GCS
             blob = self.bucket.blob(filename)
