@@ -40,6 +40,7 @@ from orchestra.web.api.assistant.schema import (
     AssistantRead,
     AssistantStatus,
     AssistantUpdate,
+    AssistantVideoUploadResponse,
     InfoResponse,
     PhotoGenerateRequest,
     RecordingCreate,
@@ -222,6 +223,7 @@ def create_assistant(
             age=assistant_in.age,
             region=assistant_in.region,
             profile_photo=assistant_in.profile_photo,
+            profile_video=assistant_in.profile_video,
             about=assistant_in.about,
             weekly_limit=parsed_weekly_limit,
             max_parallel=assistant_in.max_parallel,
@@ -449,6 +451,7 @@ def create_assistant(
             age=assistant.age,
             region=assistant.region,
             profile_photo=assistant.profile_photo,
+            profile_video=assistant.profile_video,
             about=assistant.about,
             weekly_limit=(
                 float(assistant.weekly_limit)
@@ -494,6 +497,7 @@ def create_assistant(
                                 "email": "alice.smith@example.com",
                                 "region": "North America",
                                 "profile_photo": "https://example.com/photos/alice.jpg",
+                                "profile_video": "https://example.com/videos/alice.mp4",
                                 "about": "Mathematician and writer known for work on Analytical Engine",
                                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                                 "country": "US",
@@ -511,6 +515,7 @@ def create_assistant(
                                 "email": "bob.jones@example.com",
                                 "region": "South America",
                                 "profile_photo": "https://example.com/photos/bob.jpg",
+                                "profile_video": "https://example.com/videos/bob.mp4",
                                 "about": "Machine learning expert with focus on computer vision",
                                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                                 "country": "CA",
@@ -571,6 +576,7 @@ def list_assistants(
                     age=a.age,
                     region=a.region,
                     profile_photo=a.profile_photo,
+                    profile_video=a.profile_video,
                     about=a.about,
                     country=a.country,
                     weekly_limit=(
@@ -665,6 +671,25 @@ def delete_assistant(
                 )
                 cleanup_errors.append(f"Failed to delete profile photo: {str(e_gcs)}")
 
+        # Delete GCS profile video if it exists
+        if assistant.profile_video and assistant.profile_video.startswith("gs://"):
+            try:
+                deleted_from_gcs = bucket_service.delete_assistant_file(
+                    assistant.profile_video,
+                )
+                if not deleted_from_gcs:
+                    logging.error(
+                        f"Profile video {assistant.profile_video} for assistant {assistant_id} was not deleted from GCS (either not found, wrong bucket, or other non-critical issue).",
+                    )
+                    cleanup_errors.append(
+                        f"Failed to delete profile video: {str(e_gcs)}",
+                    )
+            except Exception as e_gcs:
+                logging.error(
+                    f"Failed to delete profile video {assistant.profile_video} for assistant {assistant_id}: {str(e_gcs)}",
+                )
+                cleanup_errors.append(f"Failed to delete profile video: {str(e_gcs)}")
+
         # Wait before starting other infra cleanup (same as rollback operations)
         time.sleep(10)
 
@@ -745,6 +770,7 @@ def delete_assistant(
                             "email": "alice.smith@example.com",
                             "region": "North America",
                             "profile_photo": "https://example.com/photos/alice.jpg",
+                            "profile_video": "https://example.com/videos/alice.mp4",
                             "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                             "country": "US",
                             "created_at": "2025-04-25T12:00:00Z",
@@ -798,6 +824,8 @@ def update_assistant_config(
     # Store the old photo URL before the update
     old_photo_url = None
     is_photo_changing = False
+    old_video_url = None
+    is_video_changing = False
 
     # Check assistant existence before any updates
     existing_assistant = assistant_dao.get_assistant_by_id(
@@ -814,6 +842,10 @@ def update_assistant_config(
     old_photo_url = existing_assistant.profile_photo
     is_photo_changing = (
         update.profile_photo is not None and update.profile_photo != old_photo_url
+    )
+    old_video_url = existing_assistant.profile_video
+    is_video_changing = (
+        update.profile_video is not None and update.profile_video != old_video_url
     )
 
     try:
@@ -873,6 +905,7 @@ def update_assistant_config(
             user_id=request.state.user_id,
             agent_id=assistant_id,
             profile_photo=update.profile_photo,
+            profile_video=update.profile_video,
             about=update.about,
             phone=update.phone,
             email=update.email,
@@ -902,6 +935,18 @@ def update_assistant_config(
                     f"Failed to delete old profile photo {old_photo_url} for assistant {assistant_id} during update. Error: {str(e)}",
                 )
 
+        # If the video was updated, delete the old one from GCS.
+        if is_video_changing and old_video_url and old_video_url.startswith("gs://"):
+            try:
+                bucket_service.delete_assistant_file(old_video_url)
+                logging.info(
+                    f"Successfully deleted old profile video {old_video_url} for assistant {assistant_id}.",
+                )
+            except Exception as e:
+                logging.error(
+                    f"Failed to delete old profile video {old_video_url} for assistant {assistant_id} during update. Error: {str(e)}",
+                )
+
         return InfoResponse(
             info=AssistantRead(
                 agent_id=str(updated.agent_id),
@@ -911,6 +956,7 @@ def update_assistant_config(
                 age=updated.age,
                 region=updated.region,
                 profile_photo=updated.profile_photo,
+                profile_video=updated.profile_video,
                 about=updated.about,
                 country=updated.country,
                 weekly_limit=float(updated.weekly_limit),
@@ -2015,6 +2061,65 @@ async def upload_assistant_photo(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Could not upload photo: {str(e)}",
+        )
+
+
+@router.post(
+    "/assistant/video/upload",
+    response_model=InfoResponse[AssistantVideoUploadResponse],
+    status_code=status.HTTP_201_CREATED,
+    summary="Upload video",
+    description="Uploads a profile video for an assistant and returns the storage URL.",
+    tags=["Media"],
+)
+async def upload_assistant_video(
+    request: Request,
+    file: UploadFile = File(..., example="assistant_video.mp4"),
+):
+    bucket_service = BucketService()
+    user_id = request.state.user_id
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="User not authenticated.",
+        )
+
+    if not file.content_type or not file.content_type.startswith("video/"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid file type. Only videos are allowed.",
+        )
+
+    MAX_SIZE_BYTES = 50 * 1024 * 1024  # 50MB limit for videos
+    if (
+        file.size and file.size > MAX_SIZE_BYTES
+    ):  # FastAPI's UploadFile might have size after spooling
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File size exceeds {MAX_SIZE_BYTES // (1024*1024)}MB limit.",
+        )
+
+    try:
+        file_content = await file.read()
+        if len(file_content) > MAX_SIZE_BYTES:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File content size exceeds {MAX_SIZE_BYTES // (1024*1024)}MB limit.",
+            )
+
+        gcs_url = bucket_service.upload_assistant_photo_file(
+            file_content=file_content,
+            user_id=user_id,
+            content_type=file.content_type,
+        )
+        return InfoResponse(info=AssistantVideoUploadResponse(gcs_url=gcs_url))
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logging.error(f"Error uploading assistant video for user {user_id}: {str(e)}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Could not upload video: {str(e)}",
         )
 
 

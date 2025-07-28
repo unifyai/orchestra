@@ -56,6 +56,11 @@ class AssistantCreate(BaseModel):
         description="URL to the assistant's profile photo",
         example="https://example.com/photos/ada.jpg",
     )
+    profile_video: Optional[str] = Field(
+        None,
+        description="URL to the assistant's profile video",
+        example="https://example.com/videos/ada.mp4",
+    )
     about: Optional[str] = Field(
         None,
         description="Brief description about the assistant",
@@ -108,6 +113,7 @@ class AssistantCreate(BaseModel):
                 "max_parallel": 2,
                 "region": "North America",
                 "profile_photo": "https://example.com/photos/ada.jpg",
+                "profile_video": "https://example.com/videos/ada.mp4",
                 "about": "Mathematician and writer known for work on Analytical Engine",
                 "country": "US",
                 "email": "ada.lovelace@unify.ai",
@@ -190,6 +196,7 @@ class AssistantRead(AssistantCreate):
                 "max_parallel": 2,
                 "region": "North America",
                 "profile_photo": "https://example.com/photos/ada.jpg",
+                "profile_video": "https://example.com/videos/ada.mp4",
                 "about": "Mathematician and writer known for work on Analytical Engine",
                 "country": "US",
                 "email": "ada.lovelace@unify.ai",
@@ -231,6 +238,11 @@ class AssistantUpdate(BaseModel):
         None,
         description="URL to the assistant's profile photo",
         example="https://example.com/photos/ada.jpg",
+    )
+    profile_video: Optional[str] = Field(
+        None,
+        description="URL to the assistant's profile video",
+        example="https://example.com/videos/ada_new.mp4",
     )
     about: Optional[str] = Field(
         None,
@@ -275,6 +287,7 @@ class AssistantUpdate(BaseModel):
                 "weekly_limit": 20.5,
                 "max_parallel": 3,
                 "profile_photo": "https://example.com/photos/ada.jpg",
+                "profile_video": "https://example.com/videos/ada_new.mp4",
                 "about": "Award-winning mathematician specializing in algorithm development",
                 "user_phone": "+15551234567",
                 "phone": "+15559876543",
@@ -684,6 +697,14 @@ class AssistantPhotoUploadResponse(BaseModel):
         ...,
         description="GCS URL of the uploaded photo",
         example="gs://your-bucket-name/user_id/image_uuid.jpg",
+    )
+
+
+class AssistantVideoUploadResponse(BaseModel):
+    gcs_url: str = Field(
+        ...,
+        description="GCS URL of the uploaded video",
+        example="gs://your-bucket-name/user_id/video_uuid.mp4",
     )
 
 
