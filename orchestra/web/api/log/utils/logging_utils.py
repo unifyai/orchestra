@@ -23,7 +23,6 @@ from sqlalchemy import (
     or_,
     select,
     text,
-    true,
     union_all,
 )
 from sqlalchemy.sql.expression import ColumnClause
@@ -283,9 +282,15 @@ def _build_unified_logs_limited(
     """
     Phase 2 helper: build unified logs subquery limited to the specified log_event_ids.
     """
+    # IMPORTANT: pass the ID list through the *event_ids* parameter so the
+    #            builder emits a simple “…WHERE LogEvent.id IN ( … )” filter
+    #            that PostgreSQL can satisfy with the existing
+    #            (log_event_id) b‑tree indexes instead of a hash‑join.
+    # Pass only the single‑column list of IDs, not the whole CTE.
+    id_only_sq = select(ids_subq.c.id).subquery("page_ids")
     return _build_unified_logs_subquery(
         session=session,
-        relevant_log_events=ids_subq,
+        event_ids=id_only_sq,
     )
 
 
@@ -396,17 +401,14 @@ def _build_sort_clauses(
                     field_types,
                 )
 
+                # NEW  ❯❯  one pass, uses existing (log_event_id,key,*) indexes
                 sort_val_sq = (
                     select(
                         unified_logs_for_sort.c.log_event_id.label("log_event_id"),
-                        cast_expr.label("val"),
+                        func.max(cast_expr).label("val"),  # pick *any* value per event
                     )
                     .where(unified_logs_for_sort.c.key == sort_key)
-                    .order_by(
-                        unified_logs_for_sort.c.log_event_id,
-                        unified_logs_for_sort.c.updated_at.desc(),
-                    )
-                    .distinct(unified_logs_for_sort.c.log_event_id)
+                    .group_by(unified_logs_for_sort.c.log_event_id)  # no filesort
                     .subquery(f"sort_{sort_key}_sq")
                 )
 
@@ -601,6 +603,40 @@ def flatten_or_conditions(filter_dict):
     elif filter_dict:
         conditions.append(filter_dict)
     return conditions
+
+
+def _prefetch_json_values(session, paginated_ids_subq):
+    """
+    Return two sub‑queries with the current JSONLog value and the
+    latest JSONLogHistory value for every (event_id,key) in the page.
+    Uses DISTINCT ON, so it is index‑only and executed once.
+    """
+    jl_vals = (
+        select(
+            JSONLog.log_event_id,
+            JSONLog.key,
+            JSONLog.value.label("jl_val"),
+        )
+        .where(JSONLog.log_event_id.in_(select(paginated_ids_subq.c.id)))
+        .subquery("jl_vals")
+    )
+
+    jlh_vals = (
+        select(
+            JSONLogHistory.log_event_id,
+            JSONLogHistory.key,
+            JSONLogHistory.value.label("jlh_val"),
+        )
+        .where(JSONLogHistory.log_event_id.in_(select(paginated_ids_subq.c.id)))
+        .distinct(JSONLogHistory.log_event_id, JSONLogHistory.key)
+        .order_by(
+            JSONLogHistory.log_event_id,
+            JSONLogHistory.key,
+            JSONLogHistory.version.desc(),
+        )
+        .subquery("jlh_vals")
+    )
+    return jl_vals, jlh_vals
 
 
 def _get_logs_query(
@@ -1033,7 +1069,13 @@ def _get_logs_query(
 
         # Step 1: Create relevant log events subquery
         subquery_start = time.time()
-        relevant_log_events = log_event_query.subquery(name="relevant_log_events")
+        relevant_log_events_cte = log_event_query.cte(
+            "relevant_log_events",
+        ).prefix_with(  # WITH relevant_log_events AS ( … )
+            "MATERIALIZED",
+        )  # force single evaluation in PG ≥12
+        # keep a handy alias – this line replaces every previous reference
+        relevant_log_events = relevant_log_events_cte
         logging.debug(
             f"[_get_logs_query] [SORT] Relevant log events subquery created in {time.time() - subquery_start:.3f}s",
         )
@@ -1136,6 +1178,12 @@ def _get_logs_query(
         seed=seed,
         has_joins=has_joins,
     )
+    paginated_ids_cte = (
+        select(paginated_ids_subq.c.id, paginated_ids_subq.c.row_num)  # ⬅ wrap
+        .cte("paginated_ids")  #     then cte()
+        .prefix_with("MATERIALIZED")  # (PG ≥12)
+    )
+    paginated_ids_subq = paginated_ids_cte
     logging.info(f"[_get_logs_query] Pagination completed - total_count: {total_count}")
     phase_duration = time.time() - phase_start
     phase_timings["Phase 7: Pagination"] = phase_duration
@@ -1993,44 +2041,14 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
         f"[_get_final_logs] Starting final logs retrieval with LATERAL subqueries",
     )
 
-    # ── current JSON value ────────────────────────────────────────────────
+    # ── current JSON value and latest history value ────────────────────────────────────────────────
     lateral_setup_start = time.time()
     logging.info(
         f"[_get_final_logs] Building LATERAL subqueries for JSON value retrieval",
     )
 
-    jl_lateral = (
-        select(JSONLog.value.label("jl_val"))
-        .where(
-            and_(
-                JSONLog.log_event_id == filtered_logs_subq.c.log_event_id,
-                JSONLog.key == filtered_logs_subq.c.key,
-            ),
-        )
-        .limit(1)  # only one row exists anyway
-        .lateral()  # turn SELECT into a LATERAL
-        .alias("jl_lateral")
-    )
+    jl_vals, jlh_vals = _prefetch_json_values(session, paginated_ids_subq)
     logging.info(f"[_get_final_logs] JSONLog LATERAL subquery created")
-
-    # ── latest history value ──────────────────────────────────────────────
-    jlh_lateral = (
-        select(JSONLogHistory.value.label("jlh_val"))
-        .where(
-            and_(
-                JSONLogHistory.log_event_id == filtered_logs_subq.c.log_event_id,
-                JSONLogHistory.key == filtered_logs_subq.c.key,
-            ),
-        )
-        .order_by(JSONLogHistory.version.desc())
-        .limit(1)
-        .lateral()
-        .alias("jlh_lateral")
-    )
-    logging.info(f"[_get_final_logs] JSONLogHistory LATERAL subquery created")
-    logging.info(
-        f"[_get_final_logs] LATERAL subqueries setup completed in {time.time() - lateral_setup_start:.3f}s",
-    )
 
     # -- Main query --------------------------------------------------------------
     main_query_start = time.time()
@@ -2045,9 +2063,9 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
                 case(
                     (
                         filtered_logs_subq.c.source_type == "history",
-                        jlh_lateral.c.jlh_val,
+                        jlh_vals.c.jlh_val,
                     ),
-                    else_=jl_lateral.c.jl_val,
+                    else_=jl_vals.c.jl_val,
                 ),
                 cast(filtered_logs_subq.c.value, JSON),
             ).label("value"),
@@ -2062,9 +2080,21 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
             paginated_ids_subq,
             paginated_ids_subq.c.id == filtered_logs_subq.c.log_event_id,
         )
-        # probe the side tables
-        .outerjoin(jl_lateral, true())
-        .outerjoin(jlh_lateral, true())
+        # probe the side tables (set joins)
+        .outerjoin(
+            jl_vals,
+            and_(
+                jl_vals.c.log_event_id == filtered_logs_subq.c.log_event_id,
+                jl_vals.c.key == filtered_logs_subq.c.key,
+            ),
+        )
+        .outerjoin(
+            jlh_vals,
+            and_(
+                jlh_vals.c.log_event_id == filtered_logs_subq.c.log_event_id,
+                jlh_vals.c.key == filtered_logs_subq.c.key,
+            ),
+        )
         .order_by(paginated_ids_subq.c.row_num, filtered_logs_subq.c.created_at)
     )
     logging.info(
