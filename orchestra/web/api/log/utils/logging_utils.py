@@ -38,6 +38,7 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     Context,
     DerivedLog,
+    Embedding,
     JSONLog,
     JSONLogHistory,
     Log,
@@ -52,6 +53,7 @@ from orchestra.web.api.utils.http_responses import not_found
 
 from ..python2SQL import STR_TO_SQL_TYPES
 from ..python2SQL.core import build_sql_query
+from ..python2SQL.helpers import _select_value
 from ..python2SQL.parsers import str_filter_exp_to_dict
 
 __all__ = [
@@ -290,94 +292,138 @@ def _build_sort_clauses(
     Helper function to build sorting clauses for log queries.
     Extracts the sorting logic from _get_logs_query for reusability.
     """
+    is_vector_sort = False
+    vector_sort_details = {}
+
     if sorting:
         sort_dict = json.loads(sorting)
 
-        for i, (sort_key, mode) in enumerate(sort_dict.items()):
-            if is_image_field(sort_key, field_types) or is_audio_field(
-                sort_key,
-                field_types,
-            ):
-                continue
+        # This optimization only applies when sorting by a single vector similarity metric.
+        if isinstance(sort_dict, dict) and len(sort_dict) == 1:
+            sort_key, mode = next(iter(sort_dict.items()))
             if mode not in ("ascending", "descending"):
                 raise HTTPException(
                     status_code=400,
                     detail=f"Sort mode must be 'ascending' or 'descending', got {mode}.",
                 )
-
-            # Parse expression
             try:
                 expr_dict = str_filter_exp_to_dict(
                     sort_key,
                     field_names=list(field_types.keys()),
                 )
             except Exception:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid sort expression '{sort_key}'",
-                )
+                # not parseable => fall back
+                expr_dict = None
 
-            if expr_dict.get("type", None) == "identifier":
-                # static field sorting
-                # build a *key‑specific* unified view – orders of magnitude smaller
-                key_ul = _build_unified_logs_subquery(
-                    session=session,
-                    relevant_log_events=relevant_log_events,
-                    key=sort_key,  # ❷  filter at source
-                )
+            if (
+                isinstance(expr_dict, dict)
+                and expr_dict.get("operand") in ("cosine", "l2", "ip")
+                and isinstance(expr_dict.get("lhs"), dict)
+                and expr_dict["lhs"].get("type") == "identifier"
+                and isinstance(expr_dict.get("rhs"), dict)
+                and expr_dict["rhs"].get("operand") == "embed"
+            ):
+                is_vector_sort = True
+                vector_sort_details = {
+                    "expr_dict": expr_dict,
+                    "operand": expr_dict["operand"],
+                    "mode": mode,
+                    "lhs_key": expr_dict["lhs"]["value"],
+                    "rhs_embed": expr_dict["rhs"],
+                }
 
-                cast_expr = _build_sort_criteria(
-                    key_ul.c.value,
+        # If it's a vector sort, we will handle it later. If not, use existing logic.
+        if not is_vector_sort:
+            for i, (sort_key, mode) in enumerate(sort_dict.items()):
+                if is_image_field(sort_key, field_types) or is_audio_field(
                     sort_key,
                     field_types,
-                )
-                agg_target = (
-                    cast(cast_expr, Text)
-                    if isinstance(cast_expr.type, JSONB)
-                    else cast_expr
-                )
-
-                sort_val_sq = (
-                    select(
-                        key_ul.c.log_event_id.label("log_event_id"),
-                        agg_target.label("val"),  # ← same typed value you had before
+                ):
+                    continue
+                if mode not in ("ascending", "descending"):
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Sort mode must be 'ascending' or 'descending', got {mode}.",
                     )
-                    .distinct(key_ul.c.log_event_id)  # DISTINCT ON(log_event_id)
-                    .order_by(key_ul.c.log_event_id)  # walks the new index
-                    .subquery(f"sort_{sort_key}_sq")
-                )
 
-                sort_val_sqs.append(sort_val_sq)
-
-                # remember ORDER‑BY expression
-                direction = asc if mode == "ascending" else desc
-                sort_criteria.append(direction(sort_val_sq.c.val).nulls_last())
-
-            else:
-                # dynamic expression sorting
-                event_ids_subq = log_event_query.subquery(name="event_ids_subq")
-                sort_expr = build_sql_query(
-                    expr_dict,
-                    LogEvent,
-                    session,
-                    log_event_ids=event_ids_subq,
-                )
-                rand = random.randint(1, 1000000)
-                base_sq = sort_expr.alias(f"sort_base_{rand}")
-                sort_val_sq = (
-                    select(
-                        base_sq.c.log_event_id.label("log_event_id"),
-                        base_sq.c.value.label("val"),
+                # Parse expression
+                try:
+                    expr_dict = str_filter_exp_to_dict(
+                        sort_key,
+                        field_names=list(field_types.keys()),
                     )
-                    .where(base_sq.c.log_event_id.in_(select(event_ids_subq.c.id)))
-                    .subquery(f"sort_expr_{rand}")
-                )
+                except Exception:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Invalid sort expression '{sort_key}'",
+                    )
 
-                sort_val_sqs.append(sort_val_sq)
+                if expr_dict.get("type", None) == "identifier":
+                    # static field sorting
+                    # build a *key‑specific* unified view – orders of magnitude smaller
+                    key_ul = _build_unified_logs_subquery(
+                        session=session,
+                        relevant_log_events=relevant_log_events,
+                        key=sort_key,  # ❷  filter at source
+                    )
 
-                # Add to ORDER BY clauses
-                direction = asc if mode == "ascending" else desc
-                sort_criteria.append(direction(sort_val_sq.c.val).nulls_last())
+                    cast_expr = _build_sort_criteria(
+                        key_ul.c.value,
+                        sort_key,
+                        field_types,
+                    )
+                    agg_target = (
+                        cast(cast_expr, Text)
+                        if isinstance(cast_expr.type, JSONB)
+                        else cast_expr
+                    )
+
+                    sort_val_sq = (
+                        select(
+                            key_ul.c.log_event_id.label("log_event_id"),
+                            agg_target.label(
+                                "val",
+                            ),  # ← same typed value you had before
+                        )
+                        .distinct(key_ul.c.log_event_id)  # DISTINCT ON(log_event_id)
+                        .order_by(key_ul.c.log_event_id)  # walks the new index
+                        .subquery(f"sort_{sort_key}_sq")
+                    )
+
+                    sort_val_sqs.append(sort_val_sq)
+
+                    # remember ORDER‑BY expression
+                    direction = asc if mode == "ascending" else desc
+                    sort_criteria.append(direction(sort_val_sq.c.val).nulls_last())
+
+                else:
+                    # dynamic expression sorting
+                    event_ids_subq = log_event_query.subquery(name="event_ids_subq")
+                    sort_expr = build_sql_query(
+                        expr_dict,
+                        LogEvent,
+                        session,
+                        log_event_ids=event_ids_subq,
+                    )
+                    rand = random.randint(1, 1000000)
+                    base_sq = sort_expr.alias(f"sort_base_{rand}")
+                    sort_val_sq = (
+                        select(
+                            base_sq.c.log_event_id.label("log_event_id"),
+                            base_sq.c.value.label("val"),
+                        )
+                        .where(base_sq.c.log_event_id.in_(select(event_ids_subq.c.id)))
+                        .subquery(f"sort_expr_{rand}")
+                    )
+
+                    sort_val_sqs.append(sort_val_sq)
+
+                    # Add to ORDER BY clauses
+                    direction = asc if mode == "ascending" else desc
+                    sort_criteria.append(direction(sort_val_sq.c.val).nulls_last())
+
+    # Return the flag and details so the calling function can decide which query path to take.
+    return is_vector_sort, vector_sort_details
 
 
 def _apply_post_filters(
@@ -801,7 +847,7 @@ def _get_logs_query(
         relevant_log_events = relevant_log_events_cte
 
         # Step 2: Build sort clauses
-        _build_sort_clauses(
+        is_vector_sort, vector_sort_details = _build_sort_clauses(
             session,
             log_event_query,
             field_types,
@@ -811,52 +857,148 @@ def _get_logs_query(
             sort_criteria,
         )
 
-        # Step 3: Add deterministic tie-breaker
-        sort_criteria.append(desc(relevant_log_events.c.id))
+        if is_vector_sort:
+            # --- vector ANN fast-path  ---
 
-        # Step 4: Join sort subqueries with log events
-        joined_events = relevant_log_events
-        for i, sq in enumerate(sort_val_sqs):
-            joined_events = joined_events.outerjoin(
-                sq,
-                sq.c.log_event_id == relevant_log_events.c.id,
+            # 0) Use the already-built CTE of filtered IDs
+            event_ids = relevant_log_events  # CTE with column "id"
+
+            # 1) Extract parsed pieces from vector_sort_details
+            expr_dict = vector_sort_details["expr_dict"]
+            operand = vector_sort_details["operand"]  # "cosine" | "l2" | "ip"
+            mode = vector_sort_details["mode"]  # "ascending" | "descending"
+            lhs_key = vector_sort_details["lhs_key"]  # e.g. "_content_text_emb"
+            rhs_embed = vector_sort_details[
+                "rhs_embed"
+            ]  # parsed embed(...) dict or expr
+
+            # 2) Build RHS vector literal once
+            rhs_sql = build_sql_query(
+                rhs_embed,
+                LogEvent,
+                session,
+                log_event_ids=event_ids,  # scope for any correlated pieces (should be literal)
+            )
+            rhs_vec, _ = _select_value(rhs_sql, session, is_vector=True)
+
+            # 3) Choose the correct distance operator
+            op = {"cosine": "<=>", "l2": "<->", "ip": "<#>"}[operand]
+            dist = Embedding.vector.op(op)(rhs_vec)
+
+            asc_sort = mode == "ascending"
+
+            # 4) ANN top-K on Embedding first (pushdown LIMIT)
+            top_k = (offset or 0) + (limit or 100)
+            ann_topk = (
+                select(
+                    Embedding.ref_id.label("id"),
+                    dist.label("dist"),
+                )
+                .where(
+                    Embedding.key == lhs_key,
+                    Embedding.vector.isnot(None),
+                    Embedding.ref_id.in_(select(event_ids.c.id)),
+                )
+                .order_by(
+                    dist.asc() if asc_sort else dist.desc(),
+                    Embedding.ref_id.desc(),
+                )
+                .limit(top_k)
+                .subquery("ann_topk")
             )
 
-        # Step 5: Build final query with sort info
-        base_event_q = session.query(relevant_log_events.c.id).select_from(
-            joined_events,
-        )
+            # 5) Page and expose row numbers for downstream logic
+            row_order = [
+                ann_topk.c.dist.asc() if asc_sort else ann_topk.c.dist.desc(),
+                ann_topk.c.id.desc(),
+            ]
 
-        # For _paginate_events, we need to pass the joined query and sort criteria
-        # This will ensure proper ordering without cartesian products
+            paginated_ids_subq = select(
+                ann_topk.c.id,
+                func.row_number().over(order_by=row_order).label("row_num"),
+            ).order_by(*row_order)
+            if offset > 0:
+                paginated_ids_subq = paginated_ids_subq.offset(offset)
+            if limit:
+                paginated_ids_subq = paginated_ids_subq.limit(limit)
+
+            paginated_ids_subq = paginated_ids_subq.cte("paginated_ids").prefix_with(
+                "MATERIALIZED",
+            )
+
+            # Keep total_count consistent with legacy path
+            total_count = log_event_query.distinct().count()
+
+        else:
+            # Step 3: Add deterministic tie-breaker
+            sort_criteria.append(desc(relevant_log_events.c.id))
+
+            # Step 4: Join sort subqueries with log events
+            joined_events = relevant_log_events
+            for i, sq in enumerate(sort_val_sqs):
+                joined_events = joined_events.outerjoin(
+                    sq,
+                    sq.c.log_event_id == relevant_log_events.c.id,
+                )
+
+            # Step 5: Build final query with sort info
+            base_event_q = session.query(relevant_log_events.c.id).select_from(
+                joined_events,
+            )
+
+            # For _paginate_events, we need to pass the joined query and sort criteria
+            # This will ensure proper ordering without cartesian products
+            has_joins = True
+
+            # Calculate total count using the query without any joins or sorting
+            total_count = log_event_query.distinct().count()
+
+            # Paginate the events
+            paginated_ids_subq = _paginate_events(
+                session,
+                base_event_q,
+                sort_criteria,
+                limit,
+                offset,
+                randomize=randomize,
+                seed=seed,
+                has_joins=has_joins,
+            )
+            paginated_ids_cte = (
+                select(paginated_ids_subq.c.id, paginated_ids_subq.c.row_num)  # ⬅ wrap
+                .cte("paginated_ids")  #     then cte()
+                .prefix_with("MATERIALIZED")  # (PG ≥12)
+            )
+            paginated_ids_subq = paginated_ids_cte
+
     else:
         # No sorting needed, just use the filtered events
         base_event_q = log_event_query
 
-    # ---- Phase-2: total_count + page -------------------------------
-    # Check if we have joins (when sorting is enabled)
-    has_joins = bool(sorting) and not randomize
+        # ---- Phase-2: total_count + page -------------------------------
+        # Check if we have joins (when sorting is enabled)
+        has_joins = bool(sorting) and not randomize
 
-    # Calculate total count using the query without any joins or sorting
-    total_count = log_event_query.distinct().count()
+        # Calculate total count using the query without any joins or sorting
+        total_count = log_event_query.distinct().count()
 
-    # Paginate the events
-    paginated_ids_subq = _paginate_events(
-        session,
-        base_event_q,
-        sort_criteria,
-        limit,
-        offset,
-        randomize=randomize,
-        seed=seed,
-        has_joins=has_joins,
-    )
-    paginated_ids_cte = (
-        select(paginated_ids_subq.c.id, paginated_ids_subq.c.row_num)  # ⬅ wrap
-        .cte("paginated_ids")  #     then cte()
-        .prefix_with("MATERIALIZED")  # (PG ≥12)
-    )
-    paginated_ids_subq = paginated_ids_cte
+        # Paginate the events
+        paginated_ids_subq = _paginate_events(
+            session,
+            base_event_q,
+            sort_criteria,
+            limit,
+            offset,
+            randomize=randomize,
+            seed=seed,
+            has_joins=has_joins,
+        )
+        paginated_ids_cte = (
+            select(paginated_ids_subq.c.id, paginated_ids_subq.c.row_num)  # ⬅ wrap
+            .cte("paginated_ids")  #     then cte()
+            .prefix_with("MATERIALIZED")  # (PG ≥12)
+        )
+        paginated_ids_subq = paginated_ids_cte
 
     # Phase 3: Handle special cases
     if latest_timestamp:
