@@ -12,6 +12,7 @@ from sqlalchemy import (
     JSON,
     Integer,
     String,
+    Text,
     and_,
     asc,
     case,
@@ -25,6 +26,7 @@ from sqlalchemy import (
     text,
     union_all,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.sql.expression import ColumnClause
 from sqlalchemy.sql.selectable import Subquery
 
@@ -283,7 +285,7 @@ def _build_unified_logs_limited(
     Phase 2 helper: build unified logs subquery limited to the specified log_event_ids.
     """
     # IMPORTANT: pass the ID list through the *event_ids* parameter so the
-    #            builder emits a simple “…WHERE LogEvent.id IN ( … )” filter
+    #            builder emits a simple "…WHERE LogEvent.id IN ( … )" filter
     #            that PostgreSQL can satisfy with the existing
     #            (log_event_id) b‑tree indexes instead of a hash‑join.
     # Pass only the single‑column list of IDs, not the whole CTE.
@@ -400,12 +402,15 @@ def _build_sort_clauses(
                     sort_key,
                     field_types,
                 )
+                agg_target = cast_expr
+                if isinstance(cast_expr.type, JSONB):
+                    agg_target = cast(cast_expr, Text)  # JSONB → text
 
                 # NEW  ❯❯  one pass, uses existing (log_event_id,key,*) indexes
                 sort_val_sq = (
                     select(
                         unified_logs_for_sort.c.log_event_id.label("log_event_id"),
-                        func.max(cast_expr).label("val"),  # pick *any* value per event
+                        func.max(agg_target).label("val"),  # pick *any* value per event
                     )
                     .where(unified_logs_for_sort.c.key == sort_key)
                     .group_by(unified_logs_for_sort.c.log_event_id)  # no filesort
@@ -609,7 +614,7 @@ def _prefetch_json_values(session, paginated_ids_subq):
     """
     Return two sub‑queries with the current JSONLog value and the
     latest JSONLogHistory value for every (event_id,key) in the page.
-    Uses DISTINCT ON, so it is index‑only and executed once.
+    Uses DISTINCT ON, so it is index‑only and executed once.
     """
     jl_vals = (
         select(
@@ -1778,12 +1783,17 @@ def _build_unified_logs_subquery(
 
     def _apply_event_filter(query, table):
         if event_ids is not None:
-            return query.filter(LogEvent.id.in_(event_ids))
+            # if we were given a Subquery alias, wrap it in a scalar SELECT
+            event_ids_selectable = (
+                select(event_ids) if isinstance(event_ids, Subquery) else event_ids
+            )
+            return query.filter(LogEvent.id.in_(event_ids_selectable))
         query = query.join(relevant_log_events, relevant_log_events.c.id == LogEvent.id)
         if hasattr(relevant_log_events.c, "row_num"):
             query = query.order_by(relevant_log_events.c.row_num)
         if key:
-            return query.filter(table.key == key)
+            # Filter down to only logs with the specified key (for performance)
+            query = query.filter(table.key == key)
         return query
 
     # get only the latest version of the logs
