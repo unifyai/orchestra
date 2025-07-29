@@ -333,7 +333,7 @@ def _build_sort_clauses(
     log_event_query,
     field_types,
     sorting,
-    unified_logs_for_sort,
+    relevant_log_events,
     sort_val_sqs,
     sort_criteria,
 ):
@@ -397,23 +397,31 @@ def _build_sort_clauses(
                 )
                 static_sort_start = time.time()
 
+                # build a *key‑specific* unified view – orders of magnitude smaller
+                key_ul = _build_unified_logs_subquery(
+                    session=session,
+                    relevant_log_events=relevant_log_events,
+                    key=sort_key,  # ❷  filter at source
+                )
+
                 cast_expr = _build_sort_criteria(
-                    unified_logs_for_sort.c.value,
+                    key_ul.c.value,
                     sort_key,
                     field_types,
                 )
-                agg_target = cast_expr
-                if isinstance(cast_expr.type, JSONB):
-                    agg_target = cast(cast_expr, Text)  # JSONB → text
+                agg_target = (
+                    cast(cast_expr, Text)
+                    if isinstance(cast_expr.type, JSONB)
+                    else cast_expr
+                )
 
-                # NEW  ❯❯  one pass, uses existing (log_event_id,key,*) indexes
                 sort_val_sq = (
                     select(
-                        unified_logs_for_sort.c.log_event_id.label("log_event_id"),
-                        func.max(agg_target).label("val"),  # pick *any* value per event
+                        key_ul.c.log_event_id.label("log_event_id"),
+                        agg_target.label("val"),  # ← same typed value you had before
                     )
-                    .where(unified_logs_for_sort.c.key == sort_key)
-                    .group_by(unified_logs_for_sort.c.log_event_id)  # no filesort
+                    .distinct(key_ul.c.log_event_id)  # DISTINCT ON(log_event_id)
+                    .order_by(key_ul.c.log_event_id)  # walks the new index
                     .subquery(f"sort_{sort_key}_sq")
                 )
 
@@ -623,7 +631,7 @@ def _prefetch_json_values(session, paginated_ids_subq):
             JSONLog.value.label("jl_val"),
         )
         .where(JSONLog.log_event_id.in_(select(paginated_ids_subq.c.id)))
-        .subquery("jl_vals")
+        .cte("jl_vals")
     )
 
     jlh_vals = (
@@ -639,7 +647,7 @@ def _prefetch_json_values(session, paginated_ids_subq):
             JSONLogHistory.key,
             JSONLogHistory.version.desc(),
         )
-        .subquery("jlh_vals")
+        .cte("jlh_vals")
     )
     return jl_vals, jlh_vals
 
@@ -1085,24 +1093,14 @@ def _get_logs_query(
             f"[_get_logs_query] [SORT] Relevant log events subquery created in {time.time() - subquery_start:.3f}s",
         )
 
-        # Step 2: Build unified logs for sorting
-        unified_start = time.time()
-        unified_logs_for_sort = _build_unified_logs_subquery(
-            session=session,
-            relevant_log_events=relevant_log_events,
-        )
-        logging.debug(
-            f"[_get_logs_query] [SORT] Unified logs for sorting built in {time.time() - unified_start:.3f}s",
-        )
-
-        # Step 3: Build sort clauses
+        # Step 2: Build sort clauses
         sort_clauses_start = time.time()
         _build_sort_clauses(
             session,
             log_event_query,
             field_types,
             sorting,
-            unified_logs_for_sort,
+            relevant_log_events,
             sort_val_sqs,
             sort_criteria,
         )
@@ -1110,14 +1108,14 @@ def _get_logs_query(
             f"[_get_logs_query] [SORT] Sort clauses built in {time.time() - sort_clauses_start:.3f}s - created {len(sort_val_sqs)} sort subqueries",
         )
 
-        # Step 4: Add deterministic tie-breaker
+        # Step 3: Add deterministic tie-breaker
         tiebreaker_start = time.time()
         sort_criteria.append(desc(relevant_log_events.c.id))
         logging.debug(
             f"[_get_logs_query] [SORT] Tie-breaker added in {time.time() - tiebreaker_start:.3f}s",
         )
 
-        # Step 5: Join sort subqueries with log events
+        # Step 4: Join sort subqueries with log events
         join_start = time.time()
         joined_events = relevant_log_events
         for i, sq in enumerate(sort_val_sqs):
@@ -1133,7 +1131,7 @@ def _get_logs_query(
             f"[_get_logs_query] [SORT] All sort subqueries joined in {time.time() - join_start:.3f}s",
         )
 
-        # Step 6: Build final query with sort info
+        # Step 5: Build final query with sort info
         final_query_start = time.time()
         base_event_q = session.query(relevant_log_events.c.id).select_from(
             joined_events,
@@ -2116,29 +2114,6 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
     logging.info(
         f"[_get_final_logs] Executing final query with LATERAL joins: {final_logs_query}",
     )
-
-    # from sqlalchemy import text
-    # try:
-    #     import json
-
-    #     # Execute EXPLAIN ANALYZE with the same parameters
-    #     compiled_sql = final_logs_query.statement.compile(
-    #         dialect=session.bind.dialect,
-    #         compile_kwargs={"literal_binds": True},
-    #     ).string
-    #     compiled_sql = (
-    #         "EXPLAIN (ANALYZE, BUFFERS, TIMING, COSTS, VERBOSE, FORMAT JSON) "
-    #         + compiled_sql
-    #     )
-    #     explain_query = text(compiled_sql)
-    #     explain_result = session.execute(explain_query)
-    #     explain_output = explain_result.fetchone()[0]
-    #     with open("explain_analyze.json", "w") as f:
-    #         f.write(compiled_sql + "\n")
-    #         f.write(json.dumps(explain_output, indent=4))
-    #         print("Explain analyze written to explain_analyze.json")
-    # except Exception as explain_error:
-    #     print(f"Error getting explain analyze: {explain_error}")
 
     result = final_logs_query.all()
     execution_time = time.time() - execution_start
