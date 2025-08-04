@@ -108,11 +108,6 @@ supported_models = {
         "context_window": 32768,
         "cost": {"prompt": 0.3, "completion": 0.3},
     },
-    "qwen-2.5-coder-32b-instruct": {
-        "endpoint": "together_ai/Qwen/Qwen2.5-Coder-32B-Instruct",
-        "context_window": 32768,
-        "cost": {"prompt": 0.8, "completion": 0.8},
-    },
     "qwen-qwq-32b": {
         "endpoint": "together_ai/Qwen/QwQ-32B",
         "context_window": 32768,
