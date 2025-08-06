@@ -51,80 +51,59 @@ def queue_auto_recharge(session: Session, user: User, credits: int) -> None:
     now = datetime.now(timezone.utc)
     invoice_group = month_end_utc(now)
 
-    # Create the database record first
-    recharge = Recharge(
-        user_id=user.id,
-        type=RECHARGE_TYPE_AUTO,
-        quantity=Decimal(credits),
-        amount_usd=Decimal(credits),  # 1 credit = $1
-        invoice_group=invoice_group,
-        status=RechargeStatus.PENDING_INVOICE,
-    )
+    # Validate Stripe customer & default payment method BEFORE creating any DB record
+    print(f"[AUTO-RECHARGE] Creating Stripe invoice item for user {user.id}")
 
-    session.add(recharge)
-
-    print(
-        f"[AUTO-RECHARGE] Auto-recharge record created for user {user.id}: "
-        f"${credits:.2f} ({credits} credits), "
-        f"Invoice group: {invoice_group}",
-    )
-
-    # Now create the Stripe invoice item if user has a Stripe customer ID
-    if user.stripe_customer_id:
-        print(f"[AUTO-RECHARGE] Creating Stripe invoice item for user {user.id}")
-
-        try:
-            # Configure Stripe API key
-            stripe_key = os.environ.get("STRIPE_SECRET_KEY")
-            if not stripe_key:
-                print(
-                    "[AUTO-RECHARGE] ERROR: STRIPE_SECRET_KEY environment variable not set!",
-                )
-                return
-
-            stripe.api_key = stripe_key
+    try:
+        # Configure Stripe API key
+        stripe_key = os.environ.get("STRIPE_SECRET_KEY")
+        if not stripe_key:
             print(
-                f"[AUTO-RECHARGE] Stripe API key configured (key prefix: {stripe_key[:10]}...)",
+                "[AUTO-RECHARGE] ERROR: STRIPE_SECRET_KEY environment variable not set!",
+            )
+            return
+
+        stripe.api_key = stripe_key
+        print(
+            f"[AUTO-RECHARGE] Stripe API key configured (key prefix: {stripe_key[:10]}...)",
+        )
+
+        # Retrieve customer and ensure default payment method BEFORE any further Stripe calls
+        customer = stripe.Customer.retrieve(user.stripe_customer_id)
+
+        default_pm = (
+            customer.get("invoice_settings", {}).get("default_payment_method")
+            if customer
+            else None
+        )
+
+        if not default_pm:
+            raise ValueError(
+                f"Customer {user.stripe_customer_id} has no default payment method configured",
             )
 
-            # Create Stripe invoice item
-            print(
-                f"[AUTO-RECHARGE] Calling Stripe API - Customer: {user.stripe_customer_id}, "
-                f"Amount: ${credits} ({credits * 100} cents)",
-            )
+        # --- Passed all validation; create DB recharge record now ---
+        recharge = Recharge(
+            user_id=user.id,
+            type=RECHARGE_TYPE_AUTO,
+            quantity=Decimal(credits),
+            amount_usd=Decimal(credits),  # 1 credit = $1
+            invoice_group=invoice_group,
+            status=RechargeStatus.PENDING_INVOICE,
+        )
 
-            invoice_item = stripe.InvoiceItem.create(
-                customer=user.stripe_customer_id,
-                amount=int(credits * 100),  # Convert to cents
-                currency="usd",
-                description=f"{credits} credits (auto-recharge)",
-                metadata={
-                    "recharge_type": "auto",
-                    "user_id": user.id,
-                    "invoice_group": str(invoice_group),
-                },
-            )
+        session.add(recharge)
+        print(
+            f"[AUTO-RECHARGE] Auto-recharge record created for user {user.id}: "
+            f"${credits:.2f} ({credits} credits), "
+            f"Invoice group: {invoice_group}",
+        )
 
-            print(
-                f"[AUTO-RECHARGE] SUCCESS: Stripe invoice item created - "
-                f"Invoice Item ID: {invoice_item.id}, "
-                f"Customer: {invoice_item.customer}, "
-                f"Amount: {invoice_item.amount} cents",
-            )
-
-        except stripe.error.StripeError as e:
-            print(
-                f"[AUTO-RECHARGE] STRIPE ERROR: {type(e).__name__} - "
-                f"Message: {str(e)}, "
-                f"Code: {getattr(e, 'code', 'N/A')}",
-            )
-            # Don't raise - we still want the recharge record in the database
-
-        except Exception as e:
-            print(
-                f"[AUTO-RECHARGE] UNEXPECTED ERROR: {type(e).__name__} - "
-                f"Message: {str(e)}",
-            )
-            # Don't raise - we still want the recharge record in the database
-    else:
-        print(f"[AUTO-RECHARGE] WARNING: User {user.id} has no Stripe customer ID")
+    except stripe.error.StripeError as e:
+        print(
+            f"[AUTO-RECHARGE] STRIPE ERROR: {type(e).__name__} - "
+            f"Message: {str(e)}, "
+            f"Code: {getattr(e, 'code', 'N/A')}",
+        )
+        # Keep database record, but propagate error so caller can handle if needed
+        raise

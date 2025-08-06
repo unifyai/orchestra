@@ -2629,3 +2629,57 @@ def test_auto_recharge_integration_with_monthly_invoicer(
             # Verify the total amount is correct (50 + 25 = 75 credits = $75 = 75 cents)
             total_amount = sum(item["amount"] for item in invoice_items)
             assert total_amount == 75
+
+
+# --------------------------------------------------------------------------- #
+# New test: Stripe customer with NO default payment method                    #
+# --------------------------------------------------------------------------- #
+
+
+def test_queue_auto_recharge_no_default_payment_method(dbsession: Session, monkeypatch):
+    """Ensure auto-recharge aborts if Stripe customer lacks default payment method."""
+    import types
+
+    import orchestra.lib.billing as billing_mod
+
+    uid = "no_pm_user"
+    stripe_customer_id = "cus_no_pm_test"
+
+    # Create user with Stripe ID but no PM
+    user = Users(
+        id=uid,
+        credits=5,
+        stripe_customer_id=stripe_customer_id,
+        autorecharge=True,
+        autorecharge_threshold=10,
+        autorecharge_qty=50,
+    )
+    dbsession.add(user)
+    dbsession.commit()
+
+    # Mock stripe module to return customer with no default payment method
+    class DummyStripe:
+        class error:
+            class StripeError(Exception):
+                pass
+
+        @staticmethod
+        def Customer_retrieve(cust_id):
+            return {
+                "id": cust_id,
+                "invoice_settings": {"default_payment_method": None},
+            }
+
+    dummy = types.SimpleNamespace(
+        Customer=types.SimpleNamespace(retrieve=DummyStripe.Customer_retrieve),
+        InvoiceItem=types.SimpleNamespace(create=lambda **kw: None),
+        error=DummyStripe.error,
+    )
+
+    monkeypatch.setattr(billing_mod, "stripe", dummy, raising=True)
+
+    with pytest.raises(ValueError):
+        queue_auto_recharge(dbsession, user, 50)
+
+    # Ensure no recharge record exists
+    assert dbsession.query(Recharge).filter_by(user_id=uid).count() == 0
