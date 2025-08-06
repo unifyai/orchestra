@@ -34,6 +34,14 @@ def queue_auto_recharge(session: Session, user: User, credits: int) -> None:
         user: User object to recharge
         credits: Number of credits to recharge
     """
+    if not user.stripe_customer_id:
+        # Log an error and abort. Do not create a recharge record.
+        print(
+            f"[AUTO-RECHARGE] ERROR: Attempted to auto-recharge for user {user.id} "
+            "who has no Stripe customer ID. Aborting.",
+        )
+        raise ValueError(f"Cannot auto-recharge user {user.id} without a Stripe ID.")
+
     print(
         f"[AUTO-RECHARGE] Queueing auto-recharge - User ID: {user.id}, "
         f"Credits: {credits}, "
