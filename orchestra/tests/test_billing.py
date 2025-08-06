@@ -28,6 +28,7 @@ import sqlalchemy as sa
 from httpx import AsyncClient
 from sqlalchemy.orm import Session
 
+import orchestra.lib.billing as billing_mod
 from orchestra.db.models.orchestra_models import (
     Recharge,
     RechargeStatus,
@@ -108,7 +109,12 @@ def _routine_uses_session(module, dbsession):
 # --------------------------------------------------------------------------- #
 @pytest.fixture(autouse=True)
 def mock_stripe(monkeypatch) -> Dict[str, list]:
-    calls: Dict[str, list] = {"item": [], "invoice": [], "construct": []}
+    calls: Dict[str, list] = {
+        "item": [],
+        "invoice": [],
+        "construct": [],
+        "customer": [],
+    }
 
     def _item_create(**kw):
         calls["item"].append(kw)
@@ -134,11 +140,20 @@ def mock_stripe(monkeypatch) -> Dict[str, list]:
             "invoice": "in_test_dispute",
         }
 
+    def _cust_retrieve(cust_id):
+        calls["customer"].append(cust_id)
+        return {
+            "id": cust_id,
+            "invoice_settings": {"default_payment_method": "pm_test"},
+        }
+
+    # Provide minimal Invoice.create fallback (some tests expect it)
     dummy = SimpleNamespace(
         InvoiceItem=SimpleNamespace(create=_item_create),
         Invoice=SimpleNamespace(create=_inv_create),
         Webhook=SimpleNamespace(construct_event=_construct_event),
         PaymentIntent=SimpleNamespace(retrieve=_mock_retrieve),
+        Customer=SimpleNamespace(retrieve=_cust_retrieve),
         error=SimpleNamespace(SignatureVerificationError=Exception),
     )
 
@@ -148,6 +163,7 @@ def mock_stripe(monkeypatch) -> Dict[str, list]:
 
     monkeypatch.setattr(monthly_invoicer, "stripe", dummy, raising=True)
     monkeypatch.setattr(webhook_stripe, "stripe", dummy, raising=True)
+    monkeypatch.setattr(billing_mod, "stripe", dummy, raising=True)
     return calls
 
 
@@ -238,7 +254,8 @@ def test_invoicer_aggregates(dbsession: Session, mock_stripe):
     rows = dbsession.query(Recharge).filter_by(user_id=uid).all()
     assert {r.status for r in rows} == {RechargeStatus.INVOICE_CREATED}
     assert {r.stripe_invoice_id for r in rows} == {"in_test_123"}
-    assert len(mock_stripe["item"]) == 1 and len(mock_stripe["invoice"]) == 1
+    # Monthly invoicer now creates only the invoice (items are created at recharge time)
+    assert len(mock_stripe["invoice"]) == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -466,6 +483,7 @@ def test_auto_recharge_logic_triggers_correctly(dbsession: Session):
     user = Users(
         id=uid,
         credits=15,  # Above threshold initially
+        stripe_customer_id="cus_logic_test",
         autorecharge=True,
         autorecharge_threshold=10,
         autorecharge_qty=50,
@@ -549,7 +567,7 @@ def test_auto_recharge_above_threshold_no_trigger(dbsession: Session):
     assert recharge is None
 
 
-def test_auto_recharge_integration_with_monthly_invoicer(
+def test_auto_recharge_integration_with_monthly_invoicer_early(
     dbsession: Session,
     mock_stripe,
 ):
@@ -2054,7 +2072,7 @@ async def test_billing_migration_endpoint_comprehensive(
 
     # Add spending for each user
     for user_data in test_users:
-        if user_data["spending"] > 0:
+        if user_data.get("spending", 0) > 0:
             query_dao.create_query(
                 user_id=user_data["id"],
                 at=datetime.datetime.now(),
@@ -2200,8 +2218,7 @@ async def test_billing_migration_endpoint_edge_cases(
             "credits": 500,
             "stripe_customer_id": "cus_exact",
             "autorecharge": True,
-            "autorecharge_qty": 50.0,
-            "spending": 100.0,  # Exactly $100
+            "autorecharge_qty": 50.0,  # Exactly $100
         },
         # User with exactly $25 autorecharge amount
         {
@@ -2247,7 +2264,7 @@ async def test_billing_migration_endpoint_edge_cases(
 
     # Add spending for each user
     for user_data in edge_case_users:
-        if user_data["spending"] > 0:
+        if user_data.get("spending", 0) > 0:
             query_dao.create_query(
                 user_id=user_data["id"],
                 at=datetime.datetime.now(),
@@ -2321,6 +2338,12 @@ def test_queue_auto_recharge_creates_stripe_invoice_item(
     mock_invoice_item = SimpleNamespace(create=mock_create)
     mock_stripe_module = SimpleNamespace(
         InvoiceItem=mock_invoice_item,
+        Customer=SimpleNamespace(
+            retrieve=lambda cid: {
+                "id": cid,
+                "invoice_settings": {"default_payment_method": "pm_test"},
+            },
+        ),
         error=SimpleNamespace(
             StripeError=Exception,
             InvalidRequestError=Exception,
@@ -2403,18 +2426,12 @@ def test_queue_auto_recharge_no_stripe_customer_id(
     # Clear any previous calls
     mock_stripe["item"].clear()
 
-    # Queue auto-recharge - should not fail
-    queue_auto_recharge(dbsession, user, 50)
-    dbsession.commit()
+    # Queue auto-recharge should now raise a ValueError due to missing Stripe ID
+    with pytest.raises(ValueError):
+        queue_auto_recharge(dbsession, user, 50)
 
-    # Verify database record was still created
-    recharge = dbsession.query(Recharge).filter_by(user_id=uid).first()
-    assert recharge is not None
-    assert recharge.quantity == Decimal("50")
-    assert recharge.status == RechargeStatus.PENDING_INVOICE
-
-    # Verify NO Stripe invoice item was created
-    assert len(mock_stripe["item"]) == 0
+    # Verify no recharge record was created
+    assert dbsession.query(Recharge).filter_by(user_id=uid).count() == 0
 
 
 def test_auto_recharge_flow_creates_stripe_items(
@@ -2437,6 +2454,12 @@ def test_auto_recharge_flow_creates_stripe_items(
 
     mock_stripe_module = SimpleNamespace(
         InvoiceItem=SimpleNamespace(create=mock_create),
+        Customer=SimpleNamespace(
+            retrieve=lambda cid: {
+                "id": cid,
+                "invoice_settings": {"default_payment_method": "pm_test"},
+            },
+        ),
         error=SimpleNamespace(StripeError=Exception),
     )
 
@@ -2525,6 +2548,12 @@ def test_queue_auto_recharge_stripe_error_handling(dbsession: Session, monkeypat
     # Create the mock with proper error hierarchy
     mock_stripe_module = SimpleNamespace(
         InvoiceItem=SimpleNamespace(create=mock_create),
+        Customer=SimpleNamespace(
+            retrieve=lambda cid: {
+                "id": cid,
+                "invoice_settings": {"default_payment_method": "pm_test"},
+            },
+        ),
         error=SimpleNamespace(
             StripeError=MockStripeError,
             InvalidRequestError=MockStripeError,
@@ -2580,7 +2609,7 @@ def test_auto_recharge_fails_without_stripe_id(dbsession: Session):
     assert user.credits == initial_credits
 
 
-def test_auto_recharge_integration_with_monthly_invoicer(
+def test_auto_recharge_integration_with_monthly_invoicer_late(
     dbsession: Session,
     mock_stripe,
 ):
