@@ -62,4 +62,9 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 15, "completion": 75},
     },
+    "claude-4.1-opus": {
+        "endpoint": "anthropic/claude-opus-4-1-20250805",
+        "context_window": 200000,
+        "cost": {"prompt": 15, "completion": 75},
+    },
 }
