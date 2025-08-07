@@ -16,6 +16,15 @@ class InfoResponse(GenericModel, Generic[T]):
     info: T
 
 
+class ChatMessage(BaseModel):
+    medium: str = Field("unify_chat", description="Communication medium")
+    sender_id: int = Field(..., description="ID of the sender")
+    receiver_id: int = Field(..., description="ID of the receiver")
+    timestamp: datetime = Field(..., description="Timestamp of the message")
+    content: str = Field(..., description="Content of the message")
+    exchange_id: int = Field(..., description="ID of the exchange")
+
+
 class AssistantCreate(BaseModel):
     """
     Schema for creating a new assistant.
@@ -100,6 +109,10 @@ class AssistantCreate(BaseModel):
         None,
         description="Phone number of the assistant (just for testing purposes)",
         exclude=True,
+    )
+    pre_hire_chat: Optional[List[ChatMessage]] = Field(
+        None,
+        description="A list of chat messages from the pre-hire conversation to be logged.",
     )
 
     class Config:
