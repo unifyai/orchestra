@@ -272,11 +272,10 @@ def create_assistant(
         # Log pre-hire chat if provided
         if assistant_in.pre_hire_chat:
             try:
-                context_name = (
-                    f"{assistant.first_name}{assistant.surname}/Transcript"
-                )
+                context_name = f"{assistant.first_name}{assistant.surname}/Transcript"
                 chat_context_id = context_dao.get_or_create(
-                    assistants_project.id, name=context_name
+                    assistants_project.id,
+                    name=context_name,
                 )
                 chat_context_obj = session.get(Context, chat_context_id)
 
@@ -303,13 +302,14 @@ def create_assistant(
                                     "key": key,
                                     "value": value,
                                     "context_id": chat_context_id,
-                                }
+                                },
                             )
 
                     # Bulk create the log rows (this will flush)
                     if log_rows_to_create:
                         log_dao.bulk_create(
-                            log_rows_to_create, context_obj=chat_context_obj
+                            log_rows_to_create,
+                            context_obj=chat_context_obj,
                         )
 
                     session.commit()  # Commit the logs
@@ -317,7 +317,7 @@ def create_assistant(
             except Exception as e_log:
                 session.rollback()  # Rollback the log transaction
                 logging.warning(
-                    f"Failed to log pre-hire chat for assistant {assistant.agent_id}. Error: {str(e_log)}"
+                    f"Failed to log pre-hire chat for assistant {assistant.agent_id}. Error: {str(e_log)}",
                 )
 
         assistant_id = assistant.agent_id
@@ -432,7 +432,9 @@ def create_assistant(
                 assistant_dao = AssistantDAO(session)
                 context_dao = ContextDAO(session)
                 project_dao = ProjectDAO(
-                    session, organization_member_dao, context_dao
+                    session,
+                    organization_member_dao,
+                    context_dao,
                 )
 
                 # Rollback infrastructure in reverse order
@@ -470,10 +472,9 @@ def create_assistant(
                     if assistant_in.pre_hire_chat:
                         try:
                             context_name = f"{assistant_in.first_name}{assistant_in.surname}/Transcript"
-                            assistants_project = (
-                                project_dao.get_by_user_and_name(
-                                    user_id=user_id, name="Assistants"
-                                )
+                            assistants_project = project_dao.get_by_user_and_name(
+                                user_id=user_id,
+                                name="Assistants",
                             )
                             if assistants_project:
                                 context_to_delete = context_dao.filter(
@@ -483,11 +484,11 @@ def create_assistant(
                                 if context_to_delete:
                                     context_dao.delete(context_to_delete[0][0].id)
                                     logging.info(
-                                        f"Deleted chat transcript context for failed assistant {assistant_id}"
+                                        f"Deleted chat transcript context for failed assistant {assistant_id}",
                                     )
                         except Exception as e_ctx_del:
                             rollback_errors.append(
-                                f"Failed to delete chat context: {str(e_ctx_del)}"
+                                f"Failed to delete chat context: {str(e_ctx_del)}",
                             )
                     assistant_dao.delete_assistant(
                         user_id=user_id,
@@ -759,12 +760,14 @@ def delete_assistant(
             agent_id=assistant_id,
         )
         if not assistant:
-            logging.warning(f"Assistant with ID {assistant_id} not found for user {request.state.user_id}.")
+            logging.warning(
+                f"Assistant with ID {assistant_id} not found for user {request.state.user_id}."
+            )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Assistant not found.",
             )
-        
+
         # Delete the associated chat transcript context from the "Assistants" project
         try:
             ASSISTANTS_PROJECT_NAME = "Assistants"
@@ -773,9 +776,7 @@ def delete_assistant(
                 name=ASSISTANTS_PROJECT_NAME,
             )
             if assistants_project:
-                assistant_context_prefix = (
-                    f"{assistant.first_name}{assistant.surname}"
-                )                
+                assistant_context_prefix = f"{assistant.first_name}{assistant.surname}"
                 # Find all contexts related to the assistant (e.g., "AdaLovelace", "AdaLovelace/Transcript")
                 contexts_to_delete = (
                     session.query(Context)
@@ -792,13 +793,13 @@ def delete_assistant(
                 if contexts_to_delete:
                     for context_to_del in contexts_to_delete:
                         context_dao.delete(context_to_del.id)
-        
+
         except Exception as e_ctx:
             logging.error(
-                f"Failed to stage context deletion for assistant {assistant_id}: {str(e_ctx)}"
+                f"Failed to stage context deletion for assistant {assistant_id}: {str(e_ctx)}",
             )
             cleanup_errors.append(
-                f"Failed to delete assistant context(s): {str(e_ctx)}"
+                f"Failed to delete assistant context(s): {str(e_ctx)}",
             )
 
         # Delete GCS profile photo if it exists and is a GCS URL from the assistant images bucket
@@ -841,7 +842,7 @@ def delete_assistant(
 
         # Wait before starting other infra cleanup (same as rollback operations)
         time.sleep(10)
-        
+
         # Delete pubsub topic
         try:
             delete_pubsub_topic(str(assistant_id), is_staging=settings.is_staging)
@@ -867,7 +868,7 @@ def delete_assistant(
 
         # Finally, stage the assistant record for deletion
         dao.delete_assistant(user_id=request.state.user_id, agent_id=assistant_id)
-        
+
         # Commit the entire transaction
         session.commit()
 
@@ -877,11 +878,16 @@ def delete_assistant(
 
         return InfoResponse(info=response_msg)
     except HTTPException:
-        logging.warning(f"Rolling back transaction due to HTTPException during deletion of assistant {assistant_id}.")
+        logging.warning(
+            f"Rolling back transaction due to HTTPException during deletion of assistant {assistant_id}."
+        )
         session.rollback()
         raise
     except Exception as e:
-        logging.error(f"An unexpected error occurred during deletion of assistant {assistant_id}. Rolling back.", exc_info=True)
+        logging.error(
+            f"An unexpected error occurred during deletion of assistant {assistant_id}. Rolling back.",
+            exc_info=True,
+        )
         session.rollback()
         final_error_detail = f"Error deleting assistant: {str(e)}"
         if cleanup_errors:
@@ -893,6 +899,7 @@ def delete_assistant(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=final_error_detail,
         )
+
 
 @router.patch(
     "/assistant/{assistant_id}/config",
