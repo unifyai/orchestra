@@ -1,4 +1,5 @@
 import base64
+import datetime
 from pathlib import Path
 
 import pytest
@@ -836,3 +837,179 @@ async def test_create_assistant_duplicate_name_fails(client: AsyncClient):
     data3 = resp3.json()["info"]
     assert data3["first_name"] == payload["first_name"]
     assert data3["surname"] == payload["surname"]
+
+
+# --- Assistant project creation and logging ---
+@pytest.fixture
+def pre_hire_chat_payload():
+    """Provides a sample pre_hire_chat payload."""
+    return {
+        "pre_hire_chat": [
+            {
+                "medium": "unify_chat",
+                "sender_id": 1,
+                "receiver_id": 2,
+                "timestamp": datetime.datetime.now(
+                    datetime.timezone.utc,
+                ).isoformat(),
+                "content": "Hello, are you available for an interview?",
+                "exchange_id": 101,
+            },
+            {
+                "medium": "unify_chat",
+                "sender_id": 2,
+                "receiver_id": 1,
+                "timestamp": datetime.datetime.now(
+                    datetime.timezone.utc,
+                ).isoformat(),
+                "content": "Yes, I am. When would be a good time?",
+                "exchange_id": 101,
+            },
+        ],
+    }
+
+
+@pytest.mark.anyio
+async def test_create_assistant_creates_assistants_project(
+    client: AsyncClient,
+):
+    # Call create_assistant for the first time
+    payload = {
+        "first_name": "Project",
+        "surname": "Creator",
+        "create_infra": False,
+    }
+    resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert resp.status_code == 200
+
+    # Verify that the "Assistants" project now exists
+    projects_resp = await client.get("/v0/projects", headers=HEADERS)
+    assert projects_resp.status_code == 200
+    projects = projects_resp.json()
+    assert "Assistants" in projects
+
+
+@pytest.mark.anyio
+async def test_create_assistant_with_pre_hire_chat_logs_correctly(
+    client: AsyncClient,
+    pre_hire_chat_payload,
+):
+    payload = {
+        "first_name": "Chatty",
+        "surname": "Cathy",
+        "age": 30,
+        "weekly_limit": 10,
+        "max_parallel": 1,
+        "create_infra": False,
+        **pre_hire_chat_payload,
+    }
+
+    # Create the assistant
+    create_resp = await client.post(
+        "/v0/assistant",
+        json=payload,
+        headers=HEADERS,
+    )
+    assert (
+        create_resp.status_code == 200
+    ), f"Assistant creation failed: {create_resp.text}"
+
+    # Verify the logs were created
+    context_name = "ChattyCathy/Transcript"
+    logs_resp = await client.get(
+        f"/v0/logs?project=Assistants&context={context_name}",
+        headers=HEADERS,
+    )
+    assert logs_resp.status_code == 200, f"Failed to get logs: {logs_resp.text}"
+    logs_data = logs_resp.json()
+
+    assert logs_data["count"] == 2, f"Expected 2 logs, but found {logs_data['count']}."
+    assert (
+        len(logs_data["logs"]) == 2
+    ), f"Expected 2 log objects, but found {len(logs_data['logs'])}."
+
+    returned_logs = logs_data["logs"]
+    original_messages = pre_hire_chat_payload["pre_hire_chat"]
+
+    # Create a dictionary of returned logs keyed by their content for easy lookup
+    returned_logs_map = {
+        log["entries"]["content"]: log["entries"] for log in returned_logs
+    }
+
+    # Loop through the original messages and check if each one exists in the returned logs
+    for original_msg in original_messages:
+        content = original_msg["content"]
+
+        assert (
+            content in returned_logs_map
+        ), f"Message content '{content}' not found in returned logs."
+
+        returned_entry = returned_logs_map[content]
+
+        # Assert that all fields match
+        assert (
+            returned_entry["sender_id"] == original_msg["sender_id"]
+        ), f"Sender ID mismatch for content '{content}'. Expected {original_msg['sender_id']}, got {returned_entry['sender_id']}"
+        assert (
+            returned_entry["receiver_id"] == original_msg["receiver_id"]
+        ), f"Receiver ID mismatch for content '{content}'. Expected {original_msg['receiver_id']}, got {returned_entry['receiver_id']}"
+        assert (
+            returned_entry["exchange_id"] == original_msg["exchange_id"]
+        ), f"Exchange ID mismatch for content '{content}'. Expected {original_msg['exchange_id']}, got {returned_entry['exchange_id']}"
+
+
+@pytest.mark.anyio
+async def test_delete_assistant_deletes_contexts(
+    client: AsyncClient,
+    pre_hire_chat_payload,
+):
+    # Create an assistant with pre_hire_chat to ensure context is created
+    payload = {
+        "first_name": "Deletable",
+        "surname": "Dan",
+        "create_infra": False,
+        **pre_hire_chat_payload,
+    }
+    create_resp = await client.post(
+        "/v0/assistant",
+        json=payload,
+        headers=HEADERS,
+    )
+    assert create_resp.status_code == 200
+    assistant_id = create_resp.json()["info"]["agent_id"]
+
+    # Verify context and logs exist before deletion
+    context_name = "DeletableDan/Transcript"
+    logs_before_delete = await client.get(
+        f"/v0/logs?project=Assistants&context={context_name}",
+        headers=HEADERS,
+    )
+    assert logs_before_delete.status_code == 200
+    assert (
+        logs_before_delete.json()["count"] > 0
+    ), "Context was created but no logs were found."
+
+    # Delete the assistant
+    delete_resp = await client.delete(
+        f"/v0/assistant/{assistant_id}",
+        headers=HEADERS,
+    )
+    assert delete_resp.status_code == 200, f"Delete failed: {delete_resp.text}"
+
+    # Verify the context is now gone.
+    # A successful deletion can result in either the context being empty (200 OK, count=0)
+    # or the context itself being gone (404 Not Found). Both are valid success states.
+    logs_after_delete = await client.get(
+        f"/v0/logs?project=Assistants&context={context_name}",
+        headers=HEADERS,
+    )
+
+    assert logs_after_delete.status_code in [
+        200,
+        404,
+    ], f"Expected status 200 or 404, but got {logs_after_delete.status_code}. Response: {logs_after_delete.text}"
+
+    if logs_after_delete.status_code == 200:
+        assert (
+            logs_after_delete.json()["count"] == 0
+        ), f"Context still exists and is not empty. Found {logs_after_delete.json()['count']} logs."

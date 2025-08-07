@@ -17,15 +17,23 @@ from fastapi import (
     UploadFile,
     status,
 )
+from fastapi.encoders import jsonable_encoder
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
+from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.log_dao import LogDAO
+from orchestra.db.dao.log_event_dao import LogEventDAO
+from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.recording_dao import RecordingDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
 from orchestra.db.dependencies import get_db_session
+from orchestra.db.models.orchestra_models import Context
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.call_recording_service import CallRecordingService
 from orchestra.services.cartesia_service import CartesiaAPIError, CartesiaService
@@ -164,6 +172,11 @@ def create_assistant(
     users_dao = UsersDAO(session)
     assistant_dao = AssistantDAO(session)
     api_key_dao = ApiKeyDAO(session)
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    log_event_dao = LogEventDAO(session)
+    log_dao = LogDAO(session, context_dao)
     api_keys = api_key_dao.filter(user_id=user_id)
     if not api_keys:
         raise HTTPException(
@@ -201,6 +214,24 @@ def create_assistant(
 
     # Phase 1: Pre-checks and prepare assistant data
     try:
+        ASSISTANTS_PROJECT_NAME = "Assistants"
+        assistants_project = project_dao.get_by_user_and_name(
+            user_id=user_id,
+            name=ASSISTANTS_PROJECT_NAME,
+        )
+        if not assistants_project:
+            project_dao.create(
+                user_id=user_id,
+                name=ASSISTANTS_PROJECT_NAME,
+                description="Project to manage and track all assistants.",
+                is_versioned=False,
+            )
+            # Re-fetch the project to get the object
+            assistants_project = project_dao.get_by_user_and_name(
+                user_id=user_id,
+                name=ASSISTANTS_PROJECT_NAME,
+            )
+
         if not settings.is_staging:
             user = users_dao.get_user_with_id(user_id)
 
@@ -237,6 +268,57 @@ def create_assistant(
         # Commit the assistant creation before infrastructure setup
         # This ensures the assistant persists even if we refresh the session later
         session.commit()
+
+        # Log pre-hire chat if provided
+        if assistant_in.pre_hire_chat:
+            try:
+                context_name = f"{assistant.first_name}{assistant.surname}/Transcript"
+                chat_context_id = context_dao.get_or_create(
+                    assistants_project.id,
+                    name=context_name,
+                )
+                chat_context_obj = session.get(Context, chat_context_id)
+
+                # Prepare entries for logging using jsonable_encoder
+                chat_entries = jsonable_encoder(assistant_in.pre_hire_chat)
+                num_entries = len(chat_entries)
+
+                if num_entries > 0:
+                    log_event_ids = log_event_dao.bulk_create(
+                        project_id=assistants_project.id,
+                        count=num_entries,
+                        context_id=chat_context_id,
+                    )
+
+                    # Prepare all log rows for bulk creation
+                    log_rows_to_create = []
+                    for i, entry_dict in enumerate(chat_entries):
+                        log_event_id = log_event_ids[i]
+                        for key, value in entry_dict.items():
+                            log_rows_to_create.append(
+                                {
+                                    "project_id": assistants_project.id,
+                                    "log_event_id": log_event_id,
+                                    "key": key,
+                                    "value": value,
+                                    "context_id": chat_context_id,
+                                },
+                            )
+
+                    # Bulk create the log rows (this will flush)
+                    if log_rows_to_create:
+                        log_dao.bulk_create(
+                            log_rows_to_create,
+                            context_obj=chat_context_obj,
+                        )
+
+                    session.commit()  # Commit the logs
+
+            except Exception as e_log:
+                session.rollback()  # Rollback the log transaction
+                logging.warning(
+                    f"Failed to log pre-hire chat for assistant {assistant.agent_id}. Error: {str(e_log)}",
+                )
 
         assistant_id = assistant.agent_id
         # Infrastructure creation with rollback on failure
@@ -348,6 +430,12 @@ def create_assistant(
                 session.close()
                 session = next(get_db_session(request))
                 assistant_dao = AssistantDAO(session)
+                context_dao = ContextDAO(session)
+                project_dao = ProjectDAO(
+                    session,
+                    organization_member_dao,
+                    context_dao,
+                )
 
                 # Rollback infrastructure in reverse order
                 rollback_errors = []
@@ -380,6 +468,28 @@ def create_assistant(
 
                 # Delete the assistant record since infrastructure failed
                 try:
+                    # First, delete the chat context if it was created
+                    if assistant_in.pre_hire_chat:
+                        try:
+                            context_name = f"{assistant_in.first_name}{assistant_in.surname}/Transcript"
+                            assistants_project = project_dao.get_by_user_and_name(
+                                user_id=user_id,
+                                name="Assistants",
+                            )
+                            if assistants_project:
+                                context_to_delete = context_dao.filter(
+                                    project_id=assistants_project.id,
+                                    name=context_name,
+                                )
+                                if context_to_delete:
+                                    context_dao.delete(context_to_delete[0][0].id)
+                                    logging.info(
+                                        f"Deleted chat transcript context for failed assistant {assistant_id}",
+                                    )
+                        except Exception as e_ctx_del:
+                            rollback_errors.append(
+                                f"Failed to delete chat context: {str(e_ctx_del)}",
+                            )
                     assistant_dao.delete_assistant(
                         user_id=user_id,
                         agent_id=assistant_id,
@@ -639,6 +749,9 @@ def delete_assistant(
     """
     bucket_service = BucketService()
     dao = AssistantDAO(session)
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     cleanup_errors = []
     try:
         # First get the assistant to retrieve infrastructure details including GCS photo URL
@@ -647,9 +760,46 @@ def delete_assistant(
             agent_id=assistant_id,
         )
         if not assistant:
+            logging.warning(
+                f"Assistant with ID {assistant_id} not found for user {request.state.user_id}.",
+            )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Assistant not found.",
+            )
+
+        # Delete the associated chat transcript context from the "Assistants" project
+        try:
+            ASSISTANTS_PROJECT_NAME = "Assistants"
+            assistants_project = project_dao.get_by_user_and_name(
+                user_id=request.state.user_id,
+                name=ASSISTANTS_PROJECT_NAME,
+            )
+            if assistants_project:
+                assistant_context_prefix = f"{assistant.first_name}{assistant.surname}"
+                # Find all contexts related to the assistant (e.g., "AdaLovelace", "AdaLovelace/Transcript")
+                contexts_to_delete = (
+                    session.query(Context)
+                    .filter(
+                        Context.project_id == assistants_project.id,
+                        or_(
+                            Context.name == assistant_context_prefix,
+                            Context.name.like(f"{assistant_context_prefix}/%"),
+                        ),
+                    )
+                    .all()
+                )
+
+                if contexts_to_delete:
+                    for context_to_del in contexts_to_delete:
+                        context_dao.delete(context_to_del.id)
+
+        except Exception as e_ctx:
+            logging.error(
+                f"Failed to stage context deletion for assistant {assistant_id}: {str(e_ctx)}",
+            )
+            cleanup_errors.append(
+                f"Failed to delete assistant context(s): {str(e_ctx)}",
             )
 
         # Delete GCS profile photo if it exists and is a GCS URL from the assistant images bucket
@@ -721,7 +871,9 @@ def delete_assistant(
             dao.delete_assistant(user_id=request.state.user_id, agent_id=assistant_id)
         except Exception as e:
             cleanup_errors.append(f"Failed to delete assistant: {str(e)}")
-        print(f"ASSISTANT DELETED: {assistant_id}")
+
+        # Commit the entire transaction
+        session.commit()
 
         response_msg = "Assistant deleted successfully"
         if cleanup_errors:
@@ -729,9 +881,16 @@ def delete_assistant(
 
         return InfoResponse(info=response_msg)
     except HTTPException:
+        logging.warning(
+            f"Rolling back transaction due to HTTPException during deletion of assistant {assistant_id}.",
+        )
         session.rollback()
         raise
     except Exception as e:
+        logging.error(
+            f"An unexpected error occurred during deletion of assistant {assistant_id}. Rolling back.",
+            exc_info=True,
+        )
         session.rollback()
         final_error_detail = f"Error deleting assistant: {str(e)}"
         if cleanup_errors:
