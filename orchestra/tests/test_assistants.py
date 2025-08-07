@@ -1,4 +1,5 @@
 import base64
+import datetime
 from pathlib import Path
 
 import pytest
@@ -836,3 +837,154 @@ async def test_create_assistant_duplicate_name_fails(client: AsyncClient):
     data3 = resp3.json()["info"]
     assert data3["first_name"] == payload["first_name"]
     assert data3["surname"] == payload["surname"]
+
+
+# --- Assistant project creation and logging ---
+@pytest.fixture
+def pre_hire_chat_payload():
+    """Provides a sample pre_hire_chat payload."""
+    return {
+        "pre_hire_chat": [
+            {
+                "medium": "unify_chat",
+                "sender_id": 1,
+                "receiver_id": 2,
+                "timestamp": datetime.datetime.now(
+                    datetime.timezone.utc,
+                ).isoformat(),
+                "content": "Hello, are you available for an interview?",
+                "exchange_id": 101,
+            },
+            {
+                "medium": "unify_chat",
+                "sender_id": 2,
+                "receiver_id": 1,
+                "timestamp": datetime.datetime.now(
+                    datetime.timezone.utc,
+                ).isoformat(),
+                "content": "Yes, I am. When would be a good time?",
+                "exchange_id": 101,
+            },
+        ],
+    }
+
+
+@pytest.mark.anyio
+async def test_create_assistant_creates_assistants_project(
+    client: AsyncClient,
+):
+    # Call create_assistant for the first time
+    payload = {
+        "first_name": "Project",
+        "surname": "Creator",
+        "create_infra": False,
+    }
+    resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert resp.status_code == 200
+
+    # Verify that the "Assistants" project now exists
+    projects_resp = await client.get("/v0/projects", headers=HEADERS)
+    assert projects_resp.status_code == 200
+    projects = projects_resp.json()
+    assert "Assistants" in projects
+
+
+@pytest.mark.anyio
+async def test_create_assistant_with_pre_hire_chat_logs_correctly(
+    client: AsyncClient,
+    mocker,
+    pre_hire_chat_payload,
+):
+
+    payload = {
+        "first_name": "Chatty",
+        "surname": "Cathy",
+        "age": 30,
+        "weekly_limit": 10,
+        "max_parallel": 1,
+        "create_infra": False,
+        **pre_hire_chat_payload,
+    }
+
+    # Create the assistant
+    create_resp = await client.post(
+        "/v0/assistant",
+        json=payload,
+        headers=HEADERS,
+    )
+    assert (
+        create_resp.status_code == 200
+    ), f"Assistant creation failed: {create_resp.text}"
+
+    # Verify the logs were created
+    context_name = "ChattyCathy/Transcript"
+    logs_resp = await client.get(
+        f"/v0/logs?project=Assistants&context={context_name}",
+        headers=HEADERS,
+    )
+    assert logs_resp.status_code == 200, f"Failed to get logs: {logs_resp.text}"
+    logs_data = logs_resp.json()
+
+    assert logs_data["count"] == 2
+    assert len(logs_data["logs"]) == 2
+
+    # Check content of the first log message
+    log_entry_1 = logs_data["logs"][0]["entries"]
+    original_msg_1 = pre_hire_chat_payload["pre_hire_chat"][0]
+    assert log_entry_1["content"] == original_msg_1["content"]
+    assert log_entry_1["sender_id"] == original_msg_1["sender_id"]
+    assert log_entry_1["receiver_id"] == original_msg_1["receiver_id"]
+
+    # Check content of the second log message
+    log_entry_2 = logs_data["logs"][1]["entries"]
+    original_msg_2 = pre_hire_chat_payload["pre_hire_chat"][1]
+    assert log_entry_2["content"] == original_msg_2["content"]
+    assert log_entry_2["sender_id"] == original_msg_2["sender_id"]
+    assert log_entry_2["receiver_id"] == original_msg_2["receiver_id"]
+
+
+@pytest.mark.anyio
+async def test_delete_assistant_deletes_contexts(
+    client: AsyncClient,
+    mocker,
+    pre_hire_chat_payload,
+):
+
+    # Create an assistant with pre_hire_chat to ensure context is created
+    payload = {
+        "first_name": "Deletable",
+        "surname": "Dan",
+        "create_infra": False,
+        **pre_hire_chat_payload,
+    }
+    create_resp = await client.post(
+        "/v0/assistant",
+        json=payload,
+        headers=HEADERS,
+    )
+    assert create_resp.status_code == 200
+    assistant_id = create_resp.json()["info"]["agent_id"]
+
+    # Verify context and logs exist before deletion
+    context_name = "DeletableDan/Transcript"
+    logs_before_delete = await client.get(
+        f"/v0/logs?project=Assistants&context={context_name}",
+        headers=HEADERS,
+    )
+    assert logs_before_delete.status_code == 200
+    assert logs_before_delete.json()["count"] > 0
+
+    # Delete the assistant
+    delete_resp = await client.delete(
+        f"/v0/assistant/{assistant_id}",
+        headers=HEADERS,
+    )
+    assert delete_resp.status_code == 200, f"Delete failed: {delete_resp.text}"
+
+    # Verify the context is now gone
+    logs_after_delete = await client.get(
+        f"/v0/logs?project=Assistants&context={context_name}",
+        headers=HEADERS,
+    )
+    assert logs_after_delete.status_code == 200
+    assert logs_after_delete.json()["count"] == 0
