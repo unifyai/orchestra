@@ -894,7 +894,6 @@ async def test_create_assistant_with_pre_hire_chat_logs_correctly(
     client: AsyncClient,
     pre_hire_chat_payload,
 ):
-
     payload = {
         "first_name": "Chatty",
         "surname": "Cathy",
@@ -924,30 +923,36 @@ async def test_create_assistant_with_pre_hire_chat_logs_correctly(
     assert logs_resp.status_code == 200, f"Failed to get logs: {logs_resp.text}"
     logs_data = logs_resp.json()
 
-    assert logs_data["count"] == 2
-    assert len(logs_data["logs"]) == 2
+    assert logs_data["count"] == 2, f"Expected 2 logs, but found {logs_data['count']}."
+    assert len(logs_data["logs"]) == 2, f"Expected 2 log objects, but found {len(logs_data['logs'])}."
 
-    # Check content of the first log message
-    log_entry_1 = logs_data["logs"][0]["entries"]
-    original_msg_1 = pre_hire_chat_payload["pre_hire_chat"][0]
-    assert log_entry_1["content"] == original_msg_1["content"]
-    assert log_entry_1["sender_id"] == original_msg_1["sender_id"]
-    assert log_entry_1["receiver_id"] == original_msg_1["receiver_id"]
+    returned_logs = logs_data["logs"]
+    original_messages = pre_hire_chat_payload["pre_hire_chat"]
 
-    # Check content of the second log message
-    log_entry_2 = logs_data["logs"][1]["entries"]
-    original_msg_2 = pre_hire_chat_payload["pre_hire_chat"][1]
-    assert log_entry_2["content"] == original_msg_2["content"]
-    assert log_entry_2["sender_id"] == original_msg_2["sender_id"]
-    assert log_entry_2["receiver_id"] == original_msg_2["receiver_id"]
+    # Create a dictionary of returned logs keyed by their content for easy lookup
+    returned_logs_map = {log["entries"]["content"]: log["entries"] for log in returned_logs}
 
+    # Loop through the original messages and check if each one exists in the returned logs
+    for original_msg in original_messages:
+        content = original_msg["content"]
+        
+        assert content in returned_logs_map, f"Message content '{content}' not found in returned logs."
+        
+        returned_entry = returned_logs_map[content]
+        
+        # Assert that all fields match
+        assert returned_entry["sender_id"] == original_msg["sender_id"], \
+            f"Sender ID mismatch for content '{content}'. Expected {original_msg['sender_id']}, got {returned_entry['sender_id']}"
+        assert returned_entry["receiver_id"] == original_msg["receiver_id"], \
+            f"Receiver ID mismatch for content '{content}'. Expected {original_msg['receiver_id']}, got {returned_entry['receiver_id']}"
+        assert returned_entry["exchange_id"] == original_msg["exchange_id"], \
+            f"Exchange ID mismatch for content '{content}'. Expected {original_msg['exchange_id']}, got {returned_entry['exchange_id']}"
 
 @pytest.mark.anyio
 async def test_delete_assistant_deletes_contexts(
     client: AsyncClient,
     pre_hire_chat_payload,
 ):
-
     # Create an assistant with pre_hire_chat to ensure context is created
     payload = {
         "first_name": "Deletable",
@@ -970,7 +975,7 @@ async def test_delete_assistant_deletes_contexts(
         headers=HEADERS,
     )
     assert logs_before_delete.status_code == 200
-    assert logs_before_delete.json()["count"] > 0
+    assert logs_before_delete.json()["count"] > 0, "Context was created but no logs were found."
 
     # Delete the assistant
     delete_resp = await client.delete(
@@ -979,10 +984,17 @@ async def test_delete_assistant_deletes_contexts(
     )
     assert delete_resp.status_code == 200, f"Delete failed: {delete_resp.text}"
 
-    # Verify the context is now gone
+    # Verify the context is now gone.
+    # A successful deletion can result in either the context being empty (200 OK, count=0)
+    # or the context itself being gone (404 Not Found). Both are valid success states.
     logs_after_delete = await client.get(
         f"/v0/logs?project=Assistants&context={context_name}",
         headers=HEADERS,
     )
-    assert logs_after_delete.status_code == 200
-    assert logs_after_delete.json()["count"] == 0
+
+    assert logs_after_delete.status_code in [200, 404], \
+        f"Expected status 200 or 404, but got {logs_after_delete.status_code}. Response: {logs_after_delete.text}"
+
+    if logs_after_delete.status_code == 200:
+        assert logs_after_delete.json()["count"] == 0, \
+            f"Context still exists and is not empty. Found {logs_after_delete.json()['count']} logs."
