@@ -761,7 +761,7 @@ def delete_assistant(
         )
         if not assistant:
             logging.warning(
-                f"Assistant with ID {assistant_id} not found for user {request.state.user_id}."
+                f"Assistant with ID {assistant_id} not found for user {request.state.user_id}.",
             )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -866,8 +866,11 @@ def delete_assistant(
                 cleanup_errors.append(f"Failed to delete email: {str(e)}")
         print(f"EMAIL DELETED: {assistant.email}")
 
-        # Finally, stage the assistant record for deletion
-        dao.delete_assistant(user_id=request.state.user_id, agent_id=assistant_id)
+        # Finally delete the assistant record (matching rollback error handling)
+        try:
+            dao.delete_assistant(user_id=request.state.user_id, agent_id=assistant_id)
+        except Exception as e:
+            cleanup_errors.append(f"Failed to delete assistant: {str(e)}")
 
         # Commit the entire transaction
         session.commit()
@@ -879,7 +882,7 @@ def delete_assistant(
         return InfoResponse(info=response_msg)
     except HTTPException:
         logging.warning(
-            f"Rolling back transaction due to HTTPException during deletion of assistant {assistant_id}."
+            f"Rolling back transaction due to HTTPException during deletion of assistant {assistant_id}.",
         )
         session.rollback()
         raise
