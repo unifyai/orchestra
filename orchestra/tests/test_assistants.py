@@ -892,7 +892,6 @@ async def test_create_assistant_creates_assistants_project(
 @pytest.mark.anyio
 async def test_create_assistant_with_pre_hire_chat_logs_correctly(
     client: AsyncClient,
-    mocker,
     pre_hire_chat_payload,
 ):
 
@@ -946,7 +945,6 @@ async def test_create_assistant_with_pre_hire_chat_logs_correctly(
 @pytest.mark.anyio
 async def test_delete_assistant_deletes_contexts(
     client: AsyncClient,
-    mocker,
     pre_hire_chat_payload,
 ):
 
