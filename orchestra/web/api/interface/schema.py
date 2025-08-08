@@ -130,9 +130,10 @@ class BaseTabTemplateSchema(BaseModel):
     name: str
     visible: bool = True
     active: bool = False
-    order: int = 0
+    order: Optional[int] = None
     global_context: Optional[str] = None
     color: Optional[str] = None
+    icon: Optional[str] = None
 
 
 class TabTemplateSchema(BaseTabTemplateSchema):
@@ -154,6 +155,7 @@ class BaseTabSchema(BaseTabTemplateSchema):
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     is_checkpoint: bool = False
+    icon: str
 
 
 class TabSchema(BaseTabSchema):
@@ -166,7 +168,9 @@ class BaseInterfaceTemplateSchema(BaseModel):
     """Base template schema for interfaces with common fields"""
 
     name: str
+    icon: Optional[str] = None
     color: Optional[str] = None
+    order: Optional[int] = None
 
 
 class InterfaceTemplateSchema(BaseInterfaceTemplateSchema):
@@ -200,6 +204,7 @@ class BaseInterfaceSchema(BaseInterfaceTemplateSchema):
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     is_checkpoint: bool = False
+    icon: str
 
 
 class InterfaceSchema(BaseInterfaceSchema):
@@ -272,6 +277,7 @@ class UpdateTabRequest(BaseModel):
     order: Optional[int] = None
     global_context: Optional[str] = None
     color: Optional[str] = None
+    icon: Optional[str] = None
 
     class Config:
         extra = "forbid"  # Reject unknown fields
@@ -292,7 +298,9 @@ class UpdateInterfaceRequest(BaseModel):
 
     name: Optional[str] = None
     active_tab_id: Optional[str] = None
+    order: Optional[int] = None
     color: Optional[str] = None
+    icon: Optional[str] = None
 
     class Config:
         extra = "forbid"  # Reject unknown fields
@@ -353,14 +361,17 @@ class Item(BaseModel):
 class LegacyInterfaceConfig(BaseModel):
     """Legacy Interface configuration schema for backward compatibility"""
 
-    name: str
-    project: str
-    items: List[Item]
-    new_counter: int
+    # Project and interface name are required for creation but optional for updates
+    name: Optional[str] = None
+    project: Optional[str] = None
+    items: List[Item] = []
+    new_counter: int = 0
     temporary: bool = False
     new_name: Optional[str] = None
     context: Optional[str] = None
     color: Optional[str] = None
+    icon: Optional[str] = None
+    order: Optional[int] = None
 
 
 # Reference schemas for API responses

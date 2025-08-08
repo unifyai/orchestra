@@ -660,6 +660,7 @@ class Project(Base):
     name = Column(String, nullable=False)
     description = Column(String(256), nullable=True)
     icon = Column(String, nullable=False, server_default="folder")
+    order = Column(Integer, nullable=False, server_default="0")
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
     is_versioned = Column(Boolean, nullable=False, server_default="f")
@@ -706,7 +707,7 @@ class ProjectVersion(Base):
     next_commit_hash = Column(JSONB, nullable=False, server_default="[]")
     commit_message = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
-    # Relationship to its ContextVersions
+    # Relationship to its ContextVers ions
     context_versions = relationship("ContextVersion", back_populates="project_version")
 
 
@@ -1019,7 +1020,9 @@ class Interface(Base):
         index=True,
     )
     context = Column(String(), nullable=True)
+    icon = Column(String(), nullable=False, server_default="folder")
     color = Column(String(), nullable=True)
+    order = Column(Integer, nullable=False, server_default="0")
     # Flag to indicate if this is a checkpoint (manual save) or auto-save
     is_checkpoint = Column(Boolean(), nullable=False, server_default="f")
     # ID of the checkpoint counterpart (if this is the active version)
@@ -1291,6 +1294,7 @@ class Tab(Base):
         index=True,
     )
     name = Column(String(), nullable=False)
+    icon = Column(String(), nullable=False, server_default="tab")
     visible = Column(Boolean(), nullable=False, server_default="t")
     active = Column(Boolean(), nullable=False, server_default="f")
     order = Column(Integer, nullable=False, server_default="0")

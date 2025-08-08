@@ -68,6 +68,7 @@ def _create_interface_response(
         tabs=tab_list,
         active_tab_id=str(interface.active_tab_id) if interface.active_tab_id else None,
         color=interface.color,
+        icon=interface.icon,
         is_checkpoint=interface.is_checkpoint,
         created_at=interface.created_at.isoformat() if interface.created_at else None,
         updated_at=interface.updated_at.isoformat() if interface.updated_at else None,
@@ -254,6 +255,8 @@ def create_interface(
         name=request.name,
         project_id=project.id,
         color=request.color,
+        icon=request.icon or "folder",
+        order=request.order,
         is_checkpoint=checkpoint,
     )
 
@@ -576,6 +579,8 @@ def update_interface(
                 new_counter=regular_interface.new_counter,
                 context=regular_interface.context,
                 color=regular_interface.color,
+                icon=request.icon or regular_interface.icon,
+                order=request.order,
                 active_tab_id=regular_interface.active_tab_id,
                 is_checkpoint=True,
             )
@@ -1246,6 +1251,7 @@ def import_interface_template(
         name=interface_name,
         project_id=project.id,
         color=request.template.color,
+        icon=request.template.icon,
         is_checkpoint=False,
     )
 

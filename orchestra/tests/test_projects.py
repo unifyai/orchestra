@@ -1818,11 +1818,17 @@ async def test_projects_tree(client: AsyncClient):
     resp = await client.get("/v0/projects/tree", headers=HEADERS)
     assert resp.status_code == 200
     data = resp.json()
-    # Expect at least one entry matching project_name
+
     match = next((p for p in data if p["project"] == project_name), None)
     assert match is not None
-    assert match["icon"] == "folder"  # default
-    assert "iface1" in match["interfaces"]
+    assert match["icon"] == "folder"
+
+    # interfaces should be list of dicts with name/icon/order
+    iface = next((i for i in match["interfaces"] if i["name"] == "iface1"), None)
+    assert iface is not None
+    assert iface["icon"] == "folder"
+    # iface tabs list should exist (empty)
+    assert isinstance(iface["tabs"], list)
 
 
 if __name__ == "__main__":

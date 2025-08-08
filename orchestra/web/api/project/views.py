@@ -50,6 +50,7 @@ from orchestra.web.api.project.schema import (
     FavoriteProjectOut,
     FavoriteProjectUpdate,
     ImportProjectTemplateRequest,
+    InterfaceInfo,
     ProjectCommitHistory,
     ProjectCommitRequest,
     ProjectConfig,
@@ -58,6 +59,7 @@ from orchestra.web.api.project.schema import (
     ProjectTreeItem,
     ProjectUpdate,
     ShareProjectRequest,
+    TabInfo,
 )
 from orchestra.web.api.utils.http_responses import not_found
 
@@ -657,6 +659,7 @@ def create_project(
             icon=request.icon or "folder",
             is_versioned=request.is_versioned,
             description=request.description,
+            order=request.order,
         )
 
         return {"info": "Project created successfully!"}
@@ -901,18 +904,16 @@ def update_project(
                 new_name=request.name,
             )
 
-        # Update description if provided
+        update_kwargs = {}
         if request.description is not None:
-            project_dao.update(
-                id=project.id,
-                description=request.description,
-            )
-
+            update_kwargs["description"] = request.description
         if request.icon is not None:
-            project_dao.update(
-                id=project.id,
-                icon=request.icon,
-            )
+            update_kwargs["icon"] = request.icon
+        if request.order is not None:
+            update_kwargs["order"] = request.order
+
+        if update_kwargs:
+            project_dao.update(id=project.id, **update_kwargs)
 
         return {"info": "Project updated successfully!"}
     except ValueError as e:
@@ -1013,36 +1014,82 @@ async def list_projects_tree(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     interface_dao = InterfaceDAO(session)
+    tab_dao = TabDAO(session)
     favorite_project_dao = FavoriteProjectDAO(session)
 
     projects = project_dao.filter_by_user_access(user_id=request_fastapi.state.user_id)
     favorites = favorite_project_dao.filter_by_user(request_fastapi.state.user_id)
     fav_map = {f.project_id: f for f in favorites}
 
+    # Extract project objects and IDs for bulk queries
+    project_list = [proj_row[0] for proj_row in projects]
+    project_ids = [proj.id for proj in project_list]
+
+    # Bulk query: Get all interfaces for all projects in one query
+    all_interfaces = interface_dao.get_interfaces_bulk(
+        project_ids=project_ids,
+        is_checkpoint=False,
+    )
+
+    # Group interfaces by project_id for efficient lookup
+    interfaces_by_project = {}
+    for interface in all_interfaces:
+        if interface.project_id not in interfaces_by_project:
+            interfaces_by_project[interface.project_id] = []
+        interfaces_by_project[interface.project_id].append(interface)
+
+    # Bulk query: Get all tabs for all interfaces in one query
+    interface_ids = [str(interface.id) for interface in all_interfaces]
+    all_tabs = tab_dao.list_tabs_bulk(
+        interface_ids=interface_ids,
+        is_checkpoint=False,
+    )
+
+    # Group tabs by interface_id for efficient lookup
+    tabs_by_interface = {}
+    for tab in all_tabs:
+        if tab.interface_id not in tabs_by_interface:
+            tabs_by_interface[tab.interface_id] = []
+        tabs_by_interface[tab.interface_id].append(tab)
+
+    # Build the response structure efficiently
     items: List[ProjectTreeItem] = []
-    for proj_row in projects:
-        proj = proj_row[0]
-        interfaces = interface_dao.get_interfaces(
-            project_id=proj.id,
-            is_checkpoint=False,
-        )
+    for proj in project_list:
+        interfaces = interfaces_by_project.get(proj.id, [])
+
+        interface_items: List[InterfaceInfo] = []
+        for interface in interfaces:
+            tabs = tabs_by_interface.get(str(interface.id), [])
+            tab_items = [TabInfo(name=t.name, icon=t.icon, order=t.order) for t in tabs]
+            # tabs are already sorted by order from the bulk query
+            interface_items.append(
+                InterfaceInfo(
+                    name=interface.name,
+                    icon=interface.icon,
+                    order=interface.order,
+                    tabs=tab_items,
+                ),
+            )
+        # interfaces are already sorted by order from the bulk query
+
         fav_entry = fav_map.get(proj.id)
         items.append(
             ProjectTreeItem(
                 project=proj.name,
                 icon=proj.icon,
-                interfaces=[i.name for i in interfaces],
+                order=proj.order,
+                interfaces=interface_items,
                 favorite=fav_entry is not None,
                 position=fav_entry.position if fav_entry else None,
             ),
         )
 
-    # Sort: favorites first by position, then non-favorites alphabetically
+    # Sort: favorites first by position, then non-favorites by order
     items.sort(
         key=lambda x: (
             not x.favorite,
             x.position if x.position is not None else 1e9,
-            x.project,
+            x.order,
         ),
     )
     return items
