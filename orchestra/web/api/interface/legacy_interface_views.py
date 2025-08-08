@@ -9,6 +9,7 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.temp_interface_dao import TempInterfaceDAO
 from orchestra.db.dependencies import get_db_session
+from orchestra.db.models.orchestra_models import Interface
 from orchestra.web.api.interface.schema import LegacyInterfaceConfig
 
 router = APIRouter()
@@ -87,15 +88,27 @@ def create_interface(
             status_code=400,
             detail="Interface already exists, update the interface instead.",
         )
-    dao.create_interface(
+    # icon and order are accepted by both LegacyInterfaceDAO and TempInterfaceDAO implementations
+    dao.create_interface(  # type: ignore[arg-type]
         name=request.name,
         items=json.dumps([item.model_dump() for item in request.items]),
         new_counter=request.new_counter,
         project_id=project.id,
         context=request.context,
         color=request.color,
+        icon=request.icon or "folder",
+        order=request.order,
     )
-    return {"info": "Interface created successfully!"}
+
+    # Retrieve the newly created interface to return its ID
+    created_ifc = (
+        session.query(Interface)
+        .filter(Interface.project_id == project.id, Interface.name == request.name)
+        .order_by(Interface.created_at.desc())
+        .first()
+    )
+
+    return {"id": str(created_ifc.id) if created_ifc else None}
 
 
 @router.put(
@@ -174,6 +187,8 @@ def update_interface(
         new_counter=request.new_counter,
         context=request.context,
         color=request.color,
+        icon=request.icon,
+        order=request.order,
         new_name=request.new_name,
     )
     return {"info": "Interface updated successfully!"}
