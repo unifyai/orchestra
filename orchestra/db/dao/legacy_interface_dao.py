@@ -16,6 +16,8 @@ class LegacyInterfaceDAO:
         project_id: int,
         context: str | None = None,
         color: str | None = None,
+        icon: str | None = "folder",
+        order: int | None = None,
     ):
         self.session.add(
             Interface(
@@ -25,6 +27,8 @@ class LegacyInterfaceDAO:
                 project_id=project_id,
                 context=context,
                 color=color,
+                icon=icon,
+                order=order,
             ),
         )
         self.session.commit()
@@ -37,6 +41,8 @@ class LegacyInterfaceDAO:
         new_counter: int,
         context: str | None = None,
         color: str | None = None,
+        icon: str | None = None,
+        order: int | None = None,
         new_name: str = None,
     ):
         query = select(Interface)
@@ -53,6 +59,10 @@ class LegacyInterfaceDAO:
                 setattr(entry, "name", new_name)
             setattr(entry, "context", context)
             setattr(entry, "color", color)
+            if icon is not None:
+                setattr(entry, "icon", icon)
+            if order is not None:
+                setattr(entry, "order", order)
 
     def get_interfaces(
         self,

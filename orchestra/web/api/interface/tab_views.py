@@ -50,6 +50,7 @@ def _create_tab_response(tab: Tab, tiles: Optional[List[Tile]] = None) -> TabSch
         order=tab.order,
         global_context=tab.global_context,
         color=tab.color,
+        icon=tab.icon,
         is_checkpoint=tab.is_checkpoint,
         tiles=tile_list,
         created_at=tab.created_at.isoformat() if tab.created_at else None,
@@ -226,6 +227,7 @@ def create_tab(
         global_context=request.global_context,
         color=request.color,
         is_checkpoint=checkpoint,
+        icon=request.icon,
     )
 
     # Get all tiles for this tab
