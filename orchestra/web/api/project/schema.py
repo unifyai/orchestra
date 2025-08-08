@@ -49,6 +49,10 @@ class ProjectConfig(BaseModel):
         None,
         description="Icon identifier for the project",
     )
+    order: Optional[int] = Field(
+        None,
+        description="Position/order of the project in list",
+    )
     description: Optional[str] = Field(
         None,
         description="Optional description of the project",
@@ -79,6 +83,10 @@ class ProjectUpdate(BaseModel):
     icon: Optional[str] = Field(
         None,
         description="Icon identifier for the project",
+    )
+    order: Optional[int] = Field(
+        None,
+        description="Position/order of the project in list",
     )
     description: Optional[str] = Field(
         None,
@@ -155,9 +163,23 @@ class ImportProjectTemplateRequest(BaseModel):
     interface_name_prefix: Optional[str] = None  # Prefix for imported interface names
 
 
+class TabInfo(BaseModel):
+    name: str
+    icon: str
+    order: int
+
+
+class InterfaceInfo(BaseModel):
+    name: str
+    icon: str
+    order: int
+    tabs: List[TabInfo]
+
+
 class ProjectTreeItem(BaseModel):
     project: str
     icon: str
-    interfaces: List[str]
+    order: int
+    interfaces: List[InterfaceInfo]
     favorite: bool = False
     position: Optional[int] = None

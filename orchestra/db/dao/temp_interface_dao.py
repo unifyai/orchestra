@@ -16,6 +16,8 @@ class TempInterfaceDAO:
         project_id: int,
         context: str | None = None,
         color: str | None = None,
+        icon: str | None = "folder",
+        order: int | None = None,
     ):
         self.session.add(
             TempInterface(
@@ -25,6 +27,8 @@ class TempInterfaceDAO:
                 project_id=project_id,
                 context=context,
                 color=color,
+                icon=icon,
+                order=order,
             ),
         )
         self.session.commit()
@@ -37,6 +41,8 @@ class TempInterfaceDAO:
         new_counter: int,
         context: str | None = None,
         color: str | None = None,
+        icon: str | None = None,
+        order: int | None = None,
         new_name: str = None,
     ):
         query = select(TempInterface)
@@ -53,6 +59,10 @@ class TempInterfaceDAO:
                 setattr(entry, "name", new_name)
             setattr(entry, "context", context)
             setattr(entry, "color", color)
+            if icon is not None:
+                setattr(entry, "icon", icon)
+            if order is not None:
+                setattr(entry, "order", order)
 
     def get_interfaces(
         self,

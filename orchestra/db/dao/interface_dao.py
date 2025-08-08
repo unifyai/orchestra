@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import Interface
+from orchestra.db.utils import get_next_order_value
 
 
 class InterfaceDAO:
@@ -20,11 +21,25 @@ class InterfaceDAO:
         new_counter: int = 0,
         context: str = None,
         color: str = None,
+        icon: str = "folder",
+        order: Optional[int] = None,
         active_tab_id: str = None,
         is_checkpoint: bool = False,
         checkpoint_or_active_id: str = None,
     ) -> Interface:
         """Create a new interface."""
+        # Determine order value (append to end)
+        where_conditions = [Interface.project_id == project_id]
+        if is_checkpoint is not None:
+            where_conditions.append(Interface.is_checkpoint == is_checkpoint)
+
+        order_value = get_next_order_value(
+            session=self.session,
+            model_class=Interface,
+            order=order,
+            where_conditions=where_conditions,
+        )
+
         interface = Interface(
             name=name,
             items=items,
@@ -32,6 +47,8 @@ class InterfaceDAO:
             project_id=project_id,
             context=context,
             color=color,
+            icon=icon,
+            order=order_value,
             active_tab_id=active_tab_id,
             is_checkpoint=is_checkpoint,
             checkpoint_or_active_id=checkpoint_or_active_id,
@@ -103,6 +120,31 @@ class InterfaceDAO:
         interfaces = self.session.execute(query).scalars().all()
         return interfaces
 
+    def get_interfaces_bulk(
+        self,
+        project_ids: List[int],
+        is_checkpoint: Optional[bool] = False,
+    ) -> List[Interface]:
+        """
+        Get interfaces for multiple projects in a single query to avoid N+1 problem.
+
+        Args:
+            project_ids: List of project IDs to get interfaces for
+            is_checkpoint: Filter by checkpoint status
+
+        Returns:
+            List of interfaces ordered by project_id, then by order
+        """
+        if not project_ids:
+            return []
+
+        query = select(Interface).where(Interface.project_id.in_(project_ids))
+        if is_checkpoint is not None:
+            query = query.where(Interface.is_checkpoint == is_checkpoint)
+
+        query = query.order_by(Interface.project_id.asc(), Interface.order.asc())
+        return self.session.execute(query).scalars().all()
+
     def update_interface(
         self,
         id: Optional[str] = None,
@@ -113,7 +155,9 @@ class InterfaceDAO:
         new_counter: Optional[int] = None,
         context: Optional[str] = None,
         color: Optional[str] = None,
+        icon: Optional[str] = None,
         active_tab_id: Optional[str] = None,
+        order: Optional[int] = None,
     ) -> Optional[Interface]:
         """
         Update interface by ID or by project_id and name.
@@ -148,8 +192,12 @@ class InterfaceDAO:
             interface.context = context
         if color is not None:
             interface.color = color
+        if icon is not None:
+            interface.icon = icon
         if active_tab_id is not None:
             interface.active_tab_id = active_tab_id
+        if order is not None:
+            interface.order = order
         if is_checkpoint is not None and (id is not None or not is_checkpoint):
             # Only update is_checkpoint if:
             # 1. We're identifying by ID, or
@@ -185,24 +233,6 @@ class InterfaceDAO:
         self.session.delete(interface)
         self.session.commit()
         return True
-
-    def make_checkpoint(
-        self,
-        id: Optional[str] = None,
-        project_id: Optional[int] = None,
-        name: Optional[str] = None,
-    ) -> Optional[Interface]:
-        """
-        Mark an interface as a checkpoint (manual save) by ID or by project_id and name.
-
-        Either id or (project_id and name) must be provided.
-        """
-        return self.update_interface(
-            id=id,
-            project_id=project_id,
-            name=name,
-            is_checkpoint=True,
-        )
 
     def make_checkpoint(
         self,

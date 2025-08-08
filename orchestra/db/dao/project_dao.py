@@ -16,6 +16,7 @@ from orchestra.db.models.orchestra_models import (
     Project,
     ProjectVersion,
 )
+from orchestra.db.utils import get_next_order_value
 
 
 class ProjectDAO:
@@ -60,12 +61,27 @@ class ProjectDAO:
         is_versioned: bool = False,
         description: Optional[str] = None,
         icon: Optional[str] = "folder",
+        order: Optional[int] = None,
     ) -> None:
 
         if user_id is None and organization_id is None:
             raise ValueError("One of user_id or organization_id must be provided.")
 
         self._validate_description(description)
+
+        # Determine order: append to end by default
+        where_conditions = []
+        if user_id is not None:
+            where_conditions.append(Project.user_id == user_id)
+        if organization_id is not None:
+            where_conditions.append(Project.organization_id == organization_id)
+
+        order_value = get_next_order_value(
+            session=self.session,
+            model_class=Project,
+            order=order,
+            where_conditions=where_conditions,
+        )
 
         self.session.add(
             Project(
@@ -75,6 +91,7 @@ class ProjectDAO:
                 is_versioned=is_versioned,
                 description=description,
                 icon=icon,
+                order=order_value,
             ),
         )
 
@@ -106,6 +123,7 @@ class ProjectDAO:
         organization_id: Optional[int] = None,
         icon: Optional[str] = None,
         description: Optional[str] = None,
+        order: Optional[int] = None,
     ) -> None:
         self._validate_description(description)
 
@@ -124,6 +142,8 @@ class ProjectDAO:
                 setattr(entry, "description", description)
             if icon is not None:
                 setattr(entry, "icon", icon)
+            if order is not None:
+                setattr(entry, "order", order)
 
     def rename(
         self,

@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import Tab
+from orchestra.db.utils import get_next_order_value
 
 
 class TabDAO:
@@ -18,23 +19,37 @@ class TabDAO:
         name: str,
         visible: bool = True,
         active: bool = False,
-        order: int = 0,
+        order: Optional[int] = None,
         tab_id: Optional[str] = None,
         global_context: Optional[str] = None,
         color: Optional[str] = None,
+        icon: Optional[str] = "tab",
         is_checkpoint: bool = False,
         checkpoint_or_active_id: Optional[str] = None,
     ) -> Tab:
         """Create a new tab in an interface."""
+        # Determine order position
+        where_conditions = [Tab.interface_id == interface_id]
+        if is_checkpoint is not None:
+            where_conditions.append(Tab.is_checkpoint == is_checkpoint)
+
+        order_value = get_next_order_value(
+            session=self.session,
+            model_class=Tab,
+            order=order,
+            where_conditions=where_conditions,
+        )
+
         tab = Tab(
             id=tab_id,
             interface_id=interface_id,
             name=name,
             visible=visible,
             active=active,
-            order=order,
+            order=order_value,
             global_context=global_context,
             color=color,
+            icon=icon,
             is_checkpoint=is_checkpoint,
             checkpoint_or_active_id=checkpoint_or_active_id,
         )
@@ -100,6 +115,31 @@ class TabDAO:
         query = query.order_by(Tab.order.asc())
         return self.session.execute(query).scalars().all()
 
+    def list_tabs_bulk(
+        self,
+        interface_ids: List[str],
+        is_checkpoint: Optional[bool] = False,
+    ) -> List[Tab]:
+        """
+        Get tabs for multiple interfaces in a single query to avoid N+1 problem.
+
+        Args:
+            interface_ids: List of interface IDs to get tabs for
+            is_checkpoint: Filter by checkpoint status
+
+        Returns:
+            List of tabs ordered by interface_id, then by order
+        """
+        if not interface_ids:
+            return []
+
+        query = select(Tab).where(Tab.interface_id.in_(interface_ids))
+        if is_checkpoint is not None:
+            query = query.where(Tab.is_checkpoint == is_checkpoint)
+
+        query = query.order_by(Tab.interface_id.asc(), Tab.order.asc())
+        return self.session.execute(query).scalars().all()
+
     def update_tab(
         self,
         id: Optional[str] = None,
@@ -111,6 +151,7 @@ class TabDAO:
         order: Optional[int] = None,
         global_context: Optional[str] = None,
         color: Optional[str] = None,
+        icon: Optional[str] = None,
     ) -> Optional[Tab]:
         """
         Update tab by ID or by interface_id and name.
@@ -149,6 +190,8 @@ class TabDAO:
             tab.global_context = global_context
         if color is not None:
             tab.color = color
+        if icon is not None:
+            tab.icon = icon
         if is_checkpoint is not None and (id is not None or not is_checkpoint):
             # Only update is_checkpoint if:
             # 1. We're identifying by ID, or
