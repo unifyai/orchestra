@@ -133,4 +133,24 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 1.1, "completion": 4.4},
     },
+    "gpt-5": {
+        "endpoint": "gpt-5",
+        "context_window": 1047576,
+        "cost": {"prompt": 1.25, "completion": 10},
+    },
+    "gpt-5-mini": {
+        "endpoint": "gpt-5-mini",
+        "context_window": 400000,
+        "cost": {"prompt": 0.25, "completion": 2},
+    },
+    "gpt-5-nano": {
+        "endpoint": "gpt-5-nano",
+        "context_window": 400000,
+        "cost": {"prompt": 0.05, "completion": 0.4},
+    },
+    "gpt-5-chat-latest": {
+        "endpoint": "gpt-5-chat-latest",
+        "context_window": 400000,
+        "cost": {"prompt": 1.25, "completion": 10},
+    },
 }
