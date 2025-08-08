@@ -915,7 +915,7 @@ async def test_create_assistant_with_pre_hire_chat_logs_correctly(
     ), f"Assistant creation failed: {create_resp.text}"
 
     # Verify the logs were created
-    context_name = "ChattyCathy/Transcript"
+    context_name = "ChattyCathy/Transcripts"
     logs_resp = await client.get(
         f"/v0/logs?project=Assistants&context={context_name}",
         headers=HEADERS,
@@ -979,7 +979,7 @@ async def test_delete_assistant_deletes_contexts(
     assistant_id = create_resp.json()["info"]["agent_id"]
 
     # Verify context and logs exist before deletion
-    context_name = "DeletableDan/Transcript"
+    context_name = "DeletableDan/Transcripts"
     logs_before_delete = await client.get(
         f"/v0/logs?project=Assistants&context={context_name}",
         headers=HEADERS,

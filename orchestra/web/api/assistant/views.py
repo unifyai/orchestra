@@ -272,7 +272,7 @@ def create_assistant(
         # Log pre-hire chat if provided
         if assistant_in.pre_hire_chat:
             try:
-                context_name = f"{assistant.first_name}{assistant.surname}/Transcript"
+                context_name = f"{assistant.first_name}{assistant.surname}/Transcripts"
                 chat_context_id = context_dao.get_or_create(
                     assistants_project.id,
                     name=context_name,
@@ -471,7 +471,7 @@ def create_assistant(
                     # First, delete the chat context if it was created
                     if assistant_in.pre_hire_chat:
                         try:
-                            context_name = f"{assistant_in.first_name}{assistant_in.surname}/Transcript"
+                            context_name = f"{assistant_in.first_name}{assistant_in.surname}/Transcripts"
                             assistants_project = project_dao.get_by_user_and_name(
                                 user_id=user_id,
                                 name="Assistants",
@@ -777,7 +777,7 @@ def delete_assistant(
             )
             if assistants_project:
                 assistant_context_prefix = f"{assistant.first_name}{assistant.surname}"
-                # Find all contexts related to the assistant (e.g., "AdaLovelace", "AdaLovelace/Transcript")
+                # Find all contexts related to the assistant (e.g., "AdaLovelace", "AdaLovelace/Transcripts")
                 contexts_to_delete = (
                     session.query(Context)
                     .filter(
