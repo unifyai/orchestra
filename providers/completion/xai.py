@@ -42,24 +42,4 @@ supported_models = {
         "context_window": 131072,
         "cost": {"prompt": 0.3, "completion": 0.5},
     },
-    "grok-3-fast": {
-        "endpoint": "xai/grok-3-fast",
-        "context_window": 131072,
-        "cost": {"prompt": 5, "completion": 25},
-    },
-    "grok-3-mini-fast": {
-        "endpoint": "xai/grok-3-mini-fast",
-        "context_window": 131072,
-        "cost": {"prompt": 0.6, "completion": 4},
-    },
-    "grok-2-vision": {
-        "endpoint": "xai/grok-2-vision-latest",
-        "context_window": 32768,
-        "cost": {"prompt": 2, "completion": 10},
-    },
-    "grok-2": {
-        "endpoint": "xai/grok-2-latest",
-        "context_window": 131072,
-        "cost": {"prompt": 2, "completion": 10},
-    },
 }

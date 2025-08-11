@@ -66,6 +66,16 @@ class AWSBedrock(BaseCompletionProvider):  # noqa: WPS338
 
 
 supported_models = {
+    "gpt-oss-20b": {
+        "endpoint": "bedrock/us.openai.gpt-oss-20b-1:0",
+        "context_window": 128000,
+        "cost": {"prompt": 0.07, "completion": 0.3},
+    },
+    "gpt-oss-120b": {
+        "endpoint": "bedrock/us.openai.gpt-oss-120b-1:0",
+        "context_window": 128000,
+        "cost": {"prompt": 0.15, "completion": 0.6},
+    },
     "deepseek-r1": {
         "endpoint": "bedrock/us.deepseek.r1-v1:0",
         "context_window": 128000,
@@ -143,6 +153,11 @@ supported_models = {
     },
     "claude-4-opus": {
         "endpoint": "bedrock/us.anthropic.claude-opus-4-20250514-v1:0",
+        "context_window": 200000,
+        "cost": {"prompt": 15, "completion": 75},
+    },
+    "claude-4.1-opus": {
+        "endpoint": "bedrock/us.anthropic.claude-opus-4-1-20250805-v1:0",
         "context_window": 200000,
         "cost": {"prompt": 15, "completion": 75},
     },

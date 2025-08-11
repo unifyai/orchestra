@@ -88,6 +88,31 @@ supported_models = {
         "context_window": 1047576,
         "cost": {"prompt": 0.1, "completion": 0.4},
     },
+    "gpt-5": {
+        "endpoint": "replicate/openai/gpt-5",
+        "context_window": 400000,
+        "cost": {"prompt": 1.25, "completion": 10},
+    },
+    "gpt-5-mini": {
+        "endpoint": "replicate/openai/gpt-5-mini",
+        "context_window": 400000,
+        "cost": {"prompt": 0.25, "completion": 2},
+    },
+    "gpt-5-nano": {
+        "endpoint": "replicate/openai/gpt-5-nano",
+        "context_window": 400000,
+        "cost": {"prompt": 0.05, "completion": 0.4},
+    },
+    "gpt-oss-20b": {
+        "endpoint": "replicate/openai/gpt-oss-20b",
+        "context_window": 131072,
+        "cost": {"prompt": 0.09, "completion": 0.36},
+    },
+    "gpt-oss-120b": {
+        "endpoint": "replicate/openai/gpt-oss-120b",
+        "context_window": 131072,
+        "cost": {"prompt": 0.18, "completion": 0.72},
+    },
     "claude-4-sonnet": {
         "endpoint": "replicate/anthropic/claude-4-sonnet",
         "context_window": 200000,

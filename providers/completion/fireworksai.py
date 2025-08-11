@@ -28,6 +28,16 @@ class FireworksAI(BaseCompletionProvider):
 
 
 supported_models = {
+    "gpt-oss-20b": {
+        "endpoint": "fireworks_ai/accounts/fireworks/models/gpt-oss-20b",
+        "context_window": 131072,
+        "cost": {"prompt": 0.07, "completion": 0.3},
+    },
+    "gpt-oss-120b": {
+        "endpoint": "fireworks_ai/accounts/fireworks/models/gpt-oss-120b",
+        "context_window": 131072,
+        "cost": {"prompt": 0.15, "completion": 0.6},
+    },
     "deepseek-v3-0324": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/deepseek-v3-0324",
         "context_window": 160000,
@@ -79,14 +89,14 @@ supported_models = {
         "cost": {"prompt": 1.2, "completion": 1.2},
     },
     "qwen-3-235b-a22b-instruct": {
-        "endpoint": "fireworks_ai/accounts/fireworks/models/qwen3-235b-a22b",
-        "context_window": 128000,
+        "endpoint": "fireworks_ai/accounts/fireworks/models/qwen3-235b-a22b-instruct-2507",
+        "context_window": 256000,
         "cost": {"prompt": 0.22, "completion": 0.88},
     },
     "qwen-3-30b-a3b-instruct": {
-        "endpoint": "fireworks_ai/accounts/fireworks/models/qwen3-30b-a3b",
-        "context_window": 40000,
-        "cost": {"prompt": 0.15, "completion": 0.6},
+        "endpoint": "fireworks_ai/accounts/fireworks/models/qwen3-30b-a3b-instruct-2507",
+        "context_window": 256000,
+        "cost": {"prompt": 0.5, "completion": 0.5},
     },
     "qwen-2.5-72b-instruct": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/qwen-v2p5-72b-instruct",

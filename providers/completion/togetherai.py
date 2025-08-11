@@ -28,6 +28,16 @@ class TogetherAI(BaseCompletionProvider):
 
 
 supported_models = {
+    "gpt-oss-20b": {
+        "endpoint": "together_ai/openai/gpt-oss-20b",
+        "context_window": 131072,
+        "cost": {"prompt": 0.05, "completion": 0.2},
+    },
+    "gpt-oss-120b": {
+        "endpoint": "together_ai/openai/gpt-oss-120b",
+        "context_window": 131072,
+        "cost": {"prompt": 0.15, "completion": 0.6},
+    },
     "deepseek-r1": {
         "endpoint": "together_ai/deepseek-ai/DeepSeek-R1",
         "context_window": 128000,

@@ -135,7 +135,7 @@ supported_models = {
     },
     "gpt-5": {
         "endpoint": "gpt-5",
-        "context_window": 1047576,
+        "context_window": 400000,
         "cost": {"prompt": 1.25, "completion": 10},
     },
     "gpt-5-mini": {
