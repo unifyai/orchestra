@@ -28,6 +28,16 @@ class Deepinfra(BaseCompletionProvider):
 
 
 supported_models = {
+    "gpt-oss-20b": {
+        "endpoint": "deepinfra/openai/gpt-oss-20b",
+        "context_window": 128000,
+        "cost": {"prompt": 0.04, "completion": 0.16},
+    },
+    "gpt-oss-120b": {
+        "endpoint": "deepinfra/openai/gpt-oss-120b",
+        "context_window": 128000,
+        "cost": {"prompt": 0.09, "completion": 0.45},
+    },
     "deepseek-v3-0324": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3-0324",
         "context_window": 160000,
@@ -58,15 +68,10 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 0.23, "completion": 0.4},
     },
-    "llama-3.2-1b-chat": {
-        "endpoint": "deepinfra/meta-llama/Llama-3.2-1B-Instruct",
-        "context_window": 128000,
-        "cost": {"prompt": 0.005, "completion": 0.01},
-    },
     "llama-3.2-3b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.2-3B-Instruct",
         "context_window": 128000,
-        "cost": {"prompt": 0.003, "completion": 0.006},
+        "cost": {"prompt": 0.012, "completion": 0.024},
     },
     "llama-3.2-11b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.2-11B-Vision-Instruct",
@@ -120,7 +125,7 @@ supported_models = {
     },
     "mistral-small": {
         "endpoint": "deepinfra/mistralai/Mistral-Small-3.2-24B-Instruct-2506",
-        "context_window": 32000,
+        "context_window": 125000,
         "cost": {"prompt": 0.05, "completion": 0.1},
     },
     "mixtral-8x7b-instruct-v0.1": {
@@ -135,7 +140,7 @@ supported_models = {
     },
     "qwen-3-235b-a22b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen3-235B-A22B-Instruct-2507",
-        "context_window": 40000,
+        "context_window": 256000,
         "cost": {"prompt": 0.13, "completion": 0.6},
     },
     "qwen-3-30b-a3b-instruct": {

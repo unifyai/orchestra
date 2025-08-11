@@ -63,4 +63,14 @@ supported_models = {
         "context_window": 131072,
         "cost": {"prompt": 0.11, "completion": 0.34},
     },
+    "gpt-oss-20b": {
+        "endpoint": "groq/openai/gpt-oss-20b",
+        "context_window": 128000,
+        "cost": {"prompt": 0.1, "completion": 0.5},
+    },
+    "gpt-oss-120b": {
+        "endpoint": "groq/openai/gpt-oss-120b",
+        "context_window": 128000,
+        "cost": {"prompt": 0.15, "completion": 0.75},
+    },
 }
