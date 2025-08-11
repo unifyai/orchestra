@@ -1771,10 +1771,11 @@ def delete_logs(
         if body.source_type in ("all", "base"):
             # Use a single DELETE statement for all fields
             deletion_query = session.query(Log).filter(
-                Log.log_event_id.in_(all_log_events_subq), Log.key.in_(fields)
+                Log.log_event_id.in_(all_log_events_subq),
+                Log.key.in_(fields),
             )
             log_dao._bulk_delete_gcs_media(
-                deletion_query
+                deletion_query,
             )  # Delete GCS files BEFORE deleting DB records
             deleted_count = deletion_query.delete(synchronize_session=False)
             if deleted_count > 0:
@@ -4040,6 +4041,7 @@ async def process_traffic_logs(
         # Pull messages from PubSub
         response = subscriber.pull(
             request={"subscription": subscription_path, "max_messages": pull_limit},
+            timeout=40,
         )
 
         entries: List[Dict[str, Any]] = []
@@ -4097,8 +4099,8 @@ async def process_traffic_logs(
     except Exception as e:
         import traceback
 
-        traceback.print_exc()
+        error_message = traceback.format_exc()
         return JSONResponse(
             status_code=500,
-            content={"detail": f"Error processing traffic logs: {str(e)}"},
+            content={"detail": f"Error processing traffic logs: {error_message}"},
         )
