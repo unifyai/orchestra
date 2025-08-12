@@ -169,7 +169,7 @@ class Settings(BaseSettings):
     assistant_creation_cost: float = 10.0
 
     # Assistant photo generation
-    photo_generation_cost: float = 0.05
+    photo_generation_cost: float = 0.10
     video_generation_cost: float = 0.25
     replicate_api_key: Optional[str] = None  # Populated by model_config below
 
