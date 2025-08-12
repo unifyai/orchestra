@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Dict, Generic, List, Literal, Optional, TypeVar
+from typing import Any, Dict, Generic, List, Literal, Optional, TypeVar
 
 from pydantic import BaseModel, Field, HttpUrl
 from pydantic.generics import GenericModel
@@ -828,3 +828,21 @@ class VideoAnimateRequest(BaseModel):
                 "keep_resolution": True,
             },
         }
+
+
+class ReplicatePredictionResponse(BaseModel):
+    id: str
+    model: str
+    version: str
+    input: Optional[Dict] = None
+    output: Optional[Any] = None
+    logs: Optional[str] = None
+    error: Optional[Any] = None
+    status: str
+    created_at: str
+    completed_at: Optional[str] = None
+    urls: Optional[Dict] = None
+
+    class Config:
+        orm_mode = True
+        from_attributes = True
