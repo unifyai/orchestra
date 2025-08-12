@@ -30,9 +30,24 @@ def mock_media_services_factory(fastapi_app):
     replicate_mock.edit_photo.return_value = (
         "https://replicate.delivery/pbxt/mock-edited-url"
     )
-    replicate_mock.animate_video.return_value = (
-        "https://replicate.delivery/pbxt/mock-animated-video-url"
+
+    # Mock the new asynchronous methods for video animation
+    mock_prediction = MagicMock()
+    mock_prediction.id = "video_pred_123"
+    mock_prediction.status = "starting"
+    mock_prediction.version = (
+        "a2aad29ea95f19747a5ea22ab14fc6594654506e5815f7f5ba4293e888d3e20f"
     )
+    mock_prediction.input = {"image": "http://example.com/image.png"}
+    mock_prediction.output = None
+    mock_prediction.error = None
+    mock_prediction.logs = None
+    mock_prediction.created_at = "2025-08-12T10:00:00.000000Z"
+    mock_prediction.completed_at = None
+
+    replicate_mock.create_video_animation.return_value = mock_prediction
+    replicate_mock.get_prediction.return_value = mock_prediction
+    replicate_mock.cancel_prediction.return_value = mock_prediction
 
     bucket_mock = MagicMock(spec=OriginalBucketService)
     bucket_mock.upload_temp_assistant_file.return_value = (
@@ -340,9 +355,10 @@ async def test_animate_video_with_urls_success(
         files={},  # Force multipart
         headers=request_headers,
     )
-    assert resp.status_code == 201, resp.text
+    assert resp.status_code == 202, resp.text
     data = resp.json()["info"]
-    assert data == "https://replicate.delivery/pbxt/mock-animated-video-url"
+    assert data["id"] == "video_pred_123"
+    assert data["status"] == "starting"
 
     openai_mock.analyze_image.assert_called_once_with(
         image_url="https://example.com/image.png",
@@ -351,7 +367,7 @@ async def test_animate_video_with_urls_success(
         audio_url="https://example.com/audio.mp3",
     )
 
-    replicate_mock.animate_video.assert_called_once_with(
+    replicate_mock.create_video_animation.assert_called_once_with(
         image_url="https://example.com/image.png",
         audio_url="https://example.com/audio.mp3",
         seed=None,
@@ -408,9 +424,10 @@ async def test_animate_video_with_files_success(
         files=files_payload,
         headers=request_headers,
     )
-    assert resp.status_code == 201, resp.text
+    assert resp.status_code == 202, resp.text
     data = resp.json()["info"]
-    assert data == "https://replicate.delivery/pbxt/mock-animated-video-url"
+    assert data["id"] == "video_pred_123"
+    assert data["status"] == "starting"
 
     assert bucket_mock.upload_temp_assistant_file.call_count == 2
     bucket_mock.upload_temp_assistant_file.assert_any_call(
@@ -431,7 +448,7 @@ async def test_animate_video_with_files_success(
         audio_url="https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_audio.mp3",
     )
 
-    replicate_mock.animate_video.assert_called_once_with(
+    replicate_mock.create_video_animation.assert_called_once_with(
         image_url="https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_image.jpg",
         audio_url="https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_audio.mp3",
         seed=None,
@@ -486,7 +503,7 @@ async def test_animate_video_fails_moderation_no_face(
         image_url="https://example.com/no_face.png",
     )
     openai_mock.analyze_audio.assert_not_called()
-    replicate_mock.animate_video.assert_not_called()
+    replicate_mock.create_video_animation.assert_not_called()
 
 
 @pytest.mark.anyio
@@ -525,7 +542,7 @@ async def test_animate_video_fails_moderation_image_nsfw(
         image_url="https://example.com/nsfw_image.png",
     )
     openai_mock.analyze_audio.assert_not_called()
-    replicate_mock.animate_video.assert_not_called()
+    replicate_mock.create_video_animation.assert_not_called()
 
 
 @pytest.mark.anyio
@@ -571,7 +588,7 @@ async def test_animate_video_fails_moderation_audio_nsfw(
     openai_mock.analyze_audio.assert_called_once_with(
         audio_url="https://example.com/nsfw_audio.mp3",
     )
-    replicate_mock.animate_video.assert_not_called()
+    replicate_mock.create_video_animation.assert_not_called()
 
 
 @pytest.mark.anyio
@@ -617,7 +634,7 @@ async def test_animate_video_fails_moderation_no_speech(
     openai_mock.analyze_audio.assert_called_once_with(
         audio_url="https://example.com/silent_audio.mp3",
     )
-    replicate_mock.animate_video.assert_not_called()
+    replicate_mock.create_video_animation.assert_not_called()
 
 
 @pytest.mark.anyio
@@ -664,3 +681,40 @@ async def test_animate_video_invalid_input_combinations(client: AsyncClient):
     )
     assert resp.status_code == 400
     assert "Provide either 'audio_url' or 'audio_file'" in resp.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_get_animation_prediction(
+    client: AsyncClient, mock_media_services_factory
+):
+    replicate_mock, _, _ = mock_media_services_factory
+    prediction_id = "video_pred_123"
+
+    resp = await client.get(
+        f"/v0/assistant/photo/animate/{prediction_id}",
+        headers=HEADERS,
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()["info"]
+    assert data["id"] == prediction_id
+    assert data["status"] == "starting"
+    replicate_mock.get_prediction.assert_called_once_with(prediction_id)
+
+
+@pytest.mark.anyio
+async def test_cancel_animation_prediction(
+    client: AsyncClient, mock_media_services_factory
+):
+    replicate_mock, _, _ = mock_media_services_factory
+    prediction_id = "video_pred_123"
+
+    resp = await client.post(
+        f"/v0/assistant/photo/animate/{prediction_id}/cancel",
+        headers=HEADERS,
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()["info"]
+    assert data["id"] == prediction_id
+    replicate_mock.cancel_prediction.assert_called_once_with(prediction_id)
