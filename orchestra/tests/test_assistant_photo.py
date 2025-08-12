@@ -35,6 +35,7 @@ def mock_media_services_factory(fastapi_app):
     mock_prediction = MagicMock()
     mock_prediction.id = "video_pred_123"
     mock_prediction.status = "starting"
+    mock_prediction.model = "zsxkib/sonic"
     mock_prediction.version = (
         "a2aad29ea95f19747a5ea22ab14fc6594654506e5815f7f5ba4293e888d3e20f"
     )
@@ -44,6 +45,10 @@ def mock_media_services_factory(fastapi_app):
     mock_prediction.logs = None
     mock_prediction.created_at = "2025-08-12T10:00:00.000000Z"
     mock_prediction.completed_at = None
+    mock_prediction.urls = {
+        "get": "https://api.replicate.com/v1/predictions/video_pred_123",
+        "cancel": "https://api.replicate.com/v1/predictions/video_pred_123/cancel",
+    }
 
     replicate_mock.create_video_animation.return_value = mock_prediction
     replicate_mock.get_prediction.return_value = mock_prediction
