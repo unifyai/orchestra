@@ -2502,10 +2502,15 @@ async def edit_assistant_photo(
 
     except ReplicateAPIError as e:
         session.rollback()
+        logging.error(f"Replicate API error: {e.detail}")
         raise HTTPException(
             status_code=e.status_code,
             detail=f"Replicate API error: {e.detail}",
         )
+    except HTTPException as http_e:
+        session.rollback()
+        logging.error(f"Could not edit photo: {str(http_e)}")
+        raise
     except Exception as e:
         session.rollback()
         logging.error(f"Error editing photo for user {user_id}: {str(e)}")
