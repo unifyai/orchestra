@@ -5,6 +5,12 @@ import pytest
 from httpx import AsyncClient
 
 from orchestra.services.bucket_service import BucketService as OriginalBucketService
+from orchestra.services.openai_service import ImageAnalysisResponse
+from orchestra.services.openai_service import OpenAIService as OriginalOpenAIService
+from orchestra.services.openai_service import (
+    TextModerationResponse,
+    TextModerationResult,
+)
 from orchestra.services.replicate_service import (
     ReplicateService as OriginalReplicateService,
 )
@@ -15,8 +21,8 @@ from orchestra.tests.utils import HEADERS
 @pytest.fixture(
     autouse=True,
 )
-def mock_photo_services_factory(fastapi_app):
-    """Provides mock ReplicateService and BucketService instances."""
+def mock_media_services_factory(fastapi_app):
+    """Provides mock ReplicateService, BucketService, and OpenAIService instances."""
     replicate_mock = MagicMock(spec=OriginalReplicateService)
     replicate_mock.generate_photo.return_value = (
         "https://replicate.delivery/pbxt/mock-generated-url"
@@ -35,17 +41,35 @@ def mock_photo_services_factory(fastapi_app):
     )
     bucket_mock.delete_assistant_file.return_value = True
 
+    openai_mock = MagicMock(spec=OriginalOpenAIService)
+    # Default success response for moderation checks
+    openai_mock.analyze_image.return_value = ImageAnalysisResponse(
+        has_human_face=True,
+        is_nsfw=False,
+        reason="Image is OK.",
+    )
+    openai_mock.analyze_audio.return_value = TextModerationResponse(
+        contains_speech=True,
+        is_nsfw=False,
+        reason="Audio is OK.",
+    )
+    openai_mock.moderate_text.return_value = TextModerationResult(
+        is_nsfw=False,
+        reason="Text is clean.",
+    )
+
     fastapi_app.dependency_overrides[OriginalReplicateService] = lambda: replicate_mock
     fastapi_app.dependency_overrides[OriginalBucketService] = lambda: bucket_mock
+    fastapi_app.dependency_overrides[OriginalOpenAIService] = lambda: openai_mock
 
-    yield replicate_mock, bucket_mock
+    yield replicate_mock, bucket_mock, openai_mock
 
     fastapi_app.dependency_overrides.clear()
 
 
 @pytest.mark.anyio
-async def test_generate_photo_success(client: AsyncClient, mock_photo_services_factory):
-    replicate_mock, _ = mock_photo_services_factory
+async def test_generate_photo_success(client: AsyncClient, mock_media_services_factory):
+    replicate_mock, _, openai_mock = mock_media_services_factory
     payload = {"prompt": "A beautiful landscape"}
     resp = await client.post(
         "/v0/assistant/photo/generate",
@@ -55,16 +79,40 @@ async def test_generate_photo_success(client: AsyncClient, mock_photo_services_f
     assert resp.status_code == 201
     data = resp.json()["info"]
     assert data == "https://replicate.delivery/pbxt/mock-generated-url"
+
+    openai_mock.moderate_text.assert_called_once_with(payload["prompt"])
     replicate_mock.generate_photo.assert_called_once()
     assert replicate_mock.generate_photo.call_args[1]["prompt"] == payload["prompt"]
 
 
 @pytest.mark.anyio
+async def test_generate_photo_fails_moderation(
+    client: AsyncClient,
+    mock_media_services_factory,
+):
+    replicate_mock, _, openai_mock = mock_media_services_factory
+    openai_mock.moderate_text.return_value = TextModerationResult(
+        is_nsfw=True,
+        reason="Inappropriate prompt.",
+    )
+    payload = {"prompt": "a bad prompt"}
+    resp = await client.post(
+        "/v0/assistant/photo/generate",
+        json=payload,
+        headers=HEADERS,
+    )
+    assert resp.status_code == 400
+    assert "Prompt moderation failed" in resp.json()["detail"]
+    openai_mock.moderate_text.assert_called_once_with(payload["prompt"])
+    replicate_mock.generate_photo.assert_not_called()
+
+
+@pytest.mark.anyio
 async def test_edit_photo_with_url_success(
     client: AsyncClient,
-    mock_photo_services_factory,
+    mock_media_services_factory,
 ):
-    replicate_mock, bucket_mock = mock_photo_services_factory
+    replicate_mock, bucket_mock, openai_mock = mock_media_services_factory
 
     # Separate form data from files. Send form fields in `data`.
     data_payload = {
@@ -90,6 +138,10 @@ async def test_edit_photo_with_url_success(
     data = resp.json()["info"]
     assert data == "https://replicate.delivery/pbxt/mock-edited-url"
 
+    openai_mock.moderate_text.assert_called_once_with("Make it winter")
+    openai_mock.analyze_image.assert_called_once_with(
+        image_url="https://example.com/summer.jpg",
+    )
     replicate_mock.edit_photo.assert_called_once_with(
         prompt="Make it winter",
         input_image="https://example.com/summer.jpg",
@@ -104,9 +156,9 @@ async def test_edit_photo_with_url_success(
 @pytest.mark.anyio
 async def test_edit_photo_with_file_success(
     client: AsyncClient,
-    mock_photo_services_factory,
+    mock_media_services_factory,
 ):
-    replicate_mock, bucket_mock = mock_photo_services_factory
+    replicate_mock, bucket_mock, openai_mock = mock_media_services_factory
     file_content = b"fake image data"
 
     # Separate form data from files for clarity and correctness.
@@ -140,6 +192,10 @@ async def test_edit_photo_with_file_success(
         ANY,
         "image/jpeg",
     )
+    openai_mock.moderate_text.assert_called_once_with("Add a cat")
+    openai_mock.analyze_image.assert_called_once_with(
+        image_url="https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_image.jpg",
+    )
     replicate_mock.edit_photo.assert_called_once_with(
         prompt="Add a cat",
         input_image="https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_image.jpg",
@@ -150,6 +206,65 @@ async def test_edit_photo_with_file_success(
     bucket_mock.delete_assistant_file.assert_called_once_with(
         "gs://mock-bucket/_temp/test-user/temp_image.jpg",
     )
+
+
+@pytest.mark.anyio
+async def test_edit_photo_fails_prompt_moderation(
+    client: AsyncClient,
+    mock_media_services_factory,
+):
+    replicate_mock, _, openai_mock = mock_media_services_factory
+    openai_mock.moderate_text.return_value = TextModerationResult(
+        is_nsfw=True,
+        reason="Inappropriate prompt.",
+    )
+    data_payload = {
+        "prompt": "a bad prompt",
+        "input_image_url": "https://example.com/clean.jpg",
+    }
+    request_headers = HEADERS.copy()
+    request_headers.pop("Content-Type", None)
+    resp = await client.post(
+        "/v0/assistant/photo/edit",
+        data=data_payload,
+        files={},
+        headers=request_headers,
+    )
+    assert resp.status_code == 400
+    assert "Prompt moderation failed" in resp.json()["detail"]
+    openai_mock.moderate_text.assert_called_once_with("a bad prompt")
+
+
+@pytest.mark.anyio
+async def test_edit_photo_fails_image_moderation(
+    client: AsyncClient,
+    mock_media_services_factory,
+):
+    replicate_mock, _, openai_mock = mock_media_services_factory
+    openai_mock.analyze_image.return_value = ImageAnalysisResponse(
+        has_human_face=True,
+        is_nsfw=True,
+        reason="Inappropriate image.",
+    )
+    data_payload = {
+        "prompt": "a clean prompt",
+        "input_image_url": "https://example.com/nsfw.jpg",
+    }
+    request_headers = HEADERS.copy()
+    request_headers.pop("Content-Type", None)
+    resp = await client.post(
+        "/v0/assistant/photo/edit",
+        data=data_payload,
+        files={},
+        headers=request_headers,
+    )
+    assert resp.status_code == 400
+    assert "Image moderation failed" in resp.json()["detail"]
+    openai_mock.moderate_text.assert_called_once_with("a clean prompt")
+    openai_mock.analyze_image.assert_called_once_with(
+        image_url="https://example.com/nsfw.jpg",
+    )
+    replicate_mock.edit_photo.assert_not_called()
 
 
 @pytest.mark.anyio
@@ -196,10 +311,10 @@ async def test_edit_photo_invalid_input(client: AsyncClient):
 @pytest.mark.anyio
 async def test_animate_video_with_urls_success(
     client: AsyncClient,
-    mock_photo_services_factory,
+    mock_media_services_factory,
     dbsession,
 ):
-    replicate_mock, bucket_mock = mock_photo_services_factory
+    replicate_mock, bucket_mock, openai_mock = mock_media_services_factory
     # Ensure user has credits if staging is false
     if not settings.is_staging:
         from orchestra.db.dao.users_dao import UsersDAO
@@ -228,6 +343,14 @@ async def test_animate_video_with_urls_success(
     assert resp.status_code == 201, resp.text
     data = resp.json()["info"]
     assert data == "https://replicate.delivery/pbxt/mock-animated-video-url"
+
+    openai_mock.analyze_image.assert_called_once_with(
+        image_url="https://example.com/image.png",
+    )
+    openai_mock.analyze_audio.assert_called_once_with(
+        audio_url="https://example.com/audio.mp3",
+    )
+
     replicate_mock.animate_video.assert_called_once_with(
         image_url="https://example.com/image.png",
         audio_url="https://example.com/audio.mp3",
@@ -244,10 +367,10 @@ async def test_animate_video_with_urls_success(
 @pytest.mark.anyio
 async def test_animate_video_with_files_success(
     client: AsyncClient,
-    mock_photo_services_factory,
+    mock_media_services_factory,
     dbsession,
 ):
-    replicate_mock, bucket_mock = mock_photo_services_factory
+    replicate_mock, bucket_mock, openai_mock = mock_media_services_factory
     if not settings.is_staging:
         from orchestra.db.dao.users_dao import UsersDAO
 
@@ -301,6 +424,13 @@ async def test_animate_video_with_files_success(
         "audio/mpeg",
     )
 
+    openai_mock.analyze_image.assert_called_once_with(
+        image_url="https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_image.jpg",
+    )
+    openai_mock.analyze_audio.assert_called_once_with(
+        audio_url="https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_audio.mp3",
+    )
+
     replicate_mock.animate_video.assert_called_once_with(
         image_url="https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_image.jpg",
         audio_url="https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_audio.mp3",
@@ -318,6 +448,176 @@ async def test_animate_video_with_files_success(
     bucket_mock.delete_assistant_file.assert_any_call(
         "gs://mock-bucket/_temp/test-user/temp_audio.mp3",
     )
+
+
+@pytest.mark.anyio
+async def test_animate_video_fails_moderation_no_face(
+    client: AsyncClient,
+    mock_media_services_factory,
+):
+    replicate_mock, _, openai_mock = mock_media_services_factory
+
+    # Mock OpenAI to reject the image
+    openai_mock.analyze_image.return_value = ImageAnalysisResponse(
+        has_human_face=False,
+        is_nsfw=False,
+        reason="No face detected.",
+    )
+
+    data_payload = {
+        "image_url": "https://example.com/no_face.png",
+        "audio_url": "https://example.com/clean_audio.mp3",
+    }
+    request_headers = HEADERS.copy()
+    request_headers.pop("Content-Type", None)
+
+    resp = await client.post(
+        "/v0/assistant/photo/animate",
+        data=data_payload,
+        files={},
+        headers=request_headers,
+    )
+
+    assert resp.status_code == 400
+    assert "requires an image with a clear human face" in resp.json()["detail"]
+    assert "No face detected" in resp.json()["detail"]
+
+    openai_mock.analyze_image.assert_called_once_with(
+        image_url="https://example.com/no_face.png",
+    )
+    openai_mock.analyze_audio.assert_not_called()
+    replicate_mock.animate_video.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_animate_video_fails_moderation_image_nsfw(
+    client: AsyncClient,
+    mock_media_services_factory,
+):
+    replicate_mock, _, openai_mock = mock_media_services_factory
+
+    # Mock OpenAI to reject the image as NSFW
+    openai_mock.analyze_image.return_value = ImageAnalysisResponse(
+        has_human_face=True,
+        is_nsfw=True,
+        reason="Inappropriate content.",
+    )
+
+    data_payload = {
+        "image_url": "https://example.com/nsfw_image.png",
+        "audio_url": "https://example.com/clean_audio.mp3",
+    }
+    request_headers = HEADERS.copy()
+    request_headers.pop("Content-Type", None)
+
+    resp = await client.post(
+        "/v0/assistant/photo/animate",
+        data=data_payload,
+        files={},
+        headers=request_headers,
+    )
+
+    assert resp.status_code == 400
+    assert "Image moderation failed" in resp.json()["detail"]
+    assert "Inappropriate content" in resp.json()["detail"]
+
+    openai_mock.analyze_image.assert_called_once_with(
+        image_url="https://example.com/nsfw_image.png",
+    )
+    openai_mock.analyze_audio.assert_not_called()
+    replicate_mock.animate_video.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_animate_video_fails_moderation_audio_nsfw(
+    client: AsyncClient,
+    mock_media_services_factory,
+):
+    replicate_mock, _, openai_mock = mock_media_services_factory
+
+    # Mock OpenAI to pass the image but reject the audio
+    openai_mock.analyze_image.return_value = ImageAnalysisResponse(
+        has_human_face=True,
+        is_nsfw=False,
+        reason="OK",
+    )
+    openai_mock.analyze_audio.return_value = TextModerationResponse(
+        contains_speech=True,
+        is_nsfw=True,
+        reason="Explicit language detected.",
+    )
+
+    data_payload = {
+        "image_url": "https://example.com/clean_image.png",
+        "audio_url": "https://example.com/nsfw_audio.mp3",
+    }
+    request_headers = HEADERS.copy()
+    request_headers.pop("Content-Type", None)
+
+    resp = await client.post(
+        "/v0/assistant/photo/animate",
+        data=data_payload,
+        files={},
+        headers=request_headers,
+    )
+
+    assert resp.status_code == 400
+    assert "Audio moderation failed" in resp.json()["detail"]
+    assert "Explicit language detected" in resp.json()["detail"]
+
+    openai_mock.analyze_image.assert_called_once_with(
+        image_url="https://example.com/clean_image.png",
+    )
+    openai_mock.analyze_audio.assert_called_once_with(
+        audio_url="https://example.com/nsfw_audio.mp3",
+    )
+    replicate_mock.animate_video.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_animate_video_fails_moderation_no_speech(
+    client: AsyncClient,
+    mock_media_services_factory,
+):
+    replicate_mock, _, openai_mock = mock_media_services_factory
+
+    # Mock OpenAI to pass the image but reject the audio due to no speech
+    openai_mock.analyze_image.return_value = ImageAnalysisResponse(
+        has_human_face=True,
+        is_nsfw=False,
+        reason="OK",
+    )
+    openai_mock.analyze_audio.return_value = TextModerationResponse(
+        contains_speech=False,
+        is_nsfw=False,
+        reason="No speech detected.",
+    )
+
+    data_payload = {
+        "image_url": "https://example.com/clean_image.png",
+        "audio_url": "https://example.com/silent_audio.mp3",
+    }
+    request_headers = HEADERS.copy()
+    request_headers.pop("Content-Type", None)
+
+    resp = await client.post(
+        "/v0/assistant/photo/animate",
+        data=data_payload,
+        files={},
+        headers=request_headers,
+    )
+
+    assert resp.status_code == 400
+    assert "No speech was detected" in resp.json()["detail"]
+    assert "No speech detected" in resp.json()["detail"]
+
+    openai_mock.analyze_image.assert_called_once_with(
+        image_url="https://example.com/clean_image.png",
+    )
+    openai_mock.analyze_audio.assert_called_once_with(
+        audio_url="https://example.com/silent_audio.mp3",
+    )
+    replicate_mock.animate_video.assert_not_called()
 
 
 @pytest.mark.anyio
