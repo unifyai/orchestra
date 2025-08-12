@@ -2295,6 +2295,7 @@ def generate_assistant_photo(
     payload: PhotoGenerateRequest,
     session: Session = Depends(get_db_session),
     replicate_service: ReplicateService = Depends(),
+    openai_service: OpenAIService = Depends(),
 ) -> InfoResponse[str]:
     """
     Generate a new assistant profile photo from a text prompt.
@@ -2305,7 +2306,21 @@ def generate_assistant_photo(
     user_id = request.state.user_id
     users_dao = UsersDAO(session)
 
-    # Pre-check credits if not in staging
+    # 1. Moderate the prompt
+    try:
+        moderation_result = openai_service.moderate_text(payload.prompt)
+        if moderation_result.is_nsfw:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Prompt moderation failed: {moderation_result.reason}",
+            )
+    except OpenAIAPIError as e:
+        raise HTTPException(
+            status_code=e.status_code,
+            detail=f"Content moderation check failed: {e.detail}",
+        )
+
+    # 2. Pre-check credits if not in staging
     if not settings.is_staging:
         user = users_dao.get_user_with_id(user_id)
         if user.credits < settings.photo_generation_cost:
@@ -2314,6 +2329,7 @@ def generate_assistant_photo(
                 detail="Insufficient credits to generate a photo.",
             )
 
+    # 3. Generate photo
     try:
         image_url = replicate_service.generate_photo(
             prompt=payload.prompt,
@@ -2324,7 +2340,7 @@ def generate_assistant_photo(
             prompt_upsampling=payload.prompt_upsampling,
         )
 
-        # Deduct credits after successful generation if not in staging
+        # 4. Deduct credits after successful generation if not in staging
         if not settings.is_staging:
             users_dao.recharge_credit(
                 user_id=user_id,
@@ -2361,6 +2377,7 @@ async def edit_assistant_photo(
     session: Session = Depends(get_db_session),
     replicate_service: ReplicateService = Depends(),
     bucket_service: BucketService = Depends(),
+    openai_service: OpenAIService = Depends(),
     prompt: str = Form(
         ...,
         example="A photo of a young woman with long brown hair and blue eyes.",
@@ -2386,8 +2403,6 @@ async def edit_assistant_photo(
     temp_gcs_url_to_delete: Optional[str] = None
     input_image_for_replicate: Optional[str] = None
 
-    # A real file is provided if the UploadFile object exists and has a filename.
-    # Test clients can send an empty file part which creates an object without a filename.
     is_file_provided = input_image_file and input_image_file.filename
 
     if (input_image_url and is_file_provided) or (
@@ -2430,7 +2445,34 @@ async def edit_assistant_photo(
                 detail="No valid image input provided.",
             )
 
-        # Pre-check credits if not in staging
+        # 1. Moderate inputs
+        try:
+            # Moderate text prompt
+            prompt_moderation = openai_service.moderate_text(prompt)
+            if prompt_moderation.is_nsfw:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Prompt moderation failed: {prompt_moderation.reason}",
+                )
+
+            # Moderate input image
+            image_analysis = openai_service.analyze_image(
+                image_url=input_image_for_replicate,
+            )
+            if image_analysis.is_nsfw:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Image moderation failed: {image_analysis.reason}",
+                )
+        except OpenAIAPIError as e:
+            raise HTTPException(
+                status_code=e.status_code,
+                detail=f"Content moderation check failed: {e.detail}",
+            )
+        except HTTPException:
+            raise
+
+        # 2. Pre-check credits if not in staging
         if not settings.is_staging:
             user = users_dao.get_user_with_id(user_id)
             if user.credits < settings.photo_generation_cost:
@@ -2439,6 +2481,7 @@ async def edit_assistant_photo(
                     detail="Insufficient credits to edit a photo.",
                 )
 
+        # 3. Edit Photo
         image_url = replicate_service.edit_photo(
             prompt=prompt,
             input_image=input_image_for_replicate,
@@ -2447,7 +2490,7 @@ async def edit_assistant_photo(
             safety_tolerance=safety_tolerance,
         )
 
-        # Deduct credits after successful edit if not in staging
+        # 4. Deduct credits after successful edit if not in staging
         if not settings.is_staging:
             users_dao.recharge_credit(
                 user_id=user_id,
@@ -2459,10 +2502,15 @@ async def edit_assistant_photo(
 
     except ReplicateAPIError as e:
         session.rollback()
+        logging.error(f"Replicate API error: {e.detail}")
         raise HTTPException(
             status_code=e.status_code,
             detail=f"Replicate API error: {e.detail}",
         )
+    except HTTPException as http_e:
+        session.rollback()
+        logging.error(f"Could not edit photo: {str(http_e)}")
+        raise
     except Exception as e:
         session.rollback()
         logging.error(f"Error editing photo for user {user_id}: {str(e)}")
@@ -2496,6 +2544,7 @@ async def animate_video_endpoint(
     session: Session = Depends(get_db_session),
     replicate_service: ReplicateService = Depends(),
     bucket_service: BucketService = Depends(),
+    openai_service: OpenAIService = Depends(),
     image_url: Optional[str] = Form(None),
     image_file: Optional[UploadFile] = File(None),
     audio_url: Optional[str] = Form(None),
@@ -2585,6 +2634,53 @@ async def animate_video_endpoint(
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Missing valid image or audio input for Replicate.",
+            )
+
+        try:
+            # Perform content moderation and analysis
+            image_analysis = openai_service.analyze_image(
+                image_url=final_image_url_for_replicate,
+            )
+            if not image_analysis.has_human_face:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Animation requires an image with a clear human face. Reason: {image_analysis.reason}",
+                )
+            if image_analysis.is_nsfw:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Image moderation failed: The image was flagged as inappropriate. Reason: {image_analysis.reason}",
+                )
+
+            audio_analysis = openai_service.analyze_audio(
+                audio_url=final_audio_url_for_replicate,
+            )
+            # New check for speech content
+            if not audio_analysis.contains_speech:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Audio moderation failed: No speech was detected in the audio file. Reason: {audio_analysis.reason}",
+                )
+            if audio_analysis.is_nsfw:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Audio moderation failed: The audio was flagged as inappropriate. Reason: {audio_analysis.reason}",
+                )
+
+        except OpenAIAPIError as e:
+            raise HTTPException(
+                status_code=e.status_code,
+                detail=f"Content moderation check failed: {e.detail}",
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logging.error(
+                f"An unexpected error occurred during content moderation for user {user_id}: {str(e)}",
+            )
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="An unexpected error occurred during content moderation.",
             )
 
         # Pre-check credits (assuming video_generation_cost is defined in settings)
