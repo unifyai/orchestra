@@ -53,6 +53,7 @@ from orchestra.web.api.assistant.schema import (
     PhotoGenerateRequest,
     RecordingCreate,
     RecordingInfo,
+    ReplicatePredictionResponse,
     VoiceCreate,
     VoiceDesignCreateFromPreviewRequest,
     VoiceDesignGeneratePreviewsAPIResponse,
@@ -2533,10 +2534,10 @@ async def edit_assistant_photo(
 
 @router.post(
     "/assistant/photo/animate",
-    response_model=InfoResponse[str],
-    status_code=status.HTTP_201_CREATED,
+    response_model=InfoResponse[ReplicatePredictionResponse],
+    status_code=status.HTTP_202_ACCEPTED,
     summary="Animate photo",
-    description="Generates an animated video of the assistant using an input image and audio. Inputs can be URLs or file uploads. This action costs credits.",
+    description="Starts a job to generate an animated video of the assistant using an input image and audio. This action costs credits.",
     tags=["Media"],
 )
 async def animate_video_endpoint(
@@ -2554,7 +2555,7 @@ async def animate_video_endpoint(
     min_resolution: Optional[int] = Form(512),
     inference_steps: Optional[int] = Form(25),
     keep_resolution: Optional[bool] = Form(True),
-) -> InfoResponse[str]:
+) -> InfoResponse[ReplicatePredictionResponse]:
     user_id = request.state.user_id
     users_dao = UsersDAO(session)
 
@@ -2692,7 +2693,7 @@ async def animate_video_endpoint(
                     detail="Insufficient credits to generate video.",
                 )
 
-        video_output_url = replicate_service.animate_video(
+        prediction = replicate_service.create_video_animation(
             image_url=final_image_url_for_replicate,
             audio_url=final_audio_url_for_replicate,
             seed=seed,
@@ -2710,7 +2711,8 @@ async def animate_video_endpoint(
             )
             session.commit()
 
-        return InfoResponse(info=video_output_url)
+        response_data = ReplicatePredictionResponse.from_orm(prediction)
+        return InfoResponse(info=response_data)
 
     except ReplicateAPIError as e:
         session.rollback()
@@ -2754,6 +2756,52 @@ async def animate_video_endpoint(
                 logging.error(
                     f"Failed to clean up temporary audio file {temp_audio_gcs_url}: {e_cleanup}",
                 )
+
+
+@router.get(
+    "/assistant/photo/animate/{prediction_id}",
+    response_model=InfoResponse[ReplicatePredictionResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Get animation prediction status",
+    description="Retrieves the status and result of a video animation job.",
+    tags=["Media"],
+)
+def get_animation_prediction(
+    prediction_id: str,
+    replicate_service: ReplicateService = Depends(),
+):
+    try:
+        prediction = replicate_service.get_prediction(prediction_id)
+        response_data = ReplicatePredictionResponse.from_orm(prediction)
+        return InfoResponse(info=response_data)
+    except ReplicateAPIError as e:
+        raise HTTPException(
+            status_code=e.status_code,
+            detail=f"Replicate API error: {e.detail}",
+        )
+
+
+@router.post(
+    "/assistant/photo/animate/{prediction_id}/cancel",
+    response_model=InfoResponse[ReplicatePredictionResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Cancel animation prediction",
+    description="Cancels a running video animation job.",
+    tags=["Media"],
+)
+def cancel_animation_prediction(
+    prediction_id: str,
+    replicate_service: ReplicateService = Depends(),
+):
+    try:
+        prediction = replicate_service.cancel_prediction(prediction_id)
+        response_data = ReplicatePredictionResponse.from_orm(prediction)
+        return InfoResponse(info=response_data)
+    except ReplicateAPIError as e:
+        raise HTTPException(
+            status_code=e.status_code,
+            detail=f"Replicate API error: {e.detail}",
+        )
 
 
 ##################

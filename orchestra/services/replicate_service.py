@@ -3,6 +3,7 @@ from typing import Any, Dict, Optional
 
 import replicate
 from fastapi import HTTPException, status
+from replicate.model import Prediction
 
 from orchestra.settings import settings
 
@@ -99,7 +100,7 @@ class ReplicateService:
                 detail=f"Request to Replicate API failed: {e}",
             )
 
-    def animate_video(
+    def create_video_animation(
         self,
         image_url: str,
         audio_url: str,
@@ -108,9 +109,9 @@ class ReplicateService:
         min_resolution: Optional[int] = 512,
         inference_steps: Optional[int] = 25,
         keep_resolution: Optional[bool] = True,
-    ) -> str:
+    ) -> Prediction:
         """
-        Generates a video from an image and audio using zsxkib/sonic model.
+        Creates a video animation prediction using zsxkib/sonic model.
         """
         try:
             model_identifier = "zsxkib/sonic:a2aad29ea95f19747a5ea22ab14fc6594654506e5815f7f5ba4293e888d3e20f"
@@ -124,17 +125,51 @@ class ReplicateService:
             }
             if seed is not None:
                 model_input["seed"] = seed
-            output = self.client.run(model_identifier, input=model_input)
-            if not output or not isinstance(output, str):
-                raise ReplicateAPIError(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Unexpected output type from Replicate video animation: {repr(output)}",
-                )
-            return output
 
+            prediction = self.client.predictions.create(
+                version=model_identifier,
+                input=model_input,
+            )
+            return prediction
         except Exception as e:
-            logging.error(f"Replicate animate_video failed: {e}", exc_info=True)
+            logging.error(
+                f"Replicate create_video_animation failed: {e}", exc_info=True
+            )
             raise ReplicateAPIError(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=f"Request to Replicate API for video animation failed: {e}",
+            )
+
+    def get_prediction(self, prediction_id: str) -> Prediction:
+        """
+        Gets a prediction from Replicate.
+        """
+        try:
+            prediction = self.client.predictions.get(prediction_id)
+            return prediction
+        except Exception as e:
+            logging.error(
+                f"Replicate get_prediction failed for id {prediction_id}: {e}",
+                exc_info=True,
+            )
+            raise ReplicateAPIError(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Request to Replicate API to get prediction failed: {e}",
+            )
+
+    def cancel_prediction(self, prediction_id: str) -> Prediction:
+        """
+        Cancels a prediction on Replicate.
+        """
+        try:
+            prediction = self.client.predictions.cancel(prediction_id)
+            return prediction
+        except Exception as e:
+            logging.error(
+                f"Replicate cancel_prediction failed for id {prediction_id}: {e}",
+                exc_info=True,
+            )
+            raise ReplicateAPIError(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Request to Replicate API to cancel prediction failed: {e}",
             )
