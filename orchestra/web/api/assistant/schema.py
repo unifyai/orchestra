@@ -17,9 +17,12 @@ class InfoResponse(GenericModel, Generic[T]):
 
 
 class ChatMessage(BaseModel):
+    message_id: int = Field(
+        ..., description="Unique identifier for the message in the exchange"
+    )
     medium: str = Field("unify_chat", description="Communication medium")
     sender_id: int = Field(..., description="ID of the sender")
-    receiver_id: int = Field(..., description="ID of the receiver")
+    receiver_ids: List[int] = Field(..., description="List of receiver IDs")
     timestamp: datetime = Field(..., description="Timestamp of the message")
     content: str = Field(..., description="Content of the message")
     exchange_id: int = Field(..., description="ID of the exchange")

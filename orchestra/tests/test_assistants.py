@@ -846,9 +846,10 @@ def pre_hire_chat_payload():
     return {
         "pre_hire_chat": [
             {
+                "message_id": 1,
                 "medium": "unify_chat",
                 "sender_id": 1,
-                "receiver_id": 2,
+                "receiver_ids": [0],
                 "timestamp": datetime.datetime.now(
                     datetime.timezone.utc,
                 ).isoformat(),
@@ -856,9 +857,10 @@ def pre_hire_chat_payload():
                 "exchange_id": 101,
             },
             {
+                "message_id": 2,
                 "medium": "unify_chat",
-                "sender_id": 2,
-                "receiver_id": 1,
+                "sender_id": 0,
+                "receiver_ids": [1],
                 "timestamp": datetime.datetime.now(
                     datetime.timezone.utc,
                 ).isoformat(),
@@ -948,11 +950,14 @@ async def test_create_assistant_with_pre_hire_chat_logs_correctly(
 
         # Assert that all fields match
         assert (
+            returned_entry["message_id"] == original_msg["message_id"]
+        ), f"Message ID mismatch for content '{content}'. Expected {original_msg['message_id']}, got {returned_entry['message_id']}"
+        assert (
             returned_entry["sender_id"] == original_msg["sender_id"]
         ), f"Sender ID mismatch for content '{content}'. Expected {original_msg['sender_id']}, got {returned_entry['sender_id']}"
         assert (
-            returned_entry["receiver_id"] == original_msg["receiver_id"]
-        ), f"Receiver ID mismatch for content '{content}'. Expected {original_msg['receiver_id']}, got {returned_entry['receiver_id']}"
+            returned_entry["receiver_ids"] == original_msg["receiver_ids"]
+        ), f"Receiver IDs mismatch for content '{content}'. Expected {original_msg['receiver_ids']}, got {returned_entry['receiver_ids']}"
         assert (
             returned_entry["exchange_id"] == original_msg["exchange_id"]
         ), f"Exchange ID mismatch for content '{content}'. Expected {original_msg['exchange_id']}, got {returned_entry['exchange_id']}"
