@@ -3623,7 +3623,7 @@ def delete_fields(
 ):
     """
     Deletes one or more fields from a project. This will:
-    1. Delete all log events with the specified field names (which cascades to logs and derived logs)
+    1. Delete all Log and DerivedLog entries with the specified field names (not the entire LogEvent)
     2. Delete the field type records for those fields
 
     This operation cannot be undone, so use with caution.
@@ -3633,7 +3633,7 @@ def delete_fields(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
-    log_event_dao = LogEventDAO(session)
+    log_dao = LogDAO(session, context_dao)
 
     # Check if this is the protected Unity/Tasks context
     if request.project == "Unity" and request.context == "Tasks":
@@ -3667,6 +3667,9 @@ def delete_fields(
     context_id = context[0][0].id
 
     deleted_fields = []
+    total_deleted_logs = 0
+    total_deleted_derived_logs = 0
+
     for field_name in request.fields:
         try:
             # Get all log event IDs that have this field in either base logs or derived logs
@@ -3690,14 +3693,34 @@ def delete_fields(
                 .distinct()
             )
 
-            # Combine both queries with UNION
+            # Combine both queries with UNION to get all affected log event IDs
             all_event_ids = base_log_events.union(derived_log_events).all()
             event_ids = [event_id[0] for event_id in all_event_ids]
 
-            # If we found events with this field, delete them
             if event_ids:
-                # Use LogEventDAO to delete events (which cascades to logs, derived logs, etc.)
-                log_event_dao.delete(event_ids)
+                # Query for Log entries to delete (for GCS cleanup)
+                logs_to_delete = session.query(Log).filter(
+                    Log.log_event_id.in_(event_ids),
+                    Log.key == field_name,
+                )
+
+                # Delete GCS media files before deleting database records
+                log_dao._bulk_delete_gcs_media(logs_to_delete)
+
+                # Delete the Log entries (not the LogEvents!)
+                deleted_logs_count = logs_to_delete.delete(synchronize_session=False)
+                total_deleted_logs += deleted_logs_count
+
+                # Delete the DerivedLog entries
+                deleted_derived_logs_count = (
+                    session.query(DerivedLog)
+                    .filter(
+                        DerivedLog.log_event_id.in_(event_ids),
+                        DerivedLog.key == field_name,
+                    )
+                    .delete(synchronize_session=False)
+                )
+                total_deleted_derived_logs += deleted_derived_logs_count
 
             # Delete field type record
             field_type_dao.delete_field_type(
@@ -3720,7 +3743,7 @@ def delete_fields(
         }
 
     return {
-        "info": "Fields deleted successfully.",
+        "info": f"Fields deleted successfully. Removed {total_deleted_logs} logs and {total_deleted_derived_logs} derived logs.",
         "deleted_fields": deleted_fields,
     }
 
