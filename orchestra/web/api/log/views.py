@@ -3587,7 +3587,77 @@ def create_fields(
             detail=f"Failed to create fields: {str(e)}",
         )
 
-    return {"info": "Fields created successfully."}
+    # Backfill existing logs with None values if requested
+    backfilled_count = 0
+    if request.backfill_logs:
+        try:
+            # Get all log events in this context
+            log_event_ids = (
+                session.query(LogEvent.id)
+                .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+                .filter(
+                    LogEvent.project_id == project_id,
+                    LogEventContext.context_id == context_id,
+                )
+                .all()
+            )
+
+            if log_event_ids:
+                # Create LogDAO instance for bulk_create
+                log_dao = LogDAO(session, context_dao)
+
+                # Prepare entries for bulk creation
+                entries_to_create = []
+                for log_event_id_tuple in log_event_ids:
+                    log_event_id = log_event_id_tuple[0]
+                    for field_name in request.fields.keys():
+                        # Check if this field already exists for this log event in Log or DerivedLog
+                        existing_log = (
+                            session.query(Log)
+                            .filter(
+                                Log.log_event_id == log_event_id,
+                                Log.key == field_name,
+                            )
+                            .first()
+                        )
+
+                        existing_derived_log = (
+                            session.query(DerivedLog)
+                            .filter(
+                                DerivedLog.log_event_id == log_event_id,
+                                DerivedLog.key == field_name,
+                            )
+                            .first()
+                        )
+
+                        # Only create if it doesn't already exist in either Log or DerivedLog
+                        if not existing_log and not existing_derived_log:
+                            entries_to_create.append(
+                                {
+                                    "project_id": project_id,
+                                    "log_event_id": log_event_id,
+                                    "key": field_name,
+                                    "value": None,
+                                    "context_id": context_id,
+                                },
+                            )
+                            backfilled_count += 1
+
+                # Bulk create the entries
+                if entries_to_create:
+                    log_dao.bulk_create(entries_to_create)
+                    session.commit()
+        except Exception as e:
+            session.rollback()
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to backfill logs: {str(e)}",
+            )
+
+    return {
+        "info": f"Fields created successfully. {'Backfilled ' + str(backfilled_count) + ' log entries with None values.' if request.backfill_logs and backfilled_count > 0 else ''}",
+        "backfilled_count": backfilled_count if request.backfill_logs else 0,
+    }
 
 
 @router.delete(
