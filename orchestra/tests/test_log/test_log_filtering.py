@@ -3225,3 +3225,80 @@ async def test_filter_with_vector_function_on_uncomputed_base_field(
         similarity,
         (int, float),
     ), f"Similarity score should be a number, got {type(similarity)}"
+
+
+@pytest.mark.anyio
+async def test_filter_on_field_with_existing_embedding(client: AsyncClient):
+    """
+    Verifies that a filter on a field with an existing embedding works correctly
+    for both scalar and vector operations.
+    """
+    project_name = "test_ambiguous_field_filter"
+    await _create_project(client, project_name, user=1)
+
+    # 1. Create a log with a simple text field.
+    log_content = "the quick brown fox jumps over the lazy dog"
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"doc_text": log_content},
+    )
+    assert response.status_code == 200
+    log_id = response.json()["log_event_ids"][0]
+
+    # 2. Explicitly create a derived log to compute the embedding for 'doc_text'.
+    embedding_key = "doc_text_emb"
+    embedding_equation = "embed({log:doc_text})"
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        embedding_key,
+        embedding_equation,
+        referenced_logs={"log": [log_id]},
+    )
+    assert (
+        response.status_code == 200
+    ), f"Failed to create derived embedding: {response.text}"
+
+    # 3. Perform a simple string equality filter on the 'doc_text' field.
+    string_filter_expr = f"doc_text == '{log_content}'"
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": string_filter_expr},
+        headers=HEADERS,
+    )
+
+    # 4. Assert that the string filter works correctly.
+    assert (
+        response.status_code == 200
+    ), f"String filter failed with status {response.status_code}: {response.text}"
+    result = response.json()
+    assert (
+        len(result["logs"]) == 1
+    ), "Expected exactly one log to be returned by the string filter."
+    assert (
+        result["logs"][0]["id"] == log_id
+    ), "The wrong log was returned by the string filter."
+    assert result["logs"][0]["entries"]["doc_text"] == log_content
+
+    # 5. Now, perform a vector similarity search on the SAME 'doc_text' field.
+    vector_filter_expr = (
+        "cosine(doc_text, embed('a fast canine leaps over a sleepy animal')) > 0.2"
+    )
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": vector_filter_expr},
+        headers=HEADERS,
+    )
+
+    # 6. Assert that the vector filter also works correctly.
+    assert (
+        response.status_code == 200
+    ), f"Vector filter failed with status {response.status_code}: {response.text}"
+    result = response.json()
+    assert (
+        len(result["logs"]) == 1
+    ), "Expected exactly one log to be returned by the vector similarity filter."
+    assert (
+        result["logs"][0]["id"] == log_id
+    ), "The vector search returned the wrong log."
