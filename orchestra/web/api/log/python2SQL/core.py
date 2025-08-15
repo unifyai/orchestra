@@ -133,6 +133,7 @@ def build_sql_query(
                 log_event_ids=event_ids,
                 session=session,
                 is_derived=is_derived,
+                is_vector=is_vector,
             )
         elif filter_dict["type"] == "type_literal":
             return literal(filter_dict["value"])
