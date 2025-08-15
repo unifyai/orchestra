@@ -44,6 +44,8 @@ from orchestra.db.models.orchestra_models import (
     Log,
     LogEvent,
     LogEventContext,
+    LogEventDerivedLog,
+    LogEventLog,
     Project,
 )
 from orchestra.settings import settings
@@ -769,17 +771,19 @@ def _get_logs_query(
         allowed_fields = from_fields.split("&")
         # Check both Log and DerivedLog tables for matching fields
         log_exists = (
-            session.query(Log.log_event_id)
+            session.query(LogEventLog.log_event_id)
+            .join(Log, LogEventLog.log_id == Log.id)
             .filter(
-                Log.log_event_id == LogEvent.id,
+                LogEventLog.log_event_id == LogEvent.id,
                 Log.key.in_(allowed_fields),
             )
             .exists()
         )
         derived_log_exists = (
-            session.query(DerivedLog.log_event_id)
+            session.query(LogEventDerivedLog.log_event_id)
+            .join(DerivedLog, DerivedLog.id == LogEventDerivedLog.derived_log_id)
             .filter(
-                DerivedLog.log_event_id == LogEvent.id,
+                LogEventDerivedLog.log_event_id == LogEvent.id,
                 DerivedLog.key.in_(allowed_fields),
             )
             .exists()
@@ -792,17 +796,19 @@ def _get_logs_query(
         excluded_fields = exclude_fields.split("&")
         # Check both Log and DerivedLog tables for non-excluded fields
         log_exists = (
-            session.query(Log.log_event_id)
+            session.query(LogEventLog.log_event_id)
+            .join(Log, LogEventLog.log_id == Log.id)
             .filter(
-                Log.log_event_id == LogEvent.id,
+                LogEventLog.log_event_id == LogEvent.id,
                 Log.key.notin_(excluded_fields),
             )
             .exists()
         )
         derived_log_exists = (
-            session.query(DerivedLog.log_event_id)
+            session.query(LogEventDerivedLog.log_event_id)
+            .join(DerivedLog, DerivedLog.id == LogEventDerivedLog.derived_log_id)
             .filter(
-                DerivedLog.log_event_id == LogEvent.id,
+                LogEventDerivedLog.log_event_id == LogEvent.id,
                 DerivedLog.key.notin_(excluded_fields),
             )
             .exists()
@@ -1547,33 +1553,41 @@ def _build_unified_logs_subquery(
         return query
 
     # get only the latest version of the logs
-    base_logs_q = session.query(
-        Log.id.label("id"),
-        Log.log_event_id.label("log_event_id"),
-        Log.key.label("key"),
-        Log.value.label("value"),
-        Log.inferred_type.label("inferred_type"),
-        Log.param_version.label("param_version"),
-        cast(None, Integer).label("context_version"),
-        Log.updated_at.label("updated_at"),
-        LogEvent.created_at.label("created_at"),
-        literal("base").label("source_type"),
-    ).join(LogEvent, LogEvent.id == Log.log_event_id)
+    base_logs_q = (
+        session.query(
+            Log.id.label("id"),
+            LogEventLog.log_event_id.label("log_event_id"),
+            Log.key.label("key"),
+            Log.value.label("value"),
+            Log.inferred_type.label("inferred_type"),
+            Log.param_version.label("param_version"),
+            cast(None, Integer).label("context_version"),
+            Log.updated_at.label("updated_at"),
+            LogEvent.created_at.label("created_at"),
+            literal("base").label("source_type"),
+        )
+        .join(LogEventLog, LogEventLog.log_id == Log.id)
+        .join(LogEvent, LogEvent.id == LogEventLog.log_event_id)
+    )
     base_logs_q = _apply_event_filter(base_logs_q, Log)
 
-    derived_logs_q = session.query(
-        DerivedLog.id.label("id"),
-        DerivedLog.log_event_id.label("log_event_id"),
-        DerivedLog.key.label("key"),
-        DerivedLog.value.label("value"),
-        DerivedLog.inferred_type.label("inferred_type"),
-        # derived logs have no version => cast to None
-        cast(None, Integer).label("param_version"),
-        cast(None, Integer).label("context_version"),
-        DerivedLog.updated_at.label("updated_at"),
-        DerivedLog.created_at.label("created_at"),
-        literal("derived").label("source_type"),
-    ).join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
+    derived_logs_q = (
+        session.query(
+            DerivedLog.id.label("id"),
+            LogEventDerivedLog.log_event_id.label("log_event_id"),
+            DerivedLog.key.label("key"),
+            DerivedLog.value.label("value"),
+            DerivedLog.inferred_type.label("inferred_type"),
+            # derived logs have no version => cast to None
+            cast(None, Integer).label("param_version"),
+            cast(None, Integer).label("context_version"),
+            DerivedLog.updated_at.label("updated_at"),
+            DerivedLog.created_at.label("created_at"),
+            literal("derived").label("source_type"),
+        )
+        .join(LogEventDerivedLog, LogEventDerivedLog.derived_log_id == DerivedLog.id)
+        .join(LogEvent, LogEvent.id == LogEventDerivedLog.log_event_id)
+    )
     derived_logs_q = _apply_event_filter(derived_logs_q, DerivedLog)
 
     unified_logs_subq = base_logs_q.union_all(derived_logs_q).subquery(
@@ -1928,7 +1942,8 @@ def _build_log_subquery(
         # Create a subquery that gets the value for this key
         key_subq = (
             session.query(Log.value)
-            .filter(Log.log_event_id == LogEvent.id, Log.key == key)
+            .join(LogEventLog, LogEventLog.log_id == Log.id)
+            .filter(LogEventLog.log_event_id == LogEvent.id, Log.key == key)
             .limit(1)
             .scalar_subquery()
             .label(key)
@@ -1952,6 +1967,7 @@ def _construct_join_query(
     columns: Optional[Dict[str, str]] = None,
     fields_a: Optional[Dict[str, Any]] = None,
     fields_b: Optional[Dict[str, Any]] = None,
+    include_log_ids: bool = False,
     session=None,
 ):
     """
@@ -2006,6 +2022,12 @@ def _construct_join_query(
     except Exception as e:
         raise ValueError(f"Error processing join expression: {e}")
     select_columns = []
+
+    # If include_log_ids is True, always include log_event_id from both sources
+    if include_log_ids:
+        select_columns.append(getattr(subq_a.c, "log_event_id").label("log_event_id_a"))
+        select_columns.append(getattr(subq_b.c, "log_event_id").label("log_event_id_b"))
+
     if columns:
         for source_col, new_alias in columns.items():
             if "." not in source_col:
@@ -2110,6 +2132,7 @@ def _create_logs_from_joined_rows(
     log_events = []
     log_event_contexts = []
     logs = []
+    log_event_logs = []
     json_logs = []
 
     # Process each row
@@ -2186,16 +2209,15 @@ def _create_logs_from_joined_rows(
                             )
 
             inferred_type = LogDAO.infer_type(col, val)
-            logs.append(
-                Log(
-                    log_event_id=log_event.id,
-                    key=col,
-                    value=val,
-                    inferred_type=inferred_type,
-                    created_at=now,
-                    updated_at=now,
-                ),
+            log = Log(
+                key=col,
+                value=val,
+                inferred_type=inferred_type,
+                created_at=now,
+                updated_at=now,
             )
+            logs.append(log)
+            session.add(log)
 
             # If value is a dict or list, create a JSONLog entry
             if isinstance(val, (dict, list)):
@@ -2209,6 +2231,30 @@ def _create_logs_from_joined_rows(
 
         new_log_ids.append(log_event.id)
 
+    # Flush to get Log IDs
+    session.flush()
+
+    # Create LogEventLog associations
+    log_idx = 0
+    for i, log_event in enumerate(log_events):
+        row = result_rows[i]
+        row_dict = {}
+        for col in row._fields:
+            value = getattr(row, col)
+            if col != "id":
+                row_dict[col] = value
+
+        # Create associations for each log
+        for col, val in row_dict.items():
+            log = logs[log_idx]
+            log_event_logs.append(
+                LogEventLog(
+                    log_event_id=log_event.id,
+                    log_id=log.id,
+                ),
+            )
+            log_idx += 1
+
     # Bulk create new field types if any
     try:
         if new_field_types:
@@ -2218,8 +2264,136 @@ def _create_logs_from_joined_rows(
 
     # Bulk insert related records
     session.bulk_save_objects(log_event_contexts)
-    session.bulk_save_objects(logs)
+    session.bulk_save_objects(log_event_logs)
     session.bulk_save_objects(json_logs)
+
+    return new_log_ids
+
+
+def _create_logs_by_reference(
+    result_rows,
+    project_id: int,
+    context_id: int,
+    columns: Optional[Dict[str, str]],
+    session,
+) -> List[int]:
+    """
+    Creates new log events that reference existing logs from joined query results.
+
+    Instead of creating new Log entries, this function creates new LogEvents that
+    reference existing Logs via the LogEventLog association table.
+
+    Args:
+        result_rows: Result rows from the join query containing log_event_id_a and log_event_id_b
+        project_id: ID of the project
+        context_id: ID of the context
+        columns: Dictionary mapping source columns to new column names
+        session: SQLAlchemy session
+
+    Returns:
+        List of IDs of the newly created log events
+    """
+    new_log_ids = []
+    now = datetime.now(timezone.utc)
+
+    # Prepare collections for bulk operations
+    log_events = []
+    log_event_contexts = []
+    log_event_logs = []
+
+    # Process each row
+    for row in result_rows:
+        # Create a new LogEvent
+        log_event = LogEvent(
+            project_id=project_id,
+            created_at=now,
+            updated_at=now,
+        )
+        log_events.append(log_event)
+        session.add(log_event)
+
+    # Flush to get IDs
+    session.flush()
+
+    # Now create the related records with the generated IDs
+    for i, log_event in enumerate(log_events):
+        row = result_rows[i]
+
+        # Create LogEventContext association
+        log_event_contexts.append(
+            LogEventContext(
+                log_event_id=log_event.id,
+                context_id=context_id,
+            ),
+        )
+
+        # Get source LogEvent IDs
+        log_event_id_a = getattr(row, "log_event_id_a", None)
+        log_event_id_b = getattr(row, "log_event_id_b", None)
+
+        # For each column in the result, find the corresponding Log from the source LogEvents
+        for col in row._fields:
+            # Skip the log_event_id columns
+            if col in ("log_event_id_a", "log_event_id_b"):
+                continue
+
+            value = getattr(row, col)
+            if value is not None:
+                # Determine which source (A or B) this column came from
+                source_log_event_id = None
+                original_col = col
+
+                if columns:
+                    # If columns mapping was provided, reverse lookup to find source
+                    for source_col, alias in columns.items():
+                        if alias == col:
+                            table_prefix, original_col = source_col.split(".", 1)
+                            if table_prefix.upper() == "A":
+                                source_log_event_id = log_event_id_a
+                            elif table_prefix.upper() == "B":
+                                source_log_event_id = log_event_id_b
+                            break
+                else:
+                    # Default naming convention: A_column or B_column
+                    if col.startswith("A_"):
+                        source_log_event_id = log_event_id_a
+                        original_col = col[2:]  # Remove 'A_' prefix
+                    elif col.startswith("B_"):
+                        source_log_event_id = log_event_id_b
+                        original_col = col[2:]  # Remove 'B_' prefix
+
+                if source_log_event_id:
+                    # Find the Log with this key from the source LogEvent via LogEventLog association
+                    log = (
+                        session.query(Log)
+                        .join(LogEventLog)
+                        .filter(
+                            LogEventLog.log_event_id == source_log_event_id,
+                            Log.key == original_col,
+                        )
+                        .first()
+                    )
+
+                    if log:
+                        # Check if this association already exists to avoid duplicates
+                        existing = any(
+                            lel.log_id == log.id
+                            for lel in log_event_logs
+                            if lel.log_event_id == log_event.id
+                        )
+                        if not existing:
+                            log_event_logs.append(
+                                LogEventLog(
+                                    log_event_id=log_event.id,
+                                    log_id=log.id,
+                                ),
+                            )
+
+        new_log_ids.append(log_event.id)
+
+    # Bulk insert related records
+    session.bulk_save_objects(log_event_contexts)
+    session.bulk_save_objects(log_event_logs)
 
     return new_log_ids
 
@@ -2232,6 +2406,7 @@ def _join_logs(
     mode: str,
     context_id: int,
     columns: Optional[Dict[str, str]] = None,
+    copy: bool = False,
     request_fastapi: Optional[Request] = None,
     project_dao: ProjectDAO = None,
     field_type_dao: FieldTypeDAO = None,
@@ -2255,6 +2430,7 @@ def _join_logs(
         context_id: ID of the context where joined logs will be stored
         columns: Optional dictionary mapping source columns to new column names.
                  Format should be {'A.column_name': 'new_name', 'B.column_name': 'other_name'}
+        copy: If True, creates copies of the logs. If False (default), references existing logs.
         request_fastapi: FastAPI request object for accessing user state
         project_dao: ProjectDAO instance for project operations
         field_type_dao: FieldTypeDAO instance for field type operations
@@ -2328,6 +2504,7 @@ def _join_logs(
             columns=columns,
             fields_a=fields_a,
             fields_b=fields_b,
+            include_log_ids=(not copy),  # Include log IDs when not copying
             session=session,
         )
 
@@ -2339,14 +2516,25 @@ def _join_logs(
             return []
 
         # Create new log entries from the joined results
-        new_log_ids = _create_logs_from_joined_rows(
-            result_rows=result_rows,
-            project_id=project_id,
-            context_id=context_id,
-            field_type_dao=field_type_dao,
-            context_dao=context_dao,
-            session=session,
-        )
+        if copy:
+            # Create copies of the logs
+            new_log_ids = _create_logs_from_joined_rows(
+                result_rows=result_rows,
+                project_id=project_id,
+                context_id=context_id,
+                field_type_dao=field_type_dao,
+                context_dao=context_dao,
+                session=session,
+            )
+        else:
+            # Reference existing logs
+            new_log_ids = _create_logs_by_reference(
+                result_rows=result_rows,
+                project_id=project_id,
+                context_id=context_id,
+                columns=columns,
+                session=session,
+            )
 
         # Commit the transaction
         session.commit()
