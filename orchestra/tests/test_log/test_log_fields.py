@@ -587,10 +587,171 @@ async def test_delete_fields_endpoint(client: AsyncClient):
     assert logs_response.status_code == 200
     logs = logs_response.json()["logs"]
 
+    # IMPORTANT: Verify that logs still exist (weren't deleted)
+    assert len(logs) == 2, "Deleting fields should not delete the log events themselves"
+
     # Check each log to ensure the columns are gone
     for log in logs:
         assert "col1" not in log["entries"]
         assert "col2" not in log["entries"]
+        # Verify logs still have their structure
+        assert "id" in log
+        assert "entries" in log
+        assert isinstance(log["entries"], dict)
+
+
+@pytest.mark.anyio
+async def test_delete_fields_preserves_log_events(client: AsyncClient):
+    """Test that deleting fields only removes the field data, not the entire log events."""
+    project_name = "test-delete-fields-preserve-logs"
+
+    # Create a project
+    await _create_project(client, project_name)
+
+    # Create logs with multiple fields
+    response1 = await _create_log(
+        client,
+        project_name,
+        entries={
+            "field_to_delete": "value1",
+            "field_to_keep": "keeper1",
+            "another_field": "data1",
+            "explicit_types": {
+                "field_to_delete": {"type": "str", "mutable": True},
+                "field_to_keep": {"type": "str", "mutable": True},
+                "another_field": {"type": "str", "mutable": True},
+            },
+        },
+    )
+    assert response1.status_code == 200
+    log_id1 = response1.json()["log_event_ids"][0]
+
+    response2 = await _create_log(
+        client,
+        project_name,
+        entries={
+            "field_to_delete": "value2",
+            "field_to_keep": "keeper2",
+            "another_field": "data2",
+            "explicit_types": {
+                "field_to_delete": {"type": "str", "mutable": True},
+                "field_to_keep": {"type": "str", "mutable": True},
+                "another_field": {"type": "str", "mutable": True},
+            },
+        },
+    )
+    assert response2.status_code == 200
+    log_id2 = response2.json()["log_event_ids"][0]
+
+    # Verify logs exist and have all fields
+    logs_response_before = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_response_before.status_code == 200
+    logs_before = logs_response_before.json()["logs"]
+    assert len(logs_before) == 2
+
+    # Verify all fields exist in both logs
+    for log in logs_before:
+        assert "field_to_delete" in log["entries"]
+        assert "field_to_keep" in log["entries"]
+        assert "another_field" in log["entries"]
+
+    # Delete only one field
+    delete_response = await client.request(
+        "DELETE",
+        "/v0/logs/fields",
+        json={"project": project_name, "fields": ["field_to_delete"]},
+        headers=HEADERS,
+    )
+    assert delete_response.status_code == 200
+    assert delete_response.json()["deleted_fields"] == ["field_to_delete"]
+
+    # Verify logs STILL exist but without the deleted field
+    logs_response_after = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_response_after.status_code == 200
+    logs_after = logs_response_after.json()["logs"]
+
+    # CRITICAL: Verify we still have the same number of logs
+    assert len(logs_after) == 2, "Log events should not be deleted when deleting fields"
+
+    # Verify the deleted field is gone but other fields remain
+    for log in logs_after:
+        assert "field_to_delete" not in log["entries"]
+        assert "field_to_keep" in log["entries"]
+        assert "another_field" in log["entries"]
+
+    # Verify we can still find the specific logs with their remaining data
+    # Check that both logs have the correct remaining fields and values
+    log1 = next((log for log in logs_after if log["id"] == log_id1), None)
+    log2 = next((log for log in logs_after if log["id"] == log_id2), None)
+
+    assert log1 is not None, f"Log with ID {log_id1} should still exist"
+    assert log2 is not None, f"Log with ID {log_id2} should still exist"
+
+    # Verify log1 has correct remaining fields
+    assert log1["entries"]["field_to_keep"] == "keeper1"
+    assert log1["entries"]["another_field"] == "data1"
+
+    # Verify log2 has correct remaining fields
+    assert log2["entries"]["field_to_keep"] == "keeper2"
+    assert log2["entries"]["another_field"] == "data2"
+
+
+@pytest.mark.anyio
+async def test_delete_all_fields_preserves_empty_log_events(client: AsyncClient):
+    """Test that deleting all fields from logs still preserves the log events as empty."""
+    project_name = "test-delete-all-fields"
+
+    # Create a project
+    await _create_project(client, project_name)
+
+    # Create logs with only two fields
+    response1 = await _create_log(
+        client,
+        project_name,
+        entries={
+            "field1": "value1",
+            "field2": "value2",
+            "explicit_types": {
+                "field1": {"type": "str", "mutable": True},
+                "field2": {"type": "str", "mutable": True},
+            },
+        },
+    )
+    assert response1.status_code == 200
+    log_id1 = response1.json()["log_event_ids"][0]
+
+    # Delete both fields
+    delete_response = await client.request(
+        "DELETE",
+        "/v0/logs/fields",
+        json={"project": project_name, "fields": ["field1", "field2"]},
+        headers=HEADERS,
+    )
+    assert delete_response.status_code == 200
+    assert set(delete_response.json()["deleted_fields"]) == {"field1", "field2"}
+
+    # Verify log still exists but with empty entries
+    logs_response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_response.status_code == 200
+    logs = logs_response.json()["logs"]
+
+    # CRITICAL: Verify log event still exists even with no fields
+    assert len(logs) == 1, "Log event should exist even when all fields are deleted"
+    assert logs[0]["id"] == log_id1
+    assert (
+        logs[0]["entries"] == {}
+    ), "Log should have empty entries after all fields are deleted"
+    assert "params" in logs[0]
+    assert "derived_entries" in logs[0]
 
 
 @pytest.mark.anyio
