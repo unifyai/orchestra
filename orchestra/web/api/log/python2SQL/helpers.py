@@ -193,21 +193,25 @@ def _select_value(subq, session, is_collection=False, is_vector=False):
 
             # Subqueries with multiple typed columns (from _build_subquery_for_identifier)
             elif hasattr(subq.c, "inferred_type"):
-                distinct_types_rows = session.execute(
-                    select(subq.c.inferred_type).distinct(),
-                ).fetchall()
-                distinct_types = [
-                    row[0]
-                    for row in distinct_types_rows
-                    if row[0] not in (None, "NoneType")
-                ]
-
-                if not distinct_types:
-                    dt = "NoneType"
-                elif len(distinct_types) == 1:
-                    dt = distinct_types[0]
+                # Prioritize the is_vector flag to ensure the correct column is selected.
+                if is_vector:
+                    dt = "vector"
                 else:
-                    dt = functools.reduce(unify_inferred_types, distinct_types)
+                    distinct_types_rows = session.execute(
+                        select(subq.c.inferred_type).distinct(),
+                    ).fetchall()
+                    distinct_types = [
+                        row[0]
+                        for row in distinct_types_rows
+                        if row[0] not in (None, "NoneType")
+                    ]
+
+                    if not distinct_types:
+                        dt = "NoneType"
+                    elif len(distinct_types) == 1:
+                        dt = distinct_types[0]
+                    else:
+                        dt = functools.reduce(unify_inferred_types, distinct_types)
 
                 type_to_col_map = {
                     "int": subq.c.int_value,
@@ -224,8 +228,6 @@ def _select_value(subq, session, is_collection=False, is_vector=False):
                     "image": subq.c.str_value,
                     "NoneType": subq.c.int_value,  # Fallback, value will be NULL
                 }
-                if is_vector:
-                    dt = "vector"
                 return type_to_col_map.get(dt), dt
 
         if not isinstance(subq, Subquery):
@@ -828,6 +830,7 @@ def _build_subquery_for_base_call(
     log_event_ids,
     is_derived=False,
     local_scope=None,
+    is_vector=False,
 ):
     """
     Build a subselect that retrieves columns for a given list_of_ids and a key.
@@ -853,7 +856,8 @@ def _build_subquery_for_base_call(
             raise ValueError(f"Invalid JSON format for base_ids: {base_ids}")
 
     # Filter the key_expr subquery to only include rows with log_event_id in base_ids
-    key_val, key_type = _select_value(key_expr, session)
+    # When is_vector is True, explicitly select the vector column
+    key_val, key_type = _select_value(key_expr, session, is_vector=is_vector)
     parent_idx_col = None
     outer_base = None
     if local_scope and "__comp_idx__" in local_scope:
