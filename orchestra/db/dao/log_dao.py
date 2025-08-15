@@ -23,6 +23,7 @@ from orchestra.db.models.orchestra_models import (
     LogEventLog,
     ParamVersion,
 )
+from orchestra.services.bucket_service import BucketService
 
 
 class OverwriteError(Exception):
@@ -197,7 +198,7 @@ class LogDAO:
         context_dao: ContextDAO,
     ):
         self.session = session
-        self.bucket_service = None  # BucketService()
+        self.bucket_service = BucketService()
         self.context_dao = context_dao
 
     def upload_image_to_bucket(self, image_base64: str) -> str:
