@@ -551,25 +551,20 @@ def create_from_logs(
             non_null_value = None
             updated_log_ids = []
 
-            for i, (_, value) in enumerate(computed_values):
-                # Get all log IDs involved in this specific computation
-                involved_log_ids = list(set(ids[i] for ids in resolved_ids.values()))
-                updated_log_ids.extend(involved_log_ids)
+            for log_event_id, value in computed_values:
+                updated_log_ids.append(log_event_id)
+                val = json.loads(json.dumps(value, cls=CustomEncoder))
+                non_null_val = val if val is not None else non_null_value
 
-                # Create an update entry for each log ID
-                for log_event_id in involved_log_ids:
-                    val = json.loads(json.dumps(value, cls=CustomEncoder))
-                    non_null_val = val if val is not None else non_null_value
-
-                    updates.append(
-                        {
-                            "log_event_id": log_event_id,
-                            "key": body.key,
-                            "value": val,
-                            "context_id": context_id,
-                            "overwrite": True,
-                        },
-                    )
+                updates.append(
+                    {
+                        "log_event_id": log_event_id,
+                        "key": body.key,
+                        "value": val,
+                        "context_id": context_id,
+                        "overwrite": True,
+                    },
+                )
 
             # 5) Perform bulk update
             if updates:

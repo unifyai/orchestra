@@ -1466,7 +1466,6 @@ async def test_create_derived_entry_with_partial_null_values(client: AsyncClient
     )
     assert response.status_code == 200
     fields = response.json()
-    print(fields)
     assert key in fields
     assert fields[key]["data_type"] == "float"
 
@@ -1476,6 +1475,65 @@ async def test_create_derived_entry_with_partial_null_values(client: AsyncClient
         headers=HEADERS,
     )
     assert response.status_code == 200
-    logs = response.json()["logs"]
 
-    print(logs)
+
+@pytest.mark.anyio
+async def test_create_static_entries_with_correct_id_alignment(client: AsyncClient):
+    """
+    Verifies that create_from_logs with derived=False correctly maps
+    computed values to the right source logs, preventing ID misalignment.
+    """
+    project_name = "test_static_id_alignment"
+    await _create_project(client, project_name, user=1)
+
+    # 1. Create several logs with distinct values
+    log_ids = []
+    for i in range(5):
+        # Values are 10, 20, 30, 40, 50
+        response = await _create_log(
+            client,
+            project_name,
+            entries={"value": (i + 1) * 10},
+        )
+        assert response.status_code == 200
+        log_ids.append(response.json()["log_event_ids"][0])
+
+    # 2. Use derived=False to create a new static entry on all logs
+    key = "value_plus_100"
+    equation = "{log:value} + 100"
+    referenced_logs = {"log": log_ids}
+
+    response = await client.post(
+        "/v0/logs/derived",
+        json={
+            "project": project_name,
+            "key": key,
+            "equation": equation,
+            "referenced_logs": referenced_logs,
+            "derived": False,  # Create static entries
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # 3. Fetch all logs and verify the integrity of the new static field
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+    assert len(logs) == 5
+
+    # 4. Check each log to ensure the computed value matches its source value
+    for log in logs:
+        original_value = log["entries"]["value"]
+        computed_value = log["entries"].get(key)
+
+        assert (
+            computed_value is not None
+        ), f"Log {log['id']} is missing the new static entry"
+        assert computed_value == original_value + 100, (
+            f"ID misalignment detected for log {log['id']}. "
+            f"Expected {original_value + 100}, but got {computed_value}."
+        )
