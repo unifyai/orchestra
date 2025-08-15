@@ -498,6 +498,13 @@ class CreateFieldsRequest(BaseModel):
             },
         },
     )
+    backfill_logs: bool = Field(
+        default=True,
+        description="Whether to backfill existing logs in the context with None values for the new fields. "
+        "When True, all existing logs will get the new fields with None values, ensuring all rows can "
+        "participate in derived equations without errors.",
+        example=True,
+    )
 
 
 class DeleteFieldsRequest(BaseModel):
