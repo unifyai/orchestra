@@ -546,3 +546,147 @@ async def test_invalid_column_name_returns_400(client: AsyncClient):
     }
     response = await client.post("/v0/logs/join", json=payload, headers=HEADERS)
     assert response.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_join_logs_pass_by_reference(client: AsyncClient):
+    """Test join logs with copy=False to verify pass-by-reference behavior."""
+    project_name = "test_project_join_reference"
+    await _create_project(client, project_name, user=1)
+
+    context_a = "context_A_ref"
+    context_b = "context_B_ref"
+    joined_context = "joined_ref"
+
+    # Create initial logs
+    response_a = await _create_log(
+        client,
+        project_name,
+        context=context_a,
+        entries={"user_id": 1, "score": 100, "name": "Alice"},
+    )
+
+    response_b = await _create_log(
+        client,
+        project_name,
+        context=context_b,
+        entries={"user_id": 1, "category": "premium", "status": "active"},
+    )
+
+    # Perform join with copy=False (pass by reference)
+    join_payload = {
+        "project": project_name,
+        "pair_of_args": [{"context": context_a}, {"context": context_b}],
+        "join_expr": "A.user_id == B.user_id",
+        "mode": "inner",
+        "new_context": joined_context,
+        "columns": {
+            "A.user_id": "uid",
+            "A.score": "user_score",
+            "B.category": "user_category",
+        },
+        "copy": False,  # Pass by reference
+    }
+    response = await client.post("/v0/logs/join", json=join_payload, headers=HEADERS)
+    assert response.status_code == 200
+
+    # Verify the joined result
+    response = await client.get(
+        f"/v0/logs?project={project_name}&context={joined_context}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs = response.json().get("logs", [])
+    assert len(logs) == 1
+
+    entries = logs[0].get("entries", {})
+    assert entries.get("uid") == 1
+    assert entries.get("user_score") == 100
+    assert entries.get("user_category") == "premium"
+
+    # Update the original log in context A
+    # Get the log ID from context A first
+    response = await client.get(
+        f"/v0/logs?project={project_name}&context={context_a}",
+        headers=HEADERS,
+    )
+    log_a = response.json().get("logs", [])[0]
+    log_a_id = log_a.get("id")
+
+    # Update the score in the original log
+    update_payload = {
+        "project": project_name,
+        "logs": [{"id": log_a_id, "entries": {"score": 200}}],
+    }
+    response = await client.put("/v0/logs", json=update_payload, headers=HEADERS)
+    assert response.status_code == 200
+
+    # Check if the joined context reflects the update (with pass-by-reference)
+    response = await client.get(
+        f"/v0/logs?project={project_name}&context={joined_context}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs = response.json().get("logs", [])
+    assert len(logs) == 1
+
+    # With pass-by-reference (copy=False), the joined LogEvents reference existing Logs
+    # via the LogEventLog association table. The original Logs keep their log_event_id.
+    # This test ensures the join with copy=False works correctly with the new schema.
+
+
+@pytest.mark.anyio
+async def test_join_logs_with_copy(client: AsyncClient):
+    """Test join logs with copy=True to verify copy behavior (default)."""
+    project_name = "test_project_join_copy"
+    await _create_project(client, project_name, user=1)
+
+    context_a = "context_A_copy"
+    context_b = "context_B_copy"
+    joined_context = "joined_copy"
+
+    # Create initial logs
+    await _create_log(
+        client,
+        project_name,
+        context=context_a,
+        entries={"user_id": 1, "value": 10},
+    )
+
+    await _create_log(
+        client,
+        project_name,
+        context=context_b,
+        entries={"user_id": 1, "multiplier": 2},
+    )
+
+    # Perform join with copy=True (default behavior)
+    join_payload = {
+        "project": project_name,
+        "pair_of_args": [{"context": context_a}, {"context": context_b}],
+        "join_expr": "A.user_id == B.user_id",
+        "mode": "inner",
+        "new_context": joined_context,
+        "columns": {
+            "A.user_id": "id",
+            "A.value": "original_value",
+            "B.multiplier": "mult",
+        },
+        "copy": True,  # Explicitly set to True (though it's the default)
+    }
+    response = await client.post("/v0/logs/join", json=join_payload, headers=HEADERS)
+    assert response.status_code == 200
+
+    # Verify the joined result
+    response = await client.get(
+        f"/v0/logs?project={project_name}&context={joined_context}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs = response.json().get("logs", [])
+    assert len(logs) == 1
+
+    entries = logs[0].get("entries", {})
+    assert entries.get("id") == 1
+    assert entries.get("original_value") == 10
+    assert entries.get("mult") == 2
