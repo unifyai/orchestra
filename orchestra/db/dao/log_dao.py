@@ -20,9 +20,9 @@ from orchestra.db.models.orchestra_models import (
     Log,
     LogEvent,
     LogEventContext,
+    LogEventLog,
     ParamVersion,
 )
-from orchestra.services.bucket_service import BucketService
 
 
 class OverwriteError(Exception):
@@ -197,7 +197,7 @@ class LogDAO:
         context_dao: ContextDAO,
     ):
         self.session = session
-        self.bucket_service = BucketService()
+        self.bucket_service = None  # BucketService()
         self.context_dao = context_dao
 
     def upload_image_to_bucket(self, image_base64: str) -> str:
@@ -346,9 +346,14 @@ class LogDAO:
             log_table = alias(Log, name=log_alias)
 
             # Join with the Log table
+            # First join to LogEventLog to get log_event_id associations
+            log_event_log_table = alias(LogEventLog.__table__, f"log_event_log_{idx}")
             query = query.join(
+                log_event_log_table,
+                log_event_log_table.c.log_event_id == LogEvent.id,
+            ).join(
                 log_table,
-                log_table.c.log_event_id == LogEvent.id,
+                log_table.c.id == log_event_log_table.c.log_id,
             )
 
             # Add filter conditions for this key-value pair
@@ -394,14 +399,21 @@ class LogDAO:
         ):
             return []
 
-        query = select(Log, LogEvent.created_at.label("log_event_ts")).join(
-            LogEvent,
-            LogEvent.id == Log.log_event_id,
+        query = (
+            select(Log, LogEvent.created_at.label("log_event_ts"))
+            .join(
+                LogEventLog,
+                LogEventLog.log_id == Log.id,
+            )
+            .join(
+                LogEvent,
+                LogEvent.id == LogEventLog.log_event_id,
+            )
         )
         if id:
             query = query.where(Log.id.in_(id))
         if log_event_id:
-            query = query.where(Log.log_event_id.in_(log_event_id))
+            query = query.where(LogEventLog.log_event_id.in_(log_event_id))
         if key:
             query = query.where(Log.key.in_(key))
         if value:
@@ -455,11 +467,12 @@ class LogDAO:
             if not log_event_ids:
                 raise ValueError(f"No log events found for project_id {project_id}")
 
-            # Update Log table
+            # Update Log table via LogEventLog association
             log_update = (
                 self.session.query(Log)
+                .join(LogEventLog, LogEventLog.log_id == Log.id)
                 .filter(
-                    Log.log_event_id.in_(log_event_ids),
+                    LogEventLog.log_event_id.in_(log_event_ids),
                     Log.key == old_field_name,
                 )
                 .update(
@@ -536,11 +549,19 @@ class LogDAO:
             self._bulk_delete_gcs_media(log_query)
 
             # Delete corresponding JSONLog if it exists
-            json_log = (
-                self.session.query(JSONLog)
-                .filter_by(log_event_id=log.log_event_id, key=log.key)
-                .first()
+            # First get the log_event_id from LogEventLog association
+            log_event_log = (
+                self.session.query(LogEventLog).filter_by(log_id=log.id).first()
             )
+
+            if log_event_log:
+                json_log = (
+                    self.session.query(JSONLog)
+                    .filter_by(log_event_id=log_event_log.log_event_id, key=log.key)
+                    .first()
+                )
+            else:
+                json_log = None
             if json_log:
                 self.session.delete(json_log)
 
@@ -669,10 +690,11 @@ class LogDAO:
 
                     # Find existing log_events that have the exact same set of key-value pairs
                     q = (
-                        select(Log.log_event_id)
+                        select(LogEventLog.log_event_id)
+                        .join(Log, Log.id == LogEventLog.log_id)
                         .join(
                             LogEventContext,
-                            LogEventContext.log_event_id == Log.log_event_id,
+                            LogEventContext.log_event_id == LogEventLog.log_event_id,
                         )
                         .where(LogEventContext.context_id == context_id)
                         .where(
@@ -686,7 +708,7 @@ class LogDAO:
                                 ],
                             ),
                         )
-                        .group_by(Log.log_event_id)
+                        .group_by(LogEventLog.log_event_id)
                         .having(func.count(Log.id) == len(composite_keys))
                     )
 
@@ -703,7 +725,8 @@ class LogDAO:
                 for key, values in keys_and_values.items():
                     q = (
                         select(Log.id)
-                        .join(LogEvent, Log.log_event_id == LogEvent.id)
+                        .join(LogEventLog, LogEventLog.log_id == Log.id)
+                        .join(LogEvent, LogEvent.id == LogEventLog.log_event_id)
                         .join(
                             LogEventContext,
                             LogEvent.id == LogEventContext.log_event_id,
@@ -731,7 +754,7 @@ class LogDAO:
         Args:
             entries: List of dictionaries with the following keys:
                 - project_id: int
-                - log_event_id: int
+                - log_event_id: int (will create LogEventLog association)
                 - key: str
                 - value: Any (optional)
                 - param_version: int (optional)
@@ -879,25 +902,60 @@ class LogDAO:
                     )
 
             # Bulk-insert the accumulated rows in **one** statement
+            # First, we need to create Logs without log_event_id
             if pending_log_rows:
-                stmt = pg_insert(Log).values(pending_log_rows).on_conflict_do_nothing()
-                self.session.execute(stmt)
+                # Prepare log rows without log_event_id
+                log_rows_to_insert = []
+                log_event_associations = (
+                    []
+                )  # Track which log_event_id goes with each log
+
+                for row in pending_log_rows:
+                    log_event_id = row.pop("log_event_id")  # Remove log_event_id
+                    log_rows_to_insert.append(row)
+                    log_event_associations.append(log_event_id)
+
+                # Insert logs and get their IDs
+                stmt = pg_insert(Log).values(log_rows_to_insert).returning(Log.id)
+                result = self.session.execute(stmt)
+                log_ids = [row[0] for row in result]
+
+                # Create LogEventLog associations
+                log_event_log_rows = []
+                for log_id, log_event_id in zip(log_ids, log_event_associations):
+                    log_event_log_rows.append(
+                        {
+                            "log_event_id": log_event_id,
+                            "log_id": log_id,
+                        },
+                    )
+
+                if log_event_log_rows:
+                    stmt_assoc = pg_insert(LogEventLog).values(log_event_log_rows)
+                    self.session.execute(stmt_assoc)
 
             # Bulk-insert versioned rows in **one** statement
             if rows_log_versioned:
                 # 1. pre-check for conflicting rows already in the DB
                 pks_v = list(rows_log_versioned_pk2val.keys())
+
+                # Check for existing logs with the same key and param_version via LogEventLog
+                log_event_ids_to_check = [pk[0] for pk in pks_v]
+                keys_to_check = [pk[1] for pk in pks_v]
+                versions_to_check = [pk[2] for pk in pks_v]
+
                 rows_to_check = (
-                    self.session.query(Log)
-                    .filter(Log.log_event_id.in_([pk[0] for pk in pks_v]))
-                    .filter(Log.key.in_([pk[1] for pk in pks_v]))
-                    .filter(Log.param_version.in_([pk[2] for pk in pks_v]))
+                    self.session.query(Log, LogEventLog.log_event_id)
+                    .join(LogEventLog, LogEventLog.log_id == Log.id)
+                    .filter(LogEventLog.log_event_id.in_(log_event_ids_to_check))
+                    .filter(Log.key.in_(keys_to_check))
+                    .filter(Log.param_version.in_(versions_to_check))
                     .with_for_update()
                     .all()
                 )
-                for row in rows_to_check:
+                for row, log_event_id in rows_to_check:
                     intended = rows_log_versioned_pk2val[
-                        (row.log_event_id, row.key, row.param_version)
+                        (log_event_id, row.key, row.param_version)
                     ]
                     if row.value != intended:
                         raise OverwriteError(
@@ -905,10 +963,42 @@ class LogDAO:
                             f"'{row.key}', param_version {row.param_version}",
                         )
 
+                # Prepare versioned log rows without log_event_id
+                versioned_log_rows_to_insert = []
+                versioned_log_event_associations = []
+
+                for row in rows_log_versioned:
+                    log_event_id = row.pop("log_event_id")  # Remove log_event_id
+                    versioned_log_rows_to_insert.append(row)
+                    versioned_log_event_associations.append(log_event_id)
+
+                # Insert versioned logs and get their IDs
                 stmt_v = (
-                    pg_insert(Log).values(rows_log_versioned).on_conflict_do_nothing()
+                    pg_insert(Log)
+                    .values(versioned_log_rows_to_insert)
+                    .returning(Log.id)
                 )
-                self.session.execute(stmt_v)
+                result_v = self.session.execute(stmt_v)
+                versioned_log_ids = [row[0] for row in result_v]
+
+                # Create LogEventLog associations for versioned logs
+                versioned_log_event_log_rows = []
+                for log_id, log_event_id in zip(
+                    versioned_log_ids,
+                    versioned_log_event_associations,
+                ):
+                    versioned_log_event_log_rows.append(
+                        {
+                            "log_event_id": log_event_id,
+                            "log_id": log_id,
+                        },
+                    )
+
+                if versioned_log_event_log_rows:
+                    stmt_v_assoc = pg_insert(LogEventLog).values(
+                        versioned_log_event_log_rows,
+                    )
+                    self.session.execute(stmt_v_assoc)
 
             # Detect JSON conflicts first
             if rows_json_pk2val:
@@ -1078,10 +1168,14 @@ class LogDAO:
         ]
 
         q = (
-            select(Log.log_event_id)
-            .join(LogEventContext, LogEventContext.log_event_id == Log.log_event_id)
+            select(LogEventLog.log_event_id)
+            .join(Log, Log.id == LogEventLog.log_id)
+            .join(
+                LogEventContext,
+                LogEventContext.log_event_id == LogEventLog.log_event_id,
+            )
             .where(LogEventContext.context_id == context_id, or_(*conditions))
-            .group_by(Log.log_event_id)
+            .group_by(LogEventLog.log_event_id)
             .having(func.count(Log.id) == len(parent_ids))
         )
         return self.session.execute(q.limit(1)).first() is not None
@@ -1216,15 +1310,16 @@ class LogDAO:
             log_event_ids = [k[0] for k in update_groups.keys()]
             keys = [k[1] for k in update_groups.keys()]
             existing_logs = (
-                self.session.query(Log)
-                .filter(Log.log_event_id.in_(log_event_ids))
+                self.session.query(Log, LogEventLog.log_event_id)
+                .join(LogEventLog, LogEventLog.log_id == Log.id)
+                .filter(LogEventLog.log_event_id.in_(log_event_ids))
                 .filter(Log.key.in_(keys))
                 .all()
             )
 
             # Create a lookup for existing logs
             existing_log_map = {
-                (log.log_event_id, log.key): log for log in existing_logs
+                (log_event_id, log.key): log for log, log_event_id in existing_logs
             }
 
             # Query all existing JSON logs in one go
@@ -1369,17 +1464,18 @@ class LogDAO:
                     versions_check = [pk[2] for pk in log_pks]
 
                     existing_conflicting_logs = (
-                        self.session.query(Log)
-                        .filter(Log.log_event_id.in_(log_event_ids_check))
+                        self.session.query(Log, LogEventLog.log_event_id)
+                        .join(LogEventLog, LogEventLog.log_id == Log.id)
+                        .filter(LogEventLog.log_event_id.in_(log_event_ids_check))
                         .filter(Log.key.in_(keys_check))
                         .filter(Log.param_version.in_(versions_check))
                         .with_for_update()
                         .all()
                     )
 
-                    for existing_log in existing_conflicting_logs:
+                    for existing_log, log_event_id in existing_conflicting_logs:
                         pk = (
-                            existing_log.log_event_id,
+                            log_event_id,
                             existing_log.key,
                             existing_log.param_version,
                         )
@@ -1421,8 +1517,11 @@ class LogDAO:
             if rows_log:
                 stmt = pg_insert(Log).values(rows_log)
                 if overwrite:
+                    # Since log_event_id is no longer in Log table, we need a different approach
+                    # for upserts. We can use (key, param_version) as conflict keys since
+                    # they should be unique within a context
                     stmt = stmt.on_conflict_do_update(
-                        index_elements=["log_event_id", "key", "param_version"],
+                        index_elements=["key", "param_version"],
                         set_={
                             "value": pg_insert(Log).excluded.value,
                             "updated_at": func.now(),
@@ -1650,7 +1749,8 @@ class LogDAO:
                 # Lock the Log row for update
                 log_entry = (
                     self.session.query(Log)
-                    .filter_by(log_event_id=le_id, key=base_key)
+                    .join(LogEventLog, LogEventLog.log_id == Log.id)
+                    .filter(LogEventLog.log_event_id == le_id, Log.key == base_key)
                     .first()
                 )
                 if not log_entry:

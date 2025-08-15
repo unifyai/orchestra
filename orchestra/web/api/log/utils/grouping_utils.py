@@ -19,6 +19,8 @@ from orchestra.db.models.orchestra_models import (
     Log,
     LogEvent,
     LogEventContext,
+    LogEventDerivedLog,
+    LogEventLog,
 )
 
 from ..python2SQL import build_sql_query, str_filter_exp_to_dict
@@ -94,15 +96,16 @@ def _get_distinct_group_values(
         subquery = (
             session.query(
                 value_col.label("value"),
-                Log.log_event_id,
+                LogEventLog.log_event_id,
                 func.row_number()
                 .over(
                     partition_by=value_col,
-                    order_by=desc(Log.log_event_id),
+                    order_by=desc(LogEventLog.log_event_id),
                 )
                 .label("rn"),
             )
-            .filter(Log.log_event_id.in_(log_event_ids))
+            .join(LogEventLog, LogEventLog.log_id == Log.id)
+            .filter(LogEventLog.log_event_id.in_(log_event_ids))
             .filter(Log.key == group_key)
             .subquery()
         )
@@ -111,18 +114,23 @@ def _get_distinct_group_values(
         base_query = (
             session.query(
                 Log.value.label("value"),
-                Log.log_event_id.label("log_event_id"),
+                LogEventLog.log_event_id.label("log_event_id"),
             )
-            .filter(Log.log_event_id.in_(log_event_ids))
+            .join(LogEventLog, LogEventLog.log_id == Log.id)
+            .filter(LogEventLog.log_event_id.in_(log_event_ids))
             .filter(Log.key == group_key)
         )
 
         derived_query = (
             session.query(
                 DerivedLog.value.label("value"),
-                DerivedLog.log_event_id.label("log_event_id"),
+                LogEventDerivedLog.log_event_id.label("log_event_id"),
             )
-            .filter(DerivedLog.log_event_id.in_(log_event_ids))
+            .join(
+                LogEventDerivedLog,
+                LogEventDerivedLog.derived_log_id == DerivedLog.id,
+            )
+            .filter(LogEventDerivedLog.log_event_id.in_(log_event_ids))
             .filter(DerivedLog.key == group_key)
         )
 
@@ -174,31 +182,35 @@ def _get_log_event_ids_for_group_value(
     if is_param:
         # For parameters, only search base logs
         query = (
-            session.query(Log.log_event_id)
-            .filter(Log.log_event_id.in_(log_event_ids))
+            session.query(LogEventLog.log_event_id)
+            .join(Log, Log.id == LogEventLog.log_id)
+            .filter(LogEventLog.log_event_id.in_(log_event_ids))
             .filter(Log.key == group_key)
             .filter(Log.param_version == group_value)
         )
     elif group_key == "derived_entries":
         # For derived entries, only search derived logs
         query = (
-            session.query(DerivedLog.log_event_id)
-            .filter(DerivedLog.log_event_id.in_(log_event_ids))
+            session.query(LogEventDerivedLog.log_event_id)
+            .join(DerivedLog, DerivedLog.id == LogEventDerivedLog.derived_log_id)
+            .filter(LogEventDerivedLog.log_event_id.in_(log_event_ids))
             .filter(DerivedLog.key == group_key)
             .filter(cast(DerivedLog.value, JSONB) == cast(group_value, JSONB))
         )
     else:
         # For non-parameters, search both base and derived logs
         base_query = (
-            session.query(Log.log_event_id)
-            .filter(Log.log_event_id.in_(log_event_ids))
+            session.query(LogEventLog.log_event_id)
+            .join(Log, Log.id == LogEventLog.log_id)
+            .filter(LogEventLog.log_event_id.in_(log_event_ids))
             .filter(Log.key == group_key)
             .filter(cast(Log.value, JSONB) == cast(group_value, JSONB))
         )
 
         derived_query = (
-            session.query(DerivedLog.log_event_id)
-            .filter(DerivedLog.log_event_id.in_(log_event_ids))
+            session.query(LogEventDerivedLog.log_event_id)
+            .join(DerivedLog, DerivedLog.id == LogEventDerivedLog.derived_log_id)
+            .filter(LogEventDerivedLog.log_event_id.in_(log_event_ids))
             .filter(DerivedLog.key == group_key)
             .filter(cast(DerivedLog.value, JSONB) == cast(group_value, JSONB))
         )
@@ -216,7 +228,8 @@ def _get_params_for_log_events(
     """Get all parameter versions used across the log events."""
     query = (
         session.query(Log)
-        .filter(Log.log_event_id.in_(select(log_event_ids)))
+        .join(LogEventLog, LogEventLog.log_id == Log.id)
+        .filter(LogEventLog.log_event_id.in_(select(log_event_ids)))
         .filter(Log.param_version.isnot(None))
     )
 
