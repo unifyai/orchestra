@@ -755,6 +755,330 @@ async def test_delete_all_fields_preserves_empty_log_events(client: AsyncClient)
 
 
 @pytest.mark.anyio
+async def test_create_fields_with_backfill_default(client: AsyncClient):
+    """Test that creating fields with default backfill_logs=True adds None values to existing logs."""
+    project_name = "test-backfill-default"
+
+    # Create a project
+    await _create_project(client, project_name)
+
+    # Create some logs first
+    response1 = await _create_log(
+        client,
+        project_name,
+        entries={
+            "existing_field": "value1",
+            "explicit_types": {
+                "existing_field": {"type": "str", "mutable": True},
+            },
+        },
+    )
+    assert response1.status_code == 200
+
+    response2 = await _create_log(
+        client,
+        project_name,
+        entries={
+            "existing_field": "value2",
+            "explicit_types": {
+                "existing_field": {"type": "str", "mutable": True},
+            },
+        },
+    )
+    assert response2.status_code == 200
+
+    # Create new fields (backfill_logs defaults to True)
+    fields_response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project": project_name,
+            "fields": {
+                "new_field1": "str",
+                "new_field2": "int",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200
+    assert "backfilled_count" in fields_response.json()
+    assert fields_response.json()["backfilled_count"] == 4  # 2 logs × 2 new fields
+
+    # Verify logs now have the new fields with None values
+    logs_response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_response.status_code == 200
+    logs = logs_response.json()["logs"]
+    assert len(logs) == 2
+
+    for log in logs:
+        assert "existing_field" in log["entries"]
+        assert "new_field1" in log["entries"]
+        assert "new_field2" in log["entries"]
+        assert log["entries"]["new_field1"] is None
+        assert log["entries"]["new_field2"] is None
+
+
+@pytest.mark.anyio
+async def test_create_fields_without_backfill(client: AsyncClient):
+    """Test that creating fields with backfill_logs=False does not add to existing logs."""
+    project_name = "test-no-backfill"
+
+    # Create a project
+    await _create_project(client, project_name)
+
+    # Create some logs first
+    response1 = await _create_log(
+        client,
+        project_name,
+        entries={
+            "existing_field": "value1",
+            "explicit_types": {
+                "existing_field": {"type": "str", "mutable": True},
+            },
+        },
+    )
+    assert response1.status_code == 200
+
+    response2 = await _create_log(
+        client,
+        project_name,
+        entries={
+            "existing_field": "value2",
+            "explicit_types": {
+                "existing_field": {"type": "str", "mutable": True},
+            },
+        },
+    )
+    assert response2.status_code == 200
+
+    # Create new fields with backfill_logs=False
+    fields_response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project": project_name,
+            "fields": {
+                "new_field1": "str",
+                "new_field2": "int",
+            },
+            "backfill_logs": False,
+        },
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200
+    assert fields_response.json()["backfilled_count"] == 0
+
+    # Verify logs do NOT have the new fields
+    logs_response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_response.status_code == 200
+    logs = logs_response.json()["logs"]
+    assert len(logs) == 2
+
+    for log in logs:
+        assert "existing_field" in log["entries"]
+        assert "new_field1" not in log["entries"]
+        assert "new_field2" not in log["entries"]
+
+    # But the field types should exist
+    fields_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200
+    fields = fields_response.json()
+    assert "new_field1" in fields
+    assert "new_field2" in fields
+    assert fields["new_field1"]["data_type"] == "str"
+    assert fields["new_field2"]["data_type"] == "int"
+
+
+@pytest.mark.anyio
+async def test_create_fields_backfill_with_existing_values(client: AsyncClient):
+    """Test that backfill does not overwrite existing field values."""
+    project_name = "test-backfill-no-overwrite"
+
+    # Create a project
+    await _create_project(client, project_name)
+
+    # Create a log with one of the fields already present
+    response1 = await _create_log(
+        client,
+        project_name,
+        entries={
+            "existing_field": "value1",
+            "new_field1": "already_exists",
+            "explicit_types": {
+                "existing_field": {"type": "str", "mutable": True},
+                "new_field1": {"type": "str", "mutable": True},
+            },
+        },
+    )
+    assert response1.status_code == 200
+    log_id1 = response1.json()["log_event_ids"][0]
+
+    # Create another log without the new field
+    response2 = await _create_log(
+        client,
+        project_name,
+        entries={
+            "existing_field": "value2",
+            "explicit_types": {
+                "existing_field": {"type": "str", "mutable": True},
+            },
+        },
+    )
+    assert response2.status_code == 200
+    log_id2 = response2.json()["log_event_ids"][0]
+
+    # Create new fields with backfill
+    fields_response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project": project_name,
+            "fields": {
+                "new_field1": "str",
+                "new_field2": "int",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200
+    # Only 3 entries should be backfilled (not 4) because log1 already has new_field1
+    assert fields_response.json()["backfilled_count"] == 3
+
+    # Verify the existing value was not overwritten
+    logs_response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_response.status_code == 200
+    logs = logs_response.json()["logs"]
+
+    log1 = next((log for log in logs if log["id"] == log_id1), None)
+    log2 = next((log for log in logs if log["id"] == log_id2), None)
+
+    assert log1 is not None
+    assert log2 is not None
+
+    # Log1 should keep its existing value for new_field1
+    assert log1["entries"]["new_field1"] == "already_exists"
+    assert log1["entries"]["new_field2"] is None
+
+    # Log2 should have None for both new fields
+    assert log2["entries"]["new_field1"] is None
+    assert log2["entries"]["new_field2"] is None
+
+
+@pytest.mark.anyio
+async def test_create_fields_backfill_empty_context(client: AsyncClient):
+    """Test that backfill works correctly when context has no logs."""
+    project_name = "test-backfill-empty"
+
+    # Create a project
+    await _create_project(client, project_name)
+
+    # Create fields without any existing logs
+    fields_response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project": project_name,
+            "fields": {
+                "field1": "str",
+                "field2": "int",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200
+    assert fields_response.json()["backfilled_count"] == 0
+
+    # Fields should be created
+    fields_list_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert fields_list_response.status_code == 200
+    fields = fields_list_response.json()
+    assert "field1" in fields
+    assert "field2" in fields
+
+
+@pytest.mark.anyio
+async def test_create_fields_backfill_respects_derived_logs(client: AsyncClient):
+    """Test that backfill does not create Log entries for fields that exist as DerivedLog entries."""
+    project_name = "test-backfill-derived"
+
+    # Create a project
+    await _create_project(client, project_name)
+
+    # Create a log
+    response = await _create_log(
+        client,
+        project_name,
+        entries={
+            "base_field": 10,
+            "explicit_types": {
+                "base_field": {"type": "int", "mutable": True},
+            },
+        },
+    )
+    assert response.status_code == 200
+    log_id = response.json()["log_event_ids"][0]
+
+    # Create a derived entry with a field name we'll try to backfill
+    derived_response = await _create_derived_entry(
+        client,
+        project_name,
+        key="computed_field",
+        equation="{x:base_field} * 2",
+        referenced_logs={"x": [log_id]},
+    )
+    assert derived_response.status_code == 200
+
+    # Try to create fields including one that already exists as a derived entry
+    fields_response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project": project_name,
+            "fields": {
+                "computed_field": "int",  # This already exists as derived
+                "new_field": "str",  # This is new
+            },
+        },
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200
+    # Should only backfill 1 entry (new_field), not 2
+    assert fields_response.json()["backfilled_count"] == 1
+
+    # Verify the log has the new field but NOT a Log entry for computed_field
+    logs_response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_response.status_code == 200
+    logs = logs_response.json()["logs"]
+    assert len(logs) == 1
+
+    log = logs[0]
+    # Regular entries should have base_field and new_field
+    assert "base_field" in log["entries"]
+    assert "new_field" in log["entries"]
+    assert log["entries"]["new_field"] is None
+
+    # computed_field should NOT be in entries (it's in derived_entries)
+    assert "computed_field" not in log["entries"]
+
+    # But it should be in derived_entries
+    assert "computed_field" in log["derived_entries"]
+    assert log["derived_entries"]["computed_field"] == 20  # 10 * 2
+
+
+@pytest.mark.anyio
 async def test_unique_field_constraint(client: AsyncClient):
     """Test that the unique constraint on fields is enforced."""
     project_name = "test-unique-field"
