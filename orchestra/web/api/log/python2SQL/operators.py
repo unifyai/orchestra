@@ -117,6 +117,7 @@ def _handle_logical_operator(
     log_event_ids,
     is_derived=False,
     local_scope=None,
+    is_vector=False,
 ):
     """
     Handles logical operators ('and', 'or', 'not') using CASE statements
@@ -133,6 +134,7 @@ def _handle_logical_operator(
             log_event_ids=log_event_ids,
             is_derived=is_derived,
             local_scope=local_scope,
+            is_vector=is_vector,
         )
         if isinstance(rhs, Subquery):
             # Re-use the truthiness condition, but negate it
@@ -157,6 +159,7 @@ def _handle_logical_operator(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=is_vector,
     )
     rhs = build_sql_query(
         filter_dict.get("rhs"),
@@ -165,6 +168,7 @@ def _handle_logical_operator(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=is_vector,
     )
 
     lhs_is_sub = isinstance(lhs, Subquery)
@@ -343,6 +347,7 @@ def _handle_arithmetic_operator(
     log_event_ids,
     is_derived=False,
     local_scope=None,
+    is_vector=False,
 ):
     """
     Handles arithmetic operators ('+', '-', '*', '**', '//', '/', '%') in the filter dictionary.
@@ -363,6 +368,7 @@ def _handle_arithmetic_operator(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=is_vector,
     )
     rhs = build_sql_query(
         filter_dict.get("rhs"),
@@ -371,6 +377,7 @@ def _handle_arithmetic_operator(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=is_vector,
     )
 
     lhs_is_sub = isinstance(lhs, Subquery)
@@ -442,6 +449,7 @@ def _handle_comparison_operator(
     log_event_ids,
     is_derived=False,
     local_scope=None,
+    is_vector=False,
 ):
     """
     Handles comparison operators ('==', '!=', '<', '>', '<=', '>=', 'is', 'is not') in the filter dictionary.
@@ -462,6 +470,7 @@ def _handle_comparison_operator(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=is_vector,
     )
     rhs_sql = build_sql_query(
         filter_dict.get("rhs"),
@@ -470,6 +479,7 @@ def _handle_comparison_operator(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=is_vector,
     )
 
     lval, lval_type = _select_value(lhs_sql, session)
@@ -569,6 +579,7 @@ def _handle_membership_operator(
     log_event_ids,
     is_derived=False,
     local_scope=None,
+    is_vector=False,
 ):
     """
     Handles membership operators ('in', 'not in') in the filter dictionary.
@@ -591,6 +602,7 @@ def _handle_membership_operator(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=is_vector,
     )
     rhs = build_sql_query(
         filter_dict.get("rhs"),
@@ -599,6 +611,7 @@ def _handle_membership_operator(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=is_vector,
     )
 
     lhs_is_sub = isinstance(lhs, Subquery)
@@ -763,6 +776,7 @@ def _handle_index_operator(
     log_event_ids,
     is_derived=False,
     local_scope=None,
+    is_vector=False,
 ):
     """
     Handle the INDEX operator in a filter expression.
@@ -785,6 +799,7 @@ def _handle_index_operator(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=is_vector,
     )
     rhs_expr = build_sql_query(
         rhs_node,
@@ -793,6 +808,7 @@ def _handle_index_operator(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=is_vector,
     )
 
     if isinstance(lhs_expr, Subquery):
@@ -896,6 +912,7 @@ def _handle_slice_operator(
     log_event_ids,
     is_derived=False,
     local_scope=None,
+    is_vector=False,
 ):
     """
     Handle the SLICE operator in a filter expression.
@@ -922,6 +939,7 @@ def _handle_slice_operator(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=is_vector,
     )
 
     if isinstance(lhs_expr, Subquery):
@@ -1023,6 +1041,7 @@ def _handle_l2(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=True,  # Explicitly request vector type
     )
     rhs = build_sql_query(
         filter_dict.get("rhs"),
@@ -1031,6 +1050,7 @@ def _handle_l2(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=True,  # Explicitly request vector type
     )
 
     lhs_is_sub = isinstance(lhs, Subquery)
@@ -1095,6 +1115,7 @@ def _handle_cosine(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=True,  # Explicitly request vector type
     )
     rhs = build_sql_query(
         filter_dict.get("rhs"),
@@ -1103,6 +1124,7 @@ def _handle_cosine(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=True,  # Explicitly request vector type
     )
 
     lhs_is_sub = isinstance(lhs, Subquery)
@@ -1164,6 +1186,7 @@ def _handle_ip(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=True,  # Explicitly request vector type
     )
     rhs = build_sql_query(
         filter_dict.get("rhs"),
@@ -1172,6 +1195,7 @@ def _handle_ip(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=True,  # Explicitly request vector type
     )
 
     lhs_is_sub = isinstance(lhs, Subquery)
@@ -1232,6 +1256,7 @@ def _handle_l1(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=True,  # Explicitly request vector type
     )
     rhs = build_sql_query(
         filter_dict.get("rhs"),
@@ -1240,6 +1265,7 @@ def _handle_l1(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=True,  # Explicitly request vector type
     )
 
     lhs_is_sub = isinstance(lhs, Subquery)
@@ -1300,6 +1326,7 @@ def _handle_hamming(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=True,  # Explicitly request vector type
     )
     rhs = build_sql_query(
         filter_dict.get("rhs"),
@@ -1308,6 +1335,7 @@ def _handle_hamming(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=True,  # Explicitly request vector type
     )
 
     lhs_is_sub = isinstance(lhs, Subquery)
@@ -1368,6 +1396,7 @@ def _handle_jaccard(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=True,  # Explicitly request vector type
     )
     rhs = build_sql_query(
         filter_dict.get("rhs"),
@@ -1376,6 +1405,7 @@ def _handle_jaccard(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=True,  # Explicitly request vector type
     )
 
     lhs_is_sub = isinstance(lhs, Subquery)
