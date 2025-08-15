@@ -132,6 +132,7 @@ def _handle_functions(
     log_event_ids,
     is_derived=False,
     local_scope=None,
+    is_vector=False,
 ):
     """
     Handles function-based operations ('len', 'str', 'type', 'round', 'round_timestamp',
@@ -161,6 +162,7 @@ def _handle_functions(
                 log_event_ids=log_event_ids,
                 is_derived=is_derived,
                 local_scope=local_scope,
+                is_vector=is_vector,
             )
             for expr in filter_dict.get("rhs")
         ]
@@ -173,6 +175,7 @@ def _handle_functions(
             log_event_ids=log_event_ids,
             is_derived=is_derived,
             local_scope=local_scope,
+            is_vector=is_vector,
         )
 
     if operand == "len":
@@ -610,6 +613,7 @@ def _handle_functions(
             session,
             log_event_ids,
             local_scope=local_scope,
+            is_vector=is_vector,
         )
     elif operand == "isNone":
         if isinstance(filter_dict.get("rhs"), dict):
@@ -620,6 +624,7 @@ def _handle_functions(
                 log_event_ids=log_event_ids,
                 is_derived=is_derived,
                 local_scope=local_scope,
+                is_vector=is_vector,
             )
         else:
             rhs_expr = [
@@ -630,6 +635,7 @@ def _handle_functions(
                     log_event_ids=log_event_ids,
                     is_derived=is_derived,
                     local_scope=local_scope,
+                    is_vector=is_vector,
                 )
                 for expr in filter_dict.get("rhs")
             ]
@@ -952,6 +958,7 @@ def _handle_dict_method(
     log_event_ids,
     is_derived,
     local_scope=None,
+    is_vector=False,
 ):
     method = filter_dict["method"]  # e.g., "keys", "values", "items", "get"
     if method == "get":
@@ -963,6 +970,7 @@ def _handle_dict_method(
             is_derived,
             local_scope,
             default_supplied=filter_dict.get("default_supplied", False),
+            is_vector=is_vector,
         )
     src = build_sql_query(
         filter_dict["rhs"],
@@ -971,6 +979,7 @@ def _handle_dict_method(
         log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=is_vector,
     )
     if not isinstance(src, Subquery):
         raise HTTPException(
@@ -1044,6 +1053,7 @@ def _handle_if_expr(
     log_event_ids,
     is_derived,
     local_scope=None,
+    is_vector=False,
 ):
     """
     Handle conditional expressions (ternary if-else) in filter queries.
@@ -1130,6 +1140,7 @@ def _handle_if_expr(
         log_event_ids,
         is_derived,
         local_scope=local_scope,
+        is_vector=is_vector,
     )
     raw_body = build_sql_query(
         filter_dict["body"],
@@ -1138,6 +1149,7 @@ def _handle_if_expr(
         log_event_ids,
         is_derived,
         local_scope=local_scope,
+        is_vector=is_vector,
     )
     raw_else = build_sql_query(
         filter_dict["orelse"],
@@ -1146,6 +1158,7 @@ def _handle_if_expr(
         log_event_ids,
         is_derived,
         local_scope=local_scope,
+        is_vector=is_vector,
     )
 
     id_selects = []
@@ -1335,6 +1348,7 @@ def _handle_list_comp(
     log_event_ids,
     is_derived,
     local_scope=None,
+    is_vector=False,
 ):
     """
     Handle list comprehension expressions in filter queries.
@@ -1350,6 +1364,7 @@ def _handle_list_comp(
         log_event_ids,
         is_derived,
         local_scope=local_scope,
+        is_vector=is_vector,
     )
     if not isinstance(iter_subq, Subquery):
         raise HTTPException(
@@ -1433,6 +1448,7 @@ def _handle_list_comp(
         log_event_ids,
         is_derived,
         local_scope=local_scope,
+        is_vector=is_vector,
     )
 
     def _value_column(expr):
@@ -1509,6 +1525,7 @@ def _handle_list_comp(
             log_event_ids,
             is_derived,
             local_scope=local_scope,
+            is_vector=is_vector,
         )
         if isinstance(cond_expr, Subquery):
             condition = (
@@ -1579,6 +1596,7 @@ def _handle_str_method(
     log_event_ids,
     is_derived,
     local_scope=None,
+    is_vector=False,
 ):
     """
     Handle string method calls in filter queries.
@@ -1599,6 +1617,7 @@ def _handle_str_method(
         log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=is_vector,
     )
 
     # Get arguments if any
@@ -1612,6 +1631,7 @@ def _handle_str_method(
                 log_event_ids,
                 is_derived=is_derived,
                 local_scope=local_scope,
+                is_vector=is_vector,
             )
             for arg in filter_dict["args"]
         ]
@@ -1722,6 +1742,7 @@ def _handle_str_method(
                         log_event_ids,
                         is_derived=is_derived,
                         local_scope=local_scope,
+                        is_vector=is_vector,
                     )
                     # Convert to 1-indexed
                     if isinstance(start, BindParameter) and isinstance(
@@ -1743,6 +1764,7 @@ def _handle_str_method(
                         log_event_ids,
                         is_derived=is_derived,
                         local_scope=local_scope,
+                        is_vector=is_vector,
                     )
                     stop = cast(stop, Integer)
                     # Calculate length (stop - start)
@@ -1881,6 +1903,7 @@ def _handle_str_method(
                         log_event_ids,
                         is_derived=is_derived,
                         local_scope=local_scope,
+                        is_vector=is_vector,
                     )
                     # Convert to 1-indexed
                     if isinstance(start, BindParameter) and isinstance(
@@ -1902,6 +1925,7 @@ def _handle_str_method(
                         log_event_ids,
                         is_derived=is_derived,
                         local_scope=local_scope,
+                        is_vector=is_vector,
                     )
                     stop = cast(stop, Integer)
                     # Calculate length (stop - start)
@@ -1930,6 +1954,7 @@ def _handle_dict_comp(
     log_event_ids,
     is_derived,
     local_scope=None,
+    is_vector=False,
 ):
     """
     Handle dictionary comprehension expressions in filter queries.
@@ -1945,6 +1970,7 @@ def _handle_dict_comp(
         log_event_ids,
         is_derived,
         local_scope=local_scope,
+        is_vector=is_vector,
     )
     if not isinstance(iter_subq, Subquery):
         raise HTTPException(
@@ -2036,6 +2062,7 @@ def _handle_dict_comp(
         log_event_ids,
         is_derived,
         local_scope=local_scope,
+        is_vector=is_vector,
     )
 
     val_expr = build_sql_query(
@@ -2045,6 +2072,7 @@ def _handle_dict_comp(
         log_event_ids,
         is_derived,
         local_scope=local_scope,
+        is_vector=is_vector,
     )
 
     key_col, key_subq, key_has_idx = _value_column(key_expr)
@@ -2233,6 +2261,7 @@ def _handle_dict_comp(
             log_event_ids,
             is_derived,
             local_scope=local_scope,
+            is_vector=is_vector,
         )
         if isinstance(cond_expr, Subquery):
             condition = (
@@ -2328,6 +2357,7 @@ def _handle_dict_get(
     is_derived,
     local_scope=None,
     default_supplied=False,
+    is_vector=False,
 ):
     """
     Handle dictionary get() method in filter queries.
@@ -2352,6 +2382,7 @@ def _handle_dict_get(
         log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=is_vector,
     )
 
     # Build SQL for the key
@@ -2362,6 +2393,7 @@ def _handle_dict_get(
         log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
+        is_vector=is_vector,
     )
 
     # Build SQL for the default value if provided
@@ -2374,6 +2406,7 @@ def _handle_dict_get(
             log_event_ids,
             is_derived=is_derived,
             local_scope=local_scope,
+            is_vector=is_vector,
         )
 
     def process_get(container_val, key_val, default_val=None):
@@ -2558,6 +2591,7 @@ def _handle_zip(
     log_event_ids,
     is_derived,
     local_scope=None,
+    is_vector=False,
 ):
     args = [
         build_sql_query(
@@ -2567,6 +2601,7 @@ def _handle_zip(
             log_event_ids,
             is_derived,
             local_scope=local_scope,
+            is_vector=is_vector,
         )
         for arg in filter_dict["rhs"]
     ]
