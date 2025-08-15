@@ -40,6 +40,8 @@ from orchestra.db.models.orchestra_models import (
     Log,
     LogEvent,
     LogEventContext,
+    LogEventDerivedLog,
+    LogEventLog,
 )
 from orchestra.web.api.dependencies import auth_admin_key
 from orchestra.web.api.log.schema import (
@@ -882,8 +884,9 @@ def update_derived_log(
     derived_log_ids = [dlog_id for dlog_id in resolved_ids.values()][0]
     existing_derived_logs = (
         session.query(DerivedLog)
+        .join(LogEventDerivedLog, LogEventDerivedLog.derived_log_id == DerivedLog.id)
         .filter(
-            DerivedLog.log_event_id.in_(derived_log_ids),
+            LogEventDerivedLog.log_event_id.in_(derived_log_ids),
             DerivedLog.key == updated_key,
         )
         .all()
@@ -917,8 +920,12 @@ def update_derived_log(
         # Use updated_key/equation if provided; otherwise, take them from one of the matched logs.
         valid_logs = (
             session.query(DerivedLog)
+            .join(
+                LogEventDerivedLog,
+                LogEventDerivedLog.derived_log_id == DerivedLog.id,
+            )
             .filter(
-                DerivedLog.log_event_id.in_(derived_log_ids),
+                LogEventDerivedLog.log_event_id.in_(derived_log_ids),
                 DerivedLog.key == updated_key,
             )
             .first()
@@ -926,12 +933,24 @@ def update_derived_log(
         final_key = updated_key if updated_key else valid_logs.key
         final_equation = updated_equation if updated_equation else valid_logs.equation
         # Delete all derived logs that were matched by the update filter.
-        session.query(DerivedLog).filter(
-            DerivedLog.log_event_id.in_(derived_log_ids),
-            DerivedLog.key == valid_logs.key,
-        ).delete(
-            synchronize_session=False,
+        derived_logs_to_delete = (
+            session.query(DerivedLog.id)
+            .join(
+                LogEventDerivedLog,
+                LogEventDerivedLog.derived_log_id == DerivedLog.id,
+            )
+            .filter(
+                LogEventDerivedLog.log_event_id.in_(derived_log_ids),
+                DerivedLog.key == valid_logs.key,
+            )
+            .all()
         )
+        derived_log_ids_to_delete = [dlog[0] for dlog in derived_logs_to_delete]
+        if derived_log_ids_to_delete:
+            session.query(DerivedLog).filter(
+                DerivedLog.id.in_(derived_log_ids_to_delete),
+            ).delete(synchronize_session=False)
+
         # Also delete the field type records for these derived logs
         field_type_dao.delete_field_type(
             project_id=project_id,
@@ -1605,10 +1624,14 @@ def update_logs(
             event_ids = [value for (_, value) in updated_ids]
             derived_logs_to_recompute = (
                 session.query(DerivedLog)
-                .join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
+                .join(
+                    LogEventDerivedLog,
+                    LogEventDerivedLog.derived_log_id == DerivedLog.id,
+                )
+                .join(LogEvent, LogEvent.id == LogEventDerivedLog.log_event_id)
                 .filter(
                     LogEvent.project_id == project_id,
-                    DerivedLog.log_event_id.in_(event_ids),
+                    LogEventDerivedLog.log_event_id.in_(event_ids),
                 )
                 .all()
             )
@@ -1765,9 +1788,16 @@ def delete_logs(
         # Bulk delete from base logs with a single query
         if body.source_type in ("all", "base"):
             # Use a single DELETE statement for all fields
-            deletion_query = session.query(Log).filter(
-                Log.log_event_id.in_(all_log_events_subq),
-                Log.key.in_(fields),
+            deletion_query = (
+                session.query(Log)
+                .join(
+                    LogEventLog,
+                    LogEventLog.log_id == Log.id,
+                )
+                .filter(
+                    LogEventLog.log_event_id.in_(all_log_events_subq),
+                    Log.key.in_(fields),
+                )
             )
             log_dao._bulk_delete_gcs_media(
                 deletion_query,
@@ -1781,14 +1811,27 @@ def delete_logs(
         # Bulk delete from derived logs with a single query
         if body.source_type in ("all", "derived"):
             # Use a single DELETE statement for all fields
-            deleted_count = (
-                session.query(DerivedLog)
+            # Find derived logs to delete
+            derived_logs_to_delete = (
+                session.query(DerivedLog.id)
+                .join(
+                    LogEventDerivedLog,
+                    LogEventDerivedLog.derived_log_id == DerivedLog.id,
+                )
                 .filter(
-                    DerivedLog.log_event_id.in_(all_log_events_subq),
+                    LogEventDerivedLog.log_event_id.in_(all_log_events_subq),
                     DerivedLog.key.in_(fields),
                 )
-                .delete(synchronize_session=False)
+                .all()
             )
+            derived_log_ids_to_delete = [dlog[0] for dlog in derived_logs_to_delete]
+            deleted_count = 0
+            if derived_log_ids_to_delete:
+                deleted_count = (
+                    session.query(DerivedLog)
+                    .filter(DerivedLog.id.in_(derived_log_ids_to_delete))
+                    .delete(synchronize_session=False)
+                )
             if deleted_count > 0:
                 context_description.append(
                     f"Deleted {len(fields)} fields from {deleted_count} derived logs",
@@ -1908,13 +1951,20 @@ def delete_logs(
     if base_log_deletions and body.source_type in ("all", "base"):
 
         # Delete GCS files BEFORE deleting DB records
+        # Build a query to find logs by their log_event_id and key
+        logs_to_delete_query = session.query(Log).join(
+            LogEventLog,
+            LogEventLog.log_id == Log.id,
+        )
+
+        # Build filter for each (event_id, key) pair
         combined_filter = or_(
             *[
-                and_(Log.log_event_id == eid, Log.key == k)
+                and_(LogEventLog.log_event_id == eid, Log.key == k)
                 for eid, k in base_log_deletions
             ],
         )
-        logs_to_delete_query = session.query(Log).filter(combined_filter)
+        logs_to_delete_query = logs_to_delete_query.filter(combined_filter)
         log_dao._bulk_delete_gcs_media(logs_to_delete_query)
 
         # Group by key for more efficient deletion
@@ -1924,14 +1974,27 @@ def delete_logs(
 
         for key, event_ids in key_to_event_ids.items():
             try:
-                deleted_count = (
-                    session.query(Log)
+                # First find the logs to delete
+                logs_to_delete = (
+                    session.query(Log.id)
+                    .join(LogEventLog, LogEventLog.log_id == Log.id)
                     .filter(
                         Log.key == key,
-                        Log.log_event_id.in_(event_ids),
+                        LogEventLog.log_event_id.in_(event_ids),
                     )
-                    .delete(synchronize_session=False)
+                    .all()
                 )
+
+                # Delete them if found
+                if logs_to_delete:
+                    log_ids_to_delete = [log_id[0] for log_id in logs_to_delete]
+                    deleted_count = (
+                        session.query(Log)
+                        .filter(Log.id.in_(log_ids_to_delete))
+                        .delete(synchronize_session=False)
+                    )
+                else:
+                    deleted_count = 0
             except:
                 not_found_entries.append((event_ids, key))
                 continue
@@ -1950,14 +2013,28 @@ def delete_logs(
 
         for key, event_ids in key_to_event_ids.items():
             try:
-                deleted_count = (
-                    session.query(DerivedLog)
+                # Find derived logs to delete
+                derived_logs_to_delete = (
+                    session.query(DerivedLog.id)
+                    .join(
+                        LogEventDerivedLog,
+                        LogEventDerivedLog.derived_log_id == DerivedLog.id,
+                    )
                     .filter(
                         DerivedLog.key == key,
-                        DerivedLog.log_event_id.in_(event_ids),
+                        LogEventDerivedLog.log_event_id.in_(event_ids),
                     )
-                    .delete(synchronize_session=False)
+                    .all()
                 )
+                derived_log_ids_to_delete = [dlog[0] for dlog in derived_logs_to_delete]
+                if derived_log_ids_to_delete:
+                    deleted_count = (
+                        session.query(DerivedLog)
+                        .filter(DerivedLog.id.in_(derived_log_ids_to_delete))
+                        .delete(synchronize_session=False)
+                    )
+                else:
+                    deleted_count = 0
             except:
                 not_found_entries.append((event_ids, key))
                 continue
@@ -1972,15 +2049,17 @@ def delete_logs(
         # Get all log_event_ids that still have logs in a single query
         still_used_base_ids = set(
             row[0]
-            for row in session.query(Log.log_event_id)
-            .filter(Log.log_event_id.in_(potential_empty_logs))
+            for row in session.query(LogEventLog.log_event_id)
+            .join(Log, Log.id == LogEventLog.log_id)
+            .filter(LogEventLog.log_event_id.in_(potential_empty_logs))
             .distinct()
         )
 
         still_used_derived_ids = set(
             row[0]
-            for row in session.query(DerivedLog.log_event_id)
-            .filter(DerivedLog.log_event_id.in_(potential_empty_logs))
+            for row in session.query(LogEventDerivedLog.log_event_id)
+            .join(DerivedLog, DerivedLog.id == LogEventDerivedLog.derived_log_id)
+            .filter(LogEventDerivedLog.log_event_id.in_(potential_empty_logs))
             .distinct()
         )
 
@@ -2067,14 +2146,19 @@ def delete_logs(
         # Get all fields that still exist in any logs with two efficient queries
         existing_base_fields = (
             session.query(Log.key)
-            .join(LogEvent, LogEvent.id == Log.log_event_id)
+            .join(LogEventLog, LogEventLog.log_id == Log.id)
+            .join(LogEvent, LogEvent.id == LogEventLog.log_event_id)
             .filter(LogEvent.project_id == project_id)
             .distinct()
             .all()
         )
         existing_derived_fields = (
             session.query(DerivedLog.key)
-            .join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
+            .join(
+                LogEventDerivedLog,
+                LogEventDerivedLog.derived_log_id == DerivedLog.id,
+            )
+            .join(LogEvent, LogEvent.id == LogEventDerivedLog.log_event_id)
             .filter(LogEvent.project_id == project_id)
             .distinct()
             .all()
@@ -3361,6 +3445,7 @@ def join_logs(
             mode=request.mode,
             context_id=context_id,
             columns=request.columns,
+            copy=request.copy,
             request_fastapi=request_fastapi,
             project_dao=project_dao,
             field_type_dao=field_type_dao,
@@ -3483,7 +3568,8 @@ def get_fields(
     derived_equations = {}
     derived_fields = (
         session.query(DerivedLog.key, DerivedLog.equation)
-        .join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
+        .join(LogEventDerivedLog, LogEventDerivedLog.derived_log_id == DerivedLog.id)
+        .join(LogEvent, LogEvent.id == LogEventDerivedLog.log_event_id)
         .filter(LogEvent.project_id == project_obj.id)
         .distinct()
         .all()
@@ -3744,8 +3830,9 @@ def delete_fields(
         try:
             # Get all log event IDs that have this field in either base logs or derived logs
             base_log_events = (
-                session.query(Log.log_event_id)
-                .join(LogEvent, LogEvent.id == Log.log_event_id)
+                session.query(LogEventLog.log_event_id)
+                .join(Log, Log.id == LogEventLog.log_id)
+                .join(LogEvent, LogEvent.id == LogEventLog.log_event_id)
                 .filter(
                     LogEvent.project_id == project_id,
                     Log.key == field_name,
@@ -3754,8 +3841,9 @@ def delete_fields(
             )
 
             derived_log_events = (
-                session.query(DerivedLog.log_event_id)
-                .join(LogEvent, LogEvent.id == DerivedLog.log_event_id)
+                session.query(LogEventDerivedLog.log_event_id)
+                .join(DerivedLog, DerivedLog.id == LogEventDerivedLog.derived_log_id)
+                .join(LogEvent, LogEvent.id == LogEventDerivedLog.log_event_id)
                 .filter(
                     LogEvent.project_id == project_id,
                     DerivedLog.key == field_name,
@@ -3891,10 +3979,11 @@ def update_active_derived_logs(
 
             # Then, get log events that already have this derived log
             existing_derived_logs = (
-                session.query(DerivedLog.log_event_id)
+                session.query(LogEventDerivedLog.log_event_id)
+                .join(DerivedLog, DerivedLog.id == LogEventDerivedLog.derived_log_id)
                 .filter(
                     DerivedLog.key == template.key,
-                    DerivedLog.log_event_id.in_(select(all_log_events.c.id)),
+                    LogEventDerivedLog.log_event_id.in_(select(all_log_events.c.id)),
                 )
                 .subquery(name="existing_derived_logs")
             )

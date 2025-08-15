@@ -30,6 +30,7 @@ from orchestra.db.models.orchestra_models import (
     Log,
     LogEvent,
     LogEventContext,
+    LogEventLog,
     Organization,
     Project,
 )
@@ -1828,18 +1829,19 @@ def admin_duplicate_project(
     if log_event_id_map:
         # Query for Log objects directly
         logs = (
-            session.query(Log)
+            session.query(Log, LogEventLog.log_event_id)
+            .join(LogEventLog, LogEventLog.log_id == Log.id)
             .filter(
-                Log.log_event_id.in_(list(log_event_id_map.keys())),
+                LogEventLog.log_event_id.in_(list(log_event_id_map.keys())),
             )
             .all()
         )
 
         log_values = []
-        for log in logs:
+        log_id_map = {}  # Map old log id to new log id for LogEventLog associations
+        for log, log_event_id in logs:
             log_values.append(
                 {
-                    "log_event_id": log_event_id_map[log.log_event_id],
                     "key": log.key,
                     "value": log.value,
                     "param_version": log.param_version,
@@ -1848,13 +1850,39 @@ def admin_duplicate_project(
                     "updated_at": datetime.now(timezone.utc),
                 },
             )
+            log_id_map[log.id] = log_event_id_map[
+                log_event_id
+            ]  # Store mapping for later use
 
         # Process logs in batches to avoid memory issues
         batch_size = 5000
+        new_log_ids = []
         for i in range(0, len(log_values), batch_size):
             batch = log_values[i : i + batch_size]
             if batch:
-                stmt = sqlalchemy.insert(Log).values(batch)
+                stmt = sqlalchemy.insert(Log).values(batch).returning(Log.id)
+                result = session.execute(stmt)
+                new_log_ids.extend([row[0] for row in result])
+
+        # Create LogEventLog associations
+        log_event_log_values = []
+        old_log_ids = list(log_id_map.keys())
+        for i, new_log_id in enumerate(new_log_ids):
+            if i < len(old_log_ids):
+                old_log_id = old_log_ids[i]
+                new_log_event_id = log_id_map[old_log_id]
+                log_event_log_values.append(
+                    {
+                        "log_event_id": new_log_event_id,
+                        "log_id": new_log_id,
+                    },
+                )
+
+        # Bulk insert LogEventLog associations
+        for i in range(0, len(log_event_log_values), batch_size):
+            batch = log_event_log_values[i : i + batch_size]
+            if batch:
+                stmt = sqlalchemy.insert(LogEventLog).values(batch)
                 session.execute(stmt)
 
         stats["logs_copied"] = len(log_values)

@@ -13,6 +13,7 @@ from orchestra.db.models.orchestra_models import (
     ContextVersion,
     Log,
     LogEvent,
+    LogEventLog,
     Project,
     ProjectVersion,
 )
@@ -168,8 +169,15 @@ class ProjectDAO:
             log_events_subquery = (
                 select(LogEvent.id).where(LogEvent.project_id == id).subquery()
             )
-            logs_to_delete_query = self.session.query(Log).filter(
-                Log.log_event_id.in_(select(log_events_subquery.c.id)),
+            logs_to_delete_query = (
+                self.session.query(Log)
+                .join(
+                    LogEventLog,
+                    LogEventLog.log_id == Log.id,
+                )
+                .filter(
+                    LogEventLog.log_event_id.in_(select(log_events_subquery.c.id)),
+                )
             )
             log_dao._bulk_delete_gcs_media(logs_to_delete_query)
 

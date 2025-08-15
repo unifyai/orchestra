@@ -28,7 +28,7 @@ from sqlalchemy.dialects.postgresql import JSONB, aggregate_order_by
 from sqlalchemy.sql.selectable import ColumnClause, Subquery
 
 from orchestra.db.dao.log_dao import LogDAO, _is_date_string, _is_time_string
-from orchestra.db.models.orchestra_models import Log
+from orchestra.db.models.orchestra_models import Log, LogEventLog
 
 from . import alias_utils
 from .core import build_sql_query
@@ -514,8 +514,9 @@ def _handle_functions(
                 select(
                     log_event_alias.id.label("log_event_id"),
                     select(Log.id)
+                    .join(LogEventLog, LogEventLog.log_id == Log.id)
                     .where(
-                        Log.log_event_id == log_event_alias.id,
+                        LogEventLog.log_event_id == log_event_alias.id,
                         Log.key == identifier,
                     )
                     .exists()
@@ -587,12 +588,13 @@ def _handle_functions(
             identifier = filter_dict["rhs"]["value"]
             version_subq = (
                 select(
-                    Log.log_event_id.label("log_event_id"),
+                    LogEventLog.log_event_id.label("log_event_id"),
                     Log.param_version.label("value"),
                     literal("int").label("inferred_type"),
                 )
                 .select_from(Log)
-                .join(log_event_alias, Log.log_event_id == log_event_alias.id)
+                .join(LogEventLog, LogEventLog.log_id == Log.id)
+                .join(log_event_alias, LogEventLog.log_event_id == log_event_alias.id)
                 .where(
                     Log.key == identifier,
                 )
@@ -622,7 +624,9 @@ def _handle_functions(
                 )
 
             row_number = (
-                func.row_number().over(order_by=Log.log_event_id).label("log_event_id")
+                func.row_number()
+                .over(order_by=LogEventLog.log_event_id)
+                .label("log_event_id")
             )
             version_subq = (
                 select(
@@ -631,8 +635,9 @@ def _handle_functions(
                     literal("int").label("inferred_type"),
                 )
                 .select_from(Log)
+                .join(LogEventLog, LogEventLog.log_id == Log.id)
                 .where(
-                    Log.log_event_id.in_(event_ids) if event_ids else True,
+                    LogEventLog.log_event_id.in_(event_ids) if event_ids else True,
                     Log.key == identifier,
                 )
             )

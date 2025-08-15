@@ -11,6 +11,7 @@ from orchestra.db.models.orchestra_models import (
     Log,
     LogEvent,
     LogEventContext,
+    LogEventLog,
     Project,
 )
 
@@ -175,8 +176,15 @@ class LogEventDAO:
         try:
             # Delete associated GCS media BEFORE deleting DB records
             log_dao = LogDAO(self.session, ContextDAO(self.session))
-            logs_to_delete_query = self.session.query(Log).filter(
-                Log.log_event_id.in_(ids),
+            logs_to_delete_query = (
+                self.session.query(Log)
+                .join(
+                    LogEventLog,
+                    LogEventLog.log_id == Log.id,
+                )
+                .filter(
+                    LogEventLog.log_event_id.in_(ids),
+                )
             )
             log_dao._bulk_delete_gcs_media(logs_to_delete_query)
 
