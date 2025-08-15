@@ -38,6 +38,7 @@ def build_sql_query(
     is_derived=False,
     *,
     local_scope=None,
+    is_vector=False,
 ):
     """
     Recursively build SQLAlchemy filter or expression from filter_dict.
@@ -50,6 +51,7 @@ def build_sql_query(
         is_derived: Whether this is for a derived log.
         local_scope: Dictionary mapping local variable names to (column, type) tuples.
         Used for comprehensions to avoid building subqueries for local variables.
+        is_vector: Whether to treat the result as a vector type.
 
     Returns:
         SQLAlchemy condition or expression
@@ -146,6 +148,7 @@ def build_sql_query(
             log_event_ids,
             is_derived=is_derived,
             local_scope=local_scope,
+            is_vector=is_vector,
         )
     elif operand in ("+", "-", "*", "/", "%", "**", "//"):
         return _handle_arithmetic_operator(
@@ -155,6 +158,7 @@ def build_sql_query(
             log_event_ids,
             is_derived=is_derived,
             local_scope=local_scope,
+            is_vector=is_vector,
         )
     elif operand in ("==", "!=", "<", ">", "<=", ">=", "is", "is not"):
         return _handle_comparison_operator(
@@ -164,6 +168,7 @@ def build_sql_query(
             log_event_ids,
             is_derived=is_derived,
             local_scope=local_scope,
+            is_vector=is_vector,
         )
     elif operand in ("in", "not in"):
         return _handle_membership_operator(
@@ -173,6 +178,7 @@ def build_sql_query(
             log_event_ids,
             is_derived=is_derived,
             local_scope=local_scope,
+            is_vector=is_vector,
         )
     elif operand in (
         "len",
@@ -204,6 +210,7 @@ def build_sql_query(
             log_event_ids,
             is_derived=is_derived,
             local_scope=local_scope,
+            is_vector=is_vector,
         )
     elif operand == "INDEX":
         return _handle_index_operator(
@@ -213,6 +220,7 @@ def build_sql_query(
             log_event_ids,
             is_derived=is_derived,
             local_scope=local_scope,
+            is_vector=is_vector,
         )
     elif operand == "SLICE":
         return _handle_slice_operator(
@@ -222,6 +230,7 @@ def build_sql_query(
             log_event_ids,
             is_derived=is_derived,
             local_scope=local_scope,
+            is_vector=is_vector,
         )
     elif operand == "dict_method":
         return _handle_dict_method(
@@ -231,6 +240,7 @@ def build_sql_query(
             log_event_ids,
             is_derived,
             local_scope=local_scope,
+            is_vector=is_vector,
         )
     elif operand == "if_expr":
         return _handle_if_expr(
@@ -240,6 +250,7 @@ def build_sql_query(
             log_event_ids,
             is_derived,
             local_scope=local_scope,
+            is_vector=is_vector,
         )
     elif operand == "list_comp":
         return _handle_list_comp(
@@ -249,6 +260,7 @@ def build_sql_query(
             log_event_ids,
             is_derived,
             local_scope=local_scope,
+            is_vector=is_vector,
         )
     elif operand == "dict_comp":
         return _handle_dict_comp(
@@ -258,6 +270,7 @@ def build_sql_query(
             log_event_ids,
             is_derived,
             local_scope=local_scope,
+            is_vector=is_vector,
         )
     elif operand == "zip":
         return _handle_zip(
@@ -267,6 +280,7 @@ def build_sql_query(
             log_event_ids,
             is_derived,
             local_scope=local_scope,
+            is_vector=is_vector,
         )
     elif operand == "l2":
         return _handle_l2(
@@ -332,6 +346,7 @@ def build_sql_query(
             log_event_ids,
             is_derived,
             local_scope=local_scope,
+            is_vector=is_vector,
         )
     else:
         if operand is not None:

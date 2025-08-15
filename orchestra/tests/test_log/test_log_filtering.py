@@ -3170,3 +3170,58 @@ async def test_embed_column_function(client: AsyncClient):
 
     # Should find at least one match
     assert len(data["logs"]) > 0
+
+
+@pytest.mark.anyio
+async def test_filter_with_vector_function_on_uncomputed_base_field(
+    client: AsyncClient,
+):
+    """
+    Verifies that a vector function (e.g., cosine) correctly resolves a BASE()
+    argument, even if the target embedding field is empty or None.
+    """
+    project_name = "test_vector_base_call"
+    await _create_project(client, project_name, user=1)
+
+    # 1. Create a log with a text field but DO NOT create an embedding for it yet.
+    # This ensures the `_text_emb` field type will be 'NoneType' in the DB.
+    response = await _create_log(client, project_name, entries={"text": "some content"})
+    assert response.status_code == 200
+    log_id = response.json()["log_event_ids"][0]
+
+    # 2. Create a derived log for the similarity score
+    key = "similarity_score"
+    equation = "cosine(embed({log:text}), embed('query'))"
+    referenced_logs = {"log": [log_id]}
+
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key,
+        equation,
+        referenced_logs,
+    )
+
+    # 3. The request did not cause a 500 error.
+    assert (
+        response.status_code == 200
+    ), f"The query crashed with a server error: {response.text}"
+
+    # 4. Verify the derived entry was created correctly
+    response = await client.get(
+        f"/v0/logs?project={project_name}&from_ids={log_id}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    log = response.json()["logs"][0]
+
+    assert (
+        "similarity_score" in log["derived_entries"]
+    ), "Derived entry was not created."
+
+    # The similarity score should be a valid number
+    similarity = log["derived_entries"]["similarity_score"]
+    assert isinstance(
+        similarity,
+        (int, float),
+    ), f"Similarity score should be a number, got {type(similarity)}"
