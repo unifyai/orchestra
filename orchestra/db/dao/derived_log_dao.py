@@ -5,7 +5,11 @@ from typing import Dict, List, Optional, Union
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import DerivedLog, LogEvent
+from orchestra.db.models.orchestra_models import (
+    DerivedLog,
+    LogEvent,
+    LogEventDerivedLog,
+)
 from orchestra.web.api.log.python2SQL import (
     _compute_expression,
     _extract_placeholders,
@@ -59,7 +63,6 @@ class DerivedLogDAO:
         ts = datetime.now(timezone.utc)
 
         new_derived_log = DerivedLog(
-            log_event_id=log_event_id,
             key=key,
             equation=equation,
             referenced_logs=referenced_logs,
@@ -70,6 +73,15 @@ class DerivedLogDAO:
         )
 
         self.session.add(new_derived_log)
+        self.session.flush()  # Get the ID without committing
+
+        # Create the association
+        log_event_derived_log = LogEventDerivedLog(
+            log_event_id=log_event_id,
+            derived_log_id=new_derived_log.id,
+        )
+        self.session.add(log_event_derived_log)
+
         self.session.commit()
         return new_derived_log.id
 
@@ -97,14 +109,21 @@ class DerivedLogDAO:
         if id == [] or log_event_id == [] or key == [] or value == [] or equation == []:
             return []
 
-        query = select(DerivedLog).join(
-            LogEvent,
-            LogEvent.id == DerivedLog.log_event_id,
+        query = (
+            select(DerivedLog)
+            .join(
+                LogEventDerivedLog,
+                LogEventDerivedLog.derived_log_id == DerivedLog.id,
+            )
+            .join(
+                LogEvent,
+                LogEvent.id == LogEventDerivedLog.log_event_id,
+            )
         )
         if id:
             query = query.where(DerivedLog.id.in_(id))
         if log_event_id:
-            query = query.where(DerivedLog.log_event_id.in_(log_event_id))
+            query = query.where(LogEventDerivedLog.log_event_id.in_(log_event_id))
         if key:
             query = query.where(DerivedLog.key.in_(key))
         if value:
@@ -132,9 +151,18 @@ class DerivedLogDAO:
         """
         try:
             for dlog in logs_to_recompute:
-                reference_log = {
-                    k: dlog.log_event_id for k in dlog.referenced_logs.keys()
-                }
+                # Get the associated log_event_id
+                log_event_derived_log = (
+                    session.query(LogEventDerivedLog)
+                    .filter_by(derived_log_id=dlog.id)
+                    .first()
+                )
+                if not log_event_derived_log:
+                    continue
+
+                log_event_id = log_event_derived_log.log_event_id
+
+                reference_log = {k: log_event_id for k in dlog.referenced_logs.keys()}
                 transformed_logs = _transform_referenced_logs(
                     dlog.equation,
                     reference_log,
@@ -148,7 +176,7 @@ class DerivedLogDAO:
                     filter_dict,
                     LogEvent,
                     session,
-                    [dlog.log_event_id],
+                    [log_event_id],
                 )[0][1]
                 dlog.value = json.loads(json.dumps(new_val, cls=json_encoder))
                 dlog.updated_at = datetime.now(timezone.utc)
@@ -171,16 +199,34 @@ class DerivedLogDAO:
 
             # Check for key conflicts
             if key and key != derived_log.key:
-                exists = (
-                    self.session.query(DerivedLog)
-                    .filter(
-                        DerivedLog.log_event_id == derived_log.log_event_id,
-                        DerivedLog.key == key,
-                    )
+                # Get the associated log_event_id
+                log_event_derived_log = (
+                    self.session.query(LogEventDerivedLog)
+                    .filter_by(derived_log_id=derived_log.id)
                     .first()
                 )
-                if exists:
-                    raise ValueError(f"Key '{key}' already exists for this log event")
+
+                if log_event_derived_log:
+                    # Check if another derived log with this key exists for the same log event
+                    exists = (
+                        self.session.query(DerivedLog)
+                        .join(
+                            LogEventDerivedLog,
+                            LogEventDerivedLog.derived_log_id == DerivedLog.id,
+                        )
+                        .filter(
+                            LogEventDerivedLog.log_event_id
+                            == log_event_derived_log.log_event_id,
+                            DerivedLog.key == key,
+                            DerivedLog.id
+                            != derived_log.id,  # Exclude current derived log
+                        )
+                        .first()
+                    )
+                    if exists:
+                        raise ValueError(
+                            f"Key '{key}' already exists for this log event",
+                        )
 
             # Apply updates
             if key:

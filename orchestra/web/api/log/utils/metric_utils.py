@@ -22,7 +22,13 @@ from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql.selectable import Subquery
 
-from orchestra.db.models.orchestra_models import DerivedLog, Log, LogEvent
+from orchestra.db.models.orchestra_models import (
+    DerivedLog,
+    Log,
+    LogEvent,
+    LogEventDerivedLog,
+    LogEventLog,
+)
 
 from ..python2SQL import build_sql_query, str_filter_exp_to_dict
 
@@ -544,23 +550,25 @@ def _compute_metric_for_key_grouped(
     # 2) Build subquery for the aggregator key (both base and derived logs)
     agg_log_q = (
         session.query(
-            Log.log_event_id.label("log_event_id"),
+            LogEventLog.log_event_id.label("log_event_id"),
             Log.value.label("value"),
             Log.inferred_type.label("inferred_type"),
         )
+        .join(LogEventLog, LogEventLog.log_id == Log.id)
         .filter(Log.key == key)
-        .join(LogEvent, Log.log_event_id == LogEvent.id)
+        .join(LogEvent, LogEventLog.log_event_id == LogEvent.id)
         .filter(LogEvent.project_id == project_obj.id)
     )
 
     agg_derived_q = (
         session.query(
-            DerivedLog.log_event_id.label("log_event_id"),
+            LogEventDerivedLog.log_event_id.label("log_event_id"),
             DerivedLog.value.label("value"),
             DerivedLog.inferred_type.label("inferred_type"),
         )
+        .join(LogEventDerivedLog, LogEventDerivedLog.derived_log_id == DerivedLog.id)
         .filter(DerivedLog.key == key)
-        .join(LogEvent, DerivedLog.log_event_id == LogEvent.id)
+        .join(LogEvent, LogEventDerivedLog.log_event_id == LogEvent.id)
         .filter(LogEvent.project_id == project_obj.id)
     )
 
@@ -575,12 +583,13 @@ def _compute_metric_for_key_grouped(
             # For parameters, use only base logs with version
             group_q = (
                 session.query(
-                    Log.log_event_id.label("log_event_id"),
+                    LogEventLog.log_event_id.label("log_event_id"),
                     Log.param_version.label("value"),
                     literal("int").label("inferred_type"),
                 )
+                .join(LogEventLog, LogEventLog.log_id == Log.id)
                 .filter(Log.key == group_field)
-                .join(LogEvent, Log.log_event_id == LogEvent.id)
+                .join(LogEvent, LogEventLog.log_event_id == LogEvent.id)
                 .filter(LogEvent.project_id == project_obj.id)
             )
             group_subq = group_q.subquery(f"group_{idx}")
@@ -588,23 +597,28 @@ def _compute_metric_for_key_grouped(
             # For non-parameters, union base logs and derived logs
             group_log_q = (
                 session.query(
-                    Log.log_event_id.label("log_event_id"),
+                    LogEventLog.log_event_id.label("log_event_id"),
                     Log.value.label("value"),
                     Log.inferred_type.label("inferred_type"),
                 )
+                .join(LogEventLog, LogEventLog.log_id == Log.id)
                 .filter(Log.key == group_field)
-                .join(LogEvent, Log.log_event_id == LogEvent.id)
+                .join(LogEvent, LogEventLog.log_event_id == LogEvent.id)
                 .filter(LogEvent.project_id == project_obj.id)
             )
 
             group_derived_q = (
                 session.query(
-                    DerivedLog.log_event_id.label("log_event_id"),
+                    LogEventDerivedLog.log_event_id.label("log_event_id"),
                     DerivedLog.value.label("value"),
                     DerivedLog.inferred_type.label("inferred_type"),
                 )
+                .join(
+                    LogEventDerivedLog,
+                    LogEventDerivedLog.derived_log_id == DerivedLog.id,
+                )
                 .filter(DerivedLog.key == group_field)
-                .join(LogEvent, DerivedLog.log_event_id == LogEvent.id)
+                .join(LogEvent, LogEventDerivedLog.log_event_id == LogEvent.id)
                 .filter(LogEvent.project_id == project_obj.id)
             )
 
@@ -978,24 +992,26 @@ def compute_metric_for_key(
     # Base logs
     log_q = (
         session.query(
-            Log.log_event_id.label("log_event_id"),
+            LogEventLog.log_event_id.label("log_event_id"),
             Log.value.label("value"),
             Log.inferred_type.label("inferred_type"),
         )
+        .join(LogEventLog, LogEventLog.log_id == Log.id)
         .filter(Log.key == key)
-        .join(LogEvent, Log.log_event_id == LogEvent.id)
+        .join(LogEvent, LogEventLog.log_event_id == LogEvent.id)
         .filter(LogEvent.project_id == project_obj.id)
     )
 
     # Derived logs
     derived_q = (
         session.query(
-            DerivedLog.log_event_id.label("log_event_id"),
+            LogEventDerivedLog.log_event_id.label("log_event_id"),
             DerivedLog.value.label("value"),
             DerivedLog.inferred_type.label("inferred_type"),
         )
+        .join(LogEventDerivedLog, LogEventDerivedLog.derived_log_id == DerivedLog.id)
         .filter(DerivedLog.key == key)
-        .join(LogEvent, DerivedLog.log_event_id == LogEvent.id)
+        .join(LogEvent, LogEventDerivedLog.log_event_id == LogEvent.id)
         .filter(LogEvent.project_id == project_obj.id)
     )
 
@@ -1281,9 +1297,10 @@ def compute_metric_bulk(
             Log.inferred_type.label("inferred_type"),
         )
         .where(Log.key.in_(keys))
-        .join(LogEvent, Log.log_event_id == LogEvent.id)
+        .join(LogEventLog, LogEventLog.log_id == Log.id)
+        .join(LogEvent, LogEventLog.log_event_id == LogEvent.id)
         .where(LogEvent.project_id == project_id)
-        .where(Log.log_event_id.in_(select(filtered_events_subq.c.id)))
+        .where(LogEventLog.log_event_id.in_(select(filtered_events_subq.c.id)))
     )
 
     derived_q = (
@@ -1293,9 +1310,10 @@ def compute_metric_bulk(
             DerivedLog.inferred_type.label("inferred_type"),
         )
         .where(DerivedLog.key.in_(keys))
-        .join(LogEvent, DerivedLog.log_event_id == LogEvent.id)
+        .join(LogEventDerivedLog, LogEventDerivedLog.derived_log_id == DerivedLog.id)
+        .join(LogEvent, LogEventDerivedLog.log_event_id == LogEvent.id)
         .where(LogEvent.project_id == project_id)
-        .where(DerivedLog.log_event_id.in_(select(filtered_events_subq.c.id)))
+        .where(LogEventDerivedLog.log_event_id.in_(select(filtered_events_subq.c.id)))
     )
 
     # 3) Union the queries to get all entries

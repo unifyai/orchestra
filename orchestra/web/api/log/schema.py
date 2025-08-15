@@ -553,3 +553,7 @@ class JoinLogsRequest(BaseModel):
         example={"A.user_id": "user_identifier", "B.score": "user_score"},
     )
     project: str = Field(..., description="Name of the project")
+    copy: bool = Field(
+        default=False,
+        description="If True, a copy of each log is created and then added to the context. If False, the existing log associations are simply used.",
+    )
