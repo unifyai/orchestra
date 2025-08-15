@@ -823,8 +823,15 @@ class LogEvent(Base):
     )
     derived_logs = relationship(
         "DerivedLog",
-        cascade="all, delete-orphan",
-        backref="log_event",
+        secondary="log_event_derived_log",
+        back_populates="log_events",
+        passive_deletes=True,
+    )
+    logs = relationship(
+        "Log",
+        secondary="log_event_log",
+        back_populates="log_events",
+        passive_deletes=True,
     )
 
     __table_args__ = (Index("idx_log_event_project_id_id", "project_id", "id"),)
@@ -845,23 +852,51 @@ class JSONLog(Base):
     __table_args__ = (UniqueConstraint("log_event_id", "key"),)
 
 
+class LogEventLog(Base):
+    """Association table for the many-to-many relationship between LogEvent and Log.
+
+    This table enables a Log (single cell) to belong to multiple LogEvent instances,
+    allowing for efficient pass-by-reference in operations like join_logs.
+    """
+
+    __tablename__ = "log_event_log"
+
+    log_event_id = Column(
+        Integer,
+        ForeignKey("log_event.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    log_id = Column(
+        Integer,
+        ForeignKey("log.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+
+    __table_args__ = (
+        Index("idx_log_event_log_event_id", "log_event_id"),
+        Index("idx_log_event_log_log_id", "log_id"),
+    )
+
+
 class Log(Base):
     __tablename__ = "log"
 
     id = Column(Integer, primary_key=True)
-    log_event_id = Column(
-        Integer,
-        ForeignKey("log_event.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
     key = Column(String, nullable=False, index=True)
     value = Column(JSONB)
     param_version = Column(Integer)
     inferred_type = Column(String)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
-    __table_args__ = (UniqueConstraint("log_event_id", "key", "param_version"),)
+    # Relationships
+    log_events = relationship(
+        "LogEvent",
+        secondary="log_event_log",
+        back_populates="logs",
+        passive_deletes=True,
+    )
+
+    __table_args__ = (Index("idx_log_key_param_version", "key", "param_version"),)
 
 
 class LogVersion(Base):
@@ -929,16 +964,35 @@ class JSONLogHistory(Base):
     archived_at = Column(TIMESTAMP, server_default=func.now())
 
 
+class LogEventDerivedLog(Base):
+    """Association table for the many-to-many relationship between LogEvent and DerivedLog.
+
+    This table enables a DerivedLog to belong to multiple LogEvent instances,
+    allowing for efficient pass-by-reference in operations similar to Log.
+    """
+
+    __tablename__ = "log_event_derived_log"
+
+    log_event_id = Column(
+        Integer,
+        ForeignKey("log_event.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    derived_log_id = Column(
+        Integer,
+        ForeignKey("derived_log.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    __table_args__ = (
+        Index("idx_log_event_derived_log_event_id", "log_event_id"),
+        Index("idx_log_event_derived_log_derived_log_id", "derived_log_id"),
+    )
+
+
 class DerivedLog(Base):
     __tablename__ = "derived_log"
 
     id = Column(Integer, primary_key=True)
-    log_event_id = Column(
-        Integer,
-        ForeignKey("log_event.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
     key = Column(String, nullable=False, index=True)
     equation = Column(String)
     referenced_logs = Column(JSONB)
@@ -947,7 +1001,13 @@ class DerivedLog(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
 
-    __table_args__ = (UniqueConstraint("log_event_id", "key"),)
+    # Relationships
+    log_events = relationship(
+        "LogEvent",
+        secondary="log_event_derived_log",
+        back_populates="derived_logs",
+        passive_deletes=True,
+    )
 
 
 class ActiveDerivedLog(Base):
