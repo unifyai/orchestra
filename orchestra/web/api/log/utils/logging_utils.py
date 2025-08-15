@@ -273,6 +273,8 @@ def _build_sort_criteria(
                     (val_col == text("'null'::jsonb"), None),
                     else_=cast(val_col, cast_type),
                 )
+        else:
+            sort_expr = val_col
     else:
         sort_expr = val_col
 
