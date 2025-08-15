@@ -338,6 +338,7 @@ def _build_subquery_for_identifier(
     alias=None,
     session=None,
     is_derived=False,
+    is_vector=False,
 ):
     """
     Build a subselect that retrieves columns for a given log key.
@@ -389,6 +390,7 @@ def _build_subquery_for_identifier(
                 literal(None).label("date_value"),
                 literal(None).label("timedelta_value"),
                 literal(None).label("str_value"),
+                literal(None).label("vector_value"),
                 log_event_alias.id.label("int_value"),
                 literal(None).label("float_value"),
                 literal(None).label("bool_value"),
@@ -414,6 +416,7 @@ def _build_subquery_for_identifier(
                 literal(None).label("date_value"),
                 literal(None).label("timedelta_value"),
                 literal(None).label("str_value"),
+                literal(None).label("vector_value"),
                 literal(None).label("int_value"),
                 literal(None).label("float_value"),
                 literal(None).label("bool_value"),
@@ -427,6 +430,7 @@ def _build_subquery_for_identifier(
     # Build base logs subquery
     base_subq = select(
         log_alias.log_event_id.label("log_event_id"),
+        literal(None).label("vector_value"),
         case(
             (log_alias.inferred_type == "list", cast(log_alias.value, JSONB)),
             (log_alias.inferred_type == "dict", cast(log_alias.value, JSONB)),
@@ -474,6 +478,7 @@ def _build_subquery_for_identifier(
     # Build derived logs subquery
     derived_subq = select(
         derived_log_alias.log_event_id.label("log_event_id"),
+        literal(None).label("vector_value"),
         case(
             (
                 derived_log_alias.inferred_type == "list",
@@ -550,7 +555,11 @@ def _build_subquery_for_identifier(
     combined_subq = base_subq.union_all(derived_subq).subquery(name=safe_alias)
 
     # Wrap the combined subquery with vector column support
-    return _maybe_vector_column(combined_subq, key, session)
+    return (
+        _maybe_vector_column(combined_subq, key, session)
+        if is_vector
+        else combined_subq
+    )
 
 
 def _join_subqueries(lhs_subq, rhs_subq, expr, inferred_type, session=None):
@@ -958,7 +967,7 @@ def _ensure_vectors_exist(
                 to_insert.append(embeddings)
             except ValueError as e:
                 # Log the error but continue with other texts
-                raise e
+                print(f"Error generating embedding for {key} containing {text} : {e}")
 
     # Bulk insert new vectors if any
     if to_insert:

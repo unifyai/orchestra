@@ -819,6 +819,7 @@ def _handle_functions(
                 log_event_alias,
                 log_event_ids,
                 session=session,
+                is_vector=is_vector,
             )
             rows = session.execute(select(texts_q))
             id_to_text = {
@@ -841,6 +842,7 @@ def _handle_functions(
                 key,
                 log_event_alias,
                 log_event_ids,
+                is_vector=True,
             )
 
             # Create a proper subquery with vector type
