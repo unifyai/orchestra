@@ -14,6 +14,7 @@ from orchestra.db.models.orchestra_models import (
     Log,
     LogEvent,
     LogEventContext,
+    LogEventLog,
     LogVersion,
     ProjectVersion,
 )
@@ -172,8 +173,15 @@ class ContextDAO:
                 .where(LogEventContext.context_id == id)
                 .subquery()
             )
-            logs_to_delete_query = self.session.query(Log).filter(
-                Log.log_event_id.in_(select(log_events_subquery.c.id)),
+            logs_to_delete_query = (
+                self.session.query(Log)
+                .join(
+                    LogEventLog,
+                    LogEventLog.log_id == Log.id,
+                )
+                .filter(
+                    LogEventLog.log_event_id.in_(select(log_events_subquery.c.id)),
+                )
             )
             log_dao._bulk_delete_gcs_media(logs_to_delete_query)
 
@@ -384,7 +392,10 @@ class ContextDAO:
         """
         query = """
         WITH new_log_pairs AS (
-            SELECT key, value FROM log WHERE log_event_id = :log_event_id
+            SELECT l.key, l.value
+            FROM log l
+            JOIN log_event_log lel ON l.id = lel.log_id
+            WHERE lel.log_event_id = :log_event_id
         ),
         context_log_events AS (
             SELECT le.id
@@ -397,7 +408,8 @@ class ContextDAO:
                 cle.id,
                 COUNT(*) as pair_count
             FROM context_log_events cle
-            JOIN log l ON cle.id = l.log_event_id
+            JOIN log_event_log lel ON cle.id = lel.log_event_id
+            JOIN log l ON lel.log_id = l.id
             GROUP BY cle.id
             HAVING COUNT(*) = (SELECT COUNT(*) FROM new_log_pairs)
         ),
@@ -406,7 +418,8 @@ class ContextDAO:
                 pd.id,
                 COUNT(*) as matching_count
             FROM potential_duplicates pd
-            JOIN log l ON pd.id = l.log_event_id
+            JOIN log_event_log lel ON pd.id = lel.log_event_id
+            JOIN log l ON lel.log_id = l.id
             JOIN new_log_pairs nlp ON l.key = nlp.key AND l.value = nlp.value
             GROUP BY pd.id
         )
@@ -475,7 +488,8 @@ class ContextDAO:
                 # Query all associated Log rows for the original log event
                 original_logs = (
                     self.session.query(Log)
-                    .filter_by(log_event_id=original_log_id)
+                    .join(LogEventLog, LogEventLog.log_id == Log.id)
+                    .filter(LogEventLog.log_event_id == original_log_id)
                     .all()
                 )
 
@@ -483,7 +497,6 @@ class ContextDAO:
                 new_logs = []
                 for original_log in original_logs:
                     new_log = Log(
-                        log_event_id=new_log_event.id,
                         key=original_log.key,
                         value=original_log.value,
                         param_version=original_log.param_version,
@@ -494,6 +507,15 @@ class ContextDAO:
                 # Bulk insert all new Log entries
                 if new_logs:
                     self.session.bulk_save_objects(new_logs)
+                    self.session.flush()  # Get IDs for new logs
+
+                    # Create LogEventLog associations
+                    for new_log in new_logs:
+                        log_event_log = LogEventLog(
+                            log_event_id=new_log_event.id,
+                            log_id=new_log.id,
+                        )
+                        self.session.add(log_event_log)
 
                 # Check for JSONLog entries (if the model exists)
                 if JSONLog is not None:
@@ -735,8 +757,9 @@ class ContextDAO:
 
         # 2. Get all current logs for the context
         logs_to_version = (
-            self.session.query(Log)
-            .join(LogEvent, Log.log_event_id == LogEvent.id)
+            self.session.query(Log, LogEventLog.log_event_id)
+            .join(LogEventLog, LogEventLog.log_id == Log.id)
+            .join(LogEvent, LogEvent.id == LogEventLog.log_event_id)
             .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
             .filter(LogEventContext.context_id == context.id)
             .all()
@@ -749,7 +772,7 @@ class ContextDAO:
         log_versions = [
             LogVersion(
                 context_version_id=context_version.id,
-                log_event_id=log.log_event_id,
+                log_event_id=log_event_id,
                 key=log.key,
                 value=log.value,
                 param_version=log.param_version,
@@ -757,7 +780,7 @@ class ContextDAO:
                 created_at=log.created_at,
                 updated_at=log.updated_at,
             )
-            for log in logs_to_version
+            for log, log_event_id in logs_to_version
         ]
 
         # 4. Bulk insert the log snapshots for efficiency
@@ -796,17 +819,16 @@ class ContextDAO:
             new_logs = []
             new_json_logs = []
             for lv in lvs:
-                new_logs.append(
-                    Log(
-                        log_event_id=new_log_event.id,
-                        key=lv.key,
-                        value=lv.value,
-                        param_version=lv.param_version,
-                        inferred_type=lv.inferred_type,
-                        created_at=lv.created_at,
-                        updated_at=lv.updated_at,
-                    ),
+                new_log = Log(
+                    key=lv.key,
+                    value=lv.value,
+                    param_version=lv.param_version,
+                    inferred_type=lv.inferred_type,
+                    created_at=lv.created_at,
+                    updated_at=lv.updated_at,
                 )
+                new_logs.append(new_log)
+
                 if isinstance(lv.value, (dict, list)):
                     new_json_logs.append(
                         JSONLog(
@@ -815,7 +837,18 @@ class ContextDAO:
                             value=lv.value,
                         ),
                     )
+
             if new_logs:
                 self.session.bulk_save_objects(new_logs)
+                self.session.flush()  # Get IDs for new logs
+
+                # Create LogEventLog associations
+                for new_log in new_logs:
+                    log_event_log = LogEventLog(
+                        log_event_id=new_log_event.id,
+                        log_id=new_log.id,
+                    )
+                    self.session.add(log_event_log)
+
             if new_json_logs:
                 self.session.bulk_save_objects(new_json_logs)
