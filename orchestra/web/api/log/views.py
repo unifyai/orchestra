@@ -715,7 +715,7 @@ def create_from_logs(
                             )
 
             # Bulk insert all new derived logs in one go
-            session.bulk_save_objects(new_derived_logs)
+            session.bulk_save_objects(new_derived_logs, return_defaults=True)
             session.flush()  # Get IDs for the new derived logs
 
             # Create LogEventDerivedLog associations
@@ -1082,7 +1082,7 @@ def update_derived_log(
                 )
 
         # Bulk insert all new derived logs in one go
-        session.bulk_save_objects(new_derived_logs)
+        session.bulk_save_objects(new_derived_logs, return_defaults=True)
         session.flush()  # Get IDs for the new derived logs
 
         # Create LogEventDerivedLog associations
@@ -4160,7 +4160,10 @@ def update_active_derived_logs(
 
                     # Bulk insert the new derived logs
                     if new_derived_logs:
-                        session.bulk_save_objects(new_derived_logs)
+                        session.bulk_save_objects(
+                            new_derived_logs,
+                            return_defaults=True,
+                        )
                         session.flush()  # Get IDs for the new derived logs
 
                         # Create LogEventDerivedLog associations
