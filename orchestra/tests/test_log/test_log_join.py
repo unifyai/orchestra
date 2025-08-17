@@ -582,6 +582,7 @@ async def test_join_logs_pass_by_reference(client: AsyncClient):
         "join_expr": "A.user_id == B.user_id",
         "mode": "inner",
         "new_context": joined_context,
+        "columns": ["A.user_id", "A.score", "A.name", "B.category", "B.status"],
         "copy": False,  # Pass by reference
     }
     response = await client.post("/v0/logs/join", json=join_payload, headers=HEADERS)
@@ -730,3 +731,44 @@ async def test_join_logs_with_copy(client: AsyncClient):
     assert entries.get("uuid") == 1
     assert entries.get("original_value") == 10  # Should still be 10, not 20
     assert entries.get("mult") == 2
+
+
+@pytest.mark.anyio
+async def test_join_logs_reference_with_dict_columns_fails(client: AsyncClient):
+    """Test that using dictionary columns with copy=False raises an error."""
+    project_name = "test_project_join_ref_dict_fail"
+    await _create_project(client, project_name, user=1)
+
+    context_a = "context_A"
+    context_b = "context_B"
+    joined_context = "joined"
+
+    # Create logs
+    await _create_log(
+        client,
+        project_name,
+        context=context_a,
+        entries={"user_id": 1, "value": 10},
+    )
+
+    await _create_log(
+        client,
+        project_name,
+        context=context_b,
+        entries={"user_id": 1, "status": "active"},
+    )
+
+    # Try to join with copy=False and dictionary columns (should fail)
+    join_payload = {
+        "project": project_name,
+        "pair_of_args": [{"context": context_a}, {"context": context_b}],
+        "join_expr": "A.user_id == B.user_id",
+        "mode": "inner",
+        "new_context": joined_context,
+        "columns": {"A.user_id": "id", "A.value": "val"},  # Dict format
+        "copy": False,  # Pass by reference
+    }
+
+    response = await client.post("/v0/logs/join", json=join_payload, headers=HEADERS)
+    assert response.status_code == 400
+    assert "column aliases are not supported" in response.json()["detail"]
