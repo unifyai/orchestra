@@ -547,13 +547,23 @@ class JoinLogsRequest(BaseModel):
         description="Name for the new context where joined logs will be stored",
         example="Derived/A_B",
     )
-    columns: Optional[Dict[str, str]] = Field(
+    columns: Optional[Union[Dict[str, str], List[str]]] = Field(
         default=None,
-        description="Optional dictionary mapping source columns to new column names for the result. The key is the source column (e.g., 'A.user_id') and the value is the desired alias in the new log (e.g., 'user_identifier'). If omitted, all columns will be selected and prefixed with 'A_' or 'B_'.",
+        description=(
+            "Optional column specification for the joined result. "
+            "Can be either:\n"
+            "1. A dictionary mapping source columns to aliases (only supported when copy=True): "
+            "   {'A.user_id': 'user_identifier', 'B.score': 'user_score'}\n"
+            "2. A list of source columns to include (required format when copy=False): "
+            "   ['A.user_id', 'A.score', 'B.category']\n"
+            "Note: When copy=False (pass-by-reference), aliases are not supported and the original "
+            "column names will be preserved. Use the list format in this case.\n"
+            "If omitted, all columns will be selected and prefixed with 'A_' or 'B_'."
+        ),
         example={"A.user_id": "user_identifier", "B.score": "user_score"},
     )
     project: str = Field(..., description="Name of the project")
     copy: bool = Field(
-        default=False,
-        description="If True, a copy of each log is created and then added to the context. If False, the existing log associations are simply used.",
+        default=True,
+        description="If True, a copy of each log is created and then added to the context. If False, the existing log associations are simply used. If omitted, defaults to True.",
     )

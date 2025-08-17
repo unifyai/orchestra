@@ -3,7 +3,7 @@ import random
 import re
 import traceback
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy import (
@@ -1976,7 +1976,7 @@ def _construct_join_query(
     subq_b,
     join_expr: str,
     mode: str,
-    columns: Optional[Dict[str, str]] = None,
+    columns: Optional[Union[Dict[str, str], List[str]]] = None,
     fields_a: Optional[Dict[str, Any]] = None,
     fields_b: Optional[Dict[str, Any]] = None,
     include_log_ids: bool = False,
@@ -1990,7 +1990,7 @@ def _construct_join_query(
         subq_b: Second subquery (aliased as 'B')
         join_expr: SQL expression for the join condition
         mode: Type of join ('inner', 'left', 'right', or 'outer')
-        columns: Optional dictionary mapping source columns to new column names
+        columns: Optional dictionary mapping source columns to new column names or list of source columns to include
 
     Returns:
         SQLAlchemy select statement representing the join
@@ -2041,31 +2041,42 @@ def _construct_join_query(
         select_columns.append(getattr(subq_b.c, "log_event_id").label("log_event_id_b"))
 
     if columns:
-        for source_col, new_alias in columns.items():
+        # Convert columns to a unified format: list of (source_col, label) tuples
+        if isinstance(columns, dict):
+            column_specs = list(columns.items())
+        elif isinstance(columns, list):
+            # For list format, use the column name as the label
+            column_specs = [(col, col.split(".", 1)[1]) for col in columns]
+        else:
+            raise ValueError("columns must be either a dictionary or a list")
+
+        # Process all columns in a unified way
+        for source_col, label in column_specs:
             if "." not in source_col:
                 raise ValueError(
                     f"Column '{source_col}' must be prefixed with table alias 'A.' or 'B.'",
                 )
 
             table_alias, actual_col = source_col.split(".", 1)
-            if table_alias.upper() == "A":
-                if hasattr(subq_a.c, actual_col):
-                    select_columns.append(
-                        getattr(subq_a.c, actual_col).label(new_alias),
-                    )
-                else:
-                    raise ValueError(f"Column '{actual_col}' not found in source A")
-            elif table_alias.upper() == "B":
-                if hasattr(subq_b.c, actual_col):
-                    select_columns.append(
-                        getattr(subq_b.c, actual_col).label(new_alias),
-                    )
-                else:
-                    raise ValueError(f"Column '{actual_col}' not found in source B")
+            table_alias = table_alias.upper()
+
+            if table_alias == "A":
+                subq = subq_a
+                source_name = "source A"
+            elif table_alias == "B":
+                subq = subq_b
+                source_name = "source B"
             else:
                 raise ValueError(
                     f"Invalid table alias '{table_alias}' in column '{source_col}'",
                 )
+
+            if hasattr(subq.c, actual_col):
+                select_columns.append(
+                    getattr(subq.c, actual_col).label(label),
+                )
+            else:
+                raise ValueError(f"Column '{actual_col}' not found in {source_name}")
     else:
         # Select all columns from both tables, prefixing to avoid name clashes
         select_columns.extend(
@@ -2373,8 +2384,13 @@ def _create_logs_by_reference(
 
         # Process columns that should be included
         if columns:
-            # Only include columns specified in the mapping
-            for source_col, _ in columns.items():
+            # Convert to list if it's still a dict (shouldn't happen with validation)
+            columns_list = (
+                columns if isinstance(columns, list) else list(columns.keys())
+            )
+
+            # Only include columns specified in the list
+            for source_col in columns_list:
                 table_prefix, original_col = source_col.split(".", 1)
                 source_log_event_id = (
                     log_event_id_a if table_prefix.upper() == "A" else log_event_id_b
@@ -2466,7 +2482,7 @@ def _join_logs(
     join_expr: str,
     mode: str,
     context_id: int,
-    columns: Optional[Dict[str, str]] = None,
+    columns: Optional[Union[Dict[str, str], List[str]]] = None,
     copy: bool = False,
     request_fastapi: Optional[Request] = None,
     project_dao: ProjectDAO = None,
@@ -2489,8 +2505,11 @@ def _join_logs(
                    (e.g., 'A.user_id = B.user_id')
         mode: Type of join to perform ('inner', 'left', 'right', or 'outer')
         context_id: ID of the context where joined logs will be stored
-        columns: Optional dictionary mapping source columns to new column names.
-                 Format should be {'A.column_name': 'new_name', 'B.column_name': 'other_name'}
+        columns: Optional column specification. Can be either:
+                 - Dictionary mapping source columns to new column names (only with copy=True):
+                   {'A.column_name': 'new_name', 'B.column_name': 'other_name'}
+                 - List of source columns to include (required with copy=False):
+                   ['A.column_name', 'B.column_name']
         copy: If True, creates copies of the logs. If False (default), references existing logs.
         request_fastapi: FastAPI request object for accessing user state
         project_dao: ProjectDAO instance for project operations
@@ -2520,17 +2539,41 @@ def _join_logs(
         if filter_expr_b:
             pair_of_args[1]["filter_expr"] = filter_expr_b.replace(context_b + ".", "")
 
+        # Validate columns format based on copy parameter
+        if not copy and columns is not None and isinstance(columns, dict):
+            raise ValueError(
+                "When copy=False (pass-by-reference), column aliases are not supported. "
+                "Please provide columns as a list of column names instead of a dictionary.",
+            )
+
         # replace context_a with 'A' alias and context_b with 'B' alias
         join_expr = join_expr.replace(context_a, "A").replace(context_b, "B")
         if columns is not None:
-            new_columns = {}
-            for source_col, new_alias in columns.items():
-                processed_source_col = source_col.replace(context_a, "A").replace(
-                    context_b,
-                    "B",
+            if isinstance(columns, dict):
+                # Dictionary format - process aliases
+                new_columns = {}
+                for source_col, new_alias in columns.items():
+                    processed_source_col = source_col.replace(context_a, "A").replace(
+                        context_b,
+                        "B",
+                    )
+                    new_columns[processed_source_col] = new_alias
+                columns = new_columns
+            elif isinstance(columns, list):
+                # List format - just replace context names
+                new_columns = []
+                for source_col in columns:
+                    processed_source_col = source_col.replace(context_a, "A").replace(
+                        context_b,
+                        "B",
+                    )
+                    new_columns.append(processed_source_col)
+                columns = new_columns
+            else:
+                raise ValueError(
+                    "columns must be either a dictionary (for aliasing with copy=True) "
+                    "or a list (for column selection with copy=False)",
                 )
-                new_columns[processed_source_col] = new_alias
-            columns = new_columns
 
         subq_a, fields_a = _build_log_subquery(
             args=pair_of_args[0],
