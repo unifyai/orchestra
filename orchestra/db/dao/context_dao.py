@@ -508,7 +508,7 @@ class ContextDAO:
 
                 # Bulk insert all new Log entries
                 if new_logs:
-                    self.session.bulk_save_objects(new_logs)
+                    self.session.bulk_save_objects(new_logs, return_defaults=True)
                     self.session.flush()  # Get IDs for new logs
 
                     # Create LogEventLog associations
@@ -544,7 +544,10 @@ class ContextDAO:
 
                         # Bulk insert all new JSONLog entries
                         if new_json_logs:
-                            self.session.bulk_save_objects(new_json_logs)
+                            self.session.bulk_save_objects(
+                                new_json_logs,
+                                return_defaults=True,
+                            )
                             self.session.flush()  # Get IDs for new JSONLogs
 
                             # Create LogEventJSONLog associations
@@ -801,7 +804,7 @@ class ContextDAO:
             log_version_associations.append((log_event_id, len(log_versions) - 1))
 
         # 4. Bulk insert the log snapshots for efficiency
-        self.session.bulk_save_objects(log_versions)
+        self.session.bulk_save_objects(log_versions, return_defaults=True)
         self.session.flush()  # Get IDs for the new log versions
 
         # 5. Create LogEventLogVersion associations
@@ -872,7 +875,7 @@ class ContextDAO:
                     )
 
             if new_logs:
-                self.session.bulk_save_objects(new_logs)
+                self.session.bulk_save_objects(new_logs, return_defaults=True)
                 self.session.flush()  # Get IDs for new logs
 
                 # Create LogEventLog associations
@@ -884,7 +887,7 @@ class ContextDAO:
                     self.session.add(log_event_log)
 
             if new_json_logs:
-                self.session.bulk_save_objects(new_json_logs)
+                self.session.bulk_save_objects(new_json_logs, return_defaults=True)
                 self.session.flush()  # Get IDs for new JSONLogs
 
                 # Create LogEventJSONLog associations

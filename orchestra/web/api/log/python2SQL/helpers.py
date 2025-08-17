@@ -479,13 +479,9 @@ def _build_subquery_for_identifier(
             ).label("bool_value"),
             log_alias.inferred_type.label("inferred_type"),
         )
-        .select_from(
-            log_alias.join(
-                log_event_log_alias,
-                log_event_log_alias.log_id == log_alias.id,
-            ),
-        )
+        .select_from(log_alias, log_event_log_alias)
         .where(
+            log_event_log_alias.log_id == log_alias.id,
             log_id_condition,
             log_alias.key == key,
         )
@@ -565,13 +561,9 @@ def _build_subquery_for_identifier(
             ).label("bool_value"),
             derived_log_alias.inferred_type.label("inferred_type"),
         )
-        .select_from(
-            derived_log_alias.join(
-                log_event_derived_log_alias,
-                log_event_derived_log_alias.derived_log_id == derived_log_alias.id,
-            ),
-        )
+        .select_from(derived_log_alias, log_event_derived_log_alias)
         .where(
+            log_event_derived_log_alias.derived_log_id == derived_log_alias.id,
             derived_log_id_condition,
             derived_log_alias.key == key,
         )
