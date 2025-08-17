@@ -1819,9 +1819,9 @@ def delete_logs(
 
         # Bulk delete from base logs with a single query
         if body.source_type in ("all", "base"):
-            # Use a single DELETE statement for all fields
-            deletion_query = (
-                session.query(Log)
+            # Find log IDs to delete using a subquery
+            log_ids_to_delete = (
+                session.query(Log.id)
                 .join(
                     LogEventLog,
                     LogEventLog.log_id == Log.id,
@@ -1830,11 +1830,23 @@ def delete_logs(
                     LogEventLog.log_event_id.in_(all_log_events_subq),
                     Log.key.in_(fields),
                 )
+                .subquery()
             )
-            log_dao._bulk_delete_gcs_media(
-                deletion_query,
-            )  # Delete GCS files BEFORE deleting DB records
-            deleted_count = deletion_query.delete(synchronize_session=False)
+
+            # Delete GCS files BEFORE deleting DB records
+            deletion_query = session.query(Log).filter(
+                Log.id.in_(select(log_ids_to_delete)),
+            )
+            log_dao._bulk_delete_gcs_media(deletion_query)
+
+            # Now delete the logs without joins
+            deleted_count = (
+                session.query(Log)
+                .filter(
+                    Log.id.in_(select(log_ids_to_delete)),
+                )
+                .delete(synchronize_session=False)
+            )
             if deleted_count > 0:
                 context_description.append(
                     f"Deleted {len(fields)} fields from {deleted_count} base logs",
