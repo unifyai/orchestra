@@ -40,7 +40,9 @@ from orchestra.db.models.orchestra_models import (
     CreditCardFingerprint,
     Datapoint,
     Endpoint,
+    Log,
     LogEvent,
+    LogEventLog,
     Metric,
     Modality,
     Project,
@@ -794,10 +796,16 @@ def admin_list_contacts(
         return []
 
     # 6) Fetch log entries and assemble contacts per event
-    raw_entries = log_dao.filter(log_event_id=event_ids)
+    # Create a custom query to get log_event_id along with log data
+    query = (
+        select(Log, LogEventLog.log_event_id)
+        .join(LogEventLog, LogEventLog.log_id == Log.id)
+        .where(LogEventLog.log_event_id.in_(event_ids))
+    )
+    raw_entries = session.execute(query).all()
+
     grouped: Dict[int, Dict[str, Any]] = {}
-    for log_rec, _ts in raw_entries:
-        eid = log_rec.log_event_id
+    for log_rec, eid in raw_entries:
         grouped.setdefault(eid, {})[log_rec.key] = log_rec.value
 
     # 7) Fetch user_id for each log_event via project

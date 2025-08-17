@@ -470,13 +470,21 @@ class LogDAO:
                 raise ValueError(f"No log events found for project_id {project_id}")
 
             # Update Log table via LogEventLog association
-            log_update = (
-                self.session.query(Log)
+            # First find the log IDs to update
+            log_ids_to_update = (
+                self.session.query(Log.id)
                 .join(LogEventLog, LogEventLog.log_id == Log.id)
                 .filter(
                     LogEventLog.log_event_id.in_(log_event_ids),
                     Log.key == old_field_name,
                 )
+                .subquery()
+            )
+
+            # Then update without joins
+            log_update = (
+                self.session.query(Log)
+                .filter(Log.id.in_(select(log_ids_to_update)))
                 .update(
                     {"key": new_field_name, "updated_at": datetime.now(timezone.utc)},
                     synchronize_session=False,
@@ -484,13 +492,21 @@ class LogDAO:
             )
 
             # Update JSONLog table via LogEventJSONLog association
-            json_logs_to_update = (
-                self.session.query(JSONLog)
+            # First find the JSON log IDs to update
+            json_log_ids_to_update = (
+                self.session.query(JSONLog.id)
                 .join(LogEventJSONLog, LogEventJSONLog.json_log_id == JSONLog.id)
                 .filter(
                     LogEventJSONLog.log_event_id.in_(log_event_ids),
                     JSONLog.key == old_field_name,
                 )
+                .subquery()
+            )
+
+            # Then update without joins
+            json_logs_to_update = (
+                self.session.query(JSONLog)
+                .filter(JSONLog.id.in_(select(json_log_ids_to_update)))
                 .update({"key": new_field_name}, synchronize_session=False)
             )
 
@@ -1338,14 +1354,14 @@ class LogDAO:
 
             # Group updates by log_event_id and key for efficient querying
             update_groups = {}
-            for update in updates:
-                log_event_id = update.get("log_event_id")
-                key = update.get("key")
+            for update_item in updates:
+                log_event_id = update_item.get("log_event_id")
+                key = update_item.get("key")
                 if not log_event_id or not key:
                     continue
 
                 group_key = (log_event_id, key)
-                update_groups[group_key] = update
+                update_groups[group_key] = update_item
 
             if not update_groups:
                 return
@@ -1390,14 +1406,14 @@ class LogDAO:
             rows_json_pk2val = {}  # Maps (log_event_id, key) to value
 
             # Process each update
-            for group_key, update in update_groups.items():
+            for group_key, update_data in update_groups.items():
                 log_event_id, key = group_key
-                value = update.get("value")
-                param_version = update.get("param_version")
-                explicit_types = update.get("explicit_types", {})
+                value = update_data.get("value")
+                param_version = update_data.get("param_version")
+                explicit_types = update_data.get("explicit_types", {})
                 key_explicit_type = explicit_types.get(key, {})
                 inferred_type = key_explicit_type.get("type")
-                context_id = update.get("context_id")
+                context_id = update_data.get("context_id")
 
                 # Get project_id from log_event
                 log_event = (
@@ -1449,7 +1465,7 @@ class LogDAO:
 
                 if existing_log:
                     # Check if overwrite is allowed
-                    if not update.get("overwrite", overwrite):
+                    if not update_data.get("overwrite", overwrite):
                         raise OverwriteError
 
                     # Check if field is immutable
@@ -1474,7 +1490,7 @@ class LogDAO:
                     rows_log_pk2val[log_pk] = json_value
                     rows_log.append(
                         {
-                            "log_event_id": log_event_id,
+                            "_log_event_id": log_event_id,  # Track which log_event_id this belongs to
                             "key": key,
                             "value": json_value,
                             "param_version": param_version,
@@ -1490,7 +1506,7 @@ class LogDAO:
                     rows_json_pk2val[json_pk] = json_value
                     rows_json.append(
                         {
-                            "log_event_id": log_event_id,
+                            "_log_event_id": log_event_id,  # Track which log_event_id this belongs to
                             "key": key,
                             "value": json_value,
                         },
@@ -1569,59 +1585,158 @@ class LogDAO:
 
             # Single multi-row UPSERT for LOG
             if rows_log:
-                stmt = pg_insert(Log).values(rows_log)
-                if overwrite:
-                    # Since log_event_id is no longer in Log table, we need a different approach
-                    # for upserts. We can use (key, param_version) as conflict keys since
-                    # they should be unique within a context
-                    stmt = stmt.on_conflict_do_update(
-                        index_elements=["key", "param_version"],
-                        set_={
-                            "value": pg_insert(Log).excluded.value,
-                            "updated_at": func.now(),
-                        },
+                # Build ordered list of (log_event_id, row_data) tuples
+                log_event_rows = []
+                for log_row in rows_log:
+                    # Extract the tracked log_event_id
+                    log_event_id = log_row.pop("_log_event_id")
+                    log_event_rows.append((log_event_id, log_row))
+
+                # Extract all unique (log_event_id, key, param_version) combinations
+                check_keys = [
+                    (eid, row["key"], row.get("param_version"))
+                    for eid, row in log_event_rows
+                ]
+
+                # Bulk query to find all existing logs for these log_events
+                # This query finds logs that match our (log_event_id, key, param_version) tuples
+                existing_logs_query = (
+                    self.session.query(
+                        Log,
+                        LogEventLog.log_event_id,
                     )
-                else:  # overwrite = False
-                    stmt = stmt.on_conflict_do_nothing()
-                self.session.execute(stmt)
+                    .join(LogEventLog, LogEventLog.log_id == Log.id)
+                    .filter(
+                        or_(
+                            *[
+                                and_(
+                                    LogEventLog.log_event_id == eid,
+                                    Log.key == k,
+                                    Log.param_version == pv,
+                                )
+                                for eid, k, pv in check_keys
+                            ],
+                        ),
+                    )
+                )
+
+                # Build a map of (log_event_id, key, param_version) -> Log
+                existing_map = {}
+                for log, log_event_id in existing_logs_query:
+                    key = (log_event_id, log.key, log.param_version)
+                    existing_map[key] = log
+
+                # Process updates based on overwrite flag
+                logs_to_insert = []
+                insert_event_ids = []
+
+                for i, (log_event_id, log_row) in enumerate(log_event_rows):
+                    lookup_key = (
+                        log_event_id,
+                        log_row["key"],
+                        log_row.get("param_version"),
+                    )
+                    existing_log = existing_map.get(lookup_key)
+
+                    if existing_log:
+                        if overwrite:
+                            # Update existing log
+                            existing_log.value = log_row["value"]
+                            existing_log.inferred_type = log_row["inferred_type"]
+                            existing_log.updated_at = now
+                        # else: skip (don't overwrite)
+                    else:
+                        # Need to create new log
+                        logs_to_insert.append(log_row)
+                        insert_event_ids.append(log_event_id)
+
+                # Bulk insert new logs
+                if logs_to_insert:
+                    stmt = pg_insert(Log).values(logs_to_insert).returning(Log.id)
+                    result = self.session.execute(stmt)
+                    new_log_ids = [row[0] for row in result]
+
+                    # Create associations for new logs
+                    log_event_log_rows = []
+                    for log_id, log_event_id in zip(new_log_ids, insert_event_ids):
+                        log_event_log_rows.append(
+                            {
+                                "log_event_id": log_event_id,
+                                "log_id": log_id,
+                            },
+                        )
+
+                    if log_event_log_rows:
+                        stmt_assoc = pg_insert(LogEventLog).values(log_event_log_rows)
+                        self.session.execute(stmt_assoc)
 
             # Handle JSONLog updates with many-to-many relationship
             if rows_json:
-                # For each JSONLog, we need to check if it exists and update/create accordingly
+                # Build ordered list of (log_event_id, json_row) tuples
+                json_event_rows = []
                 for json_row in rows_json:
-                    log_event_id = json_row.get("log_event_id")
-                    key = json_row.get("key")
-                    value = json_row.get("value")
+                    # Extract the tracked log_event_id
+                    log_event_id = json_row.pop("_log_event_id")
+                    json_event_rows.append((log_event_id, json_row))
 
-                    # Check if this JSONLog already exists for this LogEvent
-                    existing_json_log = existing_json_log_map.get((log_event_id, key))
+                # Process based on overwrite flag
+                json_logs_to_insert = []
+                insert_json_event_ids = []
+
+                for log_event_id, json_row in json_event_rows:
+                    existing_json_log = existing_json_log_map.get(
+                        (log_event_id, json_row["key"]),
+                    )
 
                     if existing_json_log:
                         if overwrite:
                             # Update existing JSONLog value
-                            existing_json_log.value = value
+                            existing_json_log.value = json_row["value"]
+                        # else: skip (don't overwrite)
                     else:
-                        # Create new JSONLog
-                        new_json_log = JSONLog(key=key, value=value)
-                        self.session.add(new_json_log)
-                        self.session.flush()  # Get the ID
+                        # Need to create new JSONLog
+                        json_logs_to_insert.append(json_row)
+                        insert_json_event_ids.append(log_event_id)
 
-                        # Create LogEventJSONLog association
-                        association = LogEventJSONLog(
-                            log_event_id=log_event_id,
-                            json_log_id=new_json_log.id,
+                # Bulk insert new JSON logs
+                if json_logs_to_insert:
+                    stmt = (
+                        pg_insert(JSONLog)
+                        .values(json_logs_to_insert)
+                        .returning(JSONLog.id)
+                    )
+                    result = self.session.execute(stmt)
+                    new_json_log_ids = [row[0] for row in result]
+
+                    # Create associations for new JSON logs
+                    json_log_event_log_rows = []
+                    for json_log_id, log_event_id in zip(
+                        new_json_log_ids,
+                        insert_json_event_ids,
+                    ):
+                        json_log_event_log_rows.append(
+                            {
+                                "log_event_id": log_event_id,
+                                "json_log_id": json_log_id,
+                            },
                         )
-                        self.session.add(association)
 
-            # Update log event timestamps
-            for log_event_id in log_event_ids_to_update:
-                log_event = (
-                    self.session.query(LogEvent).filter_by(id=log_event_id).first()
+                    if json_log_event_log_rows:
+                        stmt_assoc = pg_insert(LogEventJSONLog).values(
+                            json_log_event_log_rows,
+                        )
+                        self.session.execute(stmt_assoc)
+
+            # Bulk update log event timestamps
+            if log_event_ids_to_update:
+                stmt = (
+                    update(LogEvent)
+                    .where(LogEvent.id.in_(log_event_ids_to_update))
+                    .values(updated_at=now)
                 )
-                if log_event:
-                    log_event.updated_at = now
+                self.session.execute(stmt)
 
-            self.session.commit()
+                self.session.commit()
 
         except (OverwriteError, ImmutableFieldError):
             raise
