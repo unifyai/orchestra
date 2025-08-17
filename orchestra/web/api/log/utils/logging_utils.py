@@ -527,11 +527,10 @@ def _prefetch_json_values(session, paginated_ids_subq):
             JSONLog.key,
             JSONLog.value.label("jl_val"),
         )
-        .select_from(
-            JSONLog.join(
-                LogEventJSONLog,
-                LogEventJSONLog.json_log_id == JSONLog.id,
-            ),
+        .select_from(JSONLog)
+        .join(
+            LogEventJSONLog,
+            LogEventJSONLog.json_log_id == JSONLog.id,
         )
         .where(LogEventJSONLog.log_event_id.in_(select(paginated_ids_subq.c.id)))
         .cte("jl_vals")
@@ -543,11 +542,10 @@ def _prefetch_json_values(session, paginated_ids_subq):
             JSONLogHistory.key,
             JSONLogHistory.value.label("jlh_val"),
         )
-        .select_from(
-            JSONLogHistory.join(
-                LogEventJSONLogHistory,
-                LogEventJSONLogHistory.json_log_history_id == JSONLogHistory.id,
-            ),
+        .select_from(JSONLogHistory)
+        .join(
+            LogEventJSONLogHistory,
+            LogEventJSONLogHistory.json_log_history_id == JSONLogHistory.id,
         )
         .where(LogEventJSONLogHistory.log_event_id.in_(select(paginated_ids_subq.c.id)))
         .distinct(LogEventJSONLogHistory.log_event_id, JSONLogHistory.key)
@@ -2323,9 +2321,7 @@ def _create_logs_by_reference(
 ) -> List[int]:
     """
     Creates new log events that reference existing logs from joined query results.
-
-    Instead of creating new Log entries, this function creates new LogEvents that
-    reference existing Logs via the LogEventLog association table.
+    Columns are not aliased, so we reference the original logs by key.
 
     Args:
         result_rows: Result rows from the join query containing log_event_id_a and log_event_id_b
@@ -2375,29 +2371,54 @@ def _create_logs_by_reference(
         log_event_id_a = getattr(row, "log_event_id_a", None)
         log_event_id_b = getattr(row, "log_event_id_b", None)
 
-        # For each column in the result, find the corresponding Log from the source LogEvents
-        for col in row._fields:
-            # Skip the log_event_id columns
-            if col in ("log_event_id_a", "log_event_id_b"):
-                continue
+        # Process columns that should be included
+        if columns:
+            # Only include columns specified in the mapping
+            for source_col, _ in columns.items():
+                table_prefix, original_col = source_col.split(".", 1)
+                source_log_event_id = (
+                    log_event_id_a if table_prefix.upper() == "A" else log_event_id_b
+                )
 
-            value = getattr(row, col)
-            if value is not None:
-                # Determine which source (A or B) this column came from
-                source_log_event_id = None
-                original_col = col
+                # Find the original Log with this key from the source LogEvent
+                original_log = (
+                    session.query(Log)
+                    .join(LogEventLog)
+                    .filter(
+                        LogEventLog.log_event_id == source_log_event_id,
+                        Log.key == original_col,
+                    )
+                    .first()
+                )
 
-                if columns:
-                    # If columns mapping was provided, reverse lookup to find source
-                    for source_col, alias in columns.items():
-                        if alias == col:
-                            table_prefix, original_col = source_col.split(".", 1)
-                            if table_prefix.upper() == "A":
-                                source_log_event_id = log_event_id_a
-                            elif table_prefix.upper() == "B":
-                                source_log_event_id = log_event_id_b
-                            break
-                else:
+                if original_log:
+                    # For pass-by-reference, we reference the original log
+                    # Check if this association already exists to avoid duplicates
+                    existing = any(
+                        lel.log_id == original_log.id
+                        for lel in log_event_logs
+                        if lel.log_event_id == log_event.id
+                    )
+                    if not existing:
+                        log_event_logs.append(
+                            LogEventLog(
+                                log_event_id=log_event.id,
+                                log_id=original_log.id,
+                            ),
+                        )
+        else:
+            # Include all columns with default naming
+            for col in row._fields:
+                # Skip the log_event_id columns
+                if col in ("log_event_id_a", "log_event_id_b"):
+                    continue
+
+                value = getattr(row, col)
+                if value is not None:
+                    # Determine which source this column came from
+                    source_log_event_id = None
+                    original_col = col
+
                     # Default naming convention: A_column or B_column
                     if col.startswith("A_"):
                         source_log_event_id = log_event_id_a
@@ -2406,26 +2427,20 @@ def _create_logs_by_reference(
                         source_log_event_id = log_event_id_b
                         original_col = col[2:]  # Remove 'B_' prefix
 
-                if source_log_event_id:
-                    # Find the Log with this key from the source LogEvent via LogEventLog association
-                    log = (
-                        session.query(Log)
-                        .join(LogEventLog)
-                        .filter(
-                            LogEventLog.log_event_id == source_log_event_id,
-                            Log.key == original_col,
+                    if source_log_event_id:
+                        # Find the Log with this key from the source LogEvent
+                        log = (
+                            session.query(Log)
+                            .join(LogEventLog)
+                            .filter(
+                                LogEventLog.log_event_id == source_log_event_id,
+                                Log.key == original_col,
+                            )
+                            .first()
                         )
-                        .first()
-                    )
 
-                    if log:
-                        # Check if this association already exists to avoid duplicates
-                        existing = any(
-                            lel.log_id == log.id
-                            for lel in log_event_logs
-                            if lel.log_event_id == log_event.id
-                        )
-                        if not existing:
+                        if log:
+                            # Reference the existing log
                             log_event_logs.append(
                                 LogEventLog(
                                     log_event_id=log_event.id,
@@ -2434,6 +2449,8 @@ def _create_logs_by_reference(
                             )
 
         new_log_ids.append(log_event.id)
+
+    # No need to flush or create associations for new logs since we're not creating any
 
     # Bulk insert related records
     session.bulk_save_objects(log_event_contexts)
