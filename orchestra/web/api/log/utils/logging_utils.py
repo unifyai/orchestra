@@ -45,6 +45,8 @@ from orchestra.db.models.orchestra_models import (
     LogEvent,
     LogEventContext,
     LogEventDerivedLog,
+    LogEventJSONLog,
+    LogEventJSONLogHistory,
     LogEventLog,
     Project,
 )
@@ -521,24 +523,36 @@ def _prefetch_json_values(session, paginated_ids_subq):
     """
     jl_vals = (
         select(
-            JSONLog.log_event_id,
+            LogEventJSONLog.log_event_id,
             JSONLog.key,
             JSONLog.value.label("jl_val"),
         )
-        .where(JSONLog.log_event_id.in_(select(paginated_ids_subq.c.id)))
+        .select_from(
+            JSONLog.join(
+                LogEventJSONLog,
+                LogEventJSONLog.json_log_id == JSONLog.id,
+            ),
+        )
+        .where(LogEventJSONLog.log_event_id.in_(select(paginated_ids_subq.c.id)))
         .cte("jl_vals")
     )
 
     jlh_vals = (
         select(
-            JSONLogHistory.log_event_id,
+            LogEventJSONLogHistory.log_event_id,
             JSONLogHistory.key,
             JSONLogHistory.value.label("jlh_val"),
         )
-        .where(JSONLogHistory.log_event_id.in_(select(paginated_ids_subq.c.id)))
-        .distinct(JSONLogHistory.log_event_id, JSONLogHistory.key)
+        .select_from(
+            JSONLogHistory.join(
+                LogEventJSONLogHistory,
+                LogEventJSONLogHistory.json_log_history_id == JSONLogHistory.id,
+            ),
+        )
+        .where(LogEventJSONLogHistory.log_event_id.in_(select(paginated_ids_subq.c.id)))
+        .distinct(LogEventJSONLogHistory.log_event_id, JSONLogHistory.key)
         .order_by(
-            JSONLogHistory.log_event_id,
+            LogEventJSONLogHistory.log_event_id,
             JSONLogHistory.key,
             JSONLogHistory.version.desc(),
         )
@@ -2222,11 +2236,11 @@ def _create_logs_from_joined_rows(
             # If value is a dict or list, create a JSONLog entry
             if isinstance(val, (dict, list)):
                 json_logs.append(
-                    JSONLog(
-                        log_event_id=log_event.id,
-                        key=col,
-                        value=val,
-                    ),
+                    {
+                        "log_event_id": log_event.id,  # Store temporarily for association
+                        "key": col,
+                        "value": val,
+                    },
                 )
 
         new_log_ids.append(log_event.id)
@@ -2265,7 +2279,37 @@ def _create_logs_from_joined_rows(
     # Bulk insert related records
     session.bulk_save_objects(log_event_contexts)
     session.bulk_save_objects(log_event_logs)
-    session.bulk_save_objects(json_logs)
+
+    # Handle JSONLog creation with many-to-many relationship
+    if json_logs:
+        # Create JSONLog objects without log_event_id
+        json_log_objects = []
+        json_log_associations = []  # Track which log_event_id goes with each JSONLog
+
+        for json_log_data in json_logs:
+            log_event_id = json_log_data["log_event_id"]
+            json_log = JSONLog(
+                key=json_log_data["key"],
+                value=json_log_data["value"],
+            )
+            json_log_objects.append(json_log)
+            json_log_associations.append(log_event_id)
+            session.add(json_log)
+
+        # Flush to get JSONLog IDs
+        session.flush()
+
+        # Create LogEventJSONLog associations
+        log_event_json_logs = []
+        for i, json_log in enumerate(json_log_objects):
+            log_event_json_logs.append(
+                LogEventJSONLog(
+                    log_event_id=json_log_associations[i],
+                    json_log_id=json_log.id,
+                ),
+            )
+
+        session.bulk_save_objects(log_event_json_logs)
 
     return new_log_ids
 

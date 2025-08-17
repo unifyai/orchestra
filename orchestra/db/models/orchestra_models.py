@@ -833,23 +833,67 @@ class LogEvent(Base):
         back_populates="log_events",
         passive_deletes=True,
     )
+    json_logs = relationship(
+        "JSONLog",
+        secondary="log_event_json_log",
+        back_populates="log_events",
+        passive_deletes=True,
+    )
+    log_versions = relationship(
+        "LogVersion",
+        secondary="log_event_log_version",
+        back_populates="log_events",
+        passive_deletes=True,
+    )
+    json_log_histories = relationship(
+        "JSONLogHistory",
+        secondary="log_event_json_log_history",
+        back_populates="log_events",
+        passive_deletes=True,
+    )
 
     __table_args__ = (Index("idx_log_event_project_id_id", "project_id", "id"),)
+
+
+class LogEventJSONLog(Base):
+    """Association table for the many-to-many relationship between LogEvent and JSONLog.
+
+    This table enables a JSONLog (single JSON value) to belong to multiple LogEvent instances,
+    allowing for efficient pass-by-reference for JSON data.
+    """
+
+    __tablename__ = "log_event_json_log"
+
+    log_event_id = Column(
+        Integer,
+        ForeignKey("log_event.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    json_log_id = Column(
+        Integer,
+        ForeignKey("json_log.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    __table_args__ = (
+        Index("idx_log_event_json_log_event_id", "log_event_id"),
+        Index("idx_log_event_json_log_json_log_id", "json_log_id"),
+    )
 
 
 class JSONLog(Base):
     __tablename__ = "json_log"
 
     id = Column(Integer, primary_key=True)
-    log_event_id = Column(
-        Integer,
-        ForeignKey("log_event.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
     key = Column(String, nullable=False)
     value = Column(JSON)
-    __table_args__ = (UniqueConstraint("log_event_id", "key"),)
+
+    # Relationships
+    log_events = relationship(
+        "LogEvent",
+        secondary="log_event_json_log",
+        back_populates="json_logs",
+        passive_deletes=True,
+    )
 
 
 class LogEventLog(Base):
@@ -912,7 +956,6 @@ class LogVersion(Base):
         index=True,
     )
     # --- Snapshot fields (a copy of the Log table's data) ---
-    log_event_id = Column(Integer, nullable=False, index=True)
     key = Column(String, nullable=False)
     value = Column(JSONB)
     param_version = Column(Integer)
@@ -920,8 +963,14 @@ class LogVersion(Base):
     created_at = Column(TIMESTAMP)
     updated_at = Column(TIMESTAMP)
 
-    # Relationship back to the ContextVersion
+    # Relationships
     context_version = relationship("ContextVersion", back_populates="log_versions")
+    log_events = relationship(
+        "LogEvent",
+        secondary="log_event_log_version",
+        back_populates="log_versions",
+        passive_deletes=True,
+    )
 
 
 class ParamVersion(Base):
@@ -947,21 +996,76 @@ class ParamVersion(Base):
     )
 
 
+class LogEventJSONLogHistory(Base):
+    """Association table for the many-to-many relationship between LogEvent and JSONLogHistory.
+
+    This table enables a JSONLogHistory (versioned JSON log) to belong to multiple LogEvent instances,
+    allowing for efficient historical tracking of JSON data across different log events.
+    """
+
+    __tablename__ = "log_event_json_log_history"
+
+    log_event_id = Column(
+        Integer,
+        ForeignKey("log_event.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    json_log_history_id = Column(
+        Integer,
+        ForeignKey("json_log_history.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    __table_args__ = (
+        Index("idx_log_event_json_log_history_event_id", "log_event_id"),
+        Index(
+            "idx_log_event_json_log_history_json_log_history_id",
+            "json_log_history_id",
+        ),
+    )
+
+
 class JSONLogHistory(Base):
     __tablename__ = "json_log_history"
 
     id = Column(Integer, primary_key=True)
-    log_event_id = Column(
-        Integer,
-        ForeignKey("log_event.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
     key = Column(String, nullable=False)
     value = Column(JSON)
     version = Column(Integer, nullable=False)
     description = Column(String)
     archived_at = Column(TIMESTAMP, server_default=func.now())
+
+    # Relationships
+    log_events = relationship(
+        "LogEvent",
+        secondary="log_event_json_log_history",
+        back_populates="json_log_histories",
+        passive_deletes=True,
+    )
+
+
+class LogEventLogVersion(Base):
+    """Association table for the many-to-many relationship between LogEvent and LogVersion.
+
+    This table enables a LogVersion (snapshot of a log) to belong to multiple LogEvent instances,
+    allowing for historical tracking of logs across different log events.
+    """
+
+    __tablename__ = "log_event_log_version"
+
+    log_event_id = Column(
+        Integer,
+        ForeignKey("log_event.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    log_version_id = Column(
+        Integer,
+        ForeignKey("log_version.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    __table_args__ = (
+        Index("idx_log_event_log_version_event_id", "log_event_id"),
+        Index("idx_log_event_log_version_version_id", "log_version_id"),
+    )
 
 
 class LogEventDerivedLog(Base):

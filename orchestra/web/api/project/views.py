@@ -30,6 +30,7 @@ from orchestra.db.models.orchestra_models import (
     Log,
     LogEvent,
     LogEventContext,
+    LogEventJSONLog,
     LogEventLog,
     Organization,
     Project,
@@ -1889,31 +1890,61 @@ def admin_duplicate_project(
 
     # 10. Duplicate JSON Logs using batched bulk insert
     if log_event_id_map:
-        # Query for JSONLog objects directly
-        json_logs = (
-            session.query(JSONLog)
+        # Query for JSONLog objects via LogEventJSONLog association
+        json_logs_with_event_ids = (
+            session.query(JSONLog, LogEventJSONLog.log_event_id)
+            .join(LogEventJSONLog, LogEventJSONLog.json_log_id == JSONLog.id)
             .filter(
-                JSONLog.log_event_id.in_(list(log_event_id_map.keys())),
+                LogEventJSONLog.log_event_id.in_(list(log_event_id_map.keys())),
             )
             .all()
         )
 
+        # Prepare JSONLog values and associations
         json_log_values = []
-        for jl in json_logs:
+        json_log_associations = []  # Track (old_log_event_id, key) -> new_log_event_id
+
+        for jl, old_log_event_id in json_logs_with_event_ids:
+            new_log_event_id = log_event_id_map[old_log_event_id]
             json_log_values.append(
                 {
-                    "log_event_id": log_event_id_map[jl.log_event_id],
                     "key": jl.key,
                     "value": jl.value,
                 },
             )
+            json_log_associations.append((old_log_event_id, jl.key, new_log_event_id))
 
         # Process JSON logs in batches to avoid memory issues
         batch_size = 5000
+        all_new_json_log_ids = []
+
         for i in range(0, len(json_log_values), batch_size):
             batch = json_log_values[i : i + batch_size]
             if batch:
-                stmt = sqlalchemy.insert(JSONLog).values(batch)
+                # Insert JSONLogs and get their IDs
+                stmt = sqlalchemy.insert(JSONLog).values(batch).returning(JSONLog.id)
+                result = session.execute(stmt)
+                batch_ids = [row[0] for row in result]
+                all_new_json_log_ids.extend(batch_ids)
+
+        # Create LogEventJSONLog associations
+        log_event_json_log_values = []
+        for i, (old_log_event_id, key, new_log_event_id) in enumerate(
+            json_log_associations,
+        ):
+            if i < len(all_new_json_log_ids):
+                log_event_json_log_values.append(
+                    {
+                        "log_event_id": new_log_event_id,
+                        "json_log_id": all_new_json_log_ids[i],
+                    },
+                )
+
+        # Insert associations in batches
+        for i in range(0, len(log_event_json_log_values), batch_size):
+            batch = log_event_json_log_values[i : i + batch_size]
+            if batch:
+                stmt = sqlalchemy.insert(LogEventJSONLog).values(batch)
                 session.execute(stmt)
 
         stats["json_logs_copied"] = len(json_log_values)

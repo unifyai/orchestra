@@ -642,6 +642,7 @@ def create_from_logs(
 
             # Create a new derived log entry for each computed value
             new_derived_logs = []
+            derived_log_associations = []  # Track (log_event_id, derived_log_index)
             placeholders = _extract_placeholders(body.equation)
             referenced_logs = {
                 ph.split(":")[1]: v
@@ -695,9 +696,10 @@ def create_from_logs(
                                     vector=value,
                                 )
                                 session.add(embeddings)
+
+                            # Create DerivedLog without log_event_id
                             new_derived_logs.append(
                                 DerivedLog(
-                                    log_event_id=log_event_id,
                                     key=body.key,
                                     equation=body.equation,
                                     referenced_logs=referenced_logs,
@@ -707,9 +709,23 @@ def create_from_logs(
                                     updated_at=datetime.now(timezone.utc),
                                 ),
                             )
+                            # Track the association
+                            derived_log_associations.append(
+                                (log_event_id, len(new_derived_logs) - 1),
+                            )
 
             # Bulk insert all new derived logs in one go
             session.bulk_save_objects(new_derived_logs)
+            session.flush()  # Get IDs for the new derived logs
+
+            # Create LogEventDerivedLog associations
+            for log_event_id, derived_log_index in derived_log_associations:
+                if derived_log_index < len(new_derived_logs):
+                    association = LogEventDerivedLog(
+                        log_event_id=log_event_id,
+                        derived_log_id=new_derived_logs[derived_log_index].id,
+                    )
+                    session.add(association)
 
             # If this is a filter-based derived log, create an ActiveDerivedLog
             if is_filter_based:
@@ -1026,6 +1042,7 @@ def update_derived_log(
 
         # Create new derived logs with computed values
         new_derived_logs = []
+        derived_log_associations = []  # Track (log_event_id, derived_log_index)
         now = datetime.now(timezone.utc)
         placeholders = _extract_placeholders(body.equation)
         referenced_logs = {
@@ -1047,9 +1064,9 @@ def update_derived_log(
                 non_null_val = val if val is not None else non_null_value
                 inferred_type = LogDAO.infer_type("", non_null_val)
 
+                # Create DerivedLog without log_event_id
                 new_derived_logs.append(
                     DerivedLog(
-                        log_event_id=log_event_id,
                         key=final_key,
                         equation=final_equation,
                         referenced_logs=referenced_logs,
@@ -1059,9 +1076,24 @@ def update_derived_log(
                         updated_at=now,
                     ),
                 )
+                # Track the association
+                derived_log_associations.append(
+                    (log_event_id, len(new_derived_logs) - 1),
+                )
 
         # Bulk insert all new derived logs in one go
         session.bulk_save_objects(new_derived_logs)
+        session.flush()  # Get IDs for the new derived logs
+
+        # Create LogEventDerivedLog associations
+        for log_event_id, derived_log_index in derived_log_associations:
+            if derived_log_index < len(new_derived_logs):
+                association = LogEventDerivedLog(
+                    log_event_id=log_event_id,
+                    derived_log_id=new_derived_logs[derived_log_index].id,
+                )
+                session.add(association)
+
         session.commit()
 
         # Update the field type record for the derived entry
@@ -4098,6 +4130,9 @@ def update_active_derived_logs(
 
                     # Create derived logs for each matching log event
                     new_derived_logs = []
+                    derived_log_associations = (
+                        []
+                    )  # Track (log_event_id, derived_log_index)
 
                     for log_event_id, (_, value) in zip(
                         matching_log_event_ids,
@@ -4106,9 +4141,9 @@ def update_active_derived_logs(
                         val = json.loads(json.dumps(value, cls=CustomEncoder))
                         inferred_type = LogDAO.infer_type("", val)
 
+                        # Create DerivedLog without log_event_id
                         new_derived_logs.append(
                             DerivedLog(
-                                log_event_id=log_event_id,
                                 key=template.key,
                                 equation=template.equation,
                                 referenced_logs=template.referenced_logs,
@@ -4118,10 +4153,27 @@ def update_active_derived_logs(
                                 updated_at=datetime.now(timezone.utc),
                             ),
                         )
+                        # Track the association
+                        derived_log_associations.append(
+                            (log_event_id, len(new_derived_logs) - 1),
+                        )
 
                     # Bulk insert the new derived logs
                     if new_derived_logs:
                         session.bulk_save_objects(new_derived_logs)
+                        session.flush()  # Get IDs for the new derived logs
+
+                        # Create LogEventDerivedLog associations
+                        for log_event_id, derived_log_index in derived_log_associations:
+                            if derived_log_index < len(new_derived_logs):
+                                association = LogEventDerivedLog(
+                                    log_event_id=log_event_id,
+                                    derived_log_id=new_derived_logs[
+                                        derived_log_index
+                                    ].id,
+                                )
+                                session.add(association)
+
                         total_derived_logs_created += len(new_derived_logs)
 
             except Exception as e:

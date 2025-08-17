@@ -14,7 +14,9 @@ from orchestra.db.models.orchestra_models import (
     Log,
     LogEvent,
     LogEventContext,
+    LogEventJSONLog,
     LogEventLog,
+    LogEventLogVersion,
     LogVersion,
     ProjectVersion,
 )
@@ -520,10 +522,14 @@ class ContextDAO:
                 # Check for JSONLog entries (if the model exists)
                 if JSONLog is not None:
                     try:
-                        # Query JSONLog entries for the original log event
+                        # Query JSONLog entries for the original log event via association
                         original_json_logs = (
                             self.session.query(JSONLog)
-                            .filter_by(log_event_id=original_log_id)
+                            .join(
+                                LogEventJSONLog,
+                                LogEventJSONLog.json_log_id == JSONLog.id,
+                            )
+                            .filter(LogEventJSONLog.log_event_id == original_log_id)
                             .all()
                         )
 
@@ -531,7 +537,6 @@ class ContextDAO:
                         new_json_logs = []
                         for original_json_log in original_json_logs:
                             new_json_log = JSONLog(
-                                log_event_id=new_log_event.id,
                                 key=original_json_log.key,
                                 value=original_json_log.value,
                             )
@@ -540,6 +545,15 @@ class ContextDAO:
                         # Bulk insert all new JSONLog entries
                         if new_json_logs:
                             self.session.bulk_save_objects(new_json_logs)
+                            self.session.flush()  # Get IDs for new JSONLogs
+
+                            # Create LogEventJSONLog associations
+                            for new_json_log in new_json_logs:
+                                log_event_json_log = LogEventJSONLog(
+                                    log_event_id=new_log_event.id,
+                                    json_log_id=new_json_log.id,
+                                )
+                                self.session.add(log_event_json_log)
                     except Exception:
                         pass
 
@@ -769,10 +783,12 @@ class ContextDAO:
             return
 
         # 3. Create a snapshot of each log
-        log_versions = [
-            LogVersion(
+        log_versions = []
+        log_version_associations = []  # Track (log_event_id, log_version_index)
+
+        for log, log_event_id in logs_to_version:
+            log_version = LogVersion(
                 context_version_id=context_version.id,
-                log_event_id=log_event_id,
                 key=log.key,
                 value=log.value,
                 param_version=log.param_version,
@@ -780,32 +796,50 @@ class ContextDAO:
                 created_at=log.created_at,
                 updated_at=log.updated_at,
             )
-            for log, log_event_id in logs_to_version
-        ]
+            log_versions.append(log_version)
+            # Track the association
+            log_version_associations.append((log_event_id, len(log_versions) - 1))
 
         # 4. Bulk insert the log snapshots for efficiency
         self.session.bulk_save_objects(log_versions)
+        self.session.flush()  # Get IDs for the new log versions
+
+        # 5. Create LogEventLogVersion associations
+        for log_event_id, log_version_index in log_version_associations:
+            if log_version_index < len(log_versions):
+                association = LogEventLogVersion(
+                    log_event_id=log_event_id,
+                    log_version_id=log_versions[log_version_index].id,
+                )
+                self.session.add(association)
 
     def rollback_to_version(self, context_id: int, context_version_id: int) -> None:
         """
         Helper method to prepare the rollback.
         This method only prepares the operations and does NOT commit.
         """
-        log_versions_to_restore = (
-            self.session.query(LogVersion)
-            .filter_by(context_version_id=context_version_id)
+        # Query log versions with their associated log_event_ids
+        log_versions_with_events = (
+            self.session.query(LogVersion, LogEventLogVersion.log_event_id)
+            .join(
+                LogEventLogVersion,
+                LogEventLogVersion.log_version_id == LogVersion.id,
+            )
+            .filter(LogVersion.context_version_id == context_version_id)
             .all()
         )
+
         context = self.session.query(Context).filter_by(id=context_id).one()
 
         self.session.query(LogEventContext).filter_by(context_id=context_id).delete(
             synchronize_session=False,
         )
 
+        # Group log versions by their original log_event_id
         grouped_lvs = {}
-        if log_versions_to_restore:
-            for lv in log_versions_to_restore:
-                grouped_lvs.setdefault(lv.log_event_id, []).append(lv)
+        if log_versions_with_events:
+            for lv, log_event_id in log_versions_with_events:
+                grouped_lvs.setdefault(log_event_id, []).append(lv)
 
         for original_log_event_id, lvs in grouped_lvs.items():
             new_log_event = LogEvent(project_id=context.project_id)
@@ -832,7 +866,6 @@ class ContextDAO:
                 if isinstance(lv.value, (dict, list)):
                     new_json_logs.append(
                         JSONLog(
-                            log_event_id=new_log_event.id,
                             key=lv.key,
                             value=lv.value,
                         ),
@@ -852,3 +885,12 @@ class ContextDAO:
 
             if new_json_logs:
                 self.session.bulk_save_objects(new_json_logs)
+                self.session.flush()  # Get IDs for new JSONLogs
+
+                # Create LogEventJSONLog associations
+                for new_json_log in new_json_logs:
+                    log_event_json_log = LogEventJSONLog(
+                        log_event_id=new_log_event.id,
+                        json_log_id=new_json_log.id,
+                    )
+                    self.session.add(log_event_json_log)
