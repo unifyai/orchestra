@@ -20,6 +20,7 @@ from orchestra.db.models.orchestra_models import (
     Log,
     LogEvent,
     LogEventContext,
+    LogEventJSONLog,
     LogEventLog,
     ParamVersion,
 )
@@ -482,11 +483,12 @@ class LogDAO:
                 )
             )
 
-            # Update JSONLog table
-            json_log_update = (
+            # Update JSONLog table via LogEventJSONLog association
+            json_logs_to_update = (
                 self.session.query(JSONLog)
+                .join(LogEventJSONLog, LogEventJSONLog.json_log_id == JSONLog.id)
                 .filter(
-                    JSONLog.log_event_id.in_(log_event_ids),
+                    LogEventJSONLog.log_event_id.in_(log_event_ids),
                     JSONLog.key == old_field_name,
                 )
                 .update({"key": new_field_name}, synchronize_session=False)
@@ -556,9 +558,14 @@ class LogDAO:
             )
 
             if log_event_log:
+                # Find JSONLog via LogEventJSONLog association
                 json_log = (
                     self.session.query(JSONLog)
-                    .filter_by(log_event_id=log_event_log.log_event_id, key=log.key)
+                    .join(LogEventJSONLog, LogEventJSONLog.json_log_id == JSONLog.id)
+                    .filter(
+                        LogEventJSONLog.log_event_id == log_event_log.log_event_id,
+                        JSONLog.key == log.key,
+                    )
                     .first()
                 )
             else:
@@ -860,7 +867,7 @@ class LogDAO:
                     rows_json_pk2val[pk] = value
                     rows_json.append(
                         {
-                            "log_event_id": log_event_id,
+                            "log_event_id": log_event_id,  # Store temporarily for association
                             "key": key,
                             "value": value,
                         },
@@ -1004,26 +1011,62 @@ class LogDAO:
             # Detect JSON conflicts first
             if rows_json_pk2val:
                 pks = list(rows_json_pk2val.keys())
+                # Check for existing JSONLog entries by joining through LogEventJSONLog
                 conflicting = (
-                    self.session.query(JSONLog)
-                    .filter(JSONLog.log_event_id.in_([pk[0] for pk in pks]))
+                    self.session.query(JSONLog, LogEventJSONLog.log_event_id)
+                    .join(LogEventJSONLog, LogEventJSONLog.json_log_id == JSONLog.id)
+                    .filter(LogEventJSONLog.log_event_id.in_([pk[0] for pk in pks]))
                     .filter(JSONLog.key.in_([pk[1] for pk in pks]))
                     .with_for_update()
                     .all()
                 )
-                for row in conflicting:
-                    intended = rows_json_pk2val[(row.log_event_id, row.key)]
-                    if row.value != intended:
+                for json_log, log_event_id in conflicting:
+                    intended = rows_json_pk2val[(log_event_id, json_log.key)]
+                    if json_log.value != intended:
                         raise OverwriteError(
-                            f"Cannot overwrite existing JSON value for key '{row.key}'",
+                            f"Cannot overwrite existing JSON value for key '{json_log.key}'",
                         )
 
-            # Single multi-row UPSERT
+            # Single multi-row INSERT for JSONLog
             if rows_json:
+                # Prepare JSONLog rows without log_event_id
+                json_log_rows_to_insert = []
+                json_log_event_associations = (
+                    []
+                )  # Track which log_event_id goes with each JSONLog
+
+                for row in rows_json:
+                    log_event_id = row.pop("log_event_id")  # Remove log_event_id
+                    json_log_rows_to_insert.append(row)
+                    json_log_event_associations.append(log_event_id)
+
+                # Insert JSONLogs and get their IDs
                 stmt_json = (
-                    pg_insert(JSONLog).values(rows_json).on_conflict_do_nothing()
+                    pg_insert(JSONLog)
+                    .values(json_log_rows_to_insert)
+                    .returning(JSONLog.id)
                 )
-                self.session.execute(stmt_json)
+                result_json = self.session.execute(stmt_json)
+                json_log_ids = [row[0] for row in result_json]
+
+                # Create LogEventJSONLog associations
+                log_event_json_log_rows = []
+                for json_log_id, log_event_id in zip(
+                    json_log_ids,
+                    json_log_event_associations,
+                ):
+                    log_event_json_log_rows.append(
+                        {
+                            "log_event_id": log_event_id,
+                            "json_log_id": json_log_id,
+                        },
+                    )
+
+                if log_event_json_log_rows:
+                    stmt_json_assoc = pg_insert(LogEventJSONLog).values(
+                        log_event_json_log_rows,
+                    )
+                    self.session.execute(stmt_json_assoc)
 
             self.session.flush()
 
@@ -1323,18 +1366,19 @@ class LogDAO:
                 (log_event_id, log.key): log for log, log_event_id in existing_logs
             }
 
-            # Query all existing JSON logs in one go
+            # Query all existing JSON logs in one go via LogEventJSONLog association
             existing_json_logs = (
-                self.session.query(JSONLog)
-                .filter(JSONLog.log_event_id.in_(log_event_ids))
+                self.session.query(JSONLog, LogEventJSONLog.log_event_id)
+                .join(LogEventJSONLog, LogEventJSONLog.json_log_id == JSONLog.id)
+                .filter(LogEventJSONLog.log_event_id.in_(log_event_ids))
                 .filter(JSONLog.key.in_(keys))
                 .all()
             )
 
             # Create a lookup for existing JSON logs
             existing_json_log_map = {
-                (json_log.log_event_id, json_log.key): json_log
-                for json_log in existing_json_logs
+                (log_event_id, json_log.key): json_log
+                for json_log, log_event_id in existing_json_logs
             }
 
             log_event_ids_to_update = set()
@@ -1496,15 +1540,24 @@ class LogDAO:
                     json_keys_check = [pk[1] for pk in json_pks]
 
                     existing_conflicting_json_logs = (
-                        self.session.query(JSONLog)
-                        .filter(JSONLog.log_event_id.in_(json_log_event_ids_check))
+                        self.session.query(JSONLog, LogEventJSONLog.log_event_id)
+                        .join(
+                            LogEventJSONLog,
+                            LogEventJSONLog.json_log_id == JSONLog.id,
+                        )
+                        .filter(
+                            LogEventJSONLog.log_event_id.in_(json_log_event_ids_check),
+                        )
                         .filter(JSONLog.key.in_(json_keys_check))
                         .with_for_update()
                         .all()
                     )
 
-                    for existing_json_log in existing_conflicting_json_logs:
-                        pk = (existing_json_log.log_event_id, existing_json_log.key)
+                    for (
+                        existing_json_log,
+                        log_event_id,
+                    ) in existing_conflicting_json_logs:
+                        pk = (log_event_id, existing_json_log.key)
                         intended_value = rows_json_pk2val.get(pk)
                         if (
                             intended_value is not None
@@ -1532,17 +1585,33 @@ class LogDAO:
                     stmt = stmt.on_conflict_do_nothing()
                 self.session.execute(stmt)
 
-            # Single multi-row UPSERT for JSON_LOG
+            # Handle JSONLog updates with many-to-many relationship
             if rows_json:
-                stmt_json = pg_insert(JSONLog).values(rows_json)
-                if overwrite:
-                    stmt_json = stmt_json.on_conflict_do_update(
-                        index_elements=["log_event_id", "key"],
-                        set_={"value": pg_insert(JSONLog).excluded.value},
-                    )
-                else:
-                    stmt_json = stmt_json.on_conflict_do_nothing()
-                self.session.execute(stmt_json)
+                # For each JSONLog, we need to check if it exists and update/create accordingly
+                for json_row in rows_json:
+                    log_event_id = json_row.get("log_event_id")
+                    key = json_row.get("key")
+                    value = json_row.get("value")
+
+                    # Check if this JSONLog already exists for this LogEvent
+                    existing_json_log = existing_json_log_map.get((log_event_id, key))
+
+                    if existing_json_log:
+                        if overwrite:
+                            # Update existing JSONLog value
+                            existing_json_log.value = value
+                    else:
+                        # Create new JSONLog
+                        new_json_log = JSONLog(key=key, value=value)
+                        self.session.add(new_json_log)
+                        self.session.flush()  # Get the ID
+
+                        # Create LogEventJSONLog association
+                        association = LogEventJSONLog(
+                            log_event_id=log_event_id,
+                            json_log_id=new_json_log.id,
+                        )
+                        self.session.add(association)
 
             # Update log event timestamps
             for log_event_id in log_event_ids_to_update:
@@ -1774,10 +1843,14 @@ class LogDAO:
                     )
                     is_versioned = bool(context and context.is_versioned)
 
-                # Get the corresponding JSONLog if it exists
+                # Get the corresponding JSONLog if it exists via LogEventJSONLog association
                 json_log = (
                     self.session.query(JSONLog)
-                    .filter_by(log_event_id=le_id, key=base_key)
+                    .join(LogEventJSONLog, LogEventJSONLog.json_log_id == JSONLog.id)
+                    .filter(
+                        LogEventJSONLog.log_event_id == le_id,
+                        JSONLog.key == base_key,
+                    )
                     .first()
                 )
 
