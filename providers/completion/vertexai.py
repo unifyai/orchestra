@@ -220,4 +220,10 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 0.1, "completion": 0.3},
     },
+    "qwen-3-235b-a22b-instruct": {
+        "endpoint": "vertex_ai/qwen/qwen3-235b-a22b-instruct-2507-maas",
+        "region": "us-south1",
+        "context_window": 256000,
+        "cost": {"prompt": 0.25, "completion": 1},
+    },
 }
