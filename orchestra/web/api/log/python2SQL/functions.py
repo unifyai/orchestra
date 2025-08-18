@@ -30,6 +30,7 @@ from sqlalchemy.sql.selectable import ColumnClause, Subquery
 from orchestra.db.dao.log_dao import LogDAO, _is_date_string, _is_time_string
 from orchestra.db.models.orchestra_models import Log
 
+from . import alias_utils
 from .core import build_sql_query
 from .helpers import (
     _build_subquery_for_base_call,
@@ -94,7 +95,10 @@ def _handle_date_function(rhs_expr, session):
         select_cols.extend(
             [expr.label("value"), literal("date").label("inferred_type")],
         )
-        return select(*select_cols).select_from(rhs_expr).subquery()
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(rhs_expr),
+            prefix="func_result",
+        )
     else:
         # Handle literal values
         if isinstance(rhs_expr, BindParameter):
@@ -217,7 +221,10 @@ def _handle_functions(
             select_cols.extend(
                 [expr.label("value"), literal("int").label("inferred_type")],
             )
-            return select(*select_cols).select_from(rhs_expr).subquery()
+            return alias_utils.subquery_with_unique_alias(
+                select(*select_cols).select_from(rhs_expr),
+                prefix="func_result",
+            )
         else:
             return len(rhs_expr)
 
@@ -235,7 +242,10 @@ def _handle_functions(
             select_cols.extend(
                 [expr.label("value"), literal("str").label("inferred_type")],
             )
-            return select(*select_cols).select_from(rhs_expr).subquery()
+            return alias_utils.subquery_with_unique_alias(
+                select(*select_cols).select_from(rhs_expr),
+                prefix="func_result",
+            )
         else:
             expr = rhs_expr[0] if isinstance(rhs_expr, list) else rhs_expr
             return cast(expr, String)
@@ -267,7 +277,10 @@ def _handle_functions(
                         literal("int").label("inferred_type"),
                     ],
                 )
-                return select(*select_cols).select_from(val_expr).subquery()
+                return alias_utils.subquery_with_unique_alias(
+                    select(*select_cols).select_from(val_expr),
+                    prefix="func_result",
+                )
             else:
                 # val_expr is a literal or a direct SQL expression
                 return func.round(cast(val_expr, Numeric))
@@ -301,7 +314,10 @@ def _handle_functions(
                         digits_expr,
                         val_expr.c.log_event_id == digits_expr.c.log_event_id,
                     )
-                    .subquery()
+                )
+                return alias_utils.subquery_with_unique_alias(
+                    subq,
+                    prefix="func_result",
                 )
             elif isinstance(val_expr, Subquery):
                 val_col, val_type = _select_value(val_expr, session)
@@ -321,7 +337,10 @@ def _handle_functions(
                         literal("int").label("inferred_type"),
                     ],
                 )
-                return select(*select_cols).select_from(val_expr).subquery()
+                return alias_utils.subquery_with_unique_alias(
+                    select(*select_cols).select_from(val_expr),
+                    prefix="func_result",
+                )
             elif isinstance(digits_expr, Subquery):
                 dig_col, dig_type = _select_value(digits_expr, session)
                 # In that case, val_expr might be a literal
@@ -341,7 +360,10 @@ def _handle_functions(
                         literal("int").label("inferred_type"),
                     ],
                 )
-                return select(*select_cols).select_from(digits_expr).subquery()
+                return alias_utils.subquery_with_unique_alias(
+                    select(*select_cols).select_from(digits_expr),
+                    prefix="func_result",
+                )
             else:
                 # both val_expr and digits_expr are non-subquery expressions (literals or direct SQL)
                 return func.round(cast(val_expr, Numeric), digits_expr)
@@ -387,11 +409,14 @@ def _handle_functions(
                     literal("datetime").label("inferred_type"),
                 ],
             )
-            return (
+            subq = (
                 select(*select_cols)
                 .select_from(ts_expr)
                 .join(sec_expr, ts_expr.c.log_event_id == sec_expr.c.log_event_id)
-                .subquery()
+            )
+            return alias_utils.subquery_with_unique_alias(
+                subq,
+                prefix="datetime_combined",
             )
 
         elif ts_is_sub:
@@ -414,7 +439,10 @@ def _handle_functions(
                         literal("datetime").label("inferred_type"),
                     ],
                 )
-                return select(*select_cols).select_from(ts_expr).subquery()
+                return alias_utils.subquery_with_unique_alias(
+                    select(*select_cols).select_from(ts_expr),
+                    prefix="func_result",
+                )
             else:
                 raise ValueError(
                     "round_timestamp() can't handle that form of seconds_expr (unless subquery).",
@@ -444,7 +472,10 @@ def _handle_functions(
                         literal("datetime").label("inferred_type"),
                     ],
                 )
-                return select(*select_cols).select_from(sec_expr).subquery()
+                return alias_utils.subquery_with_unique_alias(
+                    select(*select_cols).select_from(sec_expr),
+                    prefix="func_result",
+                )
             else:
                 raise ValueError(
                     "round_timestamp() can't handle that form of timestamp_expr (unless subquery).",
@@ -493,7 +524,10 @@ def _handle_functions(
                 )
                 .select_from(log_event_alias)
                 .where(log_event_alias.id.in_(select(log_event_ids.c.id)))
-                .subquery()
+            )
+            exists_subq = alias_utils.subquery_with_unique_alias(
+                exists_subq,
+                prefix="exists",
             )
             return exists_subq
 
@@ -534,7 +568,10 @@ def _handle_functions(
             if "__parent_idx__" in rhs_expr.c.keys():
                 select_cols.append(rhs_expr.c.__parent_idx__.label("__parent_idx__"))
 
-            return select(*select_cols).select_from(rhs_expr).subquery()
+            return alias_utils.subquery_with_unique_alias(
+                select(*select_cols).select_from(rhs_expr),
+                prefix="func_result",
+            )
 
         else:
             # If the argument is neither a simple identifier nor a subquery, it's invalid.
@@ -559,7 +596,10 @@ def _handle_functions(
                 .where(
                     Log.key == identifier,
                 )
-                .subquery()
+            )
+            version_subq = alias_utils.subquery_with_unique_alias(
+                version_subq,
+                prefix="version",
             )
             return version_subq
         elif (
@@ -595,7 +635,10 @@ def _handle_functions(
                     Log.log_event_id.in_(event_ids) if event_ids else True,
                     Log.key == identifier,
                 )
-                .subquery()
+            )
+            version_subq = alias_utils.subquery_with_unique_alias(
+                version_subq,
+                prefix="version",
             )
             return version_subq
         else:
@@ -656,7 +699,10 @@ def _handle_functions(
             select_cols.extend(
                 [expr.label("value"), literal("bool").label("inferred_type")],
             )
-            return select(*select_cols).select_from(rhs_expr).subquery()
+            return alias_utils.subquery_with_unique_alias(
+                select(*select_cols).select_from(rhs_expr),
+                prefix="func_result",
+            )
         else:
             # For non-subquery cases, simply return the boolean expression
             return rhs_expr.is_(None)
@@ -691,7 +737,10 @@ def _handle_functions(
             select_cols.extend(
                 [expr.label("value"), literal("time").label("inferred_type")],
             )
-            return select(*select_cols).select_from(rhs_expr).subquery()
+            return alias_utils.subquery_with_unique_alias(
+                select(*select_cols).select_from(rhs_expr),
+                prefix="func_result",
+            )
         else:
             if isinstance(rhs_expr, BindParameter):
                 val = rhs_expr.value
@@ -730,17 +779,18 @@ def _handle_functions(
             return literal(datetime.now(timezone.utc).isoformat(), type_=TIMESTAMP)
 
         if isinstance(log_event_ids, list):
-            ids_subq = select(
-                literal(id).label("log_event_id") for id in log_event_ids
-            ).subquery()
-            now_subq = (
-                select(
-                    ids_subq.c.log_event_id.label("log_event_id"),
-                    func.timezone("UTC", func.now()).label("value"),
-                    literal("datetime").label("inferred_type"),
-                )
-                .select_from(ids_subq)
-                .subquery()
+            ids_subq = alias_utils.subquery_with_unique_alias(
+                select(literal(id).label("log_event_id") for id in log_event_ids),
+                prefix="ids_list",
+            )
+            now_subq = select(
+                ids_subq.c.log_event_id.label("log_event_id"),
+                func.timezone("UTC", func.now()).label("value"),
+                literal("datetime").label("inferred_type"),
+            ).select_from(ids_subq)
+            now_subq = alias_utils.subquery_with_unique_alias(
+                now_subq,
+                prefix="now",
             )
         else:
             ids_subq = log_event_ids
@@ -748,14 +798,14 @@ def _handle_functions(
                 func.row_number().over(order_by=ids_subq.c.id).label("log_event_id")
             )
             event_id_col = row_number if is_derived else log_event_ids.c.id
-            now_subq = (
-                select(
-                    event_id_col.label("log_event_id"),
-                    func.timezone("UTC", func.now()).label("value"),
-                    literal("datetime").label("inferred_type"),
-                )
-                .select_from(ids_subq)
-                .subquery()
+            now_subq = select(
+                event_id_col.label("log_event_id"),
+                func.timezone("UTC", func.now()).label("value"),
+                literal("datetime").label("inferred_type"),
+            ).select_from(ids_subq)
+            now_subq = alias_utils.subquery_with_unique_alias(
+                now_subq,
+                prefix="now",
             )
         return now_subq
     elif operand == "embed":
@@ -863,7 +913,10 @@ def _handle_functions(
                 ],
             )
 
-            return select(*select_cols).select_from(vector_subq).subquery()
+            return alias_utils.subquery_with_unique_alias(
+                select(*select_cols).select_from(vector_subq),
+                prefix="func_result",
+            )
         else:
             # Handle literal text values (direct API call)
             text = text_expr.value
@@ -919,11 +972,10 @@ def _handle_functions(
             select_cols.extend(
                 [agg_expr.label("value"), literal("float").label("inferred_type")],
             )
-            return (
-                select(*select_cols)
-                .select_from(rhs_expr)
-                .group_by(*group_by_cols)
-                .subquery()
+            subq = select(*select_cols).select_from(rhs_expr).group_by(*group_by_cols)
+            return alias_utils.subquery_with_unique_alias(
+                subq,
+                prefix="aggregated",
             )
         else:
             # For literal values or non-subquery cases
@@ -1005,7 +1057,10 @@ def _handle_dict_method(
     if parent_idx_col is not None:
         base_cols.append(parent_idx_col.label("__parent_idx__"))
 
-    base = select(*base_cols).select_from(src.join(each, true())).subquery("base")
+    base = alias_utils.subquery_with_unique_alias(
+        select(*base_cols).select_from(src.join(each, true())),
+        prefix="base",
+    )
 
     if method == "keys":
         agg = func.coalesce(
@@ -1042,8 +1097,9 @@ def _handle_dict_method(
         select_cols.insert(1, base.c.__parent_idx__.label("__parent_idx__"))
         group_cols.append(base.c.__parent_idx__)
 
-    final = (
-        select(*select_cols).group_by(*group_cols).subquery(f"dict_{method}_subquery")
+    final = alias_utils.subquery_with_unique_alias(
+        select(*select_cols).group_by(*group_cols),
+        prefix=f"dict_{method}_subquery",
     )
     return final
 
@@ -1100,12 +1156,10 @@ def _handle_if_expr(
             val, inf = _select_value(value, session)
             cols.append(val.label("value"))
             cols.append(literal(inf).label("inferred_type"))
-            return (
-                select(*cols)
-                .select_from(value)
-                .subquery(
-                    name=f"__inflate_select_subq_{value.name}",
-                )
+            subq = select(*cols).select_from(value)
+            return alias_utils.subquery_with_unique_alias(
+                subq,
+                prefix=f"inflate_{value.name}",
             )
 
         if isinstance(value, BindParameter):
@@ -1128,10 +1182,10 @@ def _handle_if_expr(
         cols.append(literal(value).label("value"))
         cols.append(literal(inferred_type).label("inferred_type"))
 
-        return (
-            select(*cols)
-            .select_from(ids_subq)
-            .subquery(name=f"__inflate_scalar_subq_{value}")
+        subq = select(*cols).select_from(ids_subq)
+        return alias_utils.subquery_with_unique_alias(
+            subq,
+            prefix=f"__inflate_scalar_subq_{value}",
         )
 
     in_comprehension = local_scope is not None and ("__comp_idx__" in local_scope)
@@ -1188,37 +1242,48 @@ def _handle_if_expr(
                     )
                 else:
                     standardized_selects.append(s)
-            ids_subq = (
-                union_all(*standardized_selects)
-                .subquery(name="union_all_standardized_selects")
-                .select()
-                .distinct()
-                .subquery(name="ids_subq")
+            union_subq = alias_utils.subquery_with_unique_alias(
+                union_all(*standardized_selects),
+                prefix="union_all_standardized_selects",
+            )
+            ids_subq = alias_utils.subquery_with_unique_alias(
+                union_subq.select().distinct(),
+                prefix="ids_subq",
             )
         else:
-            ids_subq = (
-                union_all(*id_selects)
-                .subquery(name="union_all_id_selects")
-                .select()
-                .distinct()
-                .subquery(name="ids_subq")
+            union_subq = alias_utils.subquery_with_unique_alias(
+                union_all(*id_selects),
+                prefix="union_all_id_selects",
+            )
+            ids_subq = alias_utils.subquery_with_unique_alias(
+                union_subq.select().distinct(),
+                prefix="ids_subq",
             )
     else:
         if isinstance(log_event_ids, Subquery):
-            ids_subq = select(log_event_ids.c.id.label("log_event_id")).subquery()
+            ids_subq = alias_utils.subquery_with_unique_alias(
+                select(log_event_ids.c.id.label("log_event_id")),
+                prefix="ids_subq",
+            )
         elif isinstance(log_event_ids, (list, tuple)):
-            ids_subq = select(
-                literal(id_).label("log_event_id") for id_ in log_event_ids
-            ).subquery()
+            ids_subq = alias_utils.subquery_with_unique_alias(
+                select(literal(id_).label("log_event_id") for id_ in log_event_ids),
+                prefix="ids_subq",
+            )
         else:
-            ids_subq = select(log_event_alias.id.label("log_event_id")).subquery()
+            ids_subq = alias_utils.subquery_with_unique_alias(
+                select(log_event_alias.id.label("log_event_id")),
+                prefix="ids_subq",
+            )
 
         if in_comprehension:
             comp_idx_col = local_scope["__comp_idx__"][0]
-            ids_subq = (
-                select(ids_subq.c.log_event_id, comp_idx_col.label("__comp_idx__"))
-                .select_from(ids_subq)
-                .subquery()
+            ids_subq = alias_utils.subquery_with_unique_alias(
+                select(
+                    ids_subq.c.log_event_id,
+                    comp_idx_col.label("__comp_idx__"),
+                ).select_from(ids_subq),
+                prefix="ids_with_comp_idx",
             )
 
     if not isinstance(raw_test, Subquery) or (
@@ -1330,14 +1395,17 @@ def _handle_if_expr(
         [case_expr.label("value"), literal(res_type).label("inferred_type")],
     )
 
-    final_subq = (
-        select(*select_cols)
-        .select_from(
-            ids_subq.join(raw_test, test_join_cond)
-            .outerjoin(raw_body, body_join_cond)
-            .outerjoin(raw_else, else_join_cond),
-        )
-        .subquery(name="final_subq")
+    # Generate a unique alias to prevent collisions in nested queries
+    alias_name = alias_utils.unique_alias("if_expr_subq")
+
+    final_subq = select(*select_cols).select_from(
+        ids_subq.join(raw_test, test_join_cond)
+        .outerjoin(raw_body, body_join_cond)
+        .outerjoin(raw_else, else_join_cond),
+    )
+    final_subq = alias_utils.subquery_with_unique_alias(
+        final_subq,
+        prefix="if_expr",
     )
 
     return final_subq
@@ -1400,11 +1468,10 @@ def _handle_list_comp(
     ]
     if parent_idx_col is not None:
         base_cols.append(parent_idx_col.label("__parent_idx__"))
-    base = (
-        select(*base_cols)
-        .select_from(iter_subq.outerjoin(elem_tbl, literal(True)))
-        .subquery("base_list_comp")
+    base_stmt = select(*base_cols).select_from(
+        iter_subq.outerjoin(elem_tbl, literal(True)),
     )
+    base = alias_utils.subquery_with_unique_alias(base_stmt, prefix="base_list_comp")
 
     unpacking = isinstance(filter_dict["target"], list)
     if unpacking:
@@ -1466,22 +1533,22 @@ def _handle_list_comp(
     elt_col, elt_subq, has_idx = _value_column(elt_expr)
 
     if elt_subq is not None:
-        elt_with_row = (
-            select(
-                elt_subq.c.log_event_id,
-                (
-                    elt_subq.c.__comp_idx__ if has_idx else func.row_number().over()
-                ).label("ordinality"),
-                *(
-                    [elt_subq.c.__parent_idx__.label("__parent_idx__")]
-                    if hasattr(elt_subq.c, "__parent_idx__")
-                    else []
-                ),
-                elt_subq.c.value,
-                elt_subq.c.inferred_type,
-            )
-            .select_from(elt_subq)
-            .subquery(name="elt_with_row")
+        elt_with_row = select(
+            elt_subq.c.log_event_id,
+            (elt_subq.c.__comp_idx__ if has_idx else func.row_number().over()).label(
+                "ordinality",
+            ),
+            *(
+                [elt_subq.c.__parent_idx__.label("__parent_idx__")]
+                if hasattr(elt_subq.c, "__parent_idx__")
+                else []
+            ),
+            elt_subq.c.value,
+            elt_subq.c.inferred_type,
+        ).select_from(elt_subq)
+        elt_with_row = alias_utils.subquery_with_unique_alias(
+            elt_with_row,
+            prefix="elt_with_row",
         )
         columns = [
             base.c.log_event_id.label("log_event_id"),
@@ -1512,7 +1579,10 @@ def _handle_list_comp(
                 ),
             )
             .order_by(base.c.log_event_id, base.c.ordinality, elt_with_row.c.ordinality)
-            .subquery(name="from_clause")
+        )
+        from_clause = alias_utils.subquery_with_unique_alias(
+            from_clause,
+            prefix="from_clause",
         )
         elt_col = from_clause.c.value
     else:
@@ -1586,7 +1656,10 @@ def _handle_list_comp(
         .select_from(from_clause)
         .where(where_clause)
         .group_by(*group_by_cols)
-        .subquery(name="final")
+    )
+    final = alias_utils.subquery_with_unique_alias(
+        final,
+        prefix="list_comp_final",
     )
     return final
 
@@ -1799,7 +1872,10 @@ def _handle_str_method(
         select_cols.extend(
             [expr.label("value"), literal(inferred).label("inferred_type")],
         )
-        return select(*select_cols).select_from(src).subquery()
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(src),
+            prefix="func_result",
+        )
     else:
         # For literal values or direct SQL expressions
         if isinstance(src, BindParameter):
@@ -2013,11 +2089,10 @@ def _handle_dict_comp(
     if parent_idx_col is not None:
         base_cols.append(parent_idx_col.label("__parent_idx__"))
 
-    base = (
-        select(*base_cols)
-        .select_from(iter_subq.outerjoin(elem_tbl, literal(True)))
-        .subquery("base_dict_comp")
+    base_stmt = select(*base_cols).select_from(
+        iter_subq.outerjoin(elem_tbl, literal(True)),
     )
+    base = alias_utils.subquery_with_unique_alias(base_stmt, prefix="base_dict_comp")
 
     comp_key_type = LogDAO.infer_type(
         "",
@@ -2083,111 +2158,111 @@ def _handle_dict_comp(
     from_clause = base
 
     if key_subq is not None:
-        key_with_row = (
-            select(
-                key_subq.c.log_event_id,
-                (
-                    key_subq.c.__comp_idx__ if key_has_idx else func.row_number().over()
-                ).label("ordinality"),
-                cast(key_subq.c.value, Text).label("value"),
-                key_subq.c.inferred_type,
-                *(
-                    [key_subq.c.__parent_idx__.label("__parent_idx__")]
-                    if hasattr(key_subq.c, "__parent_idx__")
-                    else []
-                ),
-            )
-            .select_from(key_subq)
-            .subquery(name="key_with_row")
+        key_with_row = select(
+            key_subq.c.log_event_id,
+            (
+                key_subq.c.__comp_idx__ if key_has_idx else func.row_number().over()
+            ).label("ordinality"),
+            cast(key_subq.c.value, Text).label("value"),
+            key_subq.c.inferred_type,
+            *(
+                [key_subq.c.__parent_idx__.label("__parent_idx__")]
+                if hasattr(key_subq.c, "__parent_idx__")
+                else []
+            ),
+        ).select_from(key_subq)
+        key_with_row = alias_utils.subquery_with_unique_alias(
+            key_with_row,
+            prefix="key_with_row",
         )
-        from_clause_with_key = (
-            select(
-                from_clause.c.log_event_id,
-                from_clause.c.ordinality,
-                from_clause.c.__comp_key__,
-                key_with_row.c.value.label("key_value"),
-                key_with_row.c.inferred_type.label("key_type"),
-                *(
-                    [key_with_row.c.__parent_idx__]
-                    if hasattr(from_clause.c, "__parent_idx__")
-                    and hasattr(key_with_row.c, "__parent_idx__")
-                    else []
-                ),
-            )
-            .select_from(
-                from_clause.outerjoin(
-                    key_with_row,
-                    and_(
-                        from_clause.c.log_event_id == key_with_row.c.log_event_id,
-                        from_clause.c.ordinality == key_with_row.c.ordinality,
-                        *(
-                            [
-                                from_clause.c.__parent_idx__
-                                == key_with_row.c.__parent_idx__,
-                            ]
-                            if hasattr(from_clause.c, "__parent_idx__")
-                            and hasattr(key_with_row.c, "__parent_idx__")
-                            else []
-                        ),
+        from_clause_with_key = select(
+            from_clause.c.log_event_id,
+            from_clause.c.ordinality,
+            from_clause.c.__comp_key__,
+            key_with_row.c.value.label("key_value"),
+            key_with_row.c.inferred_type.label("key_type"),
+            *(
+                [key_with_row.c.__parent_idx__]
+                if hasattr(from_clause.c, "__parent_idx__")
+                and hasattr(key_with_row.c, "__parent_idx__")
+                else []
+            ),
+        ).select_from(
+            from_clause.outerjoin(
+                key_with_row,
+                and_(
+                    from_clause.c.log_event_id == key_with_row.c.log_event_id,
+                    from_clause.c.ordinality == key_with_row.c.ordinality,
+                    *(
+                        [
+                            from_clause.c.__parent_idx__
+                            == key_with_row.c.__parent_idx__,
+                        ]
+                        if hasattr(from_clause.c, "__parent_idx__")
+                        and hasattr(key_with_row.c, "__parent_idx__")
+                        else []
                     ),
                 ),
-            )
-            .subquery(name="from_clause_with_key")
+            ),
+        )
+        from_clause_with_key = alias_utils.subquery_with_unique_alias(
+            from_clause_with_key,
+            prefix="from_clause_with_key",
         )
     else:
         from_clause_with_key = None
 
     if val_subq is not None:
-        val_with_row = (
-            select(
-                val_subq.c.log_event_id,
-                (
-                    val_subq.c.__comp_idx__ if val_has_idx else func.row_number().over()
-                ).label("ordinality"),
-                val_subq.c.value,
-                val_subq.c.inferred_type,
-                *(
-                    [val_subq.c.__parent_idx__.label("__parent_idx__")]
-                    if hasattr(val_subq.c, "__parent_idx__")
-                    else []
-                ),
-            )
-            .select_from(val_subq)
-            .subquery(name="val_with_row")
+        val_with_row = select(
+            val_subq.c.log_event_id,
+            (
+                val_subq.c.__comp_idx__ if val_has_idx else func.row_number().over()
+            ).label("ordinality"),
+            val_subq.c.value,
+            val_subq.c.inferred_type,
+            *(
+                [val_subq.c.__parent_idx__.label("__parent_idx__")]
+                if hasattr(val_subq.c, "__parent_idx__")
+                else []
+            ),
+        ).select_from(val_subq)
+        val_with_row = alias_utils.subquery_with_unique_alias(
+            val_with_row,
+            prefix="val_with_row",
         )
-        from_clause_with_val = (
-            select(
-                from_clause.c.log_event_id,
-                from_clause.c.ordinality,
-                from_clause.c.__comp_val__,
-                val_with_row.c.value.label("val_value"),
-                val_with_row.c.inferred_type.label("val_type"),
-                *(
-                    [val_with_row.c.__parent_idx__]
-                    if hasattr(from_clause.c, "__parent_idx__")
-                    and hasattr(val_with_row.c, "__parent_idx__")
-                    else []
-                ),
-            )
-            .select_from(
-                from_clause.outerjoin(
-                    val_with_row,
-                    and_(
-                        from_clause.c.log_event_id == val_with_row.c.log_event_id,
-                        from_clause.c.ordinality == val_with_row.c.ordinality,
-                        *(
-                            [
-                                from_clause.c.__parent_idx__
-                                == val_with_row.c.__parent_idx__,
-                            ]
-                            if hasattr(from_clause.c, "__parent_idx__")
-                            and hasattr(val_with_row.c, "__parent_idx__")
-                            else []
-                        ),
+        from_clause_with_val = select(
+            from_clause.c.log_event_id,
+            from_clause.c.ordinality,
+            from_clause.c.__comp_val__,
+            val_with_row.c.value.label("val_value"),
+            val_with_row.c.inferred_type.label("val_type"),
+            *(
+                [val_with_row.c.__parent_idx__]
+                if hasattr(from_clause.c, "__parent_idx__")
+                and hasattr(val_with_row.c, "__parent_idx__")
+                else []
+            ),
+        ).select_from(
+            from_clause.outerjoin(
+                val_with_row,
+                and_(
+                    from_clause.c.log_event_id == val_with_row.c.log_event_id,
+                    from_clause.c.ordinality == val_with_row.c.ordinality,
+                    *(
+                        [
+                            from_clause.c.__parent_idx__
+                            == val_with_row.c.__parent_idx__,
+                        ]
+                        if hasattr(from_clause.c, "__parent_idx__")
+                        and hasattr(val_with_row.c, "__parent_idx__")
+                        else []
                     ),
                 ),
-            )
-            .subquery(name="from_clause_with_val")
+            ),
+        )
+        from_clause_with_val = alias_utils.subquery_with_unique_alias(
+            from_clause_with_val,
+            prefix="from_clause_with_val",
         )
     else:
         from_clause_with_val = None
@@ -2196,39 +2271,39 @@ def _handle_dict_comp(
     final_val_col = None
 
     if from_clause_with_key is not None and from_clause_with_val is not None:
-        joined_clause = (
-            select(
-                from_clause_with_key.c.log_event_id,
-                from_clause_with_key.c.ordinality,
-                from_clause_with_key.c.key_value,
-                from_clause_with_val.c.val_value,
-                *(
-                    [from_clause_with_key.c.__parent_idx__]
-                    if hasattr(from_clause_with_key.c, "__parent_idx__")
-                    else []
-                ),
-            )
-            .select_from(
-                from_clause_with_key.outerjoin(
-                    from_clause_with_val,
-                    and_(
-                        from_clause_with_key.c.log_event_id
-                        == from_clause_with_val.c.log_event_id,
-                        from_clause_with_key.c.ordinality
-                        == from_clause_with_val.c.ordinality,
-                        *(
-                            [
-                                from_clause_with_key.c.__parent_idx__
-                                == from_clause_with_val.c.__parent_idx__,
-                            ]
-                            if hasattr(from_clause_with_key.c, "__parent_idx__")
-                            and hasattr(from_clause_with_val.c, "__parent_idx__")
-                            else []
-                        ),
+        joined_clause = select(
+            from_clause_with_key.c.log_event_id,
+            from_clause_with_key.c.ordinality,
+            from_clause_with_key.c.key_value,
+            from_clause_with_val.c.val_value,
+            *(
+                [from_clause_with_key.c.__parent_idx__]
+                if hasattr(from_clause_with_key.c, "__parent_idx__")
+                else []
+            ),
+        ).select_from(
+            from_clause_with_key.outerjoin(
+                from_clause_with_val,
+                and_(
+                    from_clause_with_key.c.log_event_id
+                    == from_clause_with_val.c.log_event_id,
+                    from_clause_with_key.c.ordinality
+                    == from_clause_with_val.c.ordinality,
+                    *(
+                        [
+                            from_clause_with_key.c.__parent_idx__
+                            == from_clause_with_val.c.__parent_idx__,
+                        ]
+                        if hasattr(from_clause_with_key.c, "__parent_idx__")
+                        and hasattr(from_clause_with_val.c, "__parent_idx__")
+                        else []
                     ),
                 ),
-            )
-            .subquery(name="joined_clause")
+            ),
+        )
+        joined_clause = alias_utils.subquery_with_unique_alias(
+            joined_clause,
+            prefix="joined_clause",
         )
         final_key_col = joined_clause.c.key_value
         final_val_col = joined_clause.c.val_value
@@ -2241,15 +2316,15 @@ def _handle_dict_comp(
         final_key_col = joined_clause.c.__comp_key__
         final_val_col = joined_clause.c.val_value
     else:
-        joined_clause = (
-            select(
-                base.c.log_event_id,
-                base.c.ordinality,
-                base.c.__comp_key__.label("key_value"),
-                base.c.__comp_val__.label("val_value"),
-            )
-            .select_from(base)
-            .subquery(name="joined_clause")
+        joined_clause = select(
+            base.c.log_event_id,
+            base.c.ordinality,
+            base.c.__comp_key__.label("key_value"),
+            base.c.__comp_val__.label("val_value"),
+        ).select_from(base)
+        joined_clause = alias_utils.subquery_with_unique_alias(
+            joined_clause,
+            prefix="joined_clause",
         )
         final_key_col = joined_clause.c.key_value
         final_val_col = joined_clause.c.val_value
@@ -2300,7 +2375,10 @@ def _handle_dict_comp(
             .select_from(joined_clause)
             .where(where_clause)
             .group_by(joined_clause.c.log_event_id, joined_clause.c.__parent_idx__)
-            .subquery(name="final")
+        )
+        final = alias_utils.subquery_with_unique_alias(
+            final,
+            prefix="dict_comp_final",
         )
     else:
         final = (
@@ -2317,7 +2395,10 @@ def _handle_dict_comp(
             .select_from(joined_clause)
             .where(where_clause)
             .group_by(joined_clause.c.log_event_id)
-            .subquery(name="final")
+        )
+        final = alias_utils.subquery_with_unique_alias(
+            final,
+            prefix="dict_comp_final",
         )
     return final
 
@@ -2555,7 +2636,10 @@ def _handle_dict_get(
             [value_expr.label("value"), literal(result_type).label("inferred_type")],
         )
 
-        return select(*select_cols).select_from(container_sql).subquery()
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(container_sql),
+            prefix="func_result",
+        )
     else:
         # For non-subquery containers (literals or direct SQL expressions)
         if default_sql is not None:
@@ -2566,20 +2650,24 @@ def _handle_dict_get(
         # For direct expressions, we need to wrap in a subquery if we have log_event_ids
         if log_event_ids:
             if isinstance(log_event_ids, list):
-                ids_subq = select(
-                    literal(id_).label("log_event_id") for id_ in log_event_ids
-                ).subquery()
-            else:
-                ids_subq = select(log_event_ids.c.id.label("log_event_id")).subquery()
-
-            return (
-                select(
-                    ids_subq.c.log_event_id,
-                    value_expr.label("value"),
-                    literal(result_type).label("inferred_type"),
+                ids_subq = alias_utils.subquery_with_unique_alias(
+                    select(literal(id_).label("log_event_id") for id_ in log_event_ids),
+                    prefix="ids_list",
                 )
-                .select_from(ids_subq)
-                .subquery()
+            else:
+                ids_subq = alias_utils.subquery_with_unique_alias(
+                    select(log_event_ids.c.id.label("log_event_id")),
+                    prefix="ids_subq",
+                )
+
+            return select(
+                ids_subq.c.log_event_id,
+                value_expr.label("value"),
+                literal(result_type).label("inferred_type"),
+            ).select_from(ids_subq)
+            return alias_utils.subquery_with_unique_alias(
+                subq,
+                prefix="get_result",
             )
         else:
             # If no log_event_ids, just return the expression
@@ -2630,10 +2718,9 @@ def _handle_zip(
         if parent_idx_col is not None:
             sub_cols.append(parent_idx_col.label("__parent_idx__"))
 
-        sub = (
-            select(*sub_cols)
-            .select_from(arg.join(table_valued, literal(True)))
-            .subquery(f"zip_subq_{idx}")
+        sub = alias_utils.subquery_with_unique_alias(
+            select(*sub_cols).select_from(arg.join(table_valued, literal(True))),
+            prefix=f"zip_subq_{idx}",
         )
         zipped_subqs.append(sub)
 
@@ -2649,20 +2736,20 @@ def _handle_zip(
                 else []
             ),
         )
-        base = (
-            select(
-                base.c.log_event_id,
-                base.c.ordinality,
-                *[base.c[col] for col in base.c.keys() if col.startswith("value")],
-                other.c[f"value_{i}"],
-            )
-            .select_from(
-                base.join(
-                    other,
-                    join_cond,
-                ),
-            )
-            .subquery(name=f"zip_join_{i}")
+        base = select(
+            base.c.log_event_id,
+            base.c.ordinality,
+            *[base.c[col] for col in base.c.keys() if col.startswith("value")],
+            other.c[f"value_{i}"],
+        ).select_from(
+            base.join(
+                other,
+                join_cond,
+            ),
+        )
+        base = alias_utils.subquery_with_unique_alias(
+            base,
+            prefix=f"zip_join_{i}",
         )
 
     value_columns = [base.c[col] for col in base.c.keys() if col.startswith("value")]
@@ -2681,5 +2768,8 @@ def _handle_zip(
         select_cols.insert(1, base.c.__parent_idx__)
         group_cols.append(base.c.__parent_idx__)
 
-    zipped = select(*select_cols).group_by(*group_cols).subquery("zipped")
+    zipped = alias_utils.subquery_with_unique_alias(
+        select(*select_cols).group_by(*group_cols),
+        prefix="zipped",
+    )
     return zipped
