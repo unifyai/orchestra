@@ -28,6 +28,7 @@ from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.dao.log_dao import LogDAO
 
+from . import alias_utils
 from .core import build_sql_query
 from .helpers import (
     _join_subqueries,
@@ -139,14 +140,13 @@ def _handle_logical_operator(
         if isinstance(rhs, Subquery):
             # Re-use the truthiness condition, but negate it
             is_truthy_condition = _create_truthiness_condition(rhs, session)
-            return (
+            return alias_utils.subquery_with_unique_alias(
                 select(
                     rhs.c.log_event_id.label("log_event_id"),
                     not_(is_truthy_condition).label("value"),
                     literal("bool").label("inferred_type"),
-                )
-                .select_from(rhs)
-                .subquery()
+                ).select_from(rhs),
+                prefix="logical_not",
             )
         else:
             return not_(rhs)
@@ -218,7 +218,10 @@ def _handle_logical_operator(
     else:
         return case_expr
 
-    return select(*select_cols).select_from(from_clause).subquery()
+    return alias_utils.subquery_with_unique_alias(
+        select(*select_cols).select_from(from_clause),
+        prefix="logical_op",
+    )
 
 
 def _arithmetic_expr(lval, rval, operand, lval_type, rval_type):
@@ -400,7 +403,10 @@ def _handle_arithmetic_operator(
         select_cols.extend(
             [expr.label("value"), literal(result_type).label("inferred_type")],
         )
-        return select(*select_cols).select_from(lhs).subquery()
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(lhs),
+            prefix="vector_op",
+        )
     elif rhs_is_sub:
         rval, rval_type = _select_value(rhs, session)
         lval, lval_type = _select_value(lhs, session)
@@ -413,7 +419,10 @@ def _handle_arithmetic_operator(
         select_cols.extend(
             [expr.label("value"), literal(result_type).label("inferred_type")],
         )
-        return select(*select_cols).select_from(rhs).subquery()
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(rhs),
+            prefix="vector_op",
+        )
     else:
         rval, rval_type = _select_value(rhs, session)
         lval, lval_type = _select_value(lhs, session)
@@ -552,7 +561,10 @@ def _handle_comparison_operator(
         select_cols.extend(
             [expr.label("value"), literal("bool").label("inferred_type")],
         )
-        return select(*select_cols).select_from(lhs_sql).subquery()
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(lhs_sql),
+            prefix="comparison_op",
+        )
     elif rhs_is_sub:
         # Symmetrical case if only RHS is a subquery.
         select_cols = [rhs_sql.c.log_event_id.label("log_event_id")]
@@ -565,7 +577,10 @@ def _handle_comparison_operator(
         select_cols.extend(
             [expr.label("value"), literal("bool").label("inferred_type")],
         )
-        return select(*select_cols).select_from(rhs_sql).subquery()
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(rhs_sql),
+            prefix="comparison_op",
+        )
     else:
         # If neither side was a subquery, we can return the raw boolean clause.
         return expr
@@ -668,7 +683,10 @@ def _handle_membership_operator(
                 select_cols.extend(
                     [expr.label("value"), literal("bool").label("inferred_type")],
                 )
-                return select(*select_cols).select_from(lhs).subquery()
+                return alias_utils.subquery_with_unique_alias(
+                    select(*select_cols).select_from(lhs),
+                    prefix="membership_op",
+                )
 
         # Fall back to standard handling for non-array types
         rhs_list = _parse_rhs_list_or_dict_if_needed(filter_dict.get("rhs"), rhs)
@@ -701,7 +719,10 @@ def _handle_membership_operator(
         select_cols.extend(
             [expr.label("value"), literal("bool").label("inferred_type")],
         )
-        return select(*select_cols).select_from(lhs).subquery()
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(lhs),
+            prefix="membership_op",
+        )
 
     # Only RHS is a subquery
     elif rhs_is_sub and not lhs_is_sub:
@@ -735,7 +756,10 @@ def _handle_membership_operator(
                 select_cols.extend(
                     [cond.label("value"), literal("bool").label("inferred_type")],
                 )
-                return select(*select_cols).select_from(rhs).subquery()
+                return alias_utils.subquery_with_unique_alias(
+                    select(*select_cols).select_from(rhs),
+                    prefix="membership_op",
+                )
 
         lhs_list = _parse_rhs_list_or_dict_if_needed(filter_dict.get("lhs"), lhs)
 
@@ -754,7 +778,10 @@ def _handle_membership_operator(
         select_cols.extend(
             [cond.label("value"), literal("bool").label("inferred_type")],
         )
-        return select(*select_cols).select_from(rhs).subquery()
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(rhs),
+            prefix="membership_op",
+        )
 
     # Neither side is a subquery
     else:
@@ -831,12 +858,12 @@ def _handle_index_operator(
             if "__parent_idx__" in lhs_expr.c.keys():
                 select_cols.append(lhs_expr.c.__parent_idx__.label("__parent_idx__"))
             select_cols.extend([extracted.label("value"), inferred_type])
-            return (
+            subq = (
                 select(*select_cols)
                 .select_from(lhs_expr)
                 .join(rhs_expr, lhs_expr.c.log_event_id == rhs_expr.c.log_event_id)
-                .subquery()
             )
+            return alias_utils.subquery_with_unique_alias(subq, prefix="index_op")
         else:
             rhs_expr_val = (
                 rhs_expr.value if isinstance(rhs_expr, BindParameter) else rhs_expr
@@ -884,7 +911,10 @@ def _handle_index_operator(
         if "__parent_idx__" in lhs_expr.c.keys():
             select_cols.append(lhs_expr.c.__parent_idx__.label("__parent_idx__"))
         select_cols.extend([extracted.label("value"), inferred_type])
-        return select(*select_cols).select_from(lhs_expr).subquery()
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(lhs_expr),
+            prefix="contains_op",
+        )
 
     else:
         # If LHS is not a subquery => e.g. LHS is a python dict or list literal
@@ -1008,7 +1038,10 @@ def _handle_slice_operator(
                 "Slice operation is only supported on string or list values",
             )
 
-        return select(*select_cols).select_from(lhs_expr).subquery()
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(lhs_expr),
+            prefix="contains_op",
+        )
     else:
         # If LHS is a Python literal, perform the slice operation in Python
         if isinstance(lhs_expr, str):
@@ -1076,7 +1109,10 @@ def _handle_l2(
         select_cols.extend(
             [expr.label("value"), literal("float").label("inferred_type")],
         )
-        return select(*select_cols).select_from(lhs).subquery()
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(lhs),
+            prefix="l2_distance",
+        )
 
     # Only RHS is subquery
     if rhs_is_sub:
@@ -1091,7 +1127,10 @@ def _handle_l2(
         select_cols.extend(
             [expr.label("value"), literal("float").label("inferred_type")],
         )
-        return select(*select_cols).select_from(rhs).subquery()
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(rhs),
+            prefix="l2_distance",
+        )
 
     # Neither side subquery
     return lhs.op("<->")(rhs).cast(Float)
@@ -1148,7 +1187,10 @@ def _handle_cosine(
         select_cols.extend(
             [dist.label("value"), literal("float").label("inferred_type")],
         )
-        return select(*select_cols).select_from(lhs).subquery()
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(lhs),
+            prefix="vector_op",
+        )
 
     if rhs_is_sub:
         rval, _ = _select_value(rhs, session, is_vector=True)
@@ -1162,7 +1204,10 @@ def _handle_cosine(
         select_cols.extend(
             [dist.label("value"), literal("float").label("inferred_type")],
         )
-        return select(*select_cols).select_from(rhs).subquery()
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(rhs),
+            prefix="vector_op",
+        )
 
     dist = lhs.op("<=>")(rhs).cast(Float)
     return dist
@@ -1219,7 +1264,10 @@ def _handle_ip(
         select_cols.extend(
             [expr.label("value"), literal("float").label("inferred_type")],
         )
-        return select(*select_cols).select_from(lhs).subquery()
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(lhs),
+            prefix="vector_op",
+        )
 
     if rhs_is_sub:
         rval, rval_type = _select_value(rhs, session, is_vector=True)
@@ -1233,7 +1281,10 @@ def _handle_ip(
         select_cols.extend(
             [expr.label("value"), literal("float").label("inferred_type")],
         )
-        return select(*select_cols).select_from(rhs).subquery()
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(rhs),
+            prefix="vector_op",
+        )
 
     return lhs.op("<#>")(rhs).cast(Float)
 
@@ -1289,7 +1340,10 @@ def _handle_l1(
         select_cols.extend(
             [expr.label("value"), literal("float").label("inferred_type")],
         )
-        return select(*select_cols).select_from(lhs).subquery()
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(lhs),
+            prefix="vector_op",
+        )
 
     if rhs_is_sub:
         rval, rval_type = _select_value(rhs, session, is_vector=True)
@@ -1303,7 +1357,10 @@ def _handle_l1(
         select_cols.extend(
             [expr.label("value"), literal("float").label("inferred_type")],
         )
-        return select(*select_cols).select_from(rhs).subquery()
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(rhs),
+            prefix="vector_op",
+        )
 
     return lhs.op("<+>")(rhs).cast(Float)
 
@@ -1359,7 +1416,10 @@ def _handle_hamming(
         select_cols.extend(
             [expr.label("value"), literal("float").label("inferred_type")],
         )
-        return select(*select_cols).select_from(lhs).subquery()
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(lhs),
+            prefix="vector_op",
+        )
 
     if rhs_is_sub:
         rval, rval_type = _select_value(rhs, session, is_vector=True)
@@ -1373,7 +1433,10 @@ def _handle_hamming(
         select_cols.extend(
             [expr.label("value"), literal("float").label("inferred_type")],
         )
-        return select(*select_cols).select_from(rhs).subquery()
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(rhs),
+            prefix="vector_op",
+        )
 
     return lhs.op("<~>")(rhs).cast(Float)
 
@@ -1429,7 +1492,10 @@ def _handle_jaccard(
         select_cols.extend(
             [expr.label("value"), literal("float").label("inferred_type")],
         )
-        return select(*select_cols).select_from(lhs).subquery()
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(lhs),
+            prefix="vector_op",
+        )
 
     if rhs_is_sub:
         rval, rval_type = _select_value(rhs, session, is_vector=True)
@@ -1443,6 +1509,9 @@ def _handle_jaccard(
         select_cols.extend(
             [expr.label("value"), literal("float").label("inferred_type")],
         )
-        return select(*select_cols).select_from(rhs).subquery()
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(rhs),
+            prefix="vector_op",
+        )
 
     return lhs.op("<%>")(rhs).cast(Float)
