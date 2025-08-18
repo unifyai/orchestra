@@ -1,9 +1,9 @@
-import random
 import re
 
 from sqlalchemy import literal, select
 from sqlalchemy.sql.selectable import ColumnClause, Subquery
 
+from . import alias_utils
 from .helpers import _build_subquery_for_identifier
 
 __all__ = ["build_sql_query", "_compute_expression"]
@@ -109,7 +109,7 @@ def build_sql_query(
                     subq = (
                         select(*cols)
                         .select_from(base_sub)
-                        .subquery(name=f"__local_{key}_{random.randint(1,100000000)}")
+                        .subquery(name=alias_utils.unique_alias(f"__local_{key}"))
                     )
                     return subq
 
