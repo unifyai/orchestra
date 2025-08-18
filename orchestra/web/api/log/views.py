@@ -3905,9 +3905,9 @@ def delete_fields(
             event_ids = [event_id[0] for event_id in all_event_ids]
 
             if event_ids:
-                # Query for Log entries to delete (for GCS cleanup)
-                logs_to_delete = (
-                    session.query(Log)
+                # First, find the Log IDs to delete
+                logs_to_delete_ids = (
+                    session.query(Log.id)
                     .join(
                         LogEventLog,
                         LogEventLog.log_id == Log.id,
@@ -3916,14 +3916,26 @@ def delete_fields(
                         LogEventLog.log_event_id.in_(event_ids),
                         Log.key == field_name,
                     )
+                    .all()
                 )
+                log_ids = [log_id[0] for log_id in logs_to_delete_ids]
 
-                # Delete GCS media files before deleting database records
-                log_dao._bulk_delete_gcs_media(logs_to_delete)
+                if log_ids:
+                    # Query for Log entries to delete (for GCS cleanup)
+                    logs_to_delete_query = session.query(Log).filter(
+                        Log.id.in_(log_ids),
+                    )
 
-                # Delete the Log entries (not the LogEvents!)
-                deleted_logs_count = logs_to_delete.delete(synchronize_session=False)
-                total_deleted_logs += deleted_logs_count
+                    # Delete GCS media files before deleting database records
+                    log_dao._bulk_delete_gcs_media(logs_to_delete_query)
+
+                    # Delete the Log entries (not the LogEvents!)
+                    deleted_logs_count = logs_to_delete_query.delete(
+                        synchronize_session=False,
+                    )
+                    total_deleted_logs += deleted_logs_count
+                else:
+                    deleted_logs_count = 0
 
                 # Delete the DerivedLog entries
                 # First, find the DerivedLog IDs to delete
