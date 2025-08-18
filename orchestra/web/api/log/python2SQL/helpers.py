@@ -2,7 +2,6 @@ import copy
 import functools
 import json
 import os
-import random
 import re
 from typing import Optional
 
@@ -36,6 +35,8 @@ from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.models.orchestra_models import DerivedLog, Embedding, Log
+
+from . import alias_utils
 
 __all__ = [
     "unify_inferred_types",
@@ -157,23 +158,45 @@ def _select_value(subq, session, is_collection=False, is_vector=False):
     Helper function to select the appropriate value column from a subquery.
     This version is deterministic, unifying all possible types in a subquery.
     """
-    try:
-        if isinstance(subq, BindParameter):
-            return subq.value, LogDAO.infer_type("", subq.value)
-        if hasattr(subq, "element") and subq.name == "reduction_metric":
-            return subq.element, "float"
+    if isinstance(subq, BindParameter):
+        return subq.value, LogDAO.infer_type("", subq.value)
+    if hasattr(subq, "element") and subq.name == "reduction_metric":
+        return subq.element, "float"
 
-        if isinstance(subq, ColumnClause):
-            # TODO(yusha): this is a hack to get the type of the column (susceptible to SQL ordering non-determinism)
-            # we should have a better way to do this.
-            dt = session.execute(select(subq).limit(1)).first()
-            dt = dt[-1]
-            return subq, LogDAO.infer_type("", dt)
+    if isinstance(subq, ColumnClause):
+        # TODO(yusha): this is a hack to get the type of the column (susceptible to SQL ordering non-determinism)
+        # we should have a better way to do this.
+        dt = session.execute(select(subq).limit(1)).first()
+        dt = dt[-1]
+        return subq, LogDAO.infer_type("", dt)
 
-        if isinstance(subq, Subquery):
-            dt = None
-            # Subqueries with a single 'value' column (results of functions, operations)
-            if hasattr(subq.c, "value"):
+    if isinstance(subq, Subquery):
+        dt = None
+        # Subqueries with a single 'value' column (results of functions, operations)
+        if hasattr(subq.c, "value"):
+            distinct_types_rows = session.execute(
+                select(subq.c.inferred_type).distinct(),
+            ).fetchall()
+            distinct_types = [
+                row[0]
+                for row in distinct_types_rows
+                if row[0] not in (None, "NoneType")
+            ]
+
+            if not distinct_types:
+                dt = "NoneType"
+            elif len(distinct_types) == 1:
+                dt = distinct_types[0]
+            else:
+                dt = functools.reduce(unify_inferred_types, distinct_types)
+            return subq.c.value, dt
+
+        # Subqueries with multiple typed columns (from _build_subquery_for_identifier)
+        elif hasattr(subq.c, "inferred_type"):
+            # Prioritize the is_vector flag to ensure the correct column is selected.
+            if is_vector:
+                dt = "vector"
+            else:
                 distinct_types_rows = session.execute(
                     select(subq.c.inferred_type).distinct(),
                 ).fetchall()
@@ -189,52 +212,27 @@ def _select_value(subq, session, is_collection=False, is_vector=False):
                     dt = distinct_types[0]
                 else:
                     dt = functools.reduce(unify_inferred_types, distinct_types)
-                return subq.c.value, dt
 
-            # Subqueries with multiple typed columns (from _build_subquery_for_identifier)
-            elif hasattr(subq.c, "inferred_type"):
-                # Prioritize the is_vector flag to ensure the correct column is selected.
-                if is_vector:
-                    dt = "vector"
-                else:
-                    distinct_types_rows = session.execute(
-                        select(subq.c.inferred_type).distinct(),
-                    ).fetchall()
-                    distinct_types = [
-                        row[0]
-                        for row in distinct_types_rows
-                        if row[0] not in (None, "NoneType")
-                    ]
+            type_to_col_map = {
+                "int": subq.c.int_value,
+                "float": subq.c.float_value,
+                "bool": subq.c.bool_value,
+                "str": subq.c.str_value,
+                "datetime": subq.c.timestamp_value,
+                "time": subq.c.time_value,
+                "date": subq.c.date_value,
+                "timedelta": subq.c.timedelta_value,
+                "list": subq.c.jsonb_value,
+                "dict": subq.c.jsonb_value,
+                "vector": subq.c.vector_value,
+                "image": subq.c.str_value,
+                "NoneType": subq.c.int_value,  # Fallback, value will be NULL
+            }
+            return type_to_col_map.get(dt), dt
 
-                    if not distinct_types:
-                        dt = "NoneType"
-                    elif len(distinct_types) == 1:
-                        dt = distinct_types[0]
-                    else:
-                        dt = functools.reduce(unify_inferred_types, distinct_types)
+    if not isinstance(subq, Subquery):
+        return subq, LogDAO.infer_type("", subq)
 
-                type_to_col_map = {
-                    "int": subq.c.int_value,
-                    "float": subq.c.float_value,
-                    "bool": subq.c.bool_value,
-                    "str": subq.c.str_value,
-                    "datetime": subq.c.timestamp_value,
-                    "time": subq.c.time_value,
-                    "date": subq.c.date_value,
-                    "timedelta": subq.c.timedelta_value,
-                    "list": subq.c.jsonb_value,
-                    "dict": subq.c.jsonb_value,
-                    "vector": subq.c.vector_value,
-                    "image": subq.c.str_value,
-                    "NoneType": subq.c.int_value,  # Fallback, value will be NULL
-                }
-                return type_to_col_map.get(dt), dt
-
-        if not isinstance(subq, Subquery):
-            return subq, LogDAO.infer_type("", subq)
-
-    except Exception:
-        return None, None
     return None, None
 
 
@@ -380,52 +378,45 @@ def _build_subquery_for_identifier(
         log_event_condition = log_event_alias.id.in_(select(log_event_ids))
     # Special handling for log_id field
     if key == "log_id":
-        subq = (
-            select(
-                log_event_alias.id.label("log_event_id"),
-                literal(None).label("jsonb_value"),
-                literal(None).label("vector_value"),
-                literal(None).label("timestamp_value"),
-                literal(None).label("time_value"),
-                literal(None).label("date_value"),
-                literal(None).label("timedelta_value"),
-                literal(None).label("str_value"),
-                literal(None).label("vector_value"),
-                log_event_alias.id.label("int_value"),
-                literal(None).label("float_value"),
-                literal(None).label("bool_value"),
-                literal("int").label("inferred_type"),
-            )
-            .where(log_event_condition)
-            .subquery(name=safe_alias)
+        subq = select(
+            log_event_alias.id.label("log_event_id"),
+            literal(None).label("vector_value"),
+            literal(None).label("jsonb_value"),
+            literal(None).label("timestamp_value"),
+            literal(None).label("time_value"),
+            literal(None).label("date_value"),
+            literal(None).label("timedelta_value"),
+            literal(None).label("str_value"),
+            log_event_alias.id.label("int_value"),
+            literal(None).label("float_value"),
+            literal(None).label("bool_value"),
+            literal("int").label("inferred_type"),
+        ).where(log_event_condition)
+        return alias_utils.subquery_with_unique_alias(
+            subq,
+            prefix=safe_alias or "log_id",
         )
-        return subq
 
     # Special handling for created_at and updated_at fields from LogEvent table
     if key in ("created_at", "updated_at"):
-        subq = (
-            select(
-                log_event_alias.id.label("log_event_id"),
-                literal(None).label("jsonb_value"),
-                literal(None).label("vector_value"),
-                case(
-                    (True, cast(getattr(log_event_alias, key), TIMESTAMP)),
-                    else_=None,
-                ).label("timestamp_value"),
-                literal(None).label("time_value"),
-                literal(None).label("date_value"),
-                literal(None).label("timedelta_value"),
-                literal(None).label("str_value"),
-                literal(None).label("vector_value"),
-                literal(None).label("int_value"),
-                literal(None).label("float_value"),
-                literal(None).label("bool_value"),
-                literal("datetime").label("inferred_type"),
-            )
-            .where(log_event_condition)
-            .subquery(name=safe_alias)
-        )
-        return subq
+        subq = select(
+            log_event_alias.id.label("log_event_id"),
+            literal(None).label("jsonb_value"),
+            literal(None).label("vector_value"),
+            case(
+                (True, cast(getattr(log_event_alias, key), TIMESTAMP)),
+                else_=None,
+            ).label("timestamp_value"),
+            literal(None).label("time_value"),
+            literal(None).label("date_value"),
+            literal(None).label("timedelta_value"),
+            literal(None).label("str_value"),
+            literal(None).label("int_value"),
+            literal(None).label("float_value"),
+            literal(None).label("bool_value"),
+            literal("datetime").label("inferred_type"),
+        ).where(log_event_condition)
+        return alias_utils.subquery_with_unique_alias(subq, prefix=safe_alias or key)
 
     # Build base logs subquery
     base_subq = select(
@@ -552,7 +543,10 @@ def _build_subquery_for_identifier(
         derived_log_alias.key == key,
     )
     # Combine base and derived logs with union
-    combined_subq = base_subq.union_all(derived_subq).subquery(name=safe_alias)
+    combined_subq = alias_utils.subquery_with_unique_alias(
+        base_subq.union_all(derived_subq),
+        prefix=safe_alias,
+    )
 
     # Wrap the combined subquery with vector column support
     return (
@@ -670,11 +664,12 @@ def _join_subqueries(lhs_subq, rhs_subq, expr, inferred_type, session=None):
     )
     select_cols.append(literal(inferred_type).label("inferred_type"))
 
-    j = (
-        select(*select_cols)
-        .select_from(lhs_subq)
-        .outerjoin(rhs_subq, join_cond)
-        .subquery()
+    # Generate a unique alias to prevent collisions in nested queries
+    alias_name = alias_utils.unique_alias("join_subq")
+
+    j = alias_utils.subquery_with_unique_alias(
+        select(*select_cols).select_from(lhs_subq).outerjoin(rhs_subq, join_cond),
+        prefix=alias_name,
     )
     return j
 
@@ -829,7 +824,10 @@ def _maybe_vector_column(expr, key, session, model: str | None = None):
             expr.c.__parent_idx__.label("__parent_idx__"),
         )
 
-    return vector_subq.subquery()
+    return alias_utils.subquery_with_unique_alias(
+        vector_subq,
+        prefix="vector_column",
+    )
 
 
 def _build_subquery_for_base_call(
@@ -895,11 +893,11 @@ def _build_subquery_for_base_call(
     if not safe_name:
         safe_name = "subq"
 
-    filtered_subquery = (
+    filtered_subquery = alias_utils.subquery_with_unique_alias(
         select(*select_cols)
         .select_from(from_clause)
-        .where(key_expr.c.log_event_id.in_(base_ids))
-        .subquery(f"base_call_{safe_name}_{random.randint(0, 1000000)}")
+        .where(key_expr.c.log_event_id.in_(base_ids)),
+        prefix=f"base_call_{safe_name}",
     )
     return filtered_subquery
 
