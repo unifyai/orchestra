@@ -1949,17 +1949,34 @@ def _build_log_subquery(
     except Exception as e:
         raise ValueError(f"Error getting field types: {str(e)}")
 
-    # For each key, add a lateral subquery that gets its value
+    # For each key, add a lateral subquery that gets its value from either Log or DerivedLog
     for key in log_keys:
-        # Create a subquery that gets the value for this key
-        key_subq = (
+        # Create a subquery that gets the value for this key from base logs
+        base_log_subq = (
             session.query(Log.value)
             .join(LogEventLog, LogEventLog.log_id == Log.id)
             .filter(LogEventLog.log_event_id == LogEvent.id, Log.key == key)
             .limit(1)
             .scalar_subquery()
-            .label(key)
         )
+
+        # Create a subquery that gets the value for this key from derived logs
+        derived_log_subq = (
+            session.query(DerivedLog.value)
+            .join(
+                LogEventDerivedLog,
+                LogEventDerivedLog.derived_log_id == DerivedLog.id,
+            )
+            .filter(
+                LogEventDerivedLog.log_event_id == LogEvent.id,
+                DerivedLog.key == key,
+            )
+            .limit(1)
+            .scalar_subquery()
+        )
+
+        # Use COALESCE to get the value from either base or derived logs (preferring base logs)
+        key_subq = func.coalesce(base_log_subq, derived_log_subq).label(key)
         base_query = base_query.add_columns(key_subq)
 
     # Apply the filter to get only the log events we want
@@ -2199,9 +2216,23 @@ def _create_logs_from_joined_rows(
         )
 
         # Create individual Log entries for each column in the joined result
+        # When copying (copy=True), all fields become regular logs regardless of their source
         for col, val in row_dict.items():
-            # Check if field type exists, create if not
-            if col not in field_types:
+            # Check if field type exists
+            field_info = field_types.get(col)
+
+            if field_info:
+                # Enforce type consistency for existing fields
+                entered_type = LogDAO.infer_type(col, val)
+                expected_type = field_info["field_type"]
+
+                if expected_type and expected_type != "NoneType":
+                    if entered_type != expected_type and entered_type != "NoneType":
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Type mismatch for field '{col}' in joined result: expected {expected_type}, got {entered_type}",
+                        )
+            else:
                 # Determine if mutable based on versioned context
                 mutable = context_obj and context_obj.is_versioned
 
@@ -2213,25 +2244,14 @@ def _create_logs_from_joined_rows(
                         "value": val,
                         "mutable": mutable,
                         "unique": False,  # Default to non-unique for joined fields
-                        "field_category": "entry",  # Joined fields are entries
+                        "field_category": "entry",  # All copied fields become regular entries
                         "context_id": context_id,
                     },
                 )
-            else:
-                # Enforce type consistency for existing fields
-                field_info = field_types.get(col)
-                if field_info:
-                    entered_type = LogDAO.infer_type(col, val)
-                    expected_type = field_info["field_type"]
-
-                    if expected_type and expected_type != "NoneType":
-                        if entered_type != expected_type and entered_type != "NoneType":
-                            raise HTTPException(
-                                status_code=400,
-                                detail=f"Type mismatch for field '{col}' in joined result: expected {expected_type}, got {entered_type}",
-                            )
 
             inferred_type = LogDAO.infer_type(col, val)
+
+            # Create a regular Log for all fields when copying
             log = Log(
                 key=col,
                 value=val,
@@ -2351,6 +2371,7 @@ def _create_logs_by_reference(
     log_events = []
     log_event_contexts = []
     log_event_logs = []
+    log_event_derived_logs = []
 
     # Process each row
     for row in result_rows:
@@ -2407,6 +2428,17 @@ def _create_logs_by_reference(
                     .first()
                 )
 
+                # Check if it's a derived log
+                original_derived_log = (
+                    session.query(DerivedLog)
+                    .join(LogEventDerivedLog)
+                    .filter(
+                        LogEventDerivedLog.log_event_id == source_log_event_id,
+                        DerivedLog.key == original_col,
+                    )
+                    .first()
+                )
+
                 if original_log:
                     # For pass-by-reference, we reference the original log
                     # Check if this association already exists to avoid duplicates
@@ -2420,6 +2452,20 @@ def _create_logs_by_reference(
                             LogEventLog(
                                 log_event_id=log_event.id,
                                 log_id=original_log.id,
+                            ),
+                        )
+                elif original_derived_log:
+                    # Check if this association already exists
+                    existing = any(
+                        ledl.derived_log_id == original_derived_log.id
+                        for ledl in log_event_derived_logs
+                        if ledl.log_event_id == log_event.id
+                    )
+                    if not existing:
+                        log_event_derived_logs.append(
+                            LogEventDerivedLog(
+                                log_event_id=log_event.id,
+                                derived_log_id=original_derived_log.id,
                             ),
                         )
         else:
@@ -2455,12 +2501,30 @@ def _create_logs_by_reference(
                             .first()
                         )
 
+                        # Check if it's a derived log
+                        derived_log = (
+                            session.query(DerivedLog)
+                            .join(LogEventDerivedLog)
+                            .filter(
+                                LogEventDerivedLog.log_event_id == source_log_event_id,
+                                DerivedLog.key == original_col,
+                            )
+                            .first()
+                        )
+
                         if log:
                             # Reference the existing log
                             log_event_logs.append(
                                 LogEventLog(
                                     log_event_id=log_event.id,
                                     log_id=log.id,
+                                ),
+                            )
+                        elif derived_log:
+                            log_event_derived_logs.append(
+                                LogEventDerivedLog(
+                                    log_event_id=log_event.id,
+                                    derived_log_id=derived_log.id,
                                 ),
                             )
 
@@ -2471,6 +2535,7 @@ def _create_logs_by_reference(
     # Bulk insert related records
     session.bulk_save_objects(log_event_contexts)
     session.bulk_save_objects(log_event_logs)
+    session.bulk_save_objects(log_event_derived_logs)
 
     return new_log_ids
 

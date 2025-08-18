@@ -772,3 +772,225 @@ async def test_join_logs_reference_with_dict_columns_fails(client: AsyncClient):
     response = await client.post("/v0/logs/join", json=join_payload, headers=HEADERS)
     assert response.status_code == 400
     assert "column aliases are not supported" in response.json()["detail"]
+
+
+@pytest.mark.parametrize("copy", [False, True])
+@pytest.mark.anyio
+async def test_join_with_derived_embedding_columns(client: AsyncClient, copy: bool):
+    """Test joining contexts that have derived embedding columns."""
+    project_name = f"test_project_join_embeddings_copy_{copy}"
+    await _create_project(client, project_name, user=1)
+
+    context_a = "context_descriptions"
+    context_b = "context_titles"
+    joined_context = "joined_embeddings"
+
+    # Create 5 logs in context A with descriptions
+    descriptions = [
+        "a beautiful sunset over the ocean",
+        "a busy city street at night",
+        "a peaceful mountain landscape",
+        "a colorful flower garden",
+        "a cozy cabin in the woods",
+    ]
+
+    log_ids_a = []
+    for i, desc in enumerate(descriptions):
+        response = await _create_log(
+            client,
+            project_name,
+            context=context_a,
+            entries={"description": desc, "id": i},
+        )
+        assert response.status_code == 200
+        log_ids_a.append(response.json()["log_event_ids"][0])
+
+    # Create 5 logs in context B with titles
+    titles = [
+        "Ocean Sunset",
+        "Urban Nightlife",
+        "Mountain Peace",
+        "Garden Colors",
+        "Forest Retreat",
+    ]
+
+    log_ids_b = []
+    for i, title in enumerate(titles):
+        response = await _create_log(
+            client,
+            project_name,
+            context=context_b,
+            entries={"title": title, "id": i},
+        )
+        assert response.status_code == 200
+        log_ids_b.append(response.json()["log_event_ids"][0])
+
+    # Create derived embedding column for context A descriptions
+    response = await client.post(
+        "/v0/logs/derived",
+        json={
+            "project": project_name,
+            "context": context_a,
+            "key": "_description_emb",
+            "equation": "embed({lg:description}, model='text-embedding-3-small')",
+            "referenced_logs": {"lg": log_ids_a},
+        },
+        headers=HEADERS,
+    )
+    assert (
+        response.status_code == 200
+    ), f"Failed to create embedding for descriptions: {response.text}"
+
+    # Create derived embedding column for context B titles
+    response = await client.post(
+        "/v0/logs/derived",
+        json={
+            "project": project_name,
+            "context": context_b,
+            "key": "_title_emb",
+            "equation": "embed({lg:title}, model='text-embedding-3-small')",
+            "referenced_logs": {"lg": log_ids_b},
+        },
+        headers=HEADERS,
+    )
+    assert (
+        response.status_code == 200
+    ), f"Failed to create embedding for titles: {response.text}"
+
+    # Verify derived columns exist in original contexts before joining
+    response = await client.get(
+        f"/v0/logs?project={project_name}&context={context_a}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs_a = response.json().get("logs", [])
+    assert len(logs_a) == 5
+    for log in logs_a:
+        assert "_description_emb" in log.get(
+            "derived_entries",
+            {},
+        ), f"Missing _description_emb in context A log {log['id']}"
+
+    response = await client.get(
+        f"/v0/logs?project={project_name}&context={context_b}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs_b = response.json().get("logs", [])
+    assert len(logs_b) == 5
+    for log in logs_b:
+        assert "_title_emb" in log.get(
+            "derived_entries",
+            {},
+        ), f"Missing _title_emb in context B log {log['id']}"
+
+    # Perform inner join on the id field
+    # First try with explicit columns including derived ones
+    # Adjust columns based on copy parameter
+    if copy:
+        # For copy=True, we can use a dict to rename columns
+        columns = {
+            "A.id": "id",
+            "A.description": "description",
+            "A._description_emb": "_description_emb",
+            "B.title": "title",
+            "B._title_emb": "_title_emb",
+        }
+    else:
+        # For copy=False, must use a list
+        columns = [
+            "A.id",
+            "A.description",
+            "A._description_emb",
+            "B.title",
+            "B._title_emb",
+        ]
+
+    join_payload = {
+        "project": project_name,
+        "pair_of_args": [
+            {"context": context_a},
+            {"context": context_b},
+        ],
+        "join_expr": "A.id == B.id",
+        "mode": "inner",
+        "new_context": joined_context,
+        "columns": columns,
+        "copy": copy,
+    }
+    response = await client.post("/v0/logs/join", json=join_payload, headers=HEADERS)
+    assert response.status_code == 200, f"Join failed: {response.text}"
+
+    # Verify the joined context has both embedding columns
+    response = await client.get(
+        f"/v0/logs?project={project_name}&context={joined_context}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs = response.json().get("logs", [])
+
+    # Should have 5 joined logs (one for each matching id)
+    assert len(logs) == 5, f"Expected 5 joined logs, got {len(logs)}"
+
+    # Verify each log has both embedding columns
+    for i, log in enumerate(logs):
+        entries = log.get("entries", {})
+        derived_entries = log.get("derived_entries", {})
+
+        # Check that we have the base fields
+        # assert "id" in entries  # - For some reason, id columns are considered special and not copied over?
+        assert "description" in entries
+        assert "title" in entries
+
+        if copy:
+            # When copy=True, all columns (including originally derived ones) should be copied as regular entries
+            assert (
+                "_description_emb" in entries
+            ), f"Missing _description_emb in entries for log {i} (copy=True)"
+            assert (
+                "_title_emb" in entries
+            ), f"Missing _title_emb in entries for log {i} (copy=True)"
+
+            # Verify embeddings are lists (vectors)
+            assert isinstance(
+                entries["_description_emb"],
+                list,
+            ), "_description_emb should be a vector"
+            assert isinstance(
+                entries["_title_emb"],
+                list,
+            ), "_title_emb should be a vector"
+
+            # Verify embeddings have expected dimensionality for text-embedding-3-small (1536 dimensions)
+            assert (
+                len(entries["_description_emb"]) == 1536
+            ), f"Expected 1536 dimensions, got {len(entries['_description_emb'])}"
+            assert (
+                len(entries["_title_emb"]) == 1536
+            ), f"Expected 1536 dimensions, got {len(entries['_title_emb'])}"
+        else:
+            # When copy=False, derived columns should be referenced in derived_entries
+            assert (
+                "_description_emb" in derived_entries
+            ), f"Missing _description_emb in derived_entries for log {i} (copy=False)"
+            assert (
+                "_title_emb" in derived_entries
+            ), f"Missing _title_emb in derived_entries for log {i} (copy=False)"
+
+            # Verify embeddings are lists (vectors)
+            assert isinstance(
+                derived_entries["_description_emb"],
+                list,
+            ), "_description_emb should be a vector"
+            assert isinstance(
+                derived_entries["_title_emb"],
+                list,
+            ), "_title_emb should be a vector"
+
+            # Verify embeddings have expected dimensionality for text-embedding-3-small (1536 dimensions)
+            assert (
+                len(derived_entries["_description_emb"]) == 1536
+            ), f"Expected 1536 dimensions, got {len(derived_entries['_description_emb'])}"
+            assert (
+                len(derived_entries["_title_emb"]) == 1536
+            ), f"Expected 1536 dimensions, got {len(derived_entries['_title_emb'])}"
