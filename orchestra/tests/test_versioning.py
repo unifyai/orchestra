@@ -768,3 +768,198 @@ async def test_branching_history_endpoints(client: AsyncClient):
         ctx_commit_hash in proj_in_ctx["next_commit_hash"]
     )  # Has context commit as child
     assert proj_in_ctx["type"] == "project"
+
+
+@pytest.mark.anyio
+async def test_rollback_with_shared_logs(client: AsyncClient):
+    """
+    Tests rollback when logs are shared between multiple LogEvents (many-to-many).
+    Ensures that LogVersion correctly captures each log's state for each LogEvent association.
+    """
+    project_name = "test_shared_logs_rollback"
+    context1_name = "context_with_shared_logs_1"
+    context2_name = "context_with_shared_logs_2"
+
+    # Setup: Create a versioned project and two contexts
+    await client.post(
+        "/v0/project",
+        json={"name": project_name, "is_versioned": True},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context1_name, "is_versioned": True},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context2_name, "is_versioned": True},
+        headers=HEADERS,
+    )
+
+    # Create initial logs in context1
+    await _create_log(
+        client,
+        project_name,
+        context={"name": context1_name},
+        entries={"shared_key": "original_value"},
+    )
+    await _create_log(
+        client,
+        project_name,
+        context={"name": context1_name},
+        entries={"unique_to_ctx1": "unique_data"},
+    )
+
+    # Get the log IDs from context1
+    logs_ctx1 = await fetch_logs(client, project_name, context=context1_name)
+    shared_log_id = next(
+        log["id"] for log in logs_ctx1 if "shared_key" in log["entries"]
+    )
+
+    # Add the shared log to context2 (copy=False means it shares the same log)
+    add_logs_res = await client.post(
+        f"/v0/project/{project_name}/contexts/add_logs",
+        json={
+            "context_name": context2_name,
+            "log_ids": [shared_log_id],
+            "copy": False,  # This creates a many-to-many relationship
+        },
+        headers=HEADERS,
+    )
+    assert add_logs_res.status_code == 200
+
+    # Also create a unique log in context2
+    await _create_log(
+        client,
+        project_name,
+        context={"name": context2_name},
+        entries={"unique_to_ctx2": "ctx2_specific"},
+    )
+
+    # Verify both contexts have the expected logs
+    logs_ctx1_before = await fetch_logs(client, project_name, context=context1_name)
+    assert len(logs_ctx1_before) == 2
+
+    logs_ctx2_before = await fetch_logs(client, project_name, context=context2_name)
+    assert len(logs_ctx2_before) == 2
+
+    # The shared log should have the same values in both contexts
+    shared_in_ctx1 = next(
+        log for log in logs_ctx1_before if "shared_key" in log["entries"]
+    )
+    shared_in_ctx2 = next(
+        log for log in logs_ctx2_before if "shared_key" in log["entries"]
+    )
+    assert shared_in_ctx1["entries"]["shared_key"] == "original_value"
+    assert shared_in_ctx2["entries"]["shared_key"] == "original_value"
+
+    # Commit to create version history
+    commit_res = await client.post(
+        f"/v0/project/{project_name}/commit",
+        json={"commit_message": "Initial state with shared log"},
+        headers=HEADERS,
+    )
+    assert commit_res.status_code == 200
+    commit_hash = commit_res.json()["commit_hash"]
+
+    # Now update the shared log (this will affect both contexts)
+    update_res = await _update_logs(
+        client,
+        [shared_log_id],
+        {"shared_key": "updated_value", "new_field": "added_after_commit"},
+        context={"name": context1_name},
+        overwrite=True,  # Need to overwrite to update existing fields
+    )
+    assert update_res.status_code == 200, f"Update failed: {update_res.text}"
+
+    # Delete the unique log from context1
+    unique_ctx1_log_id = next(
+        log["id"] for log in logs_ctx1_before if "unique_to_ctx1" in log["entries"]
+    )
+    await _delete_logs(
+        client,
+        log_ids=[([unique_ctx1_log_id], None)],
+        project_name=project_name,
+        context=context1_name,
+    )
+
+    # Add a new log to context2
+    await _create_log(
+        client,
+        project_name,
+        context={"name": context2_name},
+        entries={"new_in_ctx2": "created_after_commit"},
+    )
+
+    # Verify the changes before rollback
+    logs_ctx1_after_changes = await fetch_logs(
+        client,
+        project_name,
+        context=context1_name,
+    )
+    logs_ctx2_after_changes = await fetch_logs(
+        client,
+        project_name,
+        context=context2_name,
+    )
+
+    # Context1 should have 1 log (shared log only, unique was deleted)
+    assert len(logs_ctx1_after_changes) == 1
+    assert logs_ctx1_after_changes[0]["entries"]["shared_key"] == "updated_value"
+    assert logs_ctx1_after_changes[0]["entries"]["new_field"] == "added_after_commit"
+
+    # Context2 should have 3 logs (shared + original unique + new)
+    assert len(logs_ctx2_after_changes) == 3
+
+    # Rollback to the committed state
+    rollback_res = await client.post(
+        f"/v0/project/{project_name}/rollback",
+        json={"commit_hash": commit_hash},
+        headers=HEADERS,
+    )
+    assert rollback_res.status_code == 200
+
+    # Verify rollback restored the original state
+    logs_ctx1_after_rollback = await fetch_logs(
+        client,
+        project_name,
+        context=context1_name,
+    )
+    logs_ctx2_after_rollback = await fetch_logs(
+        client,
+        project_name,
+        context=context2_name,
+    )
+
+    # Context1 should have 2 logs again
+    assert len(logs_ctx1_after_rollback) == 2
+
+    # Context2 should have 2 logs (shared + its original unique)
+    assert len(logs_ctx2_after_rollback) == 2
+
+    # Verify the shared log was restored to original value in both contexts
+    shared_ctx1_rollback = next(
+        log for log in logs_ctx1_after_rollback if "shared_key" in log["entries"]
+    )
+    shared_ctx2_rollback = next(
+        log for log in logs_ctx2_after_rollback if "shared_key" in log["entries"]
+    )
+
+    assert shared_ctx1_rollback["entries"]["shared_key"] == "original_value"
+    assert shared_ctx2_rollback["entries"]["shared_key"] == "original_value"
+    assert "new_field" not in shared_ctx1_rollback["entries"]
+    assert "new_field" not in shared_ctx2_rollback["entries"]
+
+    # Verify unique logs were restored
+    assert any(
+        log["entries"].get("unique_to_ctx1") == "unique_data"
+        for log in logs_ctx1_after_rollback
+    )
+    assert any(
+        log["entries"].get("unique_to_ctx2") == "ctx2_specific"
+        for log in logs_ctx2_after_rollback
+    )
+
+    # The new log created after commit should not exist
+    assert not any("new_in_ctx2" in log["entries"] for log in logs_ctx2_after_rollback)
