@@ -68,11 +68,6 @@ supported_models = {
         "context_window": 131072,
         "cost": {"prompt": 0.06, "completion": 0.06},
     },
-    "llama-3.2-11b-chat": {
-        "endpoint": "together_ai/meta-llama/Llama-3.2-11B-Vision-Instruct-Turbo",
-        "context_window": 131072,
-        "cost": {"prompt": 0.18, "completion": 0.18},
-    },
     "llama-3.2-90b-chat": {
         "endpoint": "together_ai/meta-llama/Llama-3.2-90B-Vision-Instruct-Turbo",
         "context_window": 131072,
@@ -93,20 +88,10 @@ supported_models = {
         "context_window": 130815,
         "cost": {"prompt": 3.5, "completion": 3.5},
     },
-    "gemma-2-27b-it": {
-        "endpoint": "together_ai/google/gemma-2-27b-it",
-        "context_window": 8192,
-        "cost": {"prompt": 0.8, "completion": 0.8},
-    },
     "mistral-small": {
         "endpoint": "mistralai/Mistral-Small-24B-Instruct-2501",
         "context_window": 32000,
         "cost": {"prompt": 0.8, "completion": 0.8},
-    },
-    "mistral-7b-instruct-v0.3": {
-        "endpoint": "together_ai/mistralai/Mistral-7B-Instruct-v0.3",
-        "context_window": 32768,
-        "cost": {"prompt": 0.2, "completion": 0.2},
     },
     "qwen-3-235b-a22b-instruct": {
         "endpoint": "together_ai/Qwen/Qwen3-235B-A22B-fp8-tput",
@@ -127,10 +112,5 @@ supported_models = {
         "endpoint": "together_ai/Qwen/Qwen2.5-72B-Instruct-Turbo",
         "context_window": 32768,
         "cost": {"prompt": 1.2, "completion": 1.2},
-    },
-    "qwen-2-72b-instruct": {
-        "endpoint": "together_ai/Qwen/Qwen2-72B-Instruct",
-        "context_window": 32768,
-        "cost": {"prompt": 0.9, "completion": 0.9},
     },
 }
