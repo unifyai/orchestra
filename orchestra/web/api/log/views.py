@@ -3744,8 +3744,9 @@ def create_fields(
                         # Check if this field already exists for this log event in Log or DerivedLog
                         existing_log = (
                             session.query(Log)
+                            .join(LogEventLog, LogEventLog.log_id == Log.id)
                             .filter(
-                                Log.log_event_id == log_event_id,
+                                LogEventLog.log_event_id == log_event_id,
                                 Log.key == field_name,
                             )
                             .first()
@@ -3753,8 +3754,12 @@ def create_fields(
 
                         existing_derived_log = (
                             session.query(DerivedLog)
+                            .join(
+                                LogEventDerivedLog,
+                                LogEventDerivedLog.derived_log_id == DerivedLog.id,
+                            )
                             .filter(
-                                DerivedLog.log_event_id == log_event_id,
+                                LogEventDerivedLog.log_event_id == log_event_id,
                                 DerivedLog.key == field_name,
                             )
                             .first()
@@ -3901,9 +3906,16 @@ def delete_fields(
 
             if event_ids:
                 # Query for Log entries to delete (for GCS cleanup)
-                logs_to_delete = session.query(Log).filter(
-                    Log.log_event_id.in_(event_ids),
-                    Log.key == field_name,
+                logs_to_delete = (
+                    session.query(Log)
+                    .join(
+                        LogEventLog,
+                        LogEventLog.log_id == Log.id,
+                    )
+                    .filter(
+                        LogEventLog.log_event_id.in_(event_ids),
+                        Log.key == field_name,
+                    )
                 )
 
                 # Delete GCS media files before deleting database records
@@ -3914,14 +3926,29 @@ def delete_fields(
                 total_deleted_logs += deleted_logs_count
 
                 # Delete the DerivedLog entries
-                deleted_derived_logs_count = (
-                    session.query(DerivedLog)
+                # First, find the DerivedLog IDs to delete
+                derived_logs_to_delete_ids = (
+                    session.query(DerivedLog.id)
+                    .join(
+                        LogEventDerivedLog,
+                        LogEventDerivedLog.derived_log_id == DerivedLog.id,
+                    )
                     .filter(
-                        DerivedLog.log_event_id.in_(event_ids),
+                        LogEventDerivedLog.log_event_id.in_(event_ids),
                         DerivedLog.key == field_name,
                     )
-                    .delete(synchronize_session=False)
+                    .all()
                 )
+                derived_log_ids = [d[0] for d in derived_logs_to_delete_ids]
+
+                # Then delete them
+                deleted_derived_logs_count = 0
+                if derived_log_ids:
+                    deleted_derived_logs_count = (
+                        session.query(DerivedLog)
+                        .filter(DerivedLog.id.in_(derived_log_ids))
+                        .delete(synchronize_session=False)
+                    )
                 total_deleted_derived_logs += deleted_derived_logs_count
 
             # Delete field type record
