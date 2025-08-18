@@ -30,6 +30,7 @@ from orchestra.db.models.orchestra_models import (
     Log,
     LogEvent,
     LogEventContext,
+    LogEventDerivedLog,
     LogEventJSONLog,
     LogEventLog,
     Organization,
@@ -1952,6 +1953,9 @@ def admin_duplicate_project(
     # 11. Duplicate Derived Logs using bulk insert
     if log_event_id_map:
         derived_log_values = []
+        derived_log_associations = (
+            []
+        )  # Track (old_log_event_id, new_log_event_id) for associations
 
         for old_log_event_id, new_log_event_id in log_event_id_map.items():
             derived_logs = derived_log_dao.filter(log_event_id=old_log_event_id)
@@ -1973,7 +1977,6 @@ def admin_duplicate_project(
 
                 derived_log_values.append(
                     {
-                        "log_event_id": new_log_event_id,
                         "key": dl.key,
                         "equation": dl.equation,
                         "referenced_logs": new_referenced_logs,
@@ -1983,13 +1986,40 @@ def admin_duplicate_project(
                         "updated_at": datetime.now(timezone.utc),
                     },
                 )
+                derived_log_associations.append((old_log_event_id, new_log_event_id))
 
-        # Process derived logs in batches
+        # Process derived logs in batches and collect their IDs
         batch_size = 1000
+        all_new_derived_log_ids = []
+
         for i in range(0, len(derived_log_values), batch_size):
             batch = derived_log_values[i : i + batch_size]
             if batch:
-                stmt = sqlalchemy.insert(DerivedLog).values(batch)
+                stmt = (
+                    sqlalchemy.insert(DerivedLog).values(batch).returning(DerivedLog.id)
+                )
+                result = session.execute(stmt)
+                batch_ids = [row[0] for row in result]
+                all_new_derived_log_ids.extend(batch_ids)
+
+        # Create LogEventDerivedLog associations
+        log_event_derived_log_values = []
+        for i, (old_log_event_id, new_log_event_id) in enumerate(
+            derived_log_associations,
+        ):
+            if i < len(all_new_derived_log_ids):
+                log_event_derived_log_values.append(
+                    {
+                        "log_event_id": new_log_event_id,
+                        "derived_log_id": all_new_derived_log_ids[i],
+                    },
+                )
+
+        # Bulk insert LogEventDerivedLog associations
+        for i in range(0, len(log_event_derived_log_values), batch_size):
+            batch = log_event_derived_log_values[i : i + batch_size]
+            if batch:
+                stmt = sqlalchemy.insert(LogEventDerivedLog).values(batch)
                 session.execute(stmt)
 
         stats["derived_logs_copied"] = len(derived_log_values)

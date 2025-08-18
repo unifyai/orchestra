@@ -16,7 +16,6 @@ from orchestra.db.models.orchestra_models import (
     LogEventContext,
     LogEventJSONLog,
     LogEventLog,
-    LogEventLogVersion,
     LogVersion,
     ProjectVersion,
 )
@@ -25,10 +24,11 @@ from orchestra.db.models.orchestra_models import (
 def delete_orphaned_log_events(session: Session, project_id: int) -> None:
     # Using a scoped delete for the specific project.
     # This statement deletes log events that have no association rows in log_event_context.
-    session.execute(
+    orphaned_log_event_ids = session.execute(
         text(
             """
-        DELETE FROM log_event le
+        SELECT le.id
+        FROM log_event le
         WHERE le.project_id = :project_id
           AND NOT EXISTS (
             SELECT 1
@@ -38,6 +38,84 @@ def delete_orphaned_log_events(session: Session, project_id: int) -> None:
         """,
         ),
         {"project_id": project_id},
+    ).fetchall()
+
+    if not orphaned_log_event_ids:
+        return
+
+    orphaned_ids = [row[0] for row in orphaned_log_event_ids]
+
+    # Delete associated logs via LogEventLog
+    session.execute(
+        text(
+            """
+        DELETE FROM log
+        WHERE id IN (
+            SELECT log_id FROM log_event_log
+            WHERE log_event_id = ANY(:log_event_ids)
+        )
+        """,
+        ),
+        {"log_event_ids": orphaned_ids},
+    )
+
+    # Delete associated JSON logs via LogEventJSONLog
+    session.execute(
+        text(
+            """
+        DELETE FROM json_log
+        WHERE id IN (
+            SELECT json_log_id FROM log_event_json_log
+            WHERE log_event_id = ANY(:log_event_ids)
+        )
+        """,
+        ),
+        {"log_event_ids": orphaned_ids},
+    )
+
+    # Delete associated derived logs via LogEventDerivedLog (if table exists)
+    try:
+        session.execute(
+            text(
+                """
+            DELETE FROM derived_log
+            WHERE id IN (
+                SELECT derived_log_id FROM log_event_derived_log
+                WHERE log_event_id = ANY(:log_event_ids)
+            )
+            """,
+            ),
+            {"log_event_ids": orphaned_ids},
+        )
+    except:
+        # Table might not exist
+        pass
+
+    # Delete associations
+    session.execute(
+        text("DELETE FROM log_event_log WHERE log_event_id = ANY(:log_event_ids)"),
+        {"log_event_ids": orphaned_ids},
+    )
+
+    session.execute(
+        text("DELETE FROM log_event_json_log WHERE log_event_id = ANY(:log_event_ids)"),
+        {"log_event_ids": orphaned_ids},
+    )
+
+    try:
+        session.execute(
+            text(
+                "DELETE FROM log_event_derived_log WHERE log_event_id = ANY(:log_event_ids)",
+            ),
+            {"log_event_ids": orphaned_ids},
+        )
+    except:
+        pass
+
+    # Finally, delete the orphaned log events
+    session.execute(
+        text("DELETE FROM log_event WHERE id = ANY(:log_event_ids)"),
+        {"log_event_ids": orphaned_ids},
     )
 
 
@@ -786,12 +864,10 @@ class ContextDAO:
             return
 
         # 3. Create a snapshot of each log
-        log_versions = []
-        log_version_associations = []  # Track (log_event_id, log_version_index)
-
-        for log, log_event_id in logs_to_version:
-            log_version = LogVersion(
+        log_versions = [
+            LogVersion(
                 context_version_id=context_version.id,
+                log_event_id=log_event_id,
                 key=log.key,
                 value=log.value,
                 param_version=log.param_version,
@@ -799,50 +875,32 @@ class ContextDAO:
                 created_at=log.created_at,
                 updated_at=log.updated_at,
             )
-            log_versions.append(log_version)
-            # Track the association
-            log_version_associations.append((log_event_id, len(log_versions) - 1))
+            for log, log_event_id in logs_to_version
+        ]
 
         # 4. Bulk insert the log snapshots for efficiency
-        self.session.bulk_save_objects(log_versions, return_defaults=True)
-        self.session.flush()  # Get IDs for the new log versions
-
-        # 5. Create LogEventLogVersion associations
-        for log_event_id, log_version_index in log_version_associations:
-            if log_version_index < len(log_versions):
-                association = LogEventLogVersion(
-                    log_event_id=log_event_id,
-                    log_version_id=log_versions[log_version_index].id,
-                )
-                self.session.add(association)
+        self.session.bulk_save_objects(log_versions)
 
     def rollback_to_version(self, context_id: int, context_version_id: int) -> None:
         """
         Helper method to prepare the rollback.
         This method only prepares the operations and does NOT commit.
         """
-        # Query log versions with their associated log_event_ids
-        log_versions_with_events = (
-            self.session.query(LogVersion, LogEventLogVersion.log_event_id)
-            .join(
-                LogEventLogVersion,
-                LogEventLogVersion.log_version_id == LogVersion.id,
-            )
-            .filter(LogVersion.context_version_id == context_version_id)
+        log_versions_to_restore = (
+            self.session.query(LogVersion)
+            .filter_by(context_version_id=context_version_id)
             .all()
         )
-
         context = self.session.query(Context).filter_by(id=context_id).one()
 
         self.session.query(LogEventContext).filter_by(context_id=context_id).delete(
             synchronize_session=False,
         )
 
-        # Group log versions by their original log_event_id
         grouped_lvs = {}
-        if log_versions_with_events:
-            for lv, log_event_id in log_versions_with_events:
-                grouped_lvs.setdefault(log_event_id, []).append(lv)
+        if log_versions_to_restore:
+            for lv in log_versions_to_restore:
+                grouped_lvs.setdefault(lv.log_event_id, []).append(lv)
 
         for original_log_event_id, lvs in grouped_lvs.items():
             new_log_event = LogEvent(project_id=context.project_id)
@@ -856,16 +914,16 @@ class ContextDAO:
             new_logs = []
             new_json_logs = []
             for lv in lvs:
-                new_log = Log(
-                    key=lv.key,
-                    value=lv.value,
-                    param_version=lv.param_version,
-                    inferred_type=lv.inferred_type,
-                    created_at=lv.created_at,
-                    updated_at=lv.updated_at,
+                new_logs.append(
+                    Log(
+                        key=lv.key,
+                        value=lv.value,
+                        param_version=lv.param_version,
+                        inferred_type=lv.inferred_type,
+                        created_at=lv.created_at,
+                        updated_at=lv.updated_at,
+                    ),
                 )
-                new_logs.append(new_log)
-
                 if isinstance(lv.value, (dict, list)):
                     new_json_logs.append(
                         JSONLog(
@@ -874,26 +932,62 @@ class ContextDAO:
                         ),
                     )
 
+            # Bulk insert Log entries and get their IDs
             if new_logs:
-                self.session.bulk_save_objects(new_logs, return_defaults=True)
-                self.session.flush()  # Get IDs for new logs
+                stmt = (
+                    pg_insert(Log)
+                    .values(
+                        [
+                            {
+                                "key": log.key,
+                                "value": log.value,
+                                "param_version": log.param_version,
+                                "inferred_type": log.inferred_type,
+                                "created_at": log.created_at,
+                                "updated_at": log.updated_at,
+                            }
+                            for log in new_logs
+                        ],
+                    )
+                    .returning(Log.id)
+                )
+                result = self.session.execute(stmt)
+                log_ids = [row[0] for row in result]
 
                 # Create LogEventLog associations
-                for new_log in new_logs:
-                    log_event_log = LogEventLog(
-                        log_event_id=new_log_event.id,
-                        log_id=new_log.id,
-                    )
-                    self.session.add(log_event_log)
+                if log_ids:
+                    log_event_log_values = [
+                        {"log_event_id": new_log_event.id, "log_id": log_id}
+                        for log_id in log_ids
+                    ]
+                    stmt_assoc = pg_insert(LogEventLog).values(log_event_log_values)
+                    self.session.execute(stmt_assoc)
 
+            # Bulk insert JSONLog entries and get their IDs
             if new_json_logs:
-                self.session.bulk_save_objects(new_json_logs, return_defaults=True)
-                self.session.flush()  # Get IDs for new JSONLogs
+                stmt_json = (
+                    pg_insert(JSONLog)
+                    .values(
+                        [
+                            {
+                                "key": json_log.key,
+                                "value": json_log.value,
+                            }
+                            for json_log in new_json_logs
+                        ],
+                    )
+                    .returning(JSONLog.id)
+                )
+                result_json = self.session.execute(stmt_json)
+                json_log_ids = [row[0] for row in result_json]
 
                 # Create LogEventJSONLog associations
-                for new_json_log in new_json_logs:
-                    log_event_json_log = LogEventJSONLog(
-                        log_event_id=new_log_event.id,
-                        json_log_id=new_json_log.id,
+                if json_log_ids:
+                    log_event_json_log_values = [
+                        {"log_event_id": new_log_event.id, "json_log_id": json_log_id}
+                        for json_log_id in json_log_ids
+                    ]
+                    stmt_json_assoc = pg_insert(LogEventJSONLog).values(
+                        log_event_json_log_values,
                     )
-                    self.session.add(log_event_json_log)
+                    self.session.execute(stmt_json_assoc)
