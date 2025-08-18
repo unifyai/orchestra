@@ -839,12 +839,6 @@ class LogEvent(Base):
         back_populates="log_events",
         passive_deletes=True,
     )
-    log_versions = relationship(
-        "LogVersion",
-        secondary="log_event_log_version",
-        back_populates="log_events",
-        passive_deletes=True,
-    )
     json_log_histories = relationship(
         "JSONLogHistory",
         secondary="log_event_json_log_history",
@@ -956,6 +950,7 @@ class LogVersion(Base):
         index=True,
     )
     # --- Snapshot fields (a copy of the Log table's data) ---
+    log_event_id = Column(Integer, nullable=False, index=True)
     key = Column(String, nullable=False)
     value = Column(JSONB)
     param_version = Column(Integer)
@@ -963,14 +958,8 @@ class LogVersion(Base):
     created_at = Column(TIMESTAMP)
     updated_at = Column(TIMESTAMP)
 
-    # Relationships
+    # Relationship back to the ContextVersion
     context_version = relationship("ContextVersion", back_populates="log_versions")
-    log_events = relationship(
-        "LogEvent",
-        secondary="log_event_log_version",
-        back_populates="log_versions",
-        passive_deletes=True,
-    )
 
 
 class ParamVersion(Base):
@@ -1040,31 +1029,6 @@ class JSONLogHistory(Base):
         secondary="log_event_json_log_history",
         back_populates="json_log_histories",
         passive_deletes=True,
-    )
-
-
-class LogEventLogVersion(Base):
-    """Association table for the many-to-many relationship between LogEvent and LogVersion.
-
-    This table enables a LogVersion (snapshot of a log) to belong to multiple LogEvent instances,
-    allowing for historical tracking of logs across different log events.
-    """
-
-    __tablename__ = "log_event_log_version"
-
-    log_event_id = Column(
-        Integer,
-        ForeignKey("log_event.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    log_version_id = Column(
-        Integer,
-        ForeignKey("log_version.id", ondelete="CASCADE"),
-        primary_key=True,
-    )
-    __table_args__ = (
-        Index("idx_log_event_log_version_event_id", "log_event_id"),
-        Index("idx_log_event_log_version_version_id", "log_version_id"),
     )
 
 
