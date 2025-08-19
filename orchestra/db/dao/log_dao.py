@@ -1281,11 +1281,11 @@ class LogDAO:
         if not provided_values:
             return []
 
-        # Get the context to access unique_keys_order
+        # Get the context to access the ordered columns
         context = self.session.query(Context).filter_by(id=context_id).one()
 
-        # Use the preserved order from unique_keys_order
-        all_columns = context.unique_keys_order or list(unique_keys.keys())
+        # Use the unique_key_names which preserves order
+        all_columns = context.unique_key_names or list(unique_keys.keys())
         counting_columns = [
             k for k in all_columns if k in unique_keys and unique_keys[k] == "counting"
         ]

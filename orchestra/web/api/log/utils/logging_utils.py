@@ -1266,8 +1266,8 @@ def create_logs_internal(
     provided_unique_ids = None
     if context_obj and context_obj.unique_keys:
         unique_keys = context_obj.unique_keys or {}
-        # Use the preserved order from unique_keys_order
-        all_columns = context_obj.unique_keys_order or list(unique_keys.keys())
+        # Use the unique_key_names which preserves order
+        all_columns = context_obj.unique_key_names or list(unique_keys.keys())
         counting_columns = [
             k for k in all_columns if k in unique_keys and unique_keys[k] == "counting"
         ]
@@ -1532,7 +1532,7 @@ def create_logs_internal(
     # Transform row_ids into the list format
     if row_ids and unique_keys:
         # Use the preserved order from context
-        names = context_obj.unique_keys_order or list(unique_keys.keys())
+        names = context_obj.unique_key_names or list(unique_keys.keys())
 
         if isinstance(row_ids[0], dict):
             # Dictionary format - convert to list of lists using the correct order
