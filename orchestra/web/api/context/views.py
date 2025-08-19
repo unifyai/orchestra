@@ -223,17 +223,7 @@ def get_contexts(
                 "description": context[0].description,
                 "is_versioned": context[0].is_versioned,
                 "allow_duplicates": context[0].allow_duplicates,
-                "unique_keys": (
-                    context[0].unique_keys_order
-                    if hasattr(context[0], "unique_keys_order")
-                    and context[0].unique_keys_order
-                    else (
-                        list(context[0].unique_keys.keys())
-                        if isinstance(context[0].unique_keys, dict)
-                        and context[0].unique_keys
-                        else []
-                    )
-                ),
+                "unique_keys": context[0].unique_key_names or [],
             }
             for context in existing_contexts
             if context[0].name != ""
@@ -356,17 +346,7 @@ def get_context(
             "description": context[0][0].description,
             "is_versioned": context[0][0].is_versioned,
             "allow_duplicates": context[0][0].allow_duplicates,
-            "unique_keys": (
-                context[0][0].unique_keys_order
-                if hasattr(context[0][0], "unique_keys_order")
-                and context[0][0].unique_keys_order
-                else (
-                    list(context[0][0].unique_keys.keys())
-                    if isinstance(context[0][0].unique_keys, dict)
-                    and context[0][0].unique_keys
-                    else []
-                )
-            ),
+            "unique_keys": context[0][0].unique_key_names or [],
         }
     except IndexError as e:
         raise not_found(str(e))
