@@ -746,12 +746,8 @@ class Context(Base):
     updated_at = Column(TIMESTAMP, onupdate=func.now())
     is_versioned = Column(Boolean, nullable=False, server_default="f")
     allow_duplicates = Column(Boolean, nullable=False, server_default="t")
-    unique_keys = Column(JSONB, nullable=False, server_default="{}")
-    unique_keys_order = Column(
-        JSONB,
-        nullable=False,
-        server_default="[]",
-    )  # Preserve column order
+    unique_key_names = Column(JSONB, nullable=False, server_default="[]")
+    unique_key_types = Column(JSONB, nullable=False, server_default="[]")
     current_commit_hash = Column(String, nullable=True)
 
     project = relationship("Project", back_populates="contexts")
@@ -761,6 +757,13 @@ class Context(Base):
         back_populates="contexts",
         passive_deletes=True,
     )
+
+    @property
+    def unique_keys(self):
+        """Reconstruct unique_keys dict from the separate arrays."""
+        if not self.unique_key_names or not self.unique_key_types:
+            return {}
+        return dict(zip(self.unique_key_names, self.unique_key_types))
 
     __table_args__ = (
         UniqueConstraint("project_id", "name", name="uq_project_context_name"),

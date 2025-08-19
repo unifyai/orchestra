@@ -144,6 +144,10 @@ class ContextDAO:
 
         self._validate_description(description)
 
+        # Extract names and types from unique_keys dict
+        unique_key_names = list(unique_keys.keys()) if unique_keys else []
+        unique_key_types = list(unique_keys.values()) if unique_keys else []
+
         stmt = pg_insert(Context).values(
             project_id=project_id,
             name=name,
@@ -152,8 +156,8 @@ class ContextDAO:
             updated_at=ts,
             is_versioned=is_versioned,
             allow_duplicates=allow_duplicates,
-            unique_keys=unique_keys or {},
-            unique_keys_order=list(unique_keys.keys()) if unique_keys else [],
+            unique_key_names=unique_key_names,
+            unique_key_types=unique_key_types,
         )
 
         # On conflict, do nothing and return the existing context's id
@@ -178,7 +182,7 @@ class ContextDAO:
 
             # Get the context to access the preserved order
             context_obj = self.session.query(Context).filter_by(id=context_id).one()
-            ordered_columns = context_obj.unique_keys_order or list(unique_keys.keys())
+            ordered_columns = context_obj.unique_key_names or list(unique_keys.keys())
 
             # Ensure we iterate in the correct order
             for col_name in ordered_columns:
@@ -332,6 +336,10 @@ class ContextDAO:
                 description if description is not None else "default context"
             )
 
+            # Extract names and types from unique_keys dict
+            unique_key_names = list(unique_keys.keys()) if unique_keys else []
+            unique_key_types = list(unique_keys.values()) if unique_keys else []
+
             # Create the context
             stmt = pg_insert(Context).values(
                 project_id=project_id,
@@ -341,8 +349,8 @@ class ContextDAO:
                 updated_at=ts,
                 is_versioned=is_versioned,
                 allow_duplicates=allow_duplicates,
-                unique_keys=unique_keys or {},
-                unique_keys_order=list(unique_keys.keys()) if unique_keys else [],
+                unique_key_names=unique_key_names,
+                unique_key_types=unique_key_types,
             )
 
             # On conflict, do nothing and return the existing context's id
@@ -371,10 +379,8 @@ class ContextDAO:
                             updated_at=ts,
                             is_versioned=False,
                             allow_duplicates=allow_duplicates,
-                            unique_keys=unique_keys or {},
-                            unique_keys_order=list(unique_keys.keys())
-                            if unique_keys
-                            else [],
+                            unique_key_names=unique_key_names,
+                            unique_key_types=unique_key_types,
                         )
                         .returning(Context.id)
                     )
