@@ -1,7 +1,7 @@
 import hashlib
 import re
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -135,7 +135,7 @@ class ContextDAO:
         description: Optional[str] = None,
         is_versioned: bool = False,
         allow_duplicates: bool = True,
-        unique_column_ids: Optional[List[str]] = None,
+        unique_keys: Optional[Dict[str, str]] = None,
     ) -> int:
         """Create a new context using upsert to handle race conditions."""
         from orchestra.db.dao.field_type_dao import FieldTypeDAO
@@ -152,7 +152,8 @@ class ContextDAO:
             updated_at=ts,
             is_versioned=is_versioned,
             allow_duplicates=allow_duplicates,
-            unique_id_names=unique_column_ids or [],
+            unique_keys=unique_keys or {},
+            unique_keys_order=list(unique_keys.keys()) if unique_keys else [],
         )
 
         # On conflict, do nothing and return the existing context's id
@@ -171,27 +172,42 @@ class ContextDAO:
             else:
                 raise ValueError(f"Failed to create or retrieve context {name}")
 
-        # If unique_column_ids is provided, ensure the FieldType exists
-        if unique_column_ids:
+        # If unique_keys is provided, ensure the FieldType exists for each column
+        if unique_keys:
             field_type_dao = FieldTypeDAO(self.session)
 
-            for id_name in unique_column_ids:
+            # Get the context to access the preserved order
+            context_obj = self.session.query(Context).filter_by(id=context_id).one()
+            ordered_columns = context_obj.unique_keys_order or list(unique_keys.keys())
+
+            # Ensure we iterate in the correct order
+            for col_name in ordered_columns:
+                if col_name not in unique_keys:
+                    continue
+                col_type = unique_keys[col_name]
                 field_type = field_type_dao.get_by_name_and_context(
                     project_id,
-                    id_name,
+                    col_name,
                     context_id,
                 )
                 if not field_type:
-                    # Create the field type for the sequential ID
+                    # Get initial value based on type
+                    from orchestra.web.api.log.python2SQL.constants import (
+                        get_default_value_for_type,
+                    )
+
+                    initial_value = get_default_value_for_type(col_type)
+
+                    # Create the field type
                     field_type_dao.create_field_type_if_absent(
                         project_id=project_id,
-                        field_name=id_name,
-                        value=0,  # for type inference to integer
+                        field_name=col_name,
+                        value=initial_value,
                         context_id=context_id,
                         field_category="entry",
-                        mutable=False,
+                        mutable=False,  # Composite key fields should be immutable
                         unique=True,
-                        description=f"Unique sequential ID component.",
+                        description=f"Composite unique key component ({col_type}).",
                     )
         self.session.commit()
         return context_id
@@ -283,7 +299,7 @@ class ContextDAO:
         description: Optional[str] = None,
         is_versioned: bool = False,
         allow_duplicates: bool = True,
-        unique_column_ids: Optional[List[str]] = None,
+        unique_keys: Optional[Dict[str, str]] = None,
     ) -> int:
         """
         Get or create a context using upsert.
@@ -325,7 +341,8 @@ class ContextDAO:
                 updated_at=ts,
                 is_versioned=is_versioned,
                 allow_duplicates=allow_duplicates,
-                unique_id_names=unique_column_ids or [],
+                unique_keys=unique_keys or {},
+                unique_keys_order=list(unique_keys.keys()) if unique_keys else [],
             )
 
             # On conflict, do nothing and return the existing context's id
@@ -354,7 +371,10 @@ class ContextDAO:
                             updated_at=ts,
                             is_versioned=False,
                             allow_duplicates=allow_duplicates,
-                            unique_id_names=unique_column_ids or [],
+                            unique_keys=unique_keys or {},
+                            unique_keys_order=list(unique_keys.keys())
+                            if unique_keys
+                            else [],
                         )
                         .returning(Context.id)
                     )
@@ -378,7 +398,7 @@ class ContextDAO:
                     description="default context",
                     is_versioned=False,
                     allow_duplicates=allow_duplicates,
-                    unique_column_ids=unique_column_ids,
+                    unique_keys=unique_keys,
                 )
             except Exception:
                 raise ValueError(
@@ -440,14 +460,14 @@ class ContextDAO:
     def get_context_id(self, project_id: int, body):
         if body:
             allow_duplicates = getattr(body, "allow_duplicates", True)
-            unique_column_ids = getattr(body, "unique_column_ids", None)
+            unique_keys = getattr(body, "unique_keys", None)
             return self.get_or_create(
                 project_id=project_id,
                 name=body.name,
                 description=body.description,
                 is_versioned=body.is_versioned,
                 allow_duplicates=allow_duplicates,
-                unique_column_ids=unique_column_ids,
+                unique_keys=unique_keys,
             )
         else:
             # Create or get default context using upsert
@@ -456,7 +476,7 @@ class ContextDAO:
                 name="",
                 description="default context",
                 is_versioned=False,
-                unique_column_ids=None,
+                unique_keys=None,
             )
 
     def check_for_duplicates(self, context_id: int, log_event_id: int) -> bool:
