@@ -32,36 +32,55 @@ class ContextCreateRequest(BaseModel):
         description="Whether duplicate log entries are allowed in this context. If False, attempts to add duplicate logs will be ignored.",
         example=True,
     )
-    unique_column_ids: Optional[List[str]] = Field(
+    unique_keys: Optional[Dict[str, str]] = Field(
         default=None,
-        description="List of unique column names for nested unique IDs. Leftmost is most major, rightmost is most minor. If None or empty, no unique IDs are generated.",
-        example=["task_id", "instance_id"],
+        description="Composite unique key definition. Keys are column names, values are types ('counting' for auto-increment, 'str', 'int', 'float', 'bool', 'datetime', 'time', 'date', 'timedelta', 'dict', 'list').",
+        example={
+            "department_id": "counting",
+            "first_name": "str",
+            "company_id": "counting",
+            "last_name": "str",
+        },
     )
 
-    @field_validator("unique_column_ids")
+    @field_validator("unique_keys")
     @classmethod
-    def validate_unique_column_ids(cls, v):
-        """Validate unique column IDs."""
+    def validate_unique_keys(cls, v):
+        """Validate unique keys."""
         if v is None:
             return v
 
-        if not v:  # Empty list
+        if not v:  # Empty dict
             raise ValueError(
-                "unique_column_ids cannot be an empty list. Use None to disable unique IDs.",
+                "unique_keys cannot be an empty dict. Use None to disable unique keys.",
             )
 
-        # Check for duplicates
-        if len(v) != len(set(v)):
-            raise ValueError("unique_column_ids cannot contain duplicate names")
+        # Valid types for composite keys
+        from orchestra.web.api.log.python2SQL.constants import VALID_COMPOSITE_KEY_TYPES
 
-        # Validate each column name
-        for name in v:
-            if not isinstance(name, str):
+        allowed_types = VALID_COMPOSITE_KEY_TYPES
+
+        counting_columns = []
+        for col_name, col_type in v.items():
+            # Validate column name
+            if not isinstance(col_name, str):
                 raise ValueError("All column names must be strings")
-            if not re.match(r"^[a-zA-Z0-9_]+$", name):
+            if not re.match(r"^[a-zA-Z0-9_]+$", col_name):
                 raise ValueError(
-                    f"Column name '{name}' must contain only alphanumeric characters and underscores",
+                    f"Column name '{col_name}' must contain only alphanumeric characters and underscores",
                 )
+
+            # Validate type
+            if col_type not in allowed_types:
+                raise ValueError(
+                    f"Invalid type '{col_type}' for column '{col_name}'. Allowed types: {allowed_types}",
+                )
+
+            if col_type == "counting":
+                counting_columns.append(col_name)
+
+        # If there are counting columns, they must form a valid hierarchy (ordered list)
+        # For now, we'll preserve the order as given in the dict (Python 3.7+ preserves insertion order)
 
         return v
 
