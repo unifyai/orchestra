@@ -7,13 +7,13 @@ from orchestra.web.api.context.schema import ContextCreateRequest
 
 class RowIDs(BaseModel):
     names: List[str] = Field(
-        description="List of unique ID column names for the rows. For single columns, this will be a list with one element. For nested unique IDs, this contains the column names in order from most major to most minor.",
-        example=["row_id"],
+        description="List of composite unique key column names. For single columns, this will be a list with one element. For composite keys, this contains all column names in the key.",
+        example=["department_id", "first_name"],
     )
-    ids: List[List[int]] = Field(
-        description="List of sequential row ID lists corresponding to each log event, "
-        "providing a consistent ordering mechanism for the created logs. Each inner list contains the ID values for the corresponding column names. For single columns, each inner list contains one element.",
-        example=[[0], [1], [2]],
+    ids: List[List[Any]] = Field(
+        description="List of composite key value lists corresponding to each log event. "
+        "Each inner list contains the values for the columns specified in 'names'. Values can be of any type (int, str, etc.).",
+        example=[[0, "Alice"], [1, "Bob"], [2, "Charlie"]],
     )
 
 

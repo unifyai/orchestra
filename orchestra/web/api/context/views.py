@@ -23,7 +23,6 @@ from orchestra.web.api.context.schema import (
     RenameContextRequest,
 )
 from orchestra.web.api.log.views import _get_logs_query
-from orchestra.web.api.utils.helpers import _safe_json_loads
 from orchestra.web.api.utils.http_responses import not_found
 
 router = APIRouter()
@@ -102,13 +101,13 @@ def create_context(
             context_description = None
             context_is_versioned = False
             context_allow_duplicates = True
-            unique_column_ids = None
+            unique_keys = None
         else:
             context_name = request.name
             context_description = request.description
             context_is_versioned = request.is_versioned
             context_allow_duplicates = request.allow_duplicates
-            unique_column_ids = request.unique_column_ids
+            unique_keys = request.unique_keys
 
         # Normalize context name: remove leading slash to treat '/exp1/name1' the same as 'exp1/name1'
         context_name = context_name.lstrip("/")
@@ -133,7 +132,7 @@ def create_context(
             description=context_description,
             is_versioned=context_is_versioned,
             allow_duplicates=context_allow_duplicates,
-            unique_column_ids=unique_column_ids,
+            unique_keys=unique_keys,
         )
 
         return {"info": "Context created successfully."}
@@ -159,16 +158,14 @@ def create_context(
                             "description": "description1",
                             "is_versioned": True,
                             "allow_duplicates": True,
-                            "unique_id_column": False,
-                            "unique_id_names": "row_id",
+                            "unique_keys": ["row_id"],
                         },
                         {
                             "name": "context2",
                             "description": "description2",
                             "is_versioned": False,
                             "allow_duplicates": True,
-                            "unique_id_column": False,
-                            "unique_id_names": "my_id",
+                            "unique_keys": ["user_id", "session_id"],
                         },
                     ],
                 },
@@ -226,12 +223,14 @@ def get_contexts(
                 "description": context[0].description,
                 "is_versioned": context[0].is_versioned,
                 "allow_duplicates": context[0].allow_duplicates,
-                "unique_column_ids": (
-                    context[0].unique_id_names
-                    if isinstance(context[0].unique_id_names, list)
+                "unique_keys": (
+                    context[0].unique_keys_order
+                    if hasattr(context[0], "unique_keys_order")
+                    and context[0].unique_keys_order
                     else (
-                        _safe_json_loads(context[0].unique_id_names)
-                        if context[0].unique_id_names
+                        list(context[0].unique_keys.keys())
+                        if isinstance(context[0].unique_keys, dict)
+                        and context[0].unique_keys
                         else []
                     )
                 ),
@@ -298,8 +297,7 @@ def get_context_commits(
                         "description": "description1",
                         "is_versioned": True,
                         "allow_duplicates": True,
-                        "unique_id_column": False,
-                        "unique_id_names": "row_id",
+                        "unique_keys": ["row_id"],
                     },
                 },
             },
@@ -358,12 +356,14 @@ def get_context(
             "description": context[0][0].description,
             "is_versioned": context[0][0].is_versioned,
             "allow_duplicates": context[0][0].allow_duplicates,
-            "unique_column_ids": (
-                context[0][0].unique_id_names
-                if isinstance(context[0][0].unique_id_names, list)
+            "unique_keys": (
+                context[0][0].unique_keys_order
+                if hasattr(context[0][0], "unique_keys_order")
+                and context[0][0].unique_keys_order
                 else (
-                    _safe_json_loads(context[0][0].unique_id_names)
-                    if context[0][0].unique_id_names
+                    list(context[0][0].unique_keys.keys())
+                    if isinstance(context[0][0].unique_keys, dict)
+                    and context[0][0].unique_keys
                     else []
                 )
             ),

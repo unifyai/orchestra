@@ -746,7 +746,12 @@ class Context(Base):
     updated_at = Column(TIMESTAMP, onupdate=func.now())
     is_versioned = Column(Boolean, nullable=False, server_default="f")
     allow_duplicates = Column(Boolean, nullable=False, server_default="t")
-    unique_id_names = Column(JSONB, nullable=False, server_default="[]")
+    unique_keys = Column(JSONB, nullable=False, server_default="{}")
+    unique_keys_order = Column(
+        JSONB,
+        nullable=False,
+        server_default="[]",
+    )  # Preserve column order
     current_commit_hash = Column(String, nullable=True)
 
     project = relationship("Project", back_populates="contexts")

@@ -56,71 +56,55 @@ class LogEventDAO:
             ]
             self.session.add_all(associations)
 
-            # Check if this context needs a unique sequential ID
+            # Check if this context needs composite unique keys
             context = self.session.query(Context).filter_by(id=context_id).one()
-            if context.unique_id_names:
+            if context.unique_keys:
                 log_dao = LogDAO(self.session, ContextDAO(self.session))
-                unique_id_names = context.unique_id_names or []
+                unique_keys = context.unique_keys
 
-                if len(unique_id_names) > 1:
-                    # Nested unique IDs
-                    if provided_unique_ids is None:
-                        provided_unique_ids = [{} for _ in range(count)]
-                    reserved_ids = log_dao.get_next_nested_ids(
+                # Generate composite key values
+                if provided_unique_ids is None:
+                    provided_unique_ids = [{} for _ in range(count)]
+
+                try:
+                    reserved_ids = log_dao.get_next_composite_ids(
                         project_id=project_id,
                         context_id=context_id,
-                        columns=unique_id_names,
-                        provided_ids=provided_unique_ids,
+                        unique_keys=unique_keys,
+                        provided_values=provided_unique_ids,
                     )
                     row_ids = reserved_ids
+                except ValueError as e:
+                    # Convert ValueError to a more user-friendly error
+                    from fastapi import HTTPException
 
-                    # Create log entries for all unique ID columns
-                    all_id_logs = []
-                    for i, log_event_id in enumerate(log_event_ids):
-                        id_dict = row_ids[i]
-                        for col_name, col_value in id_dict.items():
-                            all_id_logs.append(
-                                {
-                                    "project_id": project_id,
-                                    "log_event_id": log_event_id,
-                                    "key": col_name,
-                                    "value": col_value,
-                                    "context_id": context_id,
-                                    "explicit_types": {col_name: {"type": "int"}},
-                                },
-                            )
-                    if all_id_logs:
-                        log_dao.bulk_create(all_id_logs)
+                    raise HTTPException(status_code=400, detail=str(e))
 
-                elif len(unique_id_names) == 1:
-                    # Single unique ID
-                    param_key = unique_id_names[0]
-                    reserved_ids = log_dao.get_next_row_ids(
-                        project_id=project_id,
-                        context_id=context_id,
-                        param_key=param_key,
-                        count=count,
-                    )
-                    row_ids = reserved_ids
+                # Create log entries for all composite key columns
+                all_key_logs = []
+                for i, log_event_id in enumerate(log_event_ids):
+                    key_values = row_ids[i]
+                    for col_name, col_value in key_values.items():
+                        col_type = unique_keys[col_name]
 
-                    # Create sequential ID log entries
-                    sequential_id_logs = []
-                    for i, log_event_id in enumerate(log_event_ids):
-                        new_id = row_ids[i]
-                        sequential_id_logs.append(
+                        # Determine the explicit type for the field
+                        if col_type == "counting":
+                            explicit_type = "int"
+                        else:
+                            explicit_type = col_type
+
+                        all_key_logs.append(
                             {
                                 "project_id": project_id,
                                 "log_event_id": log_event_id,
-                                "key": param_key,
-                                "value": new_id,
+                                "key": col_name,
+                                "value": col_value,
                                 "context_id": context_id,
-                                "explicit_types": {param_key: {"type": "int"}},
+                                "explicit_types": {col_name: {"type": explicit_type}},
                             },
                         )
-                    if sequential_id_logs:
-                        log_dao.bulk_create(
-                            sequential_id_logs,
-                        )
+                if all_key_logs:
+                    log_dao.bulk_create(all_key_logs)
 
         self.session.flush()
         if return_row_ids:

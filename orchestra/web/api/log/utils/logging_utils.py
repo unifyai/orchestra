@@ -1264,77 +1264,94 @@ def create_logs_internal(
     total_logs = max(entries_len, params_len)
 
     provided_unique_ids = None
-    if context_obj and context_obj.unique_id_names:
-        unique_id_names = context_obj.unique_id_names or []
-        unique_id_names_set = set(unique_id_names)
+    if context_obj and context_obj.unique_keys:
+        unique_keys = context_obj.unique_keys or {}
+        # Use the preserved order from unique_keys_order
+        all_columns = context_obj.unique_keys_order or list(unique_keys.keys())
+        counting_columns = [
+            k for k in all_columns if k in unique_keys and unique_keys[k] == "counting"
+        ]
 
-        # 1. Extract parent IDs from entries/params and validate nesting rules
-        all_parent_ids = []
+        # 1. Extract and validate composite key values from entries/params
+        all_composite_values = []
         for i in range(total_logs):
             current_entries = entries_list[min(i, len(entries_list) - 1)] or {}
             current_params = params_list[min(i, len(params_list) - 1)] or {}
 
-            # Merge entries and params to check for unique ID columns
+            # Merge entries and params to check for unique key columns
             current_data = {**current_entries, **current_params}
 
-            # Extract parent IDs that match unique ID column names
-            parent_ids = {}
-            for key in list(current_data.keys()):
-                if key in unique_id_names_set:
-                    parent_ids[key] = current_data[key]
+            # Extract values for composite key columns
+            composite_values = {}
+            provided_counting_values = {}
 
-            # Validate parent IDs follow proper nesting rules
-            if parent_ids:
-                # Cannot provide the rightmost (auto-incremented) column
-                rightmost_col = unique_id_names[-1]
-                if rightmost_col in parent_ids:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Cannot provide value for rightmost unique ID column '{rightmost_col}'. This column is auto-incremented.",
-                    )
+            for col_name, col_type in unique_keys.items():
+                if col_type == "counting":
+                    # For counting columns, check if user provided a value
+                    if col_name in current_data:
+                        provided_counting_values[col_name] = current_data[col_name]
+                else:
+                    # Non-counting columns must be provided
+                    if col_name not in current_data:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Must provide value for composite key column '{col_name}' (type: {col_type}).",
+                        )
+                    composite_values[col_name] = current_data[col_name]
 
-                # Cannot skip hierarchy levels - must provide consecutive columns from left
-                provided_indices = [
-                    unique_id_names.index(key) for key in parent_ids.keys()
-                ]
+            # Validate counting columns follow hierarchical rules
+            if counting_columns and provided_counting_values:
+                # Check which counting columns were provided
+                provided_indices = []
+                for key in provided_counting_values.keys():
+                    if key in counting_columns:
+                        provided_indices.append(counting_columns.index(key))
+
                 if provided_indices:
                     provided_indices.sort()
-                    # Check if indices are consecutive starting from 0
+
+                    # Cannot skip hierarchy levels - must provide consecutive columns from left
                     expected_indices = list(range(len(provided_indices)))
                     if provided_indices != expected_indices:
                         raise HTTPException(
                             status_code=400,
-                            detail=f"Parent IDs must be provided for consecutive columns starting from the leftmost. "
-                            f"Expected columns: {unique_id_names[:len(provided_indices)]}, "
-                            f"but got: {list(parent_ids.keys())}",
+                            detail=f"Counting columns must be provided consecutively from the leftmost. "
+                            f"Expected columns: {counting_columns[:len(provided_indices)]}, "
+                            f"but got: {list(provided_counting_values.keys())}",
                         )
 
-                # Validate that parent keys are valid unique ID names (redundant check but kept for safety)
-                for key in parent_ids:
-                    if key not in unique_id_names_set:
+                    # Cannot provide the column that would be auto-incremented next
+                    next_col_index = len(provided_indices)
+                    if (
+                        next_col_index < len(counting_columns)
+                        and counting_columns[next_col_index] in provided_counting_values
+                    ):
                         raise HTTPException(
                             status_code=400,
-                            detail=f"Invalid parent ID key '{key}'. Allowed keys are: {unique_id_names[:-1]}",
+                            detail=f"Cannot provide value for counting column '{counting_columns[next_col_index]}'. This column is auto-incremented.",
                         )
 
-            all_parent_ids.append(parent_ids)
+                # Add provided counting values to composite values
+                composite_values.update(provided_counting_values)
 
-        # 2. Pop parent ID keys from original entries/params to prevent them from becoming log fields
+            all_composite_values.append(composite_values)
+
+        # 2. Pop composite key columns from original entries/params to prevent them from becoming log fields
         for i in range(total_logs):
             current_entries = entries_list[min(i, len(entries_list) - 1)]
             current_params = params_list[min(i, len(params_list) - 1)]
-            parent_ids = all_parent_ids[i]
+            composite_values = all_composite_values[i]
 
-            # Remove parent ID keys from entries and params
+            # Remove composite key columns from entries and params
             if current_entries:
-                for key in parent_ids:
+                for key in unique_keys.keys():
                     current_entries.pop(key, None)
             if current_params:
-                for key in parent_ids:
+                for key in unique_keys.keys():
                     current_params.pop(key, None)
 
         # 3. Construct the `provided_unique_ids` list for the DAO
-        provided_unique_ids = all_parent_ids
+        provided_unique_ids = all_composite_values
 
     # Bulk create all log events in one operation
     log_event_ids, row_ids = log_event_dao.bulk_create(
@@ -1507,22 +1524,26 @@ def create_logs_internal(
 
     # Build row_ids payload
     row_ids_payload = None
-    unique_id_names = context_obj.unique_id_names or []
+    unique_keys = context_obj.unique_keys or {}
 
+    names = []
     ids_list = []
-    # Always return nested format: transform row_ids into a list of lists
-    if row_ids and unique_id_names:
+
+    # Transform row_ids into the list format
+    if row_ids and unique_keys:
+        # Use the preserved order from context
+        names = context_obj.unique_keys_order or list(unique_keys.keys())
+
         if isinstance(row_ids[0], dict):
-            # Nested ID case: transform the list of dictionaries into a list of lists,
-            # ensuring the order of values matches the order of column names.
-            for id_dict in row_ids:
-                ids_list.append([id_dict.get(name) for name in unique_id_names])
+            # Dictionary format - convert to list of lists using the correct order
+            for row_id in row_ids:
+                ids_list.append([row_id.get(name) for name in names])
         else:
-            # Single ID case: wrap each ID in a list to create nested format
+            # Legacy single ID case - wrap each ID in a list
             ids_list = [[row_id] for row_id in row_ids]
 
     row_ids_payload = {
-        "names": unique_id_names,
+        "names": names,
         "ids": ids_list,
     }
     return {"log_event_ids": log_event_ids, "row_ids": row_ids_payload}

@@ -1483,7 +1483,7 @@ async def test_rename_context(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_context_with_sequential_id(client: AsyncClient):
-    """Test that logs in a context with unique_column_ids get a sequential ID."""
+    """Test that logs in a context with unique_keys get a sequential ID."""
     project_name = "sequential-id-project"
     context_name = "sequential-id-context"
     unique_id_names = "my_row_id"
@@ -1491,13 +1491,13 @@ async def test_context_with_sequential_id(client: AsyncClient):
     # Create project
     await _create_project(client, project_name)
 
-    # Create a context with unique_column_ids enabled
+    # Create a context with unique_keys enabled
     response = await client.post(
         f"/v0/project/{project_name}/contexts",
         json={
             "name": context_name,
             "description": "Context with sequential IDs",
-            "unique_column_ids": [unique_id_names],
+            "unique_keys": {unique_id_names: "counting"},
         },
         headers=HEADERS,
     )
@@ -1537,7 +1537,10 @@ async def test_nested_ids_explicit_set_fails(client: AsyncClient):
     await _create_project(client, project_name)
     await client.post(
         f"/v0/project/{project_name}/contexts",
-        json={"name": context_name, "unique_column_ids": unique_id_names},
+        json={
+            "name": context_name,
+            "unique_keys": {col: "counting" for col in unique_id_names},
+        },
         headers=HEADERS,
     )
 
@@ -1561,7 +1564,10 @@ async def test_nested_ids_non_existent_parent_fails(client: AsyncClient):
     await _create_project(client, project_name)
     await client.post(
         f"/v0/project/{project_name}/contexts",
-        json={"name": context_name, "unique_column_ids": unique_id_names},
+        json={
+            "name": context_name,
+            "unique_keys": {col: "counting" for col in unique_id_names},
+        },
         headers=HEADERS,
     )
 
@@ -1587,7 +1593,10 @@ async def test_nested_unique_ids_increment(client: AsyncClient):
     await _create_project(client, project_name)
     await client.post(
         f"/v0/project/{project_name}/contexts",
-        json={"name": context_name, "unique_column_ids": unique_id_names},
+        json={
+            "name": context_name,
+            "unique_keys": {col: "counting" for col in unique_id_names},
+        },
         headers=HEADERS,
     )
 
@@ -1668,7 +1677,10 @@ async def test_nested_ids_batch_creation(client: AsyncClient):
     await _create_project(client, project_name)
     await client.post(
         f"/v0/project/{project_name}/contexts",
-        json={"name": context_name, "unique_column_ids": unique_id_names},
+        json={
+            "name": context_name,
+            "unique_keys": {col: "counting" for col in unique_id_names},
+        },
         headers=HEADERS,
     )
 
@@ -1716,21 +1728,21 @@ async def test_nested_ids_batch_creation(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_unique_column_ids_none_disables_unique_ids(client: AsyncClient):
-    """Test that unique_column_ids: None disables unique IDs."""
+async def test_unique_keys_none_disables_unique_ids(client: AsyncClient):
+    """Test that unique_keys: None disables unique IDs."""
     project_name = "no-unique-ids-project"
     context_name = "no-unique-ids-context"
 
     # Create project
     await _create_project(client, project_name)
 
-    # Create a context with unique_column_ids: None
+    # Create a context with unique_keys: None
     response = await client.post(
         f"/v0/project/{project_name}/contexts",
         json={
             "name": context_name,
             "description": "Context without unique IDs",
-            "unique_column_ids": None,
+            "unique_keys": None,
         },
         headers=HEADERS,
     )
@@ -1760,26 +1772,26 @@ async def test_unique_column_ids_none_disables_unique_ids(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_unique_column_ids_empty_list_validation(client: AsyncClient):
-    """Test that unique_column_ids: [] is rejected with validation error."""
-    project_name = "empty-list-validation-project"
-    context_name = "empty-list-validation-context"
+async def test_unique_keys_empty_dict_validation(client: AsyncClient):
+    """Test that unique_keys: {} is rejected with validation error."""
+    project_name = "empty-dict-validation-project"
+    context_name = "empty-dict-validation-context"
 
     # Create project
     await _create_project(client, project_name)
 
-    # Try to create a context with empty list - should fail validation
+    # Try to create a context with empty dict - should fail validation
     response = await client.post(
         f"/v0/project/{project_name}/contexts",
         json={
             "name": context_name,
-            "description": "Context with empty unique_column_ids",
-            "unique_column_ids": [],
+            "description": "Context with empty unique_keys",
+            "unique_keys": {},
         },
         headers=HEADERS,
     )
     assert response.status_code == 422  # Validation error
-    assert "cannot be an empty list" in response.json()["detail"][0]["msg"]
+    assert "cannot be an empty dict" in response.json()["detail"][0]["msg"]
 
 
 @pytest.mark.anyio
@@ -1798,7 +1810,7 @@ async def test_single_column_returns_nested_format(client: AsyncClient):
         json={
             "name": context_name,
             "description": "Context with single unique column",
-            "unique_column_ids": [unique_column_name],
+            "unique_keys": {unique_column_name: "counting"},
         },
         headers=HEADERS,
     )
@@ -1854,7 +1866,7 @@ async def test_invalid_column_names_validation(client: AsyncClient):
             json={
                 "name": f"{context_name}-{len(invalid_name_list)}",
                 "description": "Context with invalid column names",
-                "unique_column_ids": invalid_name_list,
+                "unique_keys": {name: "counting" for name in invalid_name_list},
             },
             headers=HEADERS,
         )
@@ -1867,29 +1879,30 @@ async def test_invalid_column_names_validation(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_duplicate_column_names_validation(client: AsyncClient):
-    """Test validation of duplicate column names."""
+    """Test that duplicate column names are handled by dict behavior (no duplicates allowed)."""
     project_name = "duplicate-names-project"
     context_name = "duplicate-names-context"
 
     # Create project
     await _create_project(client, project_name)
 
-    # Try to create a context with duplicate column names
+    # With dict format, duplicate keys are automatically resolved (last value wins)
+    # So this will effectively create a context with only two keys: user_id and session_id
     response = await client.post(
         f"/v0/project/{project_name}/contexts",
         json={
             "name": context_name,
-            "description": "Context with duplicate column names",
-            "unique_column_ids": [
-                "user_id",
-                "session_id",
-                "user_id",
-            ],  # Duplicate user_id
+            "description": "Context with duplicate column names handled by dict",
+            "unique_keys": {
+                "user_id": "counting",
+                "session_id": "counting",
+                "user_id": "counting",  # This will overwrite the first user_id
+            },
         },
         headers=HEADERS,
     )
-    assert response.status_code == 422  # Validation error
-    assert "cannot contain duplicate names" in response.json()["detail"][0]["msg"]
+    # Should succeed since dict automatically handles duplicates
+    assert response.status_code == 200
 
 
 @pytest.mark.anyio
@@ -1918,7 +1931,7 @@ async def test_valid_column_names_accepted(client: AsyncClient):
             json={
                 "name": f"{context_name}-{i}",
                 "description": "Context with valid column names",
-                "unique_column_ids": valid_name_list,
+                "unique_keys": {name: "counting" for name in valid_name_list},
             },
             headers=HEADERS,
         )
@@ -1926,3 +1939,286 @@ async def test_valid_column_names_accepted(client: AsyncClient):
             response.status_code == 200
         ), f"Failed for names: {valid_name_list}, response: {response.json()}"
         assert "Context created successfully" in response.json()["info"]
+
+
+@pytest.mark.anyio
+async def test_composite_key_mixed_types(client: AsyncClient):
+    """Test composite keys with mixed types (counting and non-counting)."""
+    project_name = "composite-key-project"
+    context_name = "mixed-keys-context"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Create context with mixed composite key
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "description": "Context with mixed composite keys",
+            "unique_keys": {
+                "department": "str",
+                "employee_id": "counting",
+                "email": "str",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create first employee in Engineering department
+    response = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={
+            "department": "Engineering",
+            "email": "alice@company.com",
+            "name": "Alice",
+        },
+    )
+    assert response.status_code == 200
+    row_ids = response.json()["row_ids"]
+    assert row_ids["names"] == ["department", "employee_id", "email"]
+    assert row_ids["ids"] == [["Engineering", 0, "alice@company.com"]]
+
+    # Create second employee in Engineering department
+    response = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={
+            "department": "Engineering",
+            "email": "bob@company.com",
+            "name": "Bob",
+        },
+    )
+    assert response.status_code == 200
+    row_ids = response.json()["row_ids"]
+    assert row_ids["ids"] == [
+        ["Engineering", 1, "bob@company.com"],
+    ]  # Auto-incremented within Engineering
+
+    # Create first employee in Sales department
+    response = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={
+            "department": "Sales",
+            "email": "charlie@company.com",
+            "name": "Charlie",
+        },
+    )
+    assert response.status_code == 200
+    row_ids = response.json()["row_ids"]
+    assert row_ids["ids"] == [
+        ["Sales", 0, "charlie@company.com"],
+    ]  # Starts at 0 for Sales department
+
+    # Verify we can retrieve all logs
+    response = await client.get(
+        f"/v0/logs?project={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+    assert len(logs) == 3
+
+    # Verify each log has composite key fields
+    for log in logs:
+        entries = log["entries"]
+        assert "department" in entries
+        assert "employee_id" in entries
+        assert "email" in entries
+        assert "name" in entries
+
+
+@pytest.mark.anyio
+async def test_composite_key_uniqueness_constraint(client: AsyncClient):
+    """Test that composite key uniqueness is enforced."""
+    project_name = "composite-unique-project"
+    context_name = "unique-constraint-context"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Create context with composite key and duplicates not allowed
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "description": "Context that doesn't allow duplicates",
+            "allow_duplicates": False,
+            "unique_keys": {
+                "first_name": "str",
+                "last_name": "str",
+                "birth_year": "int",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create first person
+    response = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={
+            "first_name": "John",
+            "last_name": "Smith",
+            "birth_year": 1990,
+            "city": "New York",
+        },
+    )
+    assert response.status_code == 200
+
+    # Try to create duplicate (should fail)
+    response = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={
+            "first_name": "John",
+            "last_name": "Smith",
+            "birth_year": 1990,
+            "city": "Boston",  # Different city but same composite key
+        },
+    )
+    assert response.status_code == 400
+    assert "Duplicate" in response.json()["detail"]
+
+    # Create person with same name but different birth year (should succeed)
+    response = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={
+            "first_name": "John",
+            "last_name": "Smith",
+            "birth_year": 1991,
+            "city": "Chicago",
+        },
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_multiple_counting_columns(client: AsyncClient):
+    """Test hierarchical counting columns in composite keys."""
+    project_name = "hierarchical-counting-project"
+    context_name = "multi-counting-context"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Create context with multiple counting columns
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "description": "Context with hierarchical counting",
+            "unique_keys": {
+                "company_id": "counting",
+                "department_id": "counting",
+                "team_id": "counting",
+                "location": "str",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create first company
+    response = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={
+            "location": "USA",
+            "company_name": "TechCorp",
+        },
+    )
+    assert response.status_code == 200
+    row_ids = response.json()["row_ids"]
+    assert row_ids["names"] == ["company_id", "department_id", "team_id", "location"]
+    assert row_ids["ids"] == [[0, 0, 0, "USA"]]
+
+    # Create second department in company 0
+    response = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={
+            "company_id": 0,
+            "location": "USA",
+            "department_name": "Engineering",
+        },
+    )
+    assert response.status_code == 200
+    row_ids = response.json()["row_ids"]
+    assert row_ids["ids"] == [
+        [0, 1, 0, "USA"],
+    ]  # department_id incremented within company 0, team_id reset
+
+    # Create second team in company 0, department 1
+    response = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={
+            "company_id": 0,
+            "department_id": 1,
+            "location": "USA",
+            "team_name": "Backend",
+        },
+    )
+    assert response.status_code == 200
+    row_ids = response.json()["row_ids"]
+    assert row_ids["ids"] == [
+        [0, 1, 1, "USA"],
+    ]  # team_id incremented within department 1
+
+
+@pytest.mark.anyio
+async def test_composite_key_missing_required_field(client: AsyncClient):
+    """Test that non-counting columns in composite keys are required."""
+    project_name = "required-fields-project"
+    context_name = "required-fields-context"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Create context with composite key
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "description": "Context requiring composite key fields",
+            "unique_keys": {
+                "user_id": "counting",
+                "email": "str",
+                "username": "str",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Try to create log without required field (should fail)
+    response = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={
+            "email": "test@example.com",
+            # Missing username
+            "full_name": "Test User",
+        },
+    )
+    assert response.status_code == 400
+    assert (
+        "Must provide value for composite key column 'username'"
+        in response.json()["detail"]
+    )
