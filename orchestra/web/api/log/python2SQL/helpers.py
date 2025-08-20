@@ -5,6 +5,7 @@ import os
 import re
 from typing import Optional
 
+import unify
 from openai import OpenAI
 from sqlalchemy import (
     TIMESTAMP,
@@ -58,6 +59,7 @@ __all__ = [
     "_maybe_vector_column",
     "_ensure_vectors_exist",
     "_get_embedding",
+    "_get_embeddings_batch",
     "DEFAULT_EMBEDDING_MODEL",
 ]
 # Initialize OpenAI client if API key is available
@@ -78,18 +80,30 @@ def _get_embedding(
     dimensions: int | None = None,
 ) -> list[float]:
     """
-    Get embedding vector for a text string using OpenAI's API.
+    Get embedding vector for a single text string.
+    This is now a convenience wrapper around the batch-capable function.
+    """
+    return _get_embeddings_batch([text], model, dimensions)[0]
+
+
+def _get_embeddings_batch(
+    texts: list[str],
+    model: str | None = None,
+    dimensions: int | None = None,
+) -> list[list[float]]:
+    """
+    Get embedding vectors for a batch of text strings using OpenAI's API.
 
     Args:
-        text (str): The text to embed
-        model (str, optional): The embedding model to use. Defaults to text-embedding-3-large.
+        texts (list[str]): The list of texts to embed.
+        model (str, optional): The embedding model to use. Defaults to DEFAULT_EMBEDDING_MODEL.
         dimensions (int, optional): The number of dimensions for the embedding vector.
 
     Returns:
-        list: A list of floats representing the embedding vector
+        list[list[float]]: A list of embedding vectors.
 
     Raises:
-        ValueError: If OpenAI API key is not set (except in test environment) or API call fails
+        ValueError: If OpenAI API key is not set or API call fails.
     """
     if not OPENAI_API_KEY:
         raise ValueError(
@@ -99,19 +113,24 @@ def _get_embedding(
     model = model or DEFAULT_EMBEDDING_MODEL
 
     try:
-        kwargs = {"model": model, "input": [text]}
+        kwargs = {"model": model, "input": texts}
         if dimensions is not None:
             kwargs["dimensions"] = dimensions
 
         resp = _client.embeddings.create(**kwargs)
-        embedding = resp.data[0].embedding
-        if len(embedding) > MAX_EMBEDDING_DIMS:
+
+        # Sort results by index to ensure order is preserved
+        resp.data.sort(key=lambda x: x.index)
+
+        embeddings = [d.embedding for d in resp.data]
+
+        if len(embeddings[0]) > MAX_EMBEDDING_DIMS:
             raise ValueError(
-                f"Embedding dimension {len(embedding)} exceeds {MAX_EMBEDDING_DIMS}",
+                f"Embedding dimension {len(embeddings[0])} exceeds {MAX_EMBEDDING_DIMS}",
             )
-        return embedding
+        return embeddings
     except Exception as e:
-        raise ValueError(f"Failed to get embedding: {str(e)}")
+        raise ValueError(f"Failed to get embeddings: {str(e)}")
 
 
 def _extract_placeholders(equation: str) -> list:
@@ -954,50 +973,65 @@ def _ensure_vectors_exist(
     # Normalize model name
     model_name = model or DEFAULT_EMBEDDING_MODEL
 
-    # Query existing vectors by ref_id
+    # 1. Find which texts actually need embedding
+    all_ids = list(id_to_text.keys())
     existing_refs = (
         session.execute(
             select(Embedding.ref_id).where(
                 and_(
                     Embedding.key == key,
                     Embedding.model == model_name,
-                    Embedding.ref_id.in_(list(id_to_text.keys())),
+                    Embedding.ref_id.in_(all_ids),
                 ),
             ),
         )
         .scalars()
         .all()
     )
-
-    # Convert to set for faster lookups
     existing_set = set(existing_refs)
 
-    # Build list of Embedding objects to insert
+    ids_to_embed = [id for id in all_ids if id not in existing_set]
+    if not ids_to_embed:
+        return
+
+    texts_to_embed = [id_to_text[id] for id in ids_to_embed]
+
+    # 2. Get embeddings in batches and parallelize batches with unify.map
+    # OpenAI recommends batch sizes of 2048 for their models.
+    BATCH_SIZE = 2048
+    text_batches = [
+        texts_to_embed[i : i + BATCH_SIZE]
+        for i in range(0, len(texts_to_embed), BATCH_SIZE)
+    ]
+    embedding_batches = unify.map(
+        _get_embeddings_batch,
+        text_batches,
+        model=model_name,
+        dimensions=dimensions,
+        mode="threading",
+        name="embedding_creation",
+    )
+
+    # Flatten the list of lists of embeddings
+    all_embeddings = [embedding for batch in embedding_batches for embedding in batch]
+
+    # 3. Create Embedding objects for bulk insertion
     to_insert = []
-    for log_event_id, text in id_to_text.items():
-        if log_event_id not in existing_set:
-            try:
-                # Generate embedding
-                embedding = _get_embedding(text, model_name, dimensions)
+    for i, log_event_id in enumerate(ids_to_embed):
+        embedding_vector = all_embeddings[i]
+        to_insert.append(
+            Embedding(
+                ref_id=log_event_id,
+                key=key,
+                model=model_name,
+                vector=embedding_vector,
+            ),
+        )
 
-                # Create new Embedding object
-                embeddings = Embedding(
-                    ref_id=log_event_id,
-                    key=key,
-                    model=model_name,
-                    vector=embedding,
-                )
-
-                to_insert.append(embeddings)
-            except ValueError as e:
-                # Log the error but continue with other texts
-                print(f"Error generating embedding for {key} containing {text} : {e}")
-
-    # Bulk insert new vectors if any
+    # 4. Bulk insert new vectors
     if to_insert:
         try:
             session.bulk_save_objects(to_insert)
             session.commit()
         except IntegrityError:
-            # Handle race condition where vectors were inserted by another process
-            session.rollback()
+            session.rollback()  # Handle race condition
