@@ -331,18 +331,6 @@ def create_tile(
                         detail=f"Context '{request.context}' not found in project.",
                     )
 
-            # Validate column_context field
-            if request.column_context and request.column_context.strip():
-                existing_contexts = context_dao.filter(
-                    project_id=project_obj.id,
-                    name=request.column_context,
-                )
-                if not existing_contexts:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Context '{request.column_context}' not found in project.",
-                    )
-
     try:
         # Create tile with position from the request
         position_data = {
@@ -758,7 +746,7 @@ def update_tile(
     update_dict = request.model_dump(exclude_unset=True)
 
     # Validate context fields if they're being updated
-    if "context" in update_dict or "column_context" in update_dict:
+    if "context" in update_dict:
         from orchestra.db.dao.context_dao import ContextDAO
         from orchestra.db.dao.interface_dao import InterfaceDAO
         from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
@@ -807,22 +795,6 @@ def update_tile(
                             raise HTTPException(
                                 status_code=400,
                                 detail=f"Context '{update_dict['context']}' not found in project.",
-                            )
-
-                    # Validate column_context field
-                    if (
-                        "column_context" in update_dict
-                        and update_dict["column_context"]
-                        and str(update_dict["column_context"]).strip()
-                    ):
-                        existing_contexts = context_dao.filter(
-                            project_id=project_obj.id,
-                            name=update_dict["column_context"],
-                        )
-                        if not existing_contexts:
-                            raise HTTPException(
-                                status_code=400,
-                                detail=f"Context '{update_dict['column_context']}' not found in project.",
                             )
 
     # Update the tile
@@ -1311,7 +1283,7 @@ def patch_tile(
     )
 
     # Validate context fields if they're being updated
-    if "context" in update_data or "column_context" in update_data:
+    if "context" in update_data:
         from orchestra.db.dao.context_dao import ContextDAO
         from orchestra.db.dao.interface_dao import InterfaceDAO
         from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
@@ -1340,22 +1312,6 @@ def patch_tile(
                         raise HTTPException(
                             status_code=400,
                             detail=f"Context '{update_data['context']}' not found in project.",
-                        )
-
-                # Validate column_context field
-                if (
-                    "column_context" in update_data
-                    and update_data["column_context"]
-                    and str(update_data["column_context"]).strip()
-                ):
-                    existing_contexts = context_dao.filter(
-                        project_id=project_obj.id,
-                        name=update_data["column_context"],
-                    )
-                    if not existing_contexts:
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Context '{update_data['column_context']}' not found in project.",
                         )
 
     # Apply the patch

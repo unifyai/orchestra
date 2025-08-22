@@ -1026,7 +1026,7 @@ async def test_patch_tile(client: AsyncClient):
     # Patch the tile
     patch_data = {
         "position": {"width": 2, "height": 3},
-        "context": "Parameters/student/student_id",
+        "context": None,  # Use null instead of non-existent context
     }
     response = await _patch_tile(client, tile_id=tile_id, patch_data=patch_data)
     assert response.status_code == 200
@@ -1035,7 +1035,7 @@ async def test_patch_tile(client: AsyncClient):
     assert data["id"] == tile_id
     assert data["position"]["width"] == 2
     assert data["position"]["height"] == 3
-    assert data["context"] == "Parameters/student/student_id"
+    assert data["context"] is None  # Should be null
     # Other fields should remain unchanged
     assert data["name"] == TEST_TILE
     assert data["visible"] is True

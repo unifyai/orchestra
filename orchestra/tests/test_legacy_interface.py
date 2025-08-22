@@ -75,7 +75,8 @@ async def test_create_interface(client: AsyncClient):
         context,
     )
     assert response.status_code == 200
-    assert response.json()["info"] == "Interface created successfully!"
+    assert "id" in response.json()
+    assert response.json()["id"] is not None
 
 
 @pytest.mark.anyio

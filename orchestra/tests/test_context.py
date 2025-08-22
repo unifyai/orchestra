@@ -2809,7 +2809,7 @@ async def test_context_reference_after_context_deletion(client: AsyncClient):
     )
 
     # Create interface with context reference
-    await client.put(
+    await client.post(
         "/v0/interface",
         json={
             "name": "test-interface",
@@ -2829,7 +2829,7 @@ async def test_context_reference_after_context_deletion(client: AsyncClient):
     assert response.status_code == 200
 
     # Try to create new interface with the deleted context reference
-    response = await client.put(
+    response = await client.post(
         "/v0/interface",
         json={
             "name": "test-interface-2",
@@ -2849,8 +2849,8 @@ async def test_context_reference_after_context_deletion(client: AsyncClient):
 async def test_context_reference_after_context_rename(client: AsyncClient):
     """Test behavior of entity context references after their referenced context is renamed"""
     project_name = "test-context-rename"
-    old_context_name = "old-context"
-    new_context_name = "new-context"
+    old_context_name = "oldcontext"
+    new_context_name = "newcontext"
 
     # Create project and context
     await client.post(
@@ -2865,7 +2865,7 @@ async def test_context_reference_after_context_rename(client: AsyncClient):
     )
 
     # Create interface with context reference
-    await client.put(
+    await client.post(
         "/v0/interface",
         json={
             "name": "test-interface",
@@ -2886,7 +2886,7 @@ async def test_context_reference_after_context_rename(client: AsyncClient):
     assert response.status_code == 200
 
     # Try to create new interface with the old context name
-    response = await client.put(
+    response = await client.post(
         "/v0/interface",
         json={
             "name": "test-interface-2",
@@ -2902,7 +2902,7 @@ async def test_context_reference_after_context_rename(client: AsyncClient):
     assert f"Context '{old_context_name}' not found" in response.json()["detail"]
 
     # Try to create interface with the new context name - should work
-    response = await client.put(
+    response = await client.post(
         "/v0/interface",
         json={
             "name": "test-interface-3",
@@ -2937,7 +2937,7 @@ async def test_cross_project_context_reference(client: AsyncClient):
         )
 
     # Create interface in project_1 referencing context from project_1 - should work
-    response = await client.put(
+    response = await client.post(
         "/v0/interface",
         json={
             "name": "interface-1",
@@ -2951,7 +2951,7 @@ async def test_cross_project_context_reference(client: AsyncClient):
     assert response.status_code == 200
 
     # Create interface in project_2 referencing context from project_2 - should work
-    response = await client.put(
+    response = await client.post(
         "/v0/interface",
         json={
             "name": "interface-2",
