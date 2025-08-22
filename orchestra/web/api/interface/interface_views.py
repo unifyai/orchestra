@@ -16,6 +16,7 @@ from orchestra.web.api.interface.schema import (
     ExportInterfaceTemplateRequest,
     ImportInterfaceTemplateRequest,
     InterfaceSchema,
+    LegacyInterfaceConfig,
     TemplateExportResponse,
     TemplateImportResponse,
     UpdateInterfaceRequest,
@@ -65,6 +66,7 @@ def _create_interface_response(
         id=str(interface.id),
         name=interface.name,
         project_id=interface.project_id,
+        context=interface.context,
         tabs=tab_list,
         active_tab_id=str(interface.active_tab_id) if interface.active_tab_id else None,
         color=interface.color,
@@ -593,6 +595,23 @@ def update_interface(
     # Convert Pydantic model to dict
     update_dict = request.model_dump()
 
+    # Validate context if provided (non-empty string)
+    if update_dict.get("context") and str(update_dict["context"]).strip():
+        context_name = update_dict["context"]
+        # Get the project ID from the interface
+        if interface_id:
+            project_id = interface.project_id
+        else:
+            project_id = project_obj.id
+
+        # Check if context exists in the project
+        existing_contexts = context_dao.filter(project_id=project_id, name=context_name)
+        if not existing_contexts:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Context '{context_name}' not found in project.",
+            )
+
     # Verify that the tab exists and belongs to this interface if active_tab_id is being updated
     if update_dict.get("active_tab_id"):
         tab = tab_dao.get(update_dict["active_tab_id"])
@@ -618,6 +637,172 @@ def update_interface(
     )
 
     return _create_interface_response(updated, tabs, session)
+
+
+def create_interface_legacy_style(
+    request_fastapi: Request,
+    request: LegacyInterfaceConfig,
+    session: Session = Depends(get_db_session),
+):
+    """Create an interface using legacy-style parameters with modern validation."""
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    interface_dao = InterfaceDAO(session)
+
+    # Validate required fields for creation
+    if not request.name:
+        raise HTTPException(
+            status_code=422,
+            detail="Interface name is required for creation.",
+        )
+    if not request.project:
+        raise HTTPException(
+            status_code=422,
+            detail="Project name is required for creation.",
+        )
+
+    # Verify project exists and user has access
+    project_obj = project_dao.get_by_user_and_name(
+        user_id=request_fastapi.state.user_id,
+        name=request.project,
+    )
+    if not project_obj:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {request.project} not found.",
+        )
+
+    # Check if interface already exists
+    existing = interface_dao.get_by_project_and_name(
+        project_obj.id,
+        request.name,
+        is_checkpoint=False,
+    )
+
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail="Interface already exists, update the interface instead.",
+        )
+
+    # Validate context if provided (non-empty string)
+    if request.context and request.context.strip():
+        existing_contexts = context_dao.filter(
+            project_id=project_obj.id,
+            name=request.context,
+        )
+        if not existing_contexts:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Context '{request.context}' not found in project.",
+            )
+
+    # Create the interface using the modern DAO
+    interface = interface_dao.create_interface(
+        name=request.name,
+        project_id=project_obj.id,
+        context=request.context,
+        color=request.color,
+        icon=request.icon or "folder",
+        order=request.order,
+    )
+
+    return {"id": str(interface.id)}
+
+
+def update_interface_legacy_style(
+    request_fastapi: Request,
+    request: LegacyInterfaceConfig,
+    session: Session = Depends(get_db_session),
+):
+    """Update an interface using legacy-style parameters (name+project) with modern validation."""
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    interface_dao = InterfaceDAO(session)
+
+    # Validate required fields for update
+    if not request.name:
+        raise HTTPException(
+            status_code=422,
+            detail="Interface name is required for update.",
+        )
+    if not request.project:
+        raise HTTPException(
+            status_code=422,
+            detail="Project name is required for update.",
+        )
+
+    # Verify project exists and user has access
+    project_obj = project_dao.get_by_user_and_name(
+        user_id=request_fastapi.state.user_id,
+        name=request.project,
+    )
+    if not project_obj:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {request.project} not found.",
+        )
+
+    # Find the interface by name and project
+    interface = interface_dao.get_by_project_and_name(
+        project_id=project_obj.id,
+        name=request.name,
+        is_checkpoint=False,  # Legacy API doesn't use checkpoints
+    )
+
+    if not interface:
+        raise HTTPException(
+            status_code=404,
+            detail="Interface not added yet. Create it first.",
+        )
+
+    # Validate context if provided (non-empty string)
+    if request.context and request.context.strip():
+        existing_contexts = context_dao.filter(
+            project_id=project_obj.id,
+            name=request.context,
+        )
+        if not existing_contexts:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Context '{request.context}' not found in project.",
+            )
+
+    # Update the interface using the modern DAO
+    interface_dao.update_interface(
+        id=interface.id,
+        context=request.context,
+        color=request.color,
+        icon=request.icon,
+        order=request.order,
+    )
+
+    return {"info": "Interface updated successfully!"}
+
+
+def update_interface_by_id(
+    request_fastapi: Request,
+    request: UpdateInterfaceRequest,
+    interface_id: str,  # Path parameter
+    checkpoint: bool = Query(
+        False,
+        description="Whether this is a checkpoint update (manual save)",
+    ),
+    session: Session = Depends(get_db_session),
+):
+    """Update an interface by ID (path parameter version)."""
+    # Call the main update function with interface_id as a direct parameter
+    return update_interface(
+        request_fastapi=request_fastapi,
+        request=request,
+        interface_id=interface_id,  # Pass as keyword argument
+        project=None,  # Not needed when using ID
+        name=None,  # Not needed when using ID
+        checkpoint=checkpoint,
+        session=session,
+    )
 
 
 @router.post(
@@ -1266,7 +1451,7 @@ def import_interface_template(
             visible=tab_data.visible if tab_data.visible is not None else True,
             active=tab_data.active if tab_data.active is not None else False,
             order=tab_data.order if tab_data.order is not None else 0,
-            global_context=tab_data.global_context,
+            context=tab_data.context,
             color=tab_data.color,
             is_checkpoint=False,
         )

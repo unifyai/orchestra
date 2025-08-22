@@ -10,7 +10,7 @@ from orchestra.web.api.interface.tile_views import router as tile_router
 # Main router with no prefix but with interface tag
 router = APIRouter(tags=["interface"])
 
-# Include legacy endpoints at /interface
+# Include legacy endpoints at /interface with context validation added
 router.include_router(legacy_router)
 
 # Include new granular endpoints at their respective paths
@@ -50,8 +50,31 @@ router.add_api_route(
 )
 
 router.add_api_route(
-    "/interface",
-    _new_if_views.update_interface,
+    "/interface/",
+    _new_if_views.create_interface,
+    methods=["POST"],
+    tags=["interface"],
+)
+
+# Legacy-compatible endpoints (validation added directly to legacy views)
+# router.add_api_route(
+#     "/interface",
+#     _new_if_views.create_interface_legacy_style,
+#     methods=["POST"],
+#     tags=["interface"],
+# )
+
+# router.add_api_route(
+#     "/interface",
+#     _new_if_views.update_interface_legacy_style,
+#     methods=["PUT"],
+#     tags=["interface"],
+# )
+
+# Add path parameter version for interface update
+router.add_api_route(
+    "/interface/{interface_id}",
+    _new_if_views.update_interface_by_id,
     methods=["PUT"],
     tags=["interface"],
 )

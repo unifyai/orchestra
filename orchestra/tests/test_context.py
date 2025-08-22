@@ -2222,3 +2222,748 @@ async def test_composite_key_missing_required_field(client: AsyncClient):
         "Must provide value for composite key column 'username'"
         in response.json()["detail"]
     )
+
+
+# =============================================================================
+# INTERFACE, TAB, AND TILE CONTEXT REFERENCE TESTS
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_legacy_interface_context_valid_reference(client: AsyncClient):
+    """Test that legacy interface API accepts valid context references"""
+    project_name = "test-interface-context"
+    context_name = "valid-context"
+    interface_name = "test-interface"
+
+    # Create project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "description": "Valid context"},
+        headers=HEADERS,
+    )
+
+    # Create interface first (legacy API requires POST to create, PUT to update)
+    create_response = await client.post(
+        "/v0/interface",
+        json={
+            "name": interface_name,
+            "project": project_name,
+            "items": [],
+            "new_counter": 0,
+        },
+        headers=HEADERS,
+    )
+    assert create_response.status_code == 200
+
+    # Update interface with valid context reference
+    response = await client.put(
+        "/v0/interface",
+        json={
+            "name": interface_name,
+            "project": project_name,
+            "context": context_name,
+            "items": [],
+            "new_counter": 0,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert "Interface updated successfully" in response.json()["info"]
+
+
+@pytest.mark.anyio
+async def test_legacy_interface_context_invalid_reference(client: AsyncClient):
+    """Test that legacy interface API should validate invalid context references"""
+    project_name = "test-interface-invalid"
+    interface_name = "test-interface"
+
+    # Create project only (no context)
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+
+    # Create interface first (legacy API requires POST to create, PUT to update)
+    create_response = await client.post(
+        "/v0/interface",
+        json={
+            "name": interface_name,
+            "project": project_name,
+            "items": [],
+            "new_counter": 0,
+        },
+        headers=HEADERS,
+    )
+    assert create_response.status_code == 200
+
+    # Try to update interface with non-existent context reference
+    response = await client.put(
+        "/v0/interface",
+        json={
+            "name": interface_name,
+            "project": project_name,
+            "context": "non-existent-context",
+            "items": [],
+            "new_counter": 0,
+        },
+        headers=HEADERS,
+    )
+    # Now this should fail with context validation
+    assert response.status_code == 400
+    assert "Context 'non-existent-context' not found" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_legacy_interface_context_empty_reference(client: AsyncClient):
+    """Test that legacy interface API handles empty context references"""
+    project_name = "test-interface-empty"
+    interface_name = "test-interface"
+
+    # Create project
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+
+    # Create interface first (legacy API requires POST to create, PUT to update)
+    create_response = await client.post(
+        "/v0/interface",
+        json={
+            "name": interface_name,
+            "project": project_name,
+            "items": [],
+            "new_counter": 0,
+        },
+        headers=HEADERS,
+    )
+    assert create_response.status_code == 200
+
+    # Update interface with empty context reference
+    response = await client.put(
+        "/v0/interface",
+        json={
+            "name": interface_name,
+            "project": project_name,
+            "context": "",  # Empty context
+            "items": [],
+            "new_counter": 0,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert "Interface updated successfully" in response.json()["info"]
+
+
+@pytest.mark.anyio
+async def test_modern_interface_context_supported(client: AsyncClient):
+    """Test that modern interface API now supports context field with valid reference"""
+    project_name = "test-modern-interface"
+    context_name = "valid-context"
+
+    # Create project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "description": "Valid context"},
+        headers=HEADERS,
+    )
+
+    # Create interface first
+    response = await client.post(
+        "/v0/interface/",
+        json={
+            "name": "modern-interface",
+            "project": project_name,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    interface_id = response.json()["id"]
+
+    # Update with valid context field - should work
+    response = await client.put(
+        f"/v0/interface/{interface_id}",
+        json={
+            "context": context_name,  # This field is now in UpdateInterfaceRequest
+        },
+        headers=HEADERS,
+    )
+    # Should succeed
+    assert response.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_modern_interface_context_invalid_reference(client: AsyncClient):
+    """Test that modern interface API validates context references"""
+    project_name = "test-modern-interface-invalid"
+    context_name = "valid-context"
+    invalid_context = "nonexistent-context"
+
+    # Create project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "description": "Valid context"},
+        headers=HEADERS,
+    )
+
+    # Create interface first
+    response = await client.post(
+        "/v0/interface/",
+        json={
+            "name": "modern-interface",
+            "project": project_name,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    interface_id = response.json()["id"]
+
+    # Try to update with invalid context field - should fail
+    response = await client.put(
+        f"/v0/interface/{interface_id}",
+        json={
+            "context": invalid_context,  # This context doesn't exist
+        },
+        headers=HEADERS,
+    )
+    # Should fail with validation error
+    assert response.status_code == 400
+    assert f"Context '{invalid_context}' not found" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_tab_context_valid_reference(client: AsyncClient):
+    """Test that tab API accepts valid context references"""
+    project_name = "test-tab-context"
+    context_name = "valid-context"
+
+    # Create project, context, and interface
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "description": "Valid context"},
+        headers=HEADERS,
+    )
+
+    interface_response = await client.post(
+        "/v0/interface/",
+        json={"name": "test-interface", "project": project_name},
+        headers=HEADERS,
+    )
+    interface_id = interface_response.json()["id"]
+
+    # Create tab with valid context reference
+    response = await client.post(
+        "/v0/tab/",
+        json={
+            "name": "test-tab",
+            "interface_id": interface_id,
+            "context": context_name,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 201  # POST returns 201 for creation
+    assert response.json()["context"] == context_name
+
+
+@pytest.mark.anyio
+async def test_tab_context_invalid_reference(client: AsyncClient):
+    """Test that tab API should validate invalid context references"""
+    project_name = "test-tab-invalid"
+
+    # Create project and interface only (no context)
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+
+    interface_response = await client.post(
+        "/v0/interface/",
+        json={"name": "test-interface", "project": project_name},
+        headers=HEADERS,
+    )
+    interface_id = interface_response.json()["id"]
+
+    # Try to create tab with non-existent context reference
+    response = await client.post(
+        "/v0/tab/",
+        json={
+            "name": "test-tab",
+            "interface_id": interface_id,
+            "context": "non-existent-context",
+        },
+        headers=HEADERS,
+    )
+    # This should fail with context validation
+    assert response.status_code == 400
+    assert "Context 'non-existent-context' not found" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_tab_context_update_valid_reference(client: AsyncClient):
+    """Test updating tab with valid context reference"""
+    project_name = "test-tab-update"
+    context_name = "updated-context"
+
+    # Create project, context, and interface
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "description": "Updated context"},
+        headers=HEADERS,
+    )
+
+    interface_response = await client.post(
+        "/v0/interface/",
+        json={"name": "test-interface", "project": project_name},
+        headers=HEADERS,
+    )
+    interface_id = interface_response.json()["id"]
+
+    # Create tab without context first
+    tab_response = await client.post(
+        "/v0/tab/",
+        json={
+            "name": "test-tab",
+            "interface_id": interface_id,
+        },
+        headers=HEADERS,
+    )
+    assert tab_response.status_code == 201
+    tab_id = tab_response.json()["id"]
+
+    # Update tab with valid context reference
+    update_response = await client.put(
+        f"/v0/tab/?tab_id={tab_id}",
+        json={
+            "context": context_name,
+        },
+        headers=HEADERS,
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["context"] == context_name
+
+
+@pytest.mark.anyio
+async def test_tile_context_valid_reference(client: AsyncClient):
+    """Test that tile API accepts valid context references"""
+    project_name = "test-tile-context"
+    context_name = "valid-context"
+    column_context_name = "column-context"
+
+    # Create project and contexts
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    for ctx_name in [context_name, column_context_name]:
+        await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": ctx_name, "description": f"Context {ctx_name}"},
+            headers=HEADERS,
+        )
+
+    # Create interface and tab
+    interface_response = await client.post(
+        "/v0/interface/",
+        json={"name": "test-interface", "project": project_name},
+        headers=HEADERS,
+    )
+    interface_id = interface_response.json()["id"]
+
+    tab_response = await client.post(
+        "/v0/tab/",
+        json={"name": "test-tab", "interface_id": interface_id},
+        headers=HEADERS,
+    )
+    tab_id = tab_response.json()["id"]
+
+    # Create tile with valid context references
+    response = await client.post(
+        "/v0/tile/",
+        json={
+            "name": "test-tile",
+            "tab_id": tab_id,
+            "type": "Table",
+            "context": context_name,
+            "column_context": column_context_name,
+            "position": {
+                "x": 0,
+                "y": 0,
+                "width": 1,
+                "height": 1,
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 201  # POST returns 201 for creation
+    assert response.json()["context"] == context_name
+    assert response.json()["column_context"] == column_context_name
+
+
+@pytest.mark.anyio
+async def test_tile_context_invalid_reference(client: AsyncClient):
+    """Test that tile API should validate invalid context references"""
+    project_name = "test-tile-invalid"
+
+    # Create project, interface, and tab only (no contexts)
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+
+    interface_response = await client.post(
+        "/v0/interface/",
+        json={"name": "test-interface", "project": project_name},
+        headers=HEADERS,
+    )
+    interface_id = interface_response.json()["id"]
+
+    tab_response = await client.post(
+        "/v0/tab/",
+        json={"name": "test-tab", "interface_id": interface_id},
+        headers=HEADERS,
+    )
+    tab_id = tab_response.json()["id"]
+
+    # Try to create tile with non-existent context references
+    response = await client.post(
+        "/v0/tile/",
+        json={
+            "name": "test-tile",
+            "tab_id": tab_id,
+            "type": "Table",
+            "context": "non-existent-context",
+            "column_context": "non-existent-column-context",
+            "position": {
+                "x": 0,
+                "y": 0,
+                "width": 1,
+                "height": 1,
+            },
+        },
+        headers=HEADERS,
+    )
+    # This should fail with context validation
+    assert response.status_code == 400
+    assert "Context 'non-existent-context' not found" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_tile_context_patch_update(client: AsyncClient):
+    """Test that tile PATCH API handles context updates"""
+    project_name = "test-tile-patch"
+    context_name = "patch-context"
+
+    # Create project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "description": "Patch context"},
+        headers=HEADERS,
+    )
+
+    # Create interface and tab
+    interface_response = await client.post(
+        "/v0/interface/",
+        json={"name": "test-interface", "project": project_name},
+        headers=HEADERS,
+    )
+    interface_id = interface_response.json()["id"]
+
+    tab_response = await client.post(
+        "/v0/tab/",
+        json={"name": "test-tab", "interface_id": interface_id},
+        headers=HEADERS,
+    )
+    tab_id = tab_response.json()["id"]
+
+    # Create tile without context first
+    create_response = await client.post(
+        "/v0/tile/",
+        json={
+            "name": "test-tile",
+            "tab_id": tab_id,
+            "type": "Table",
+            "position": {
+                "x": 0,
+                "y": 0,
+                "width": 1,
+                "height": 1,
+            },
+        },
+        headers=HEADERS,
+    )
+    assert create_response.status_code == 201
+    tile_id = create_response.json()["id"]
+
+    # Update tile with valid context via PATCH
+    patch_response = await client.patch(
+        f"/v0/tile/?tile_id={tile_id}",
+        json={
+            "context": context_name,
+        },
+        headers=HEADERS,
+    )
+    assert patch_response.status_code == 200
+    assert patch_response.json()["context"] == context_name
+
+
+@pytest.mark.anyio
+async def test_tile_context_empty_references(client: AsyncClient):
+    """Test that tile API handles empty context references"""
+    project_name = "test-tile-empty"
+
+    # Create project, interface, and tab
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+
+    interface_response = await client.post(
+        "/v0/interface/",
+        json={"name": "test-interface", "project": project_name},
+        headers=HEADERS,
+    )
+    interface_id = interface_response.json()["id"]
+
+    tab_response = await client.post(
+        "/v0/tab/",
+        json={"name": "test-tab", "interface_id": interface_id},
+        headers=HEADERS,
+    )
+    tab_id = tab_response.json()["id"]
+
+    # Create tile with empty context references (should be allowed)
+    response = await client.post(
+        "/v0/tile/",
+        json={
+            "name": "test-tile",
+            "tab_id": tab_id,
+            "type": "Table",
+            "context": "",  # Empty context
+            "column_context": "",  # Empty column context
+            "position": {
+                "x": 0,
+                "y": 0,
+                "width": 1,
+                "height": 1,
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 201
+    assert response.json()["context"] == ""
+    assert response.json()["column_context"] == ""
+
+
+@pytest.mark.anyio
+async def test_context_reference_after_context_deletion(client: AsyncClient):
+    """Test behavior of entity context references after their referenced context is deleted"""
+    project_name = "test-context-deletion"
+    context_name = "deletable-context"
+
+    # Create project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "description": "Context to be deleted"},
+        headers=HEADERS,
+    )
+
+    # Create interface with context reference
+    await client.put(
+        "/v0/interface",
+        json={
+            "name": "test-interface",
+            "project": project_name,
+            "context": context_name,
+            "items": [],
+            "new_counter": 0,
+        },
+        headers=HEADERS,
+    )
+
+    # Delete the context
+    response = await client.delete(
+        f"/v0/project/{project_name}/contexts/{context_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Try to create new interface with the deleted context reference
+    response = await client.put(
+        "/v0/interface",
+        json={
+            "name": "test-interface-2",
+            "project": project_name,
+            "context": context_name,  # Reference to deleted context
+            "items": [],
+            "new_counter": 0,
+        },
+        headers=HEADERS,
+    )
+    # This should fail since the context no longer exists
+    assert response.status_code == 400
+    assert "Context 'deletable-context' not found" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_context_reference_after_context_rename(client: AsyncClient):
+    """Test behavior of entity context references after their referenced context is renamed"""
+    project_name = "test-context-rename"
+    old_context_name = "old-context"
+    new_context_name = "new-context"
+
+    # Create project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": old_context_name, "description": "Context to be renamed"},
+        headers=HEADERS,
+    )
+
+    # Create interface with context reference
+    await client.put(
+        "/v0/interface",
+        json={
+            "name": "test-interface",
+            "project": project_name,
+            "context": old_context_name,
+            "items": [],
+            "new_counter": 0,
+        },
+        headers=HEADERS,
+    )
+
+    # Rename the context
+    response = await client.patch(
+        f"/v0/project/{project_name}/contexts/{old_context_name}/rename",
+        json={"name": new_context_name},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Try to create new interface with the old context name
+    response = await client.put(
+        "/v0/interface",
+        json={
+            "name": "test-interface-2",
+            "project": project_name,
+            "context": old_context_name,  # Reference to old name
+            "items": [],
+            "new_counter": 0,
+        },
+        headers=HEADERS,
+    )
+    # This should fail since the old name no longer exists
+    assert response.status_code == 400
+    assert f"Context '{old_context_name}' not found" in response.json()["detail"]
+
+    # Try to create interface with the new context name - should work
+    response = await client.put(
+        "/v0/interface",
+        json={
+            "name": "test-interface-3",
+            "project": project_name,
+            "context": new_context_name,  # Reference to new name
+            "items": [],
+            "new_counter": 0,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_cross_project_context_reference(client: AsyncClient):
+    """Test that entities cannot reference contexts from different projects"""
+    project_1 = "project-1"
+    project_2 = "project-2"
+    context_name = "shared-context-name"
+
+    # Create two projects with contexts having the same name
+    for project in [project_1, project_2]:
+        await client.post(
+            "/v0/project",
+            json={"name": project},
+            headers=HEADERS,
+        )
+        await client.post(
+            f"/v0/project/{project}/contexts",
+            json={"name": context_name, "description": f"Context in {project}"},
+            headers=HEADERS,
+        )
+
+    # Create interface in project_1 referencing context from project_1 - should work
+    response = await client.put(
+        "/v0/interface",
+        json={
+            "name": "interface-1",
+            "project": project_1,
+            "context": context_name,  # Context from project_1
+            "items": [],
+            "new_counter": 0,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create interface in project_2 referencing context from project_2 - should work
+    response = await client.put(
+        "/v0/interface",
+        json={
+            "name": "interface-2",
+            "project": project_2,
+            "context": context_name,  # Context from project_2
+            "items": [],
+            "new_counter": 0,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Note: There's no way to directly reference a context from a different project
+    # since context references are just strings and validation is project-scoped
+    # This test mainly documents the expected behavior
