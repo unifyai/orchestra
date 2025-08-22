@@ -602,6 +602,8 @@ class LogDAO:
 
         # Collect all project and context IDs from entries
         all_project_ids = set(e["project_id"] for e in entries if "project_id" in e)
+        all_context_ids = set(e["context_id"] for e in entries if e.get("context_id"))
+
         if not all_project_ids:
             return
 
@@ -618,21 +620,29 @@ class LogDAO:
         for ft in field_types:
             unique_field_defs[(ft.project_id, ft.context_id, ft.field_name)] = ft
 
-        if not unique_field_defs:
-            return
+        # Fetch all contexts to check for composite keys
+        contexts_with_composite_keys = {}
+        if all_context_ids:
+            contexts = (
+                self.session.query(Context)
+                .filter(Context.id.in_(all_context_ids))
+                .all()
+            )
+            for ctx in contexts:
+                if ctx.unique_keys and len(ctx.unique_keys) > 0:
+                    contexts_with_composite_keys[ctx.id] = ctx
 
-        # Group entries by project and context to handle composite keys correctly
+        # Group entries by project and context
         grouped_by_context = defaultdict(list)
         for entry in entries:
-            # We only care about entries that correspond to a unique field
+            context_id = entry.get("context_id")
+            # Include entry if it has a unique field OR if its context has composite keys
             if (
                 entry.get("project_id"),
-                entry.get("context_id"),
+                context_id,
                 entry.get("key"),
-            ) in unique_field_defs:
-                grouped_by_context[
-                    (entry.get("project_id"), entry.get("context_id"))
-                ].append(entry)
+            ) in unique_field_defs or context_id in contexts_with_composite_keys:
+                grouped_by_context[(entry.get("project_id"), context_id)].append(entry)
 
         if not grouped_by_context:
             return
@@ -670,17 +680,25 @@ class LogDAO:
             else:
                 # Simple key check
                 for entry in context_entries:
-                    simple_val = entry["value"]
+                    # Only check if this field is marked as unique
                     if (
-                        simple_val
-                        in batch_unique_values[(project_id, context_id, entry["key"])]
-                    ):
-                        raise ValueError(
-                            f"Duplicate value for unique field '{entry['key']}' in batch.",
+                        entry.get("project_id"),
+                        context_id,
+                        entry["key"],
+                    ) in unique_field_defs:
+                        simple_val = entry["value"]
+                        if (
+                            simple_val
+                            in batch_unique_values[
+                                (project_id, context_id, entry["key"])
+                            ]
+                        ):
+                            raise ValueError(
+                                f"Duplicate value for unique field '{entry['key']}' in batch.",
+                            )
+                        batch_unique_values[(project_id, context_id, entry["key"])].add(
+                            simple_val,
                         )
-                    batch_unique_values[(project_id, context_id, entry["key"])].add(
-                        simple_val,
-                    )
 
         # Check against DB
         for (project_id, context_id), context_entries in grouped_by_context.items():
@@ -740,7 +758,13 @@ class LogDAO:
                 # Handle simple unique key check (original logic, but scoped to this context group)
                 keys_and_values = defaultdict(list)
                 for entry in context_entries:
-                    keys_and_values[entry["key"]].append(entry["value"])
+                    # Only collect values for fields that are marked as unique
+                    if (
+                        entry.get("project_id"),
+                        context_id,
+                        entry["key"],
+                    ) in unique_field_defs:
+                        keys_and_values[entry["key"]].append(entry["value"])
 
                 for key, values in keys_and_values.items():
                     q = (
@@ -1281,17 +1305,25 @@ class LogDAO:
         if not provided_values:
             return []
 
-        # Get the context to access the ordered columns
+        # Get the context to access the ordered columns and auto_counting config
         context = self.session.query(Context).filter_by(id=context_id).one()
 
-        # Use the unique_key_names which preserves order
-        all_columns = context.unique_key_names or list(unique_keys.keys())
-        counting_columns = [
-            k for k in all_columns if k in unique_keys and unique_keys[k] == "counting"
-        ]
-        non_counting_columns = [
-            k for k in all_columns if k in unique_keys and unique_keys[k] != "counting"
-        ]
+        # Get auto-counting configuration
+        auto_counting = context.auto_counting or {}
+
+        # Get all columns: unique_keys + any auto-counting columns not in unique_keys
+        unique_key_columns = context.unique_key_names or list(unique_keys.keys())
+        all_auto_counting_columns = list(auto_counting.keys())
+
+        # Combine unique key columns and auto-counting columns
+        all_columns = unique_key_columns[:]
+        for col in all_auto_counting_columns:
+            if col not in all_columns:
+                all_columns.append(col)
+
+        # Determine which columns are counting based on auto_counting config
+        counting_columns = [k for k in all_columns if k in auto_counting]
+        non_counting_columns = [k for k in all_columns if k not in auto_counting]
 
         completed_ids = []
 
@@ -1307,113 +1339,80 @@ class LogDAO:
 
             # Handle counting columns
             if counting_columns:
-                # Determine which counting column to auto-increment
+                # Separate provided counting values
                 provided_counting = {
                     k: v for k, v in provided_value.items() if k in counting_columns
                 }
-                target_col_index = len(provided_counting)
 
-                if target_col_index < len(counting_columns):
-                    target_col = counting_columns[target_col_index]
+                # Process each counting column
+                for col_name in counting_columns:
+                    if col_name not in provided_counting:
+                        # This column needs auto-increment
+                        parent_col = auto_counting.get(col_name)
 
-                    # Validate parent exists if we have parent IDs
-                    if provided_counting and not self._validate_parent_exists(
-                        context_id,
-                        provided_counting,
-                    ):
-                        raise ValueError(
-                            f"Parent ID combination {provided_counting} does not exist in this context.",
-                        )
+                        if parent_col is None:
+                            # Independent counter - only use column name
+                            param_key = col_name
+                        else:
+                            # Hierarchical counter - build full hierarchy path
+                            # We need to include all ancestors in the param_key, not just immediate parent
+                            param_key_parts = []
+                            current_col = col_name
 
-                    # Build key for counter lookup including all parent values
-                    key_parts = []
-                    for j in range(target_col_index):
-                        col = counting_columns[j]
-                        key_parts.append(f"{col}={provided_counting[col]}")
+                            # Walk up the hierarchy to build the full path
+                            while current_col in auto_counting:
+                                parent_of_current = auto_counting[current_col]
+                                if parent_of_current is None:
+                                    # Reached a root column
+                                    break
 
-                    # Find position of target counting column in the full column list
-                    target_col_position = all_columns.index(target_col)
+                                # Get the parent value
+                                if parent_of_current in provided_counting:
+                                    parent_value = provided_counting[parent_of_current]
+                                elif parent_of_current in final_values:
+                                    parent_value = final_values[parent_of_current]
+                                else:
+                                    raise ValueError(
+                                        f"Parent column '{parent_of_current}' value must be provided for '{current_col}'",
+                                    )
 
-                    # Add non-counting columns that come BEFORE the target counting column
-                    for col_name in all_columns[:target_col_position]:
-                        if (
-                            col_name in non_counting_columns
-                            and col_name in final_values
-                        ):
-                            key_parts.append(f"{col_name}={final_values[col_name]}")
-
-                    key_parts.append(target_col)
-                    param_key = "::".join(key_parts)
-
-                    # Get next ID for this specific combination
-                    next_id = self.get_next_row_ids(
-                        project_id=project_id,
-                        context_id=context_id,
-                        param_key=param_key,
-                        count=1,
-                    )[0]
-
-                    # Add provided counting values
-                    final_values.update(provided_counting)
-                    # Add the auto-incremented value
-                    final_values[target_col] = next_id
-
-                    # Initialize remaining counting columns to 0
-                    for j in range(target_col_index + 1, len(counting_columns)):
-                        final_values[counting_columns[j]] = 0
-
-                    # Initialize counters for all newly created child paths
-                    if target_col_index < len(counting_columns) - 1:
-                        temp_parent_path = {}
-                        for k in range(len(counting_columns) - 1):
-                            current_level_key = counting_columns[k]
-                            temp_parent_path[current_level_key] = final_values[
-                                current_level_key
-                            ]
-
-                            if k >= target_col_index:
-                                child_col = counting_columns[k + 1]
-                                child_key_parts = [
-                                    f"{col}={val}"
-                                    for col, val in temp_parent_path.items()
-                                ]
-
-                                # Find position of child counting column in the full column list
-                                child_col_position = all_columns.index(child_col)
-
-                                # Add non-counting columns that come BEFORE the child counting column
-                                for col_name in all_columns[:child_col_position]:
-                                    if (
-                                        col_name in non_counting_columns
-                                        and col_name in final_values
+                                # Only validate if parent was explicitly provided
+                                if (
+                                    parent_of_current in provided_counting
+                                    and current_col == col_name
+                                ):
+                                    parent_check = {parent_of_current: parent_value}
+                                    if not self._validate_parent_exists(
+                                        context_id,
+                                        parent_check,
                                     ):
-                                        child_key_parts.append(
-                                            f"{col_name}={final_values[col_name]}",
+                                        raise ValueError(
+                                            f"Parent ID {parent_of_current}={parent_value} does not exist in this context.",
                                         )
-                                child_key_parts.append(child_col)
-                                child_param_key = "::".join(child_key_parts)
 
-                                # Initialize counter
-                                init_stmt = (
-                                    pg_insert(ParamVersion)
-                                    .values(
-                                        project_id=project_id,
-                                        context_id=context_id,
-                                        param_key=child_param_key,
-                                        last_version=0,
-                                    )
-                                    .on_conflict_do_nothing(
-                                        index_elements=[
-                                            "project_id",
-                                            "context_id",
-                                            "param_key",
-                                        ],
-                                    )
+                                param_key_parts.insert(
+                                    0,
+                                    f"{parent_of_current}={parent_value}",
                                 )
-                                self.session.execute(init_stmt)
-                else:
-                    # All counting columns were provided
-                    final_values.update(provided_counting)
+                                current_col = parent_of_current
+
+                            # Add the column name at the end
+                            param_key_parts.append(col_name)
+                            param_key = "::".join(param_key_parts)
+
+                        # Get next ID for this specific combination
+                        next_id = self.get_next_row_ids(
+                            project_id=project_id,
+                            context_id=context_id,
+                            param_key=param_key,
+                            count=1,
+                        )[0]
+
+                        # Add the auto-incremented value
+                        final_values[col_name] = next_id
+
+                # Add all provided counting values
+                final_values.update(provided_counting)
 
             # Ensure the final dict preserves the original order of unique_keys
             ordered_final_values = {}
