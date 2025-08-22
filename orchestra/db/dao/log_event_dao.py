@@ -56,9 +56,9 @@ class LogEventDAO:
             ]
             self.session.add_all(associations)
 
-            # Check if this context needs composite unique keys
+            # Check if this context needs composite unique keys or auto-counting
             context = self.session.query(Context).filter_by(id=context_id).one()
-            if context.unique_keys:
+            if context.unique_keys or context.auto_counting:
                 log_dao = LogDAO(self.session, ContextDAO(self.session))
                 unique_keys = context.unique_keys
 
@@ -67,31 +67,28 @@ class LogEventDAO:
                     provided_unique_ids = [{} for _ in range(count)]
 
                 try:
-                    reserved_ids = log_dao.get_next_composite_ids(
+                    row_ids = log_dao.get_next_composite_ids(
                         project_id=project_id,
                         context_id=context_id,
-                        unique_keys=unique_keys,
+                        unique_keys=unique_keys or {},
                         provided_values=provided_unique_ids,
                     )
-                    row_ids = reserved_ids
                 except ValueError as e:
                     # Convert ValueError to a more user-friendly error
                     from fastapi import HTTPException
 
                     raise HTTPException(status_code=400, detail=str(e))
 
-                # Create log entries for all composite key columns
+                # Create log entries for all composite key columns AND auto-counting columns
                 all_key_logs = []
                 for i, log_event_id in enumerate(log_event_ids):
                     key_values = row_ids[i]
                     for col_name, col_value in key_values.items():
-                        col_type = unique_keys[col_name]
+                        # Determine the type - either from unique_keys or default to "int" for auto-counting
+                        col_type = unique_keys.get(col_name, "int")
 
-                        # Determine the explicit type for the field
-                        if col_type == "counting":
-                            explicit_type = "int"
-                        else:
-                            explicit_type = col_type
+                        # Use the type directly (no more "counting" type)
+                        explicit_type = col_type
 
                         all_key_logs.append(
                             {
