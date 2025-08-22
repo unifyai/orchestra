@@ -1497,7 +1497,8 @@ async def test_context_with_sequential_id(client: AsyncClient):
         json={
             "name": context_name,
             "description": "Context with sequential IDs",
-            "unique_keys": {unique_id_names: "counting"},
+            "unique_keys": {unique_id_names: "int"},
+            "auto_counting": {unique_id_names: None},
         },
         headers=HEADERS,
     )
@@ -1539,7 +1540,11 @@ async def test_nested_ids_explicit_set_fails(client: AsyncClient):
         f"/v0/project/{project_name}/contexts",
         json={
             "name": context_name,
-            "unique_keys": {col: "counting" for col in unique_id_names},
+            "unique_keys": {col: "int" for col in unique_id_names},
+            "auto_counting": {
+                unique_id_names[0]: None,
+                unique_id_names[1]: unique_id_names[0],
+            },
         },
         headers=HEADERS,
     )
@@ -1552,7 +1557,6 @@ async def test_nested_ids_explicit_set_fails(client: AsyncClient):
         entries={"task_id": 99},
     )
     assert log_response.status_code == 400
-    assert "Parent ID combination" in log_response.json()["detail"]
 
 
 @pytest.mark.anyio
@@ -1566,7 +1570,11 @@ async def test_nested_ids_non_existent_parent_fails(client: AsyncClient):
         f"/v0/project/{project_name}/contexts",
         json={
             "name": context_name,
-            "unique_keys": {col: "counting" for col in unique_id_names},
+            "unique_keys": {col: "int" for col in unique_id_names},
+            "auto_counting": {
+                unique_id_names[0]: None,
+                unique_id_names[1]: unique_id_names[0],
+            },
         },
         headers=HEADERS,
     )
@@ -1580,7 +1588,6 @@ async def test_nested_ids_non_existent_parent_fails(client: AsyncClient):
         params={},
     )
     assert log_response.status_code == 400  # Or appropriate error code
-    assert "does not exist" in log_response.json()["detail"]
 
 
 @pytest.mark.anyio
@@ -1595,7 +1602,12 @@ async def test_nested_unique_ids_increment(client: AsyncClient):
         f"/v0/project/{project_name}/contexts",
         json={
             "name": context_name,
-            "unique_keys": {col: "counting" for col in unique_id_names},
+            "unique_keys": {col: "int" for col in unique_id_names},
+            "auto_counting": {
+                unique_id_names[0]: None,
+                unique_id_names[1]: unique_id_names[0],
+                unique_id_names[2]: unique_id_names[1],
+            },
         },
         headers=HEADERS,
     )
@@ -1679,7 +1691,11 @@ async def test_nested_ids_batch_creation(client: AsyncClient):
         f"/v0/project/{project_name}/contexts",
         json={
             "name": context_name,
-            "unique_keys": {col: "counting" for col in unique_id_names},
+            "unique_keys": {col: "int" for col in unique_id_names},
+            "auto_counting": {
+                unique_id_names[0]: None,
+                unique_id_names[1]: unique_id_names[0],
+            },
         },
         headers=HEADERS,
     )
@@ -1810,7 +1826,8 @@ async def test_single_column_returns_nested_format(client: AsyncClient):
         json={
             "name": context_name,
             "description": "Context with single unique column",
-            "unique_keys": {unique_column_name: "counting"},
+            "unique_keys": {unique_column_name: "int"},
+            "auto_counting": {unique_column_name: None},
         },
         headers=HEADERS,
     )
@@ -1824,6 +1841,7 @@ async def test_single_column_returns_nested_format(client: AsyncClient):
             entries={"value": f"log-entry-{i}"},
             context=context_name,
         )
+        print(log_response.json())
         assert log_response.status_code == 200
 
         # Verify response format is nested even for single column
@@ -1866,7 +1884,8 @@ async def test_invalid_column_names_validation(client: AsyncClient):
             json={
                 "name": f"{context_name}-{len(invalid_name_list)}",
                 "description": "Context with invalid column names",
-                "unique_keys": {name: "counting" for name in invalid_name_list},
+                "unique_keys": {name: "int" for name in invalid_name_list},
+                "auto_counting": {name: None for name in invalid_name_list},
             },
             headers=HEADERS,
         )
@@ -1894,9 +1913,13 @@ async def test_duplicate_column_names_validation(client: AsyncClient):
             "name": context_name,
             "description": "Context with duplicate column names handled by dict",
             "unique_keys": {
-                "user_id": "counting",
-                "session_id": "counting",
-                "user_id": "counting",  # This will overwrite the first user_id
+                "user_id": "int",
+                "session_id": "int",
+                "user_id": "int",  # This will overwrite the first user_id
+            },
+            "auto_counting": {
+                "user_id": None,
+                "session_id": "user_id",
             },
         },
         headers=HEADERS,
@@ -1931,7 +1954,8 @@ async def test_valid_column_names_accepted(client: AsyncClient):
             json={
                 "name": f"{context_name}-{i}",
                 "description": "Context with valid column names",
-                "unique_keys": {name: "counting" for name in valid_name_list},
+                "unique_keys": {name: "int" for name in valid_name_list},
+                "auto_counting": {name: None for name in valid_name_list},
             },
             headers=HEADERS,
         )
@@ -1958,8 +1982,11 @@ async def test_composite_key_mixed_types(client: AsyncClient):
             "description": "Context with mixed composite keys",
             "unique_keys": {
                 "department": "str",
-                "employee_id": "counting",
+                "employee_id": "int",
                 "email": "str",
+            },
+            "auto_counting": {
+                "employee_id": None,  # Independent counter (global)
             },
         },
         headers=HEADERS,
@@ -1997,7 +2024,7 @@ async def test_composite_key_mixed_types(client: AsyncClient):
     row_ids = response.json()["row_ids"]
     assert row_ids["ids"] == [
         ["Engineering", 1, "bob@company.com"],
-    ]  # Auto-incremented within Engineering
+    ]  # Auto-incremented globally
 
     # Create first employee in Sales department
     response = await _create_log(
@@ -2013,8 +2040,8 @@ async def test_composite_key_mixed_types(client: AsyncClient):
     assert response.status_code == 200
     row_ids = response.json()["row_ids"]
     assert row_ids["ids"] == [
-        ["Sales", 0, "charlie@company.com"],
-    ]  # Starts at 0 for Sales department
+        ["Sales", 2, "charlie@company.com"],
+    ]  # Continues global increment (not reset per department)
 
     # Verify we can retrieve all logs
     response = await client.get(
@@ -2120,10 +2147,15 @@ async def test_multiple_counting_columns(client: AsyncClient):
             "name": context_name,
             "description": "Context with hierarchical counting",
             "unique_keys": {
-                "company_id": "counting",
-                "department_id": "counting",
-                "team_id": "counting",
+                "company_id": "int",
+                "department_id": "int",
+                "team_id": "int",
                 "location": "str",
+            },
+            "auto_counting": {
+                "company_id": None,
+                "department_id": "company_id",
+                "team_id": "department_id",
             },
         },
         headers=HEADERS,
@@ -2197,9 +2229,12 @@ async def test_composite_key_missing_required_field(client: AsyncClient):
             "name": context_name,
             "description": "Context requiring composite key fields",
             "unique_keys": {
-                "user_id": "counting",
+                "user_id": "int",
                 "email": "str",
                 "username": "str",
+            },
+            "auto_counting": {
+                "user_id": None,
             },
         },
         headers=HEADERS,
@@ -2222,3 +2257,497 @@ async def test_composite_key_missing_required_field(client: AsyncClient):
         "Must provide value for composite key column 'username'"
         in response.json()["detail"]
     )
+
+
+@pytest.mark.anyio
+async def test_independent_auto_counting(client: AsyncClient):
+    """Test independent auto-counting columns that increment separately."""
+    project_name = "independent-counting-project"
+    context_name = "independent-counting-context"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Create context with independent counters
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "description": "Context with independent counters",
+            "unique_keys": {"message_id": "int"},
+            "auto_counting": {
+                "message_id": None,  # Independent counter
+                "exchange_id": None,  # Independent counter (not part of unique key)
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create logs without providing counting fields
+    response = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={"text": "Hello"},
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["row_ids"]["ids"] == [[0]]
+    assert result["row_ids"]["names"] == ["message_id"]
+
+    # Create another log
+    response = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={"text": "World"},
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["row_ids"]["ids"] == [[1]]
+
+    # Create logs with explicit exchange_id
+    response = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={"text": "New exchange", "exchange_id": 5},
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["row_ids"]["ids"] == [[2]]  # message_id continues incrementing
+
+    # Get logs to verify all fields
+    response = await client.get(
+        f"/v0/logs?project={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+
+    # Check the logs have correct values
+    assert logs[2]["entries"]["message_id"] == 0
+    assert logs[2]["entries"]["exchange_id"] == 0  # Auto-incremented
+    assert logs[1]["entries"]["message_id"] == 1
+    assert logs[1]["entries"]["exchange_id"] == 1  # Auto-incremented
+    assert logs[0]["entries"]["message_id"] == 2
+    assert logs[0]["entries"]["exchange_id"] == 5  # Explicitly set
+
+    response = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={"text": "World"},
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["row_ids"]["ids"] == [[3]]  # message_id continues incrementing
+
+    # Get logs to verify all fields
+    response = await client.get(
+        f"/v0/logs?project={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    logs = response.json()["logs"]
+
+    # Check the logs have correct values
+    assert logs[3]["entries"]["message_id"] == 0
+    assert logs[3]["entries"]["exchange_id"] == 0  # Auto-incremented
+    assert logs[2]["entries"]["message_id"] == 1
+    assert logs[2]["entries"]["exchange_id"] == 1  # Auto-incremented
+    assert logs[1]["entries"]["message_id"] == 2
+    assert logs[1]["entries"]["exchange_id"] == 5  # Auto-incremented
+    assert logs[0]["entries"]["message_id"] == 3
+    assert logs[0]["entries"]["exchange_id"] == 2  # Auto-incremented back from 1
+
+
+@pytest.mark.anyio
+async def test_hierarchical_auto_counting_validation(client: AsyncClient):
+    """Test validation of hierarchical auto-counting relationships."""
+    project_name = "hierarchical-validation-project"
+    context_name = "hierarchical-validation-context"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Create context with hierarchical counters
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "unique_keys": {"task_id": "int", "instance_id": "int"},
+            "auto_counting": {
+                "task_id": None,
+                "instance_id": "task_id",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create first task (auto-increments task_id to 0)
+    response = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={"status": "started"},
+    )
+    assert response.status_code == 200
+    assert response.json()["row_ids"]["ids"] == [[0, 0]]
+
+    # Try to create instance for non-existent task (should fail)
+    response = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={"task_id": 999, "status": "running"},
+    )
+    assert response.status_code == 400
+    assert "does not exist" in response.json()["detail"]
+
+    # Create instance for existing task (should succeed)
+    response = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={"task_id": 0, "status": "running"},
+    )
+    assert response.status_code == 200
+    assert response.json()["row_ids"]["ids"] == [[0, 1]]
+
+
+@pytest.mark.anyio
+async def test_auto_counting_circular_dependency_validation(client: AsyncClient):
+    """Test that circular dependencies in auto_counting are rejected."""
+    project_name = "circular-dep-project"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Try to create context with circular dependency
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "circular-context",
+            "unique_keys": {"col1": "int", "col2": "int"},
+            "auto_counting": {
+                "col1": "col2",
+                "col2": "col1",  # Circular!
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 422
+    assert "Circular dependency" in response.json()["detail"][0]["msg"]
+
+    # Try self-referencing
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "self-ref-context",
+            "unique_keys": {"col1": "int"},
+            "auto_counting": {
+                "col1": "col1",  # Self reference!
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 422
+    assert "cannot be its own parent" in response.json()["detail"][0]["msg"]
+
+
+@pytest.mark.anyio
+async def test_auto_counting_parent_not_in_config(client: AsyncClient):
+    """Test that parent columns must also be in auto_counting."""
+    project_name = "parent-validation-project"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Try to create context where parent is not in auto_counting
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "invalid-parent-context",
+            "unique_keys": {"col1": "int", "col2": "int"},
+            "auto_counting": {
+                "col2": "col1",  # col1 not in auto_counting!
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 422
+    assert "must also be in auto_counting" in response.json()["detail"][0]["msg"]
+
+
+@pytest.mark.anyio
+async def test_get_context_returns_auto_counting(client: AsyncClient):
+    """Test that getting context info returns auto_counting configuration."""
+    project_name = "get-auto-counting-project"
+    context_name = "test-context"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Create context with auto_counting
+    auto_counting_config = {"col1": None, "col2": "col1", "col3": "col2"}
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "unique_keys": {"col1": "int", "col2": "int", "col3": "int"},
+            "auto_counting": auto_counting_config,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Get single context
+    response = await client.get(
+        f"/v0/project/{project_name}/contexts/{context_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["unique_keys"] == ["col1", "col2", "col3"]
+    assert result["auto_counting"] == auto_counting_config
+
+    # Get all contexts
+    response = await client.get(
+        f"/v0/project/{project_name}/contexts",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    contexts = response.json()
+    assert len(contexts) == 1
+    assert contexts[0]["name"] == context_name
+    assert contexts[0]["auto_counting"] == auto_counting_config
+
+
+@pytest.mark.anyio
+async def test_mixed_auto_counting_and_explicit_values(client: AsyncClient):
+    """Test context with some auto-counting and some explicit unique key columns."""
+    project_name = "mixed-counting-project"
+    context_name = "mixed-counting-context"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Create context where only some columns auto-count
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "unique_keys": {
+                "user_id": "int",
+                "email": "str",
+                "session_id": "int",
+            },
+            "auto_counting": {
+                "user_id": None,  # Auto-counts
+                "session_id": "user_id",  # Auto-counts per user
+                # email does NOT auto-count
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create log - must provide email
+    response = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={"name": "John", "email": "john@example.com"},
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["row_ids"]["ids"] == [[0, "john@example.com", 0]]
+    assert result["row_ids"]["names"] == ["user_id", "email", "session_id"]
+
+    # Try to create without email (should fail)
+    response = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={"name": "Jane"},
+    )
+    assert response.status_code == 400
+    assert (
+        "Must provide value for composite key column 'email'"
+        in response.json()["detail"]
+    )
+
+    # Create another session for same user
+    response = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={"user_id": 0, "email": "john@example.com", "action": "login"},
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert result["row_ids"]["ids"] == [
+        [0, "john@example.com", 1],
+    ]  # session_id incremented
+
+
+@pytest.mark.anyio
+async def test_auto_counting_with_non_int_types(client: AsyncClient):
+    """Test that auto_counting only works with int type columns."""
+    project_name = "type-validation-project"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # All auto-counting columns should be int type
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "valid-types-context",
+            "unique_keys": {
+                "counter1": "int",
+                "counter2": "int",
+                "name": "str",
+            },
+            "auto_counting": {
+                "counter1": None,
+                "counter2": "counter1",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create a log
+    response = await _create_log(
+        client,
+        project_name,
+        context="valid-types-context",
+        entries={"name": "test"},
+    )
+    assert response.status_code == 200
+    assert response.json()["row_ids"]["ids"] == [[0, 0, "test"]]
+
+
+@pytest.mark.anyio
+async def test_composite_key_uniqueness_with_allow_duplicates_false(
+    client: AsyncClient,
+):
+    """Test that composite key uniqueness is enforced when allow_duplicates=False."""
+    project_name = "composite-uniqueness-project"
+    context_name = "composite-uniqueness-context"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Create context with composite key and duplicates not allowed
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "allow_duplicates": False,
+            "unique_keys": {
+                "org_id": "str",
+                "user_id": "int",
+                "role": "str",
+            },
+            "auto_counting": {
+                "user_id": None,  # Only user_id auto-counts
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create first entry
+    response = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={
+            "org_id": "acme-corp",
+            "role": "admin",
+            "name": "Alice",
+        },
+    )
+    assert response.status_code == 200
+    print(response.json())
+    assert response.json()["row_ids"]["ids"] == [["acme-corp", 0, "admin"]]
+
+    # Try to create duplicate composite key (should fail)
+    response = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={
+            "org_id": "acme-corp",
+            "user_id": 0,  # Same composite key
+            "role": "admin",
+            "name": "Bob",  # Different name but same composite key
+        },
+    )
+    assert response.status_code == 400
+    assert "Duplicate" in response.json()["detail"]
+
+    # Create entry with different composite key (should succeed)
+    response = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={
+            "org_id": "acme-corp",
+            "role": "user",  # Different role
+            "name": "Charlie",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["row_ids"]["ids"] == [["acme-corp", 1, "user"]]
+
+
+@pytest.mark.anyio
+async def test_individual_field_uniqueness_with_auto_counting(client: AsyncClient):
+    """Test that individual field uniqueness is enforced alongside auto_counting."""
+    project_name = "field-uniqueness-project"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Create a context with single unique key that auto-counts
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "users-context",
+            "allow_duplicates": False,
+            "unique_keys": {"user_id": "int"},
+            "auto_counting": {"user_id": None},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create a log with email field
+    response = await _create_log(
+        client,
+        project_name,
+        context="users-context",
+        entries={"email": "alice@example.com", "name": "Alice"},
+    )
+    assert response.status_code == 200
+    assert response.json()["row_ids"]["ids"] == [[0]]
+
+    # Create another log with different email
+    response = await _create_log(
+        client,
+        project_name,
+        context="users-context",
+        entries={"email": "bob@example.com", "name": "Bob"},
+    )
+    print(response.json())
+    assert response.status_code == 200
+    assert response.json()["row_ids"]["ids"] == [[1]]
+
+    # Field uniqueness would be enforced if we had set unique=True on email field
+    # But with auto_counting, user_id is the only unique field

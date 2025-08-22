@@ -748,6 +748,7 @@ class Context(Base):
     allow_duplicates = Column(Boolean, nullable=False, server_default="t")
     unique_key_names = Column(JSONB, nullable=False, server_default="[]")
     unique_key_types = Column(JSONB, nullable=False, server_default="[]")
+    auto_counting = Column(JSONB, nullable=False, server_default="{}")
     current_commit_hash = Column(String, nullable=True)
 
     project = relationship("Project", back_populates="contexts")

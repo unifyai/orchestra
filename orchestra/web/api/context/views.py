@@ -102,12 +102,14 @@ def create_context(
             context_is_versioned = False
             context_allow_duplicates = True
             unique_keys = None
+            auto_counting = None
         else:
             context_name = request.name
             context_description = request.description
             context_is_versioned = request.is_versioned
             context_allow_duplicates = request.allow_duplicates
             unique_keys = request.unique_keys
+            auto_counting = request.auto_counting
 
         # Normalize context name: remove leading slash to treat '/exp1/name1' the same as 'exp1/name1'
         context_name = context_name.lstrip("/")
@@ -133,6 +135,7 @@ def create_context(
             is_versioned=context_is_versioned,
             allow_duplicates=context_allow_duplicates,
             unique_keys=unique_keys,
+            auto_counting=auto_counting,
         )
 
         return {"info": "Context created successfully."}
@@ -159,6 +162,7 @@ def create_context(
                             "is_versioned": True,
                             "allow_duplicates": True,
                             "unique_keys": ["row_id"],
+                            "auto_counting": {"row_id": None},
                         },
                         {
                             "name": "context2",
@@ -166,6 +170,7 @@ def create_context(
                             "is_versioned": False,
                             "allow_duplicates": True,
                             "unique_keys": ["user_id", "session_id"],
+                            "auto_counting": {"user_id": None, "session_id": "user_id"},
                         },
                     ],
                 },
@@ -224,6 +229,7 @@ def get_contexts(
                 "is_versioned": context[0].is_versioned,
                 "allow_duplicates": context[0].allow_duplicates,
                 "unique_keys": context[0].unique_key_names or [],
+                "auto_counting": context[0].auto_counting or {},
             }
             for context in existing_contexts
             if context[0].name != ""
@@ -288,6 +294,7 @@ def get_context_commits(
                         "is_versioned": True,
                         "allow_duplicates": True,
                         "unique_keys": ["row_id"],
+                        "auto_counting": {"row_id": None},
                     },
                 },
             },
@@ -347,6 +354,7 @@ def get_context(
             "is_versioned": context[0][0].is_versioned,
             "allow_duplicates": context[0][0].allow_duplicates,
             "unique_keys": context[0][0].unique_key_names or [],
+            "auto_counting": context[0][0].auto_counting or {},
         }
     except IndexError as e:
         raise not_found(str(e))

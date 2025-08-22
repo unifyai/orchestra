@@ -34,12 +34,20 @@ class ContextCreateRequest(BaseModel):
     )
     unique_keys: Optional[Dict[str, str]] = Field(
         default=None,
-        description="Composite unique key definition. Keys are column names, values are types ('counting' for auto-increment, 'str', 'int', 'float', 'bool', 'datetime', 'time', 'date', 'timedelta', 'dict', 'list').",
+        description="Unique key definition. Keys are column names, values are types ('str', 'int', 'float', 'bool', 'datetime', 'time', 'date', 'timedelta', 'dict', 'list').",
         example={
-            "department_id": "counting",
+            "department_id": "int",
             "first_name": "str",
-            "company_id": "counting",
+            "company_id": "int",
             "last_name": "str",
+        },
+    )
+    auto_counting: Optional[Dict[str, Optional[str]]] = Field(
+        default=None,
+        description="Auto-counting configuration. Keys are column names to auto-increment, values are parent counter names (None for independent counters).",
+        example={
+            "department_id": None,
+            "company_id": "department_id",
         },
     )
 
@@ -55,12 +63,11 @@ class ContextCreateRequest(BaseModel):
                 "unique_keys cannot be an empty dict. Use None to disable unique keys.",
             )
 
-        # Valid types for composite keys
-        from orchestra.web.api.log.python2SQL.constants import VALID_COMPOSITE_KEY_TYPES
+        # Valid types for unique keys
+        from orchestra.web.api.log.python2SQL.constants import STR_TO_SQL_TYPES
 
-        allowed_types = VALID_COMPOSITE_KEY_TYPES
+        allowed_types = list(STR_TO_SQL_TYPES.keys())
 
-        counting_columns = []
         for col_name, col_type in v.items():
             # Validate column name
             if not isinstance(col_name, str):
@@ -76,11 +83,54 @@ class ContextCreateRequest(BaseModel):
                     f"Invalid type '{col_type}' for column '{col_name}'. Allowed types: {allowed_types}",
                 )
 
-            if col_type == "counting":
-                counting_columns.append(col_name)
+        return v
 
-        # If there are counting columns, they must form a valid hierarchy (ordered list)
-        # For now, we'll preserve the order as given in the dict (Python 3.7+ preserves insertion order)
+    @field_validator("auto_counting")
+    @classmethod
+    def validate_auto_counting(cls, v, values):
+        """Validate auto_counting configuration."""
+        if v is None:
+            return v
+
+        # Validate column names
+        for col_name, parent_col in v.items():
+            if not isinstance(col_name, str):
+                raise ValueError("All column names must be strings")
+            if not re.match(r"^[a-zA-Z0-9_]+$", col_name):
+                raise ValueError(
+                    f"Column name '{col_name}' must contain only alphanumeric characters and underscores",
+                )
+
+            # Validate parent column if specified
+            if parent_col is not None:
+                if not isinstance(parent_col, str):
+                    raise ValueError(
+                        f"Parent column for '{col_name}' must be a string or None",
+                    )
+                if parent_col not in v:
+                    raise ValueError(
+                        f"Parent column '{parent_col}' for '{col_name}' must also be in auto_counting",
+                    )
+                if parent_col == col_name:
+                    raise ValueError(f"Column '{col_name}' cannot be its own parent")
+
+        # Check for circular dependencies
+        def has_cycle(column, visited=None):
+            if visited is None:
+                visited = set()
+            if column in visited:
+                return True
+            visited.add(column)
+            parent = v.get(column)
+            if parent and parent in v:
+                return has_cycle(parent, visited)
+            return False
+
+        for col_name in v:
+            if has_cycle(col_name):
+                raise ValueError(
+                    f"Circular dependency detected in auto_counting hierarchy involving '{col_name}'",
+                )
 
         return v
 

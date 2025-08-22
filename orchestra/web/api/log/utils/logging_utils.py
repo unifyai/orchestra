@@ -1264,13 +1264,10 @@ def create_logs_internal(
     total_logs = max(entries_len, params_len)
 
     provided_unique_ids = None
-    if context_obj and context_obj.unique_keys:
+    # Handle auto-counting fields (both in unique_keys and not)
+    if context_obj and (context_obj.unique_keys or context_obj.auto_counting):
         unique_keys = context_obj.unique_keys or {}
-        # Use the unique_key_names which preserves order
-        all_columns = context_obj.unique_key_names or list(unique_keys.keys())
-        counting_columns = [
-            k for k in all_columns if k in unique_keys and unique_keys[k] == "counting"
-        ]
+        auto_counting = context_obj.auto_counting or {}
 
         # 1. Extract and validate composite key values from entries/params
         all_composite_values = []
@@ -1285,13 +1282,14 @@ def create_logs_internal(
             composite_values = {}
             provided_counting_values = {}
 
+            # First process unique key columns
             for col_name, col_type in unique_keys.items():
-                if col_type == "counting":
-                    # For counting columns, check if user provided a value
+                if col_name in auto_counting:
+                    # For auto-counting columns, check if user provided a value
                     if col_name in current_data:
                         provided_counting_values[col_name] = current_data[col_name]
                 else:
-                    # Non-counting columns must be provided
+                    # Non-auto-counting columns must be provided
                     if col_name not in current_data:
                         raise HTTPException(
                             status_code=400,
@@ -1299,37 +1297,26 @@ def create_logs_internal(
                         )
                     composite_values[col_name] = current_data[col_name]
 
-            # Validate counting columns follow hierarchical rules
-            if counting_columns and provided_counting_values:
-                # Check which counting columns were provided
-                provided_indices = []
-                for key in provided_counting_values.keys():
-                    if key in counting_columns:
-                        provided_indices.append(counting_columns.index(key))
+            # Then process auto-counting columns that are NOT in unique keys
+            for col_name, parent_col in auto_counting.items():
+                if col_name not in unique_keys and col_name in current_data:
+                    provided_counting_values[col_name] = current_data[col_name]
 
-                if provided_indices:
-                    provided_indices.sort()
-
-                    # Cannot skip hierarchy levels - must provide consecutive columns from left
-                    expected_indices = list(range(len(provided_indices)))
-                    if provided_indices != expected_indices:
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Counting columns must be provided consecutively from the leftmost. "
-                            f"Expected columns: {counting_columns[:len(provided_indices)]}, "
-                            f"but got: {list(provided_counting_values.keys())}",
-                        )
-
-                    # Cannot provide the column that would be auto-incremented next
-                    next_col_index = len(provided_indices)
-                    if (
-                        next_col_index < len(counting_columns)
-                        and counting_columns[next_col_index] in provided_counting_values
-                    ):
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Cannot provide value for counting column '{counting_columns[next_col_index]}'. This column is auto-incremented.",
-                        )
+            # Validate auto-counting columns follow rules
+            if auto_counting and provided_counting_values:
+                # For hierarchical counters, validate parent-child relationships
+                for col_name, value in provided_counting_values.items():
+                    if col_name in auto_counting:
+                        parent_col = auto_counting.get(col_name)
+                        if (
+                            parent_col
+                            and parent_col not in composite_values
+                            and parent_col not in provided_counting_values
+                        ):
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"Cannot provide value for '{col_name}' without providing parent column '{parent_col}'.",
+                            )
 
                 # Add provided counting values to composite values
                 composite_values.update(provided_counting_values)
@@ -1374,6 +1361,25 @@ def create_logs_internal(
         # If i exceeds list length, use the last item in the list
         current_entries = entries_list[min(i, entries_len - 1)]
         current_params = params_list[min(i, params_len - 1)]
+
+        # Add auto-incremented values from row_ids that are not in unique_keys back to entries
+        if context_obj and context_obj.auto_counting and row_ids and i < len(row_ids):
+            row_id_dict = row_ids[i] if isinstance(row_ids[i], dict) else {}
+            unique_keys = context_obj.unique_keys or {}
+
+            for col_name, col_value in row_id_dict.items():
+                # Only add if it's an auto-counting field that's NOT in unique_keys
+                # (unique_key fields are already handled by log_event_dao.bulk_create)
+                if (
+                    col_name in context_obj.auto_counting
+                    and col_name not in unique_keys
+                ):
+                    if (
+                        col_name not in current_entries
+                        and col_name not in current_params
+                    ):
+                        # Add to entries
+                        current_entries[col_name] = col_value
 
         # Extract explicit types - NOTE: This mutates entries/params dicts in-place
         # Callers should pass fresh copies if they need to reuse the original dicts
