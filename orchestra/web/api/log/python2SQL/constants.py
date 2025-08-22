@@ -7,7 +7,6 @@ from sqlalchemy.dialects.postgresql import JSONB
 __all__ = [
     "STR_TO_SQL_TYPES",
     "get_default_value_for_type",
-    "VALID_COMPOSITE_KEY_TYPES",
 ]
 
 STR_TO_SQL_TYPES = {
@@ -29,13 +28,12 @@ def get_default_value_for_type(type_name: str) -> Any:
     Get the default/initial value for a given type name.
 
     Args:
-        type_name: The type name (e.g., "int", "str", "datetime", "counting")
+        type_name: The type name (e.g., "int", "str", "datetime")
 
     Returns:
         The appropriate default value for the type
     """
     default_values = {
-        "counting": 0,
         "int": 0,
         "float": 0.0,
         "bool": False,
@@ -52,7 +50,3 @@ def get_default_value_for_type(type_name: str) -> Any:
         type_name,
         "",
     )  # Default to empty string for unknown types
-
-
-# Valid types for composite key columns
-VALID_COMPOSITE_KEY_TYPES = ["counting"] + list(STR_TO_SQL_TYPES.keys())
