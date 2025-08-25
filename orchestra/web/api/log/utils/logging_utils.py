@@ -1987,9 +1987,38 @@ def _build_log_subquery(
             .scalar_subquery()
         )
 
-        # Create a subquery that gets the value for this key from derived logs
+        # Create scalar subqueries for derived log fields
         derived_log_subq = (
             session.query(DerivedLog.value)
+            .join(
+                LogEventDerivedLog,
+                LogEventDerivedLog.derived_log_id == DerivedLog.id,
+            )
+            .filter(
+                LogEventDerivedLog.log_event_id == LogEvent.id,
+                DerivedLog.key == key,
+            )
+            .limit(1)
+            .scalar_subquery()
+        )
+
+        # Create scalar subqueries for metadata
+        derived_log_equation_subq = (
+            session.query(DerivedLog.equation)
+            .join(
+                LogEventDerivedLog,
+                LogEventDerivedLog.derived_log_id == DerivedLog.id,
+            )
+            .filter(
+                LogEventDerivedLog.log_event_id == LogEvent.id,
+                DerivedLog.key == key,
+            )
+            .limit(1)
+            .scalar_subquery()
+        )
+
+        derived_log_referenced_logs_subq = (
+            session.query(DerivedLog.referenced_logs)
             .join(
                 LogEventDerivedLog,
                 LogEventDerivedLog.derived_log_id == DerivedLog.id,
@@ -2005,6 +2034,22 @@ def _build_log_subquery(
         # Use COALESCE to get the value from either base or derived logs (preferring base logs)
         key_subq = func.coalesce(base_log_subq, derived_log_subq).label(key)
         base_query = base_query.add_columns(key_subq)
+
+        # Add metadata columns to track source with table prefixes
+        source_col = case(
+            (base_log_subq.isnot(None), literal("log")),
+            (derived_log_subq.isnot(None), literal("derived_log")),
+            else_=literal(None),
+        ).label(f"{key}__orchestra__source")
+        base_query = base_query.add_columns(source_col)
+
+        # Add equation and referenced_logs for derived logs with table prefixes
+        base_query = base_query.add_columns(
+            derived_log_equation_subq.label(f"{key}__derived_log__equation"),
+            derived_log_referenced_logs_subq.label(
+                f"{key}__derived_log__referenced_logs",
+            ),
+        )
 
     # Apply the filter to get only the log events we want
     final_query = base_query.filter(
@@ -2119,6 +2164,21 @@ def _construct_join_query(
                 select_columns.append(
                     getattr(subq.c, actual_col).label(label),
                 )
+                # Also include metadata columns if they exist
+                # Check for all possible metadata suffixes with table prefixes
+                metadata_suffixes = [
+                    "__orchestra__source",
+                    "__derived_log__equation",
+                    "__derived_log__referenced_logs",
+                ]
+                for suffix in metadata_suffixes:
+                    metadata_col_name = f"{actual_col}{suffix}"
+                    if hasattr(subq.c, metadata_col_name):
+                        select_columns.append(
+                            getattr(subq.c, metadata_col_name).label(
+                                f"{label}{suffix}",
+                            ),
+                        )
             else:
                 raise ValueError(f"Column '{actual_col}' not found in {source_name}")
     else:
@@ -2166,17 +2226,23 @@ def _create_logs_from_joined_rows(
     field_type_dao: FieldTypeDAO,
     context_dao: ContextDAO,
     session,
+    source_contexts: Optional[Dict[str, int]] = None,
 ) -> List[int]:
     """
     Creates new log entries from joined query results.
 
+    Important: result_rows contain JSONB values from Log/DerivedLog tables, not numpy arrays.
+    Embeddings are stored separately in the Embedding table and need to be recreated from
+    the JSONB lists when copying derived logs that were created with embed().
+
     Args:
-        result_rows: Result rows from the join query
+        result_rows: Result rows from the join query (contain JSONB values)
         project_id: ID of the project
         context_id: ID of the context
         field_type_dao: FieldTypeDAO instance for field type operations
         context_dao: ContextDAO instance for context operations
         session: SQLAlchemy session
+        source_contexts: Optional mapping of source aliases to context IDs
 
     Returns:
         List of IDs of the newly created log events
@@ -2184,15 +2250,19 @@ def _create_logs_from_joined_rows(
     new_log_ids = []
     now = datetime.now(timezone.utc)
 
-    # Get the context object to check if it's versioned
+    # Get the context object
     context_obj = session.get(Context, context_id)
 
-    # Get existing field types for the project/context
-    field_types = field_type_dao.get_field_types(
-        project_id,
-        return_mutable=True,
-        context_id=context_id,
-    )
+    # Helper function to extract metadata from column names
+    def extract_metadata(col_name: str) -> tuple:
+        """Extract table and metadata type from column name."""
+        if "__orchestra__source" in col_name:
+            return "orchestra", "source"
+        elif "__derived_log__equation" in col_name:
+            return "derived_log", "equation"
+        elif "__derived_log__referenced_logs" in col_name:
+            return "derived_log", "referenced_logs"
+        return None, None
 
     # Prepare collections for bulk operations
     new_field_types = []
@@ -2200,16 +2270,26 @@ def _create_logs_from_joined_rows(
     log_event_contexts = []
     logs = []
     log_event_logs = []
+    derived_logs = []
+    log_event_derived_logs = []
     json_logs = []
+    embeddings_to_create = []  # Track embeddings that need to be created
 
     # Process each row
     for row in result_rows:
-        # Convert row to dictionary
+        # Separate regular columns from metadata
         row_dict = {}
+        metadata_dict = {}
         for col in row._fields:
             value = getattr(row, col)
-            if col != "id":  # Skip the id column as it's special
-                row_dict[col] = value
+            if col != "id":  # Skip the id column
+                table, meta_type = extract_metadata(col)
+                if table:
+                    # This is a metadata column
+                    metadata_dict[col] = value
+                else:
+                    # Regular data column - store original value (including numpy arrays)
+                    row_dict[col] = value
 
         # Create a new LogEvent
         log_event = LogEvent(
@@ -2228,11 +2308,19 @@ def _create_logs_from_joined_rows(
     # Now create the related records with the generated IDs
     for i, log_event in enumerate(log_events):
         row = result_rows[i]
+        # Separate regular columns from metadata - reuse the same logic
         row_dict = {}
+        metadata_dict = {}
         for col in row._fields:
             value = getattr(row, col)
-            if col != "id":  # Skip the id column as it's special
-                row_dict[col] = value
+            if col != "id":  # Skip the id column
+                table, meta_type = extract_metadata(col)
+                if table:
+                    # This is a metadata column
+                    metadata_dict[col] = value
+                else:
+                    # Regular data column - store original value (including numpy arrays)
+                    row_dict[col] = value
 
         # Create LogEventContext association
         log_event_contexts.append(
@@ -2243,51 +2331,137 @@ def _create_logs_from_joined_rows(
         )
 
         # Create individual Log entries for each column in the joined result
-        # When copying (copy=True), all fields become regular logs regardless of their source
+        # Check metadata to determine if fields should go to Embedding table
         for col, val in row_dict.items():
-            # Check if field type exists
-            field_info = field_types.get(col)
+            # Skip metadata columns
+            if extract_metadata(col)[0]:
+                continue
 
-            if field_info:
-                # Enforce type consistency for existing fields
+            # Get source metadata for this field
+            source_info = metadata_dict.get(f"{col}__orchestra__source")
+            equation_info = metadata_dict.get(f"{col}__derived_log__equation")
+            referenced_logs_info = metadata_dict.get(
+                f"{col}__derived_log__referenced_logs",
+            )
+
+            # Look up the original field type from any source context
+            original_field_type = None
+
+            # Try to find the field type in any source context
+            if source_contexts:
+                for alias, src_context_id in source_contexts.items():
+                    field_type = field_type_dao.get_by_name_and_context(
+                        project_id=project_id,
+                        field_name=col,
+                        context_id=src_context_id,
+                    )
+                    if field_type:
+                        original_field_type = field_type
+                        break
+
+            # Also check if it exists in the current project (global field types)
+            if not original_field_type:
+                field_type = field_type_dao.get_by_name_and_context(
+                    project_id=project_id,
+                    field_name=col,
+                    context_id=None,  # Global field type
+                )
+                if field_type:
+                    original_field_type = field_type
+
+            # Check if field already exists in target context
+            existing_field_type = field_type_dao.get_by_name_and_context(
+                project_id=project_id,
+                field_name=col,
+                context_id=context_id,
+            )
+
+            if existing_field_type:
+                # Validate type consistency
                 entered_type = LogDAO.infer_type(col, val)
-                expected_type = field_info["field_type"]
-
-                if expected_type and expected_type != "NoneType":
-                    if entered_type != expected_type and entered_type != "NoneType":
+                if (
+                    existing_field_type.field_type != "NoneType"
+                    and entered_type != "NoneType"
+                ):
+                    if entered_type != existing_field_type.field_type:
                         raise HTTPException(
                             status_code=400,
-                            detail=f"Type mismatch for field '{col}' in joined result: expected {expected_type}, got {entered_type}",
+                            detail=f"Type mismatch for field '{col}' in joined result: expected {existing_field_type.field_type}, got {entered_type}",
                         )
+            elif original_field_type:
+                # Copy the original field type to the new context
+                # Determine the field category based on whether it's a derived log
+                field_category = (
+                    "derived_entry"
+                    if source_info == "derived_log"
+                    else original_field_type.field_category
+                )
+
+                new_field_types.append(
+                    {
+                        "project_id": project_id,
+                        "field_name": col,
+                        "value": val,
+                        "mutable": original_field_type.mutable,
+                        "unique": original_field_type.unique,
+                        "field_category": field_category,
+                        "enum_values": original_field_type.enum_values,
+                        "enum_restrict": original_field_type.enum_restrict,
+                        "description": original_field_type.description,
+                        "context_id": context_id,
+                    },
+                )
             else:
-                # Determine if mutable based on versioned context
+                # No original field type found, infer from value
+                # Determine field category based on source
+                field_category = (
+                    "derived_entry" if source_info == "derived_log" else "entry"
+                )
+
+                # Only make it mutable if the context is versioned
                 mutable = context_obj and context_obj.is_versioned
 
-                # Add to new field types collection
                 new_field_types.append(
                     {
                         "project_id": project_id,
                         "field_name": col,
                         "value": val,
                         "mutable": mutable,
-                        "unique": False,  # Default to non-unique for joined fields
-                        "field_category": "entry",  # All copied fields become regular entries
+                        "unique": False,
+                        "field_category": field_category,
                         "context_id": context_id,
                     },
                 )
 
+            # Values from result_rows are already JSONB from Log/DerivedLog tables
+            # No need to encode - they're already properly formatted
             inferred_type = LogDAO.infer_type(col, val)
 
-            # Create a regular Log for all fields when copying
-            log = Log(
-                key=col,
-                value=val,
-                inferred_type=inferred_type,
-                created_at=now,
-                updated_at=now,
-            )
-            logs.append(log)
-            session.add(log)
+            # Check if this was originally a derived log
+            if source_info == "derived_log" and equation_info:
+                # Create a DerivedLog entry with the JSONB value as-is
+                derived_log = DerivedLog(
+                    key=col,
+                    value=val,  # Already JSONB from the query
+                    equation=equation_info,
+                    referenced_logs=referenced_logs_info,
+                    inferred_type=inferred_type,
+                    created_at=now,
+                    updated_at=now,
+                )
+                derived_logs.append(derived_log)
+                session.add(derived_log)
+            else:
+                # Create a regular Log entry
+                log = Log(
+                    key=col,
+                    value=val,  # Already JSONB from the query
+                    inferred_type=inferred_type,
+                    created_at=now,
+                    updated_at=now,
+                )
+                logs.append(log)
+                session.add(log)
 
             # If value is a dict or list, create a JSONLog entry
             if isinstance(val, (dict, list)):
@@ -2295,35 +2469,132 @@ def _create_logs_from_joined_rows(
                     {
                         "log_event_id": log_event.id,  # Store temporarily for association
                         "key": col,
-                        "value": val,
+                        "value": val,  # Already JSONB
                     },
                 )
 
         new_log_ids.append(log_event.id)
 
-    # Flush to get Log IDs
+    # Flush to get Log and DerivedLog IDs
     session.flush()
 
-    # Create LogEventLog associations
-    log_idx = 0
-    for i, log_event in enumerate(log_events):
-        row = result_rows[i]
-        row_dict = {}
-        for col in row._fields:
-            value = getattr(row, col)
-            if col != "id":
-                row_dict[col] = value
+    # Look up embeddings from original log events
+    # Get all source log event IDs
+    source_log_event_ids = set()
+    for row in result_rows:
+        log_event_id_a = getattr(row, "log_event_id_a", None)
+        log_event_id_b = getattr(row, "log_event_id_b", None)
+        if log_event_id_a:
+            source_log_event_ids.add(log_event_id_a)
+        if log_event_id_b:
+            source_log_event_ids.add(log_event_id_b)
 
-        # Create associations for each log
-        for col, val in row_dict.items():
-            log = logs[log_idx]
-            log_event_logs.append(
-                LogEventLog(
-                    log_event_id=log_event.id,
-                    log_id=log.id,
-                ),
+    # Query all embeddings from source log events in one go
+    if source_log_event_ids:
+        source_embeddings = (
+            session.query(Embedding)
+            .filter(
+                Embedding.ref_id.in_(source_log_event_ids),
             )
-            log_idx += 1
+            .all()
+        )
+
+        # Build a lookup map: (ref_id, key) -> embedding
+        embedding_lookup = {}
+        for emb in source_embeddings:
+            embedding_lookup[(emb.ref_id, emb.key)] = emb
+
+        # Track which fields are derived logs for each row
+        for i, (log_event, row) in enumerate(zip(log_events, result_rows)):
+            log_event_id_a = getattr(row, "log_event_id_a", None)
+            log_event_id_b = getattr(row, "log_event_id_b", None)
+
+            # Rebuild metadata dict for this row
+            metadata_dict = {}
+            for col in row._fields:
+                table, meta_type = extract_metadata(col)
+                if table:
+                    metadata_dict[col] = getattr(row, col)
+
+            # Check each field in this row
+            for col in row._fields:
+                if (
+                    col == "id"
+                    or extract_metadata(col)[0]
+                    or col in ["log_event_id_a", "log_event_id_b"]
+                ):
+                    continue
+
+                # Get source metadata for this field
+                source_info = metadata_dict.get(f"{col}__orchestra__source")
+
+                # Only process derived log fields
+                if source_info == "derived_log":
+                    # Try to find embedding for this key from either source
+                    for source_id in [log_event_id_a, log_event_id_b]:
+                        if source_id:
+                            # Try different key variations to handle aliasing
+                            # Remove common prefixes
+                            if col.startswith("A_") or col.startswith("B_"):
+                                base_key = col[2:]
+                            else:
+                                base_key = col
+
+                            # Check if embedding exists for this key
+                            embedding = embedding_lookup.get((source_id, base_key))
+                            if not embedding:
+                                embedding = embedding_lookup.get((source_id, col))
+
+                            if embedding:
+                                embeddings_to_create.append(
+                                    {
+                                        "log_event_id": log_event.id,
+                                        "key": col,
+                                        "vector": embedding.vector,
+                                        "model": embedding.model,
+                                    },
+                                )
+                                break  # Found embedding for this key
+
+    # Create associations
+    log_idx = 0
+    derived_log_idx = 0
+    for i, (log_event, row) in enumerate(zip(log_events, result_rows)):
+        # Rebuild metadata dict for this row
+        metadata_dict = {}
+        for col in row._fields:
+            table, meta_type = extract_metadata(col)
+            if table:
+                metadata_dict[col] = getattr(row, col)
+
+        # Create associations for each field
+        for col in row._fields:
+            if col == "id" or extract_metadata(col)[0]:
+                continue
+
+            # Check if this is a derived log
+            source_info = metadata_dict.get(f"{col}__orchestra__source")
+
+            if source_info == "derived_log" and derived_log_idx < len(derived_logs):
+                # Create association for derived log
+                derived_log = derived_logs[derived_log_idx]
+                log_event_derived_logs.append(
+                    LogEventDerivedLog(
+                        log_event_id=log_event.id,
+                        derived_log_id=derived_log.id,
+                    ),
+                )
+                derived_log_idx += 1
+            elif log_idx < len(logs):
+                # Create association for regular log
+                log = logs[log_idx]
+                log_event_logs.append(
+                    LogEventLog(
+                        log_event_id=log_event.id,
+                        log_id=log.id,
+                    ),
+                )
+                log_idx += 1
 
     # Bulk create new field types if any
     try:
@@ -2335,6 +2606,18 @@ def _create_logs_from_joined_rows(
     # Bulk insert related records
     session.bulk_save_objects(log_event_contexts)
     session.bulk_save_objects(log_event_logs)
+    session.bulk_save_objects(log_event_derived_logs)
+
+    # Create Embedding entries
+    if embeddings_to_create:
+        for emb_data in embeddings_to_create:
+            embedding = Embedding(
+                ref_id=emb_data["log_event_id"],
+                key=emb_data["key"],
+                model=emb_data["model"],
+                vector=emb_data["vector"],
+            )
+            session.add(embedding)
 
     # Handle JSONLog creation with many-to-many relationship
     if json_logs:
@@ -2621,7 +2904,7 @@ def _join_logs(
         context_b = pair_of_args[1].get("context")
         if not context_a or not context_b:
             raise ValueError(
-                "Contexts for both queries must be provided in the pair of args. Got: {context_a} and {context_b}",
+                f"Contexts for both queries must be provided in the pair of args. Got: {context_a} and {context_b}",
             )
 
         filter_expr_a = pair_of_args[0].get("filter_expr")
@@ -2700,7 +2983,7 @@ def _join_logs(
             columns=columns,
             fields_a=fields_a,
             fields_b=fields_b,
-            include_log_ids=(not copy),  # Include log IDs when not copying
+            include_log_ids=True,  # Always include log IDs for embedding lookups
             session=session,
         )
 
@@ -2710,6 +2993,13 @@ def _join_logs(
         # If no results, return empty list
         if not result_rows:
             return []
+
+        # Get source context IDs for field type lookups
+        source_contexts = {}
+        context_a_id = context_dao.get_or_create(project_id, name=context_a)
+        context_b_id = context_dao.get_or_create(project_id, name=context_b)
+        source_contexts["A"] = context_a_id
+        source_contexts["B"] = context_b_id
 
         # Create new log entries from the joined results
         if copy:
@@ -2721,6 +3011,7 @@ def _join_logs(
                 field_type_dao=field_type_dao,
                 context_dao=context_dao,
                 session=session,
+                source_contexts=source_contexts,
             )
         else:
             # Reference existing logs
