@@ -1,6 +1,7 @@
 import json
 
 from fastapi import HTTPException
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     TIMESTAMP,
     BindParameter,
@@ -1170,14 +1171,38 @@ def _handle_cosine(
     rhs_is_sub = isinstance(rhs, Subquery)
 
     if lhs_is_sub and rhs_is_sub:
-        lval, _ = _select_value(lhs, session, is_vector=True)
-        rval, _ = _select_value(rhs, session, is_vector=True)
+        lval, lval_type = _select_value(lhs, session, is_vector=True)
+        rval, rval_type = _select_value(rhs, session, is_vector=True)
+
+        # Special handling for when vector operations receive JSONB values
+        # This happens with copy=False joins where new log_event_ids
+        # are generated but the logs/derived logs are original ones
+        if lval_type == "list" and hasattr(lval, "type"):
+            # Use PostgreSQL's ability to cast JSONB arrays to vector type
+            lval = func.cast(lval.op("#>>")("{}"), Vector)
+
+        if rval_type == "list" and hasattr(rval, "type"):
+            # Use PostgreSQL's ability to cast JSONB arrays to vector type
+            rval = func.cast(rval.op("#>>")("{}"), Vector)
+
         dist = lval.op("<=>")(rval).cast(Float)
         return _join_subqueries(lhs, rhs, dist, "float", session=session)
 
     if lhs_is_sub:
-        lval, _ = _select_value(lhs, session, is_vector=True)
-        rval, _ = _select_value(rhs, session, is_vector=True)
+        lval, lval_type = _select_value(lhs, session, is_vector=True)
+        rval, rval_type = _select_value(rhs, session, is_vector=True)
+
+        # Special handling for when vector operations receive JSONB values
+        # This happens with copy=False joins where new log_event_ids
+        # are generated but the logs/derived logs are original ones
+        if lval_type == "list" and hasattr(lval, "type"):
+            # Use PostgreSQL's ability to cast JSONB arrays to vector type
+            lval = func.cast(lval.op("#>>")("{}"), Vector)
+
+        if rval_type == "list" and hasattr(rval, "type"):
+            # Use PostgreSQL's ability to cast JSONB arrays to vector type
+            rval = func.cast(rval.op("#>>")("{}"), Vector)
+
         dist = lval.op("<=>")(rval).cast(Float)
         select_cols = [lhs.c.log_event_id.label("log_event_id")]
         if "__comp_idx__" in lhs.c.keys():
@@ -1193,8 +1218,20 @@ def _handle_cosine(
         )
 
     if rhs_is_sub:
-        rval, _ = _select_value(rhs, session, is_vector=True)
-        lval, _ = _select_value(lhs, session, is_vector=True)
+        rval, rval_type = _select_value(rhs, session, is_vector=True)
+        lval, lval_type = _select_value(lhs, session, is_vector=True)
+
+        # Special handling for when vector operations receive JSONB values
+        # This happens with copy=False joins where new log_event_ids
+        # are generated but the logs/derived logs are original ones
+        if lval_type == "list" and hasattr(lval, "type"):
+            # Use PostgreSQL's ability to cast JSONB arrays to vector type
+            lval = func.cast(lval.op("#>>")("{}"), Vector)
+
+        if rval_type == "list" and hasattr(rval, "type"):
+            # Use PostgreSQL's ability to cast JSONB arrays to vector type
+            rval = func.cast(rval.op("#>>")("{}"), Vector)
+
         dist = lval.op("<=>")(rval).cast(Float)
         select_cols = [rhs.c.log_event_id.label("log_event_id")]
         if "__comp_idx__" in rhs.c.keys():
