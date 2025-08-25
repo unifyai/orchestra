@@ -2512,14 +2512,17 @@ async def test_tile_context_valid_reference(client: AsyncClient):
 
     # Create tile with valid context references
     response = await client.post(
-        "/v0/tiles/",
+        "/v0/tile/",
         json={
-            "position": {"width": 1, "height": 1},
+            "name": "test-tile",
+            "position": {"x": 0, "y": 0, "width": 1, "height": 1},
             "tab_id": tab_id,
             "context": context_name,
         },
         headers=HEADERS,
     )
+    if response.status_code != 201:
+        print(f"Response: {response.status_code} - {response.json()}")
     assert response.status_code == 201  # POST returns 201 for creation
 
 
@@ -2551,9 +2554,10 @@ async def test_tile_context_invalid_reference(client: AsyncClient):
 
     # Try to create tile with non-existent context references
     response = await client.post(
-        "/v0/tiles/",
+        "/v0/tile/",
         json={
-            "position": {"width": 1, "height": 1},
+            "name": "test-tile",
+            "position": {"x": 0, "y": 0, "width": 1, "height": 1},
             "tab_id": tab_id,
             "context": "non-existent-context",
         },
@@ -2599,9 +2603,10 @@ async def test_tile_context_patch_update(client: AsyncClient):
 
     # Create tile without context first
     create_response = await client.post(
-        "/v0/tiles/",
+        "/v0/tile/",
         json={
-            "position": {"width": 1, "height": 1},
+            "name": "test-tile",
+            "position": {"x": 0, "y": 0, "width": 1, "height": 1},
             "tab_id": tab_id,
         },
         headers=HEADERS,
@@ -2611,7 +2616,7 @@ async def test_tile_context_patch_update(client: AsyncClient):
 
     # Update tile with valid context via PATCH
     patch_response = await client.patch(
-        f"/v0/tiles/?tile_id={tile_id}",
+        f"/v0/tile/?tile_id={tile_id}",
         json={
             "context": context_name,
         },
@@ -2649,9 +2654,10 @@ async def test_tile_context_empty_references(client: AsyncClient):
 
     # Create tile with empty context references (should be allowed)
     response = await client.post(
-        "/v0/tiles/",
+        "/v0/tile/",
         json={
-            "position": {"width": 1, "height": 1},
+            "name": "test-tile",
+            "position": {"x": 0, "y": 0, "width": 1, "height": 1},
             "tab_id": tab_id,
             "context": "",  # Empty context
         },
