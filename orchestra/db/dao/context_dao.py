@@ -136,6 +136,7 @@ class ContextDAO:
         is_versioned: bool = False,
         allow_duplicates: bool = True,
         unique_keys: Optional[Dict[str, str]] = None,
+        auto_counting: Optional[Dict[str, Optional[str]]] = None,
     ) -> int:
         """Create a new context using upsert to handle race conditions."""
         from orchestra.db.dao.field_type_dao import FieldTypeDAO
@@ -158,6 +159,7 @@ class ContextDAO:
             allow_duplicates=allow_duplicates,
             unique_key_names=unique_key_names,
             unique_key_types=unique_key_types,
+            auto_counting=auto_counting or {},
         )
 
         # On conflict, do nothing and return the existing context's id
@@ -203,15 +205,17 @@ class ContextDAO:
                     initial_value = get_default_value_for_type(col_type)
 
                     # Create the field type
+                    # Set unique=True only for single unique keys
+                    is_unique = len(unique_keys) == 1
                     field_type_dao.create_field_type_if_absent(
                         project_id=project_id,
                         field_name=col_name,
                         value=initial_value,
                         context_id=context_id,
                         field_category="entry",
-                        mutable=False,  # Composite key fields should be immutable
-                        unique=True,
-                        description=f"Composite unique key component ({col_type}).",
+                        mutable=False,  # Unique key fields should be immutable
+                        unique=is_unique,  # Only set True for single unique keys
+                        description=f"{'Unique' if is_unique else 'Composite unique'} key component ({col_type}).",
                     )
         self.session.commit()
         return context_id
@@ -304,6 +308,7 @@ class ContextDAO:
         is_versioned: bool = False,
         allow_duplicates: bool = True,
         unique_keys: Optional[Dict[str, str]] = None,
+        auto_counting: Optional[Dict[str, Optional[str]]] = None,
     ) -> int:
         """
         Get or create a context using upsert.
@@ -351,6 +356,7 @@ class ContextDAO:
                 allow_duplicates=allow_duplicates,
                 unique_key_names=unique_key_names,
                 unique_key_types=unique_key_types,
+                auto_counting=auto_counting or {},
             )
 
             # On conflict, do nothing and return the existing context's id
@@ -381,6 +387,7 @@ class ContextDAO:
                             allow_duplicates=allow_duplicates,
                             unique_key_names=unique_key_names,
                             unique_key_types=unique_key_types,
+                            auto_counting=auto_counting or {},
                         )
                         .returning(Context.id)
                     )
