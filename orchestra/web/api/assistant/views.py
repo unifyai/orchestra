@@ -358,18 +358,19 @@ def create_assistant(
                     )
                 print(f"EMAIL WATCHED: {created_email}")
 
-                # Step 3: create phone number
-                country = assistant_in.country if assistant_in.country else "US"
-                phone_response = create_phone_number(
-                    country=country,
-                    is_staging=settings.is_staging,
-                )
-                if "detail" in phone_response:
-                    raise Exception(
-                        f"Phone number creation failed: {phone_response['detail']}",
+                # Step 3: create phone number if user_phone is provided
+                if assistant_in.user_phone:
+                    country = assistant_in.country if assistant_in.country else "US"
+                    phone_response = create_phone_number(
+                        country=country,
+                        is_staging=settings.is_staging,
                     )
-                created_phone = phone_response.get("phoneNumber")
-                print(f"PHONE CREATED: {created_phone}")
+                    if "detail" in phone_response:
+                        raise Exception(
+                            f"Phone number creation failed: {phone_response['detail']}",
+                        )
+                    created_phone = phone_response.get("phoneNumber")
+                    print(f"PHONE CREATED: {created_phone}")
 
                 # Step 4: assign whatsapp sender if whatsapp number is provided
                 if assistant_in.user_whatsapp_number:
@@ -1013,6 +1014,30 @@ def update_assistant_config(
         if update.weekly_limit is not None:
             weekly_limit = Decimal(update.weekly_limit)
 
+        # Create / update assistant phone
+        # 1- Check if the assistant doesn't have a phone number already and if a user phone is provided
+        # 2- If so, create an assistant phone number
+        assistant_phone = update.phone
+        if update.user_phone and not existing_assistant.phone:
+            try:
+                country = update.country if update.country else "US"
+                phone_response = create_phone_number(
+                    country=country,
+                    is_staging=settings.is_staging,
+                )
+                if "detail" in phone_response:
+                    raise Exception(
+                        f"Phone number creation failed: {phone_response['detail']}",
+                    )
+                phone_to_update = phone_response.get("phoneNumber")
+                print(f"PHONE CREATED ON UPDATE: {phone_to_update}")
+            except Exception as e:
+                # If phone creation fails, we should not proceed with the update
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to create phone number during update: {str(e)}",
+                )
+
         # Create / update social account:
         # 1- Check if the assistant doesn't have a user account already and if a user account value is provided
         # 2- If so and if user has enough credits (production), assign the whatsapp account to the assistant
@@ -1067,7 +1092,7 @@ def update_assistant_config(
             profile_photo=update.profile_photo,
             profile_video=update.profile_video,
             about=update.about,
-            phone=update.phone,
+            phone=assistant_phone,
             email=update.email,
             user_phone=update.user_phone,
             user_whatsapp_number=update.user_whatsapp_number,
