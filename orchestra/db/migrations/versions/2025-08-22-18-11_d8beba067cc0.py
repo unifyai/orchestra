@@ -1,7 +1,7 @@
 """rename_tab_global_context_to_context
 
 Revision ID: d8beba067cc0
-Revises: e8b659127557
+Revises: de93563153ae
 Create Date: 2025-08-22 18:11:53.721852
 
 """
@@ -9,7 +9,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "d8beba067cc0"
-down_revision = "e8b659127557"
+down_revision = "de93563153ae"
 branch_labels = None
 depends_on = None
 
