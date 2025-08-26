@@ -64,6 +64,7 @@ from orchestra.web.api.admin.schema import (  # noqa: WPS235
     DemoModelRequest,
     EndpointModelRequest,
     EndpointModelResponse,
+    FileUploadUrlRequest,
     FileWriteRequest,
     MetricModelRequest,
     MetricModelResponse,
@@ -1871,6 +1872,171 @@ def delete_file_or_folder(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to delete file or folder: {str(e)}",
+        )
+
+
+@router.post(
+    "/file/upload_url",
+    responses={
+        200: {
+            "description": "Signed resumable upload URL created",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "upload_url": "https://storage.googleapis.com/upload/storage/v1/b/...",
+                        "path": "123/my-project/path/to/file.bin",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project <project> not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def create_upload_url(
+    request: FileUploadUrlRequest,
+    session=Depends(get_db_session),
+):
+    """
+    Create a signed URL for a GCS resumable upload session.
+    Clients should upload the file directly to this URL using the resumable protocol.
+    """
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project = project_dao.get_by_user_and_name(
+        user_id=request.user_id,
+        name=request.project,
+    )
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {request.project} not found.",
+        )
+
+    # Basic path validation: no traversal, no leading slash
+    if request.path.startswith("/") or ".." in request.path:
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    try:
+        client = Client()
+        bucket = client.bucket(
+            (
+                "interface-file-system-staging"
+                if request.staging
+                else "interface-file-system"
+            ),
+        )
+
+        full_path = f"{request.user_id}/{project.name}/{request.path}"
+        blob = bucket.blob(full_path)
+
+        upload_url = blob.create_resumable_upload_session(
+            content_type=request.content_type or "application/octet-stream",
+            timeout=3600,
+        )
+
+        return {
+            "upload_url": upload_url,
+            "path": full_path,
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create upload URL: {str(e)}",
+        )
+
+
+@router.get(
+    "/file/download_url",
+    responses={
+        200: {
+            "description": "Signed download URL created",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "download_url": "https://storage.googleapis.com/storage/v1/b/...",
+                        "path": "123/my-project/path/to/file.bin",
+                        "expires_in": 3600,
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project or File Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project <project> not found or file not found",
+                    },
+                },
+            },
+        },
+    },
+)
+def create_download_url(
+    user_id: str,
+    project: str,
+    path: str,
+    staging: bool = False,
+    expires_in: int = 3600,
+    session=Depends(get_db_session),
+):
+    """
+    Create a time-bound signed URL for downloading a file from GCS.
+    """
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_obj = project_dao.get_by_user_and_name(
+        user_id=user_id,
+        name=project,
+    )
+    if not project_obj:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {project} not found.",
+        )
+
+    if path.startswith("/") or ".." in path:
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    try:
+        client = Client()
+        bucket = client.bucket(
+            "interface-file-system-staging" if staging else "interface-file-system",
+        )
+        full_path = f"{user_id}/{project_obj.name}/{path}"
+        blob = bucket.blob(full_path)
+        if not blob.exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"File not found at path: {full_path}",
+            )
+
+        download_url = blob.generate_signed_url(
+            expiration=expires_in,
+            method="GET",
+        )
+        return {
+            "download_url": download_url,
+            "path": full_path,
+            "expires_in": expires_in,
+        }
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create download URL: {str(e)}",
         )
 
 
