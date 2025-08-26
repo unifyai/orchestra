@@ -2029,7 +2029,7 @@ def create_download_url(
             items = []
             for b in blobs:
                 url = b.generate_signed_url(
-                    expiration=expires_in,
+                    expiration=timedelta(seconds=expires_in),
                     method="GET",
                 )
                 items.append(
@@ -2052,7 +2052,7 @@ def create_download_url(
                 )
 
             download_url = blob.generate_signed_url(
-                expiration=expires_in,
+                expiration=timedelta(seconds=expires_in),
                 method="GET",
             )
             return {
