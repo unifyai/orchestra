@@ -2,8 +2,7 @@
 Includes endpoints related to context management within projects.
 """
 
-import re
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from sqlalchemy.exc import IntegrityError
@@ -35,20 +34,59 @@ router = APIRouter()
             "description": "Successful Response",
             "content": {
                 "application/json": {
-                    "example": {
-                        "name": "experiment1/trial1",
-                        "description": "Context for experiment 1 trial 1",
-                        "is_versioned": True,
+                    "examples": {
+                        "single": {
+                            "summary": "Single context creation",
+                            "value": {
+                                "info": "Context created successfully.",
+                            },
+                        },
+                        "batch": {
+                            "summary": "Batch context creation",
+                            "value": {
+                                "info": "Created 3 context(s) successfully.",
+                                "created": [
+                                    "experiment1",
+                                    "experiment2",
+                                    "experiment3",
+                                ],
+                            },
+                        },
+                        "batch_with_errors": {
+                            "summary": "Batch creation with some errors",
+                            "value": {
+                                "info": "Created 2 context(s) successfully.",
+                                "created": ["experiment1", "experiment3"],
+                                "errors": [
+                                    {
+                                        "index": 1,
+                                        "name": "experiment2",
+                                        "error": "A context with this name already exists in the project.",
+                                    },
+                                ],
+                            },
+                        },
                     },
                 },
             },
         },
         400: {
-            "description": "Already Existing Context",
+            "description": "Bad Request",
             "content": {
                 "application/json": {
-                    "example": {
-                        "detail": "A context with this name already exists in the project.",
+                    "examples": {
+                        "already_exists": {
+                            "summary": "Context already exists",
+                            "value": {
+                                "detail": "A context with this name already exists in the project.",
+                            },
+                        },
+                        "invalid_name": {
+                            "summary": "Invalid context name",
+                            "value": {
+                                "detail": "Invalid context name. Names can only contain alphanumeric characters, underscores, dashes, and forward slashes. Consecutive slashes are not allowed.",
+                            },
+                        },
                     },
                 },
             },
@@ -67,7 +105,11 @@ router = APIRouter()
 )
 def create_context(
     request_fastapi: Request,
-    request: Union[ContextCreateRequest, str],
+    request: Union[
+        ContextCreateRequest,
+        str,
+        List[Union[ContextCreateRequest, str, Dict]],
+    ],
     project_name: str = Path(
         description="Name of the project to create context in.",
         example="my_project",
@@ -75,18 +117,22 @@ def create_context(
     session=Depends(get_db_session),
 ):
     """
-    Creates a new context within a project. Contexts can be used to organize logs
+    Creates one or more contexts within a project. Contexts can be used to organize logs
     and artifacts within a project.
 
     If is_versioned=True, all logs in this context will be versioned and mutable.
     The context version will increment automatically when logs are added, updated, or removed.
 
-    The context can be provided as a string (which will be used as the name with no description)
-    or as an object with name and description fields.
+    The context can be provided as:
+    - A string (which will be used as the name with no description)
+    - A ContextCreateRequest object with name and description fields
+    - A list of strings for batch creation
+    - A list of ContextCreateRequest objects for batch creation
     """
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+
     try:
         project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
@@ -96,56 +142,91 @@ def create_context(
             raise IndexError
         project_id = project.id
 
-        if isinstance(request, str):
-            context_name = request
-            context_description = None
-            context_is_versioned = False
-            context_allow_duplicates = True
-            unique_keys = None
-            auto_counting = None
+        # Normalize request to always work with a list
+        contexts_to_create = []
+        if isinstance(request, (str, ContextCreateRequest)):
+            # Single context creation
+            contexts_to_create = [request]
+        elif isinstance(request, list):
+            # Batch context creation
+            contexts_to_create = request
         else:
-            context_name = request.name
-            context_description = request.description
-            context_is_versioned = request.is_versioned
-            context_allow_duplicates = request.allow_duplicates
-            unique_keys = request.unique_keys
-            auto_counting = request.auto_counting
-
-        # Normalize context name: remove leading slash to treat '/exp1/name1' the same as 'exp1/name1'
-        context_name = context_name.lstrip("/")
-
-        # Validate context name
-        if not re.match(r"^[a-zA-Z0-9\_\-/]+$", context_name) or "//" in context_name:
             raise HTTPException(
                 status_code=400,
-                detail="Invalid context name. Names can only contain alphanumeric characters, underscores, dashes, and forward slashes. Consecutive slashes are not allowed.",
+                detail="Invalid request format. Expected a string, ContextCreateRequest, or list of either.",
             )
 
-        existing_context = context_dao.filter(
-            project_id=project_id,
-            name=context_name,
-        )
-        if existing_context:
-            raise ValueError("Context already exists")
+        # Convert all contexts to dictionaries for bulk_create
+        context_data_list = []
+        for context_request in contexts_to_create:
+            if isinstance(context_request, str):
+                context_data_list.append(
+                    {
+                        "name": context_request,
+                        "description": None,
+                        "is_versioned": False,
+                        "allow_duplicates": True,
+                        "unique_keys": None,
+                        "auto_counting": None,
+                    },
+                )
+            elif isinstance(context_request, dict):
+                # Handle dictionary input - validate it as ContextCreateRequest
+                try:
+                    validated_request = ContextCreateRequest(**context_request)
+                    context_data_list.append(
+                        {
+                            "name": validated_request.name,
+                            "description": validated_request.description,
+                            "is_versioned": validated_request.is_versioned,
+                            "allow_duplicates": validated_request.allow_duplicates,
+                            "unique_keys": validated_request.unique_keys,
+                            "auto_counting": validated_request.auto_counting,
+                        },
+                    )
+                except Exception as e:
+                    # Add invalid data with error - bulk_create will handle it
+                    context_data_list.append(context_request)
+            else:
+                # Handle ContextCreateRequest object
+                context_data_list.append(
+                    {
+                        "name": context_request.name,
+                        "description": context_request.description,
+                        "is_versioned": context_request.is_versioned,
+                        "allow_duplicates": context_request.allow_duplicates,
+                        "unique_keys": context_request.unique_keys,
+                        "auto_counting": context_request.auto_counting,
+                    },
+                )
 
-        context_dao.create(
+        # Use bulk_create for all contexts
+        result = context_dao.bulk_create(
             project_id=project_id,
-            name=context_name,
-            description=context_description,
-            is_versioned=context_is_versioned,
-            allow_duplicates=context_allow_duplicates,
-            unique_keys=unique_keys,
-            auto_counting=auto_counting,
+            contexts=context_data_list,
         )
 
-        return {"info": "Context created successfully."}
+        # Prepare response
+        if len(contexts_to_create) == 1:
+            # Single context creation - maintain backward compatibility
+            if result["errors"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=result["errors"][0]["error"],
+                )
+            return {"info": "Context created successfully."}
+        else:
+            # Batch context creation
+            response = {
+                "info": f"Created {len(result['created'])} context(s) successfully.",
+                "created": result["created"],
+            }
+            if result["errors"]:
+                response["errors"] = result["errors"]
+            return response
+
     except IndexError:
         raise not_found("Project")
-    except ValueError as e:
-        raise HTTPException(
-            status_code=400,
-            detail="A context with this name already exists in the project.",
-        )
 
 
 @router.get(
