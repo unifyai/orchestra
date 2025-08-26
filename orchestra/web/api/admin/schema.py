@@ -375,6 +375,24 @@ class FileWriteRequest(BaseModel):
     staging: bool = False
 
 
+class FileUploadUrlRequest(BaseModel):
+    """Schema for creating a signed resumable upload URL for GCS.
+
+    Attributes:
+        user_id: Owner of the project.
+        project: Project name.
+        path: Relative file path within the project (no leading slash).
+        content_type: Optional MIME type to set on the object.
+        staging: Whether to use the staging bucket.
+    """
+
+    user_id: str
+    project: str
+    path: str
+    content_type: Optional[str] = None
+    staging: bool = False
+
+
 # Contact schema for admin_list_contacts endpoint
 class Contact(BaseModel):
     # the ID of the user who owns this contact log

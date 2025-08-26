@@ -118,3 +118,103 @@ async def test_admin_file_endpoints_end_to_end(client):
         headers=ADMIN_HEADERS,
     )
     assert del_img_resp.status_code == status.HTTP_200_OK, del_img_resp.json()
+
+
+@pytest.mark.anyio
+async def test_admin_file_signed_url_endpoints(client):
+    # Create a test user and a project
+    user = await create_test_user(client, email="filetests-signed@example.com")
+    project_name = "files-project-signed"
+    create_project_resp = await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=user["headers"],
+    )
+    assert (
+        create_project_resp.status_code == status.HTTP_200_OK
+    ), create_project_resp.json()
+
+    user_id = user["id"]
+
+    # 1) Create upload URL (resumable)
+    req = {
+        "user_id": user_id,
+        "project": project_name,
+        "path": "signed/file.bin",
+        "content_type": "application/octet-stream",
+        "staging": True,
+    }
+    up_resp = await client.post(
+        "/v0/admin/file/upload_url",
+        json=req,
+        headers=ADMIN_HEADERS,
+    )
+    assert up_resp.status_code == status.HTTP_200_OK, up_resp.json()
+    up_data = up_resp.json()
+    assert "upload_url" in up_data and "path" in up_data
+    assert up_data["path"].endswith("/signed/file.bin")
+
+    # 2) Write a real small object so download URL can be generated
+    content_bytes = b"small-object"
+    put_payload = {
+        "user_id": user_id,
+        "project": project_name,
+        "files": {"signed/file.bin": base64.b64encode(content_bytes).decode("ascii")},
+        "staging": True,
+    }
+    put_resp = await client.post(
+        "/v0/admin/file",
+        json=put_payload,
+        headers=ADMIN_HEADERS,
+    )
+    assert put_resp.status_code == status.HTTP_200_OK, put_resp.json()
+
+    # 3) Create download URL
+    down_resp = await client.get(
+        f"/v0/admin/file/download_url?user_id={user_id}&project={project_name}&path=signed/file.bin&staging=true",
+        headers=ADMIN_HEADERS,
+    )
+    assert down_resp.status_code == status.HTTP_200_OK, down_resp.json()
+    down_data = down_resp.json()
+    assert "download_url" in down_data and "path" in down_data
+    assert down_data["path"].endswith("/signed/file.bin")
+
+    # 4) Invalid path should 400
+    bad_req = {
+        "user_id": user_id,
+        "project": project_name,
+        "path": "../escape.bin",
+        "staging": True,
+    }
+    bad_resp = await client.post(
+        "/v0/admin/file/upload_url",
+        json=bad_req,
+        headers=ADMIN_HEADERS,
+    )
+    assert bad_resp.status_code == status.HTTP_400_BAD_REQUEST
+
+    bad_get = await client.get(
+        f"/v0/admin/file/download_url?user_id={user_id}&project={project_name}&path=../escape.bin&staging=true",
+        headers=ADMIN_HEADERS,
+    )
+    assert bad_get.status_code == status.HTTP_400_BAD_REQUEST
+
+    # 5) Unknown project should 404
+    no_proj_req = {
+        "user_id": user_id,
+        "project": "does-not-exist",
+        "path": "file.bin",
+    }
+    no_proj_resp = await client.post(
+        "/v0/admin/file/upload_url",
+        json=no_proj_req,
+        headers=ADMIN_HEADERS,
+    )
+    assert no_proj_resp.status_code == status.HTTP_404_NOT_FOUND
+
+    # Cleanup the uploaded object
+    del_resp = await client.delete(
+        f"/v0/admin/file?user_id={user_id}&project={project_name}&path=signed&staging=true",
+        headers=ADMIN_HEADERS,
+    )
+    assert del_resp.status_code == status.HTTP_200_OK, del_resp.json()
