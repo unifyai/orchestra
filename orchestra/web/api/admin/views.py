@@ -1988,6 +1988,7 @@ def create_download_url(
     path: str,
     staging: bool = False,
     expires_in: int = 3600,
+    as_prefix: bool = False,
     session=Depends(get_db_session),
 ):
     """
@@ -2015,22 +2016,50 @@ def create_download_url(
             "interface-file-system-staging" if staging else "interface-file-system",
         )
         full_path = f"{user_id}/{project_obj.name}/{path}"
-        blob = bucket.blob(full_path)
-        if not blob.exists():
-            raise HTTPException(
-                status_code=404,
-                detail=f"File not found at path: {full_path}",
-            )
 
-        download_url = blob.generate_signed_url(
-            expiration=expires_in,
-            method="GET",
-        )
-        return {
-            "download_url": download_url,
-            "path": full_path,
-            "expires_in": expires_in,
-        }
+        if as_prefix:
+            blobs = list(bucket.list_blobs(prefix=full_path))
+            # Filter out directory placeholders
+            blobs = [b for b in blobs if not b.name.endswith("/")]
+            if not blobs:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No files found under prefix: {full_path}",
+                )
+            items = []
+            for b in blobs:
+                url = b.generate_signed_url(
+                    expiration=expires_in,
+                    method="GET",
+                )
+                items.append(
+                    {
+                        "path": b.name,
+                        "download_url": url,
+                    },
+                )
+            return {
+                "prefix": full_path,
+                "expires_in": expires_in,
+                "items": items,
+            }
+        else:
+            blob = bucket.blob(full_path)
+            if not blob.exists():
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"File not found at path: {full_path}",
+                )
+
+            download_url = blob.generate_signed_url(
+                expiration=expires_in,
+                method="GET",
+            )
+            return {
+                "download_url": download_url,
+                "path": full_path,
+                "expires_in": expires_in,
+            }
     except Exception as e:
         if isinstance(e, HTTPException):
             raise e
