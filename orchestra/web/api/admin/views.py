@@ -1,3 +1,4 @@
+import base64
 import os
 import subprocess
 import sys
@@ -1598,7 +1599,9 @@ def write_files(
 
             # Create a new blob and upload the file contents
             blob = bucket.blob(full_path)
-            blob.upload_from_string(file_content)
+            # Expect file_content to be a base64-encoded string; decode and upload bytes
+            data_bytes = base64.b64decode(file_content)
+            blob.upload_from_string(data_bytes, content_type="application/octet-stream")
 
         return {
             "message": "Files uploaded successfully",
@@ -1618,8 +1621,8 @@ def write_files(
             "content": {
                 "application/json": {
                     "example": {
-                        "123/my-project/file1.txt": "Hello, world!",
-                        "123/my-project/folder/file2.txt": "Hello, world!",
+                        "123/my-project/file1.txt": "SGVsbG8sIHdvcmxkIQ==",
+                        "123/my-project/folder/file2.txt": "SGVsbG8sIHdvcmxkIQ==",
                     },
                 },
             },
@@ -1644,7 +1647,7 @@ def get_files(
 ):
     """
     Get all files in a user's project folder in the bucket.
-    Returns a flat list of file paths and contents.
+    Returns a flat list of file paths mapped to base64-encoded contents.
     """
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
@@ -1672,12 +1675,15 @@ def get_files(
         # List all blobs under the prefix
         blobs = bucket.list_blobs(prefix=prefix)
 
-        # Extract the full paths and contents
+        # Extract the full paths and contents (base64-encoded)
         files = dict()
         for blob in blobs:
-            # Download the content of each file
-            content = blob.download_as_text() if not blob.name.endswith("/") else ""
-            files[blob.name.replace(prefix, "")] = content
+            if blob.name.endswith("/"):
+                # Skip folder placeholders
+                continue
+            data_bytes = blob.download_as_bytes()
+            content_b64 = base64.b64encode(data_bytes).decode("ascii")
+            files[blob.name.replace(prefix, "")] = content_b64
 
         return files
     except Exception as e:
@@ -1695,7 +1701,7 @@ def get_files(
             "content": {
                 "application/json": {
                     "example": {
-                        "contents": "Hello, world!",
+                        "contents": "SGVsbG8sIHdvcmxkIQ==",
                         "path": "my-app/folder/file.txt",
                     },
                 },
@@ -1766,11 +1772,12 @@ def get_file_contents(
                 detail=f"File not found at path: {full_path}",
             )
 
-        # Download the contents
-        contents = blob.download_as_text()
+        # Download the contents and return as base64
+        data_bytes = blob.download_as_bytes()
+        contents_b64 = base64.b64encode(data_bytes).decode("ascii")
 
         return {
-            "contents": contents,
+            "contents": contents_b64,
             "path": full_path,
         }
     except Exception as e:
