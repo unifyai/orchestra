@@ -791,9 +791,10 @@ def delete_assistant(
                     )
                     .all()
                 )
-
+                print(f"CONTEXTS TO DELETE: {contexts_to_delete}")
                 if contexts_to_delete:
                     for context_to_del in contexts_to_delete:
+                        print(f"DELETING CONTEXT: {context_to_del.id}")
                         context_dao.delete(context_to_del.id)
 
         except Exception as e_ctx:
