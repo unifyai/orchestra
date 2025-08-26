@@ -84,6 +84,123 @@ async def test_create_context_with_slash(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_batch_create_contexts(client: AsyncClient):
+    project_name = "test-batch-context-project"
+
+    # Create project first
+    response = await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Test batch creation with strings
+    contexts_strings = ["context1", "context2", "context3"]
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json=contexts_strings,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert "Created 3 context(s) successfully" in result["info"]
+    assert set(result["created"]) == set(contexts_strings)
+    assert "errors" not in result
+
+    # Test batch creation with ContextCreateRequest objects
+    contexts_objects = [
+        {
+            "name": "experiment1",
+            "description": "First experiment",
+            "is_versioned": True,
+        },
+        {
+            "name": "experiment2",
+            "description": "Second experiment",
+            "is_versioned": False,
+        },
+    ]
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json=contexts_objects,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert "Created 2 context(s) successfully" in result["info"]
+    assert set(result["created"]) == {"experiment1", "experiment2"}
+
+    # Test batch creation with some errors (duplicate contexts)
+    contexts_with_duplicates = [
+        "new_context1",
+        "context1",  # Already exists
+        "new_context2",
+        "context2",  # Already exists
+    ]
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json=contexts_with_duplicates,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert "Created 2 context(s) successfully" in result["info"]
+    assert set(result["created"]) == {"new_context1", "new_context2"}
+    assert "errors" in result
+    assert len(result["errors"]) == 2
+    for error in result["errors"]:
+        assert "already exists" in error["error"]
+
+    # Test with invalid context names
+    contexts_invalid = [
+        "valid_context",
+        "invalid//context",  # Double slashes
+        "invalid context",  # Space
+        "valid-context-2",
+    ]
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json=contexts_invalid,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert "Created 2 context(s) successfully" in result["info"]
+    assert set(result["created"]) == {"valid_context", "valid-context-2"}
+    assert "errors" in result
+    assert len(result["errors"]) == 2
+
+    # Test mixed batch creation (mix of strings and objects)
+    contexts_mixed = [
+        "simple_context",
+        {
+            "name": "complex_context",
+            "description": "Context with description",
+            "is_versioned": True,
+            "unique_keys": {"user_id": "int", "session_id": "str"},
+            "auto_counting": {"user_id": None},
+        },
+        "another_simple",
+    ]
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json=contexts_mixed,
+        headers=HEADERS,
+    )
+    if response.status_code != 200:
+        print(f"Error response: {response.json()}")
+    assert response.status_code == 200
+    result = response.json()
+    assert "Created 3 context(s) successfully" in result["info"]
+    assert set(result["created"]) == {
+        "simple_context",
+        "complex_context",
+        "another_simple",
+    }
+
+
+@pytest.mark.anyio
 async def test_delete_context_with_slash(client: AsyncClient):
     project_name = "test-project"
     context_name = "/training/trial1"
