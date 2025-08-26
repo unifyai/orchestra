@@ -1,7 +1,7 @@
 import hashlib
 import re
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -219,6 +219,182 @@ class ContextDAO:
                     )
         self.session.commit()
         return context_id
+
+    def bulk_create(
+        self,
+        project_id: int,
+        contexts: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Create multiple contexts in a single database transaction.
+
+        Args:
+            project_id: ID of the project to create contexts in
+            contexts: List of dictionaries with context data:
+                - name: str (required)
+                - description: Optional[str]
+                - is_versioned: bool (default False)
+                - allow_duplicates: bool (default True)
+                - unique_keys: Optional[Dict[str, str]]
+                - auto_counting: Optional[Dict[str, Optional[str]]]
+
+        Returns:
+            Dictionary with:
+                - created: List of successfully created context names
+                - errors: List of errors with index, name, and error message
+        """
+        if not contexts:
+            return {"created": [], "errors": []}
+
+        created_contexts = []
+        errors = []
+
+        try:
+            # Validate all contexts first
+            for idx, context_data in enumerate(contexts):
+                try:
+                    name = context_data.get("name")
+                    if name is None:
+                        errors.append(
+                            {
+                                "index": idx,
+                                "name": "unknown",
+                                "error": "Context name is required",
+                            },
+                        )
+                        continue
+
+                    # Normalize name: remove leading slash to treat '/exp1/name1' the same as 'exp1/name1'
+                    name = name.lstrip("/")
+
+                    # Validate name format
+                    if not re.match(r"^[a-zA-Z0-9\_\-/]+$", name) or "//" in name:
+                        errors.append(
+                            {
+                                "index": idx,
+                                "name": name,
+                                "error": "Invalid context name. Names can only contain alphanumeric characters, underscores, dashes, and forward slashes. Consecutive slashes are not allowed.",
+                            },
+                        )
+                        continue
+
+                    # Validate description length
+                    description = context_data.get("description")
+                    if description is not None:
+                        try:
+                            self._validate_description(description)
+                        except ValueError as e:
+                            errors.append(
+                                {
+                                    "index": idx,
+                                    "name": name,
+                                    "error": str(e),
+                                },
+                            )
+                            continue
+
+                    # Check if context already exists
+                    existing = self.filter(project_id=project_id, name=name)
+                    if existing:
+                        errors.append(
+                            {
+                                "index": idx,
+                                "name": name,
+                                "error": "A context with this name already exists in the project.",
+                            },
+                        )
+                        continue
+
+                except Exception as e:
+                    errors.append(
+                        {
+                            "index": idx,
+                            "name": context_data.get("name", "unknown"),
+                            "error": str(e),
+                        },
+                    )
+                    continue
+
+            # Create all valid contexts
+            for idx, context_data in enumerate(contexts):
+                try:
+                    name = context_data.get("name", "").lstrip("/")
+
+                    # Skip if we already recorded an error for this context
+                    if any(e["index"] == idx for e in errors):
+                        continue
+
+                    # Create the context
+                    self.create(
+                        project_id=project_id,
+                        name=name,
+                        description=context_data.get("description"),
+                        is_versioned=context_data.get("is_versioned", False),
+                        allow_duplicates=context_data.get("allow_duplicates", True),
+                        unique_keys=context_data.get("unique_keys"),
+                        auto_counting=context_data.get("auto_counting"),
+                    )
+                    created_contexts.append(name)
+
+                except Exception as e:
+                    # If creation fails, add to errors
+                    errors.append(
+                        {
+                            "index": idx,
+                            "name": name,
+                            "error": str(e),
+                        },
+                    )
+                    # Rollback the transaction to maintain consistency
+                    self.session.rollback()
+                    # Re-add successfully created contexts in this transaction
+                    for created_name in created_contexts:
+                        try:
+                            # Check if it still exists (wasn't rolled back)
+                            existing = self.filter(
+                                project_id=project_id,
+                                name=created_name,
+                            )
+                            if not existing:
+                                # Re-create it
+                                matching_context = next(
+                                    (
+                                        c
+                                        for c in contexts
+                                        if c.get("name", "").lstrip("/") == created_name
+                                    ),
+                                    None,
+                                )
+                                if matching_context:
+                                    self.create(
+                                        project_id=project_id,
+                                        name=created_name,
+                                        description=matching_context.get("description"),
+                                        is_versioned=matching_context.get(
+                                            "is_versioned",
+                                            False,
+                                        ),
+                                        allow_duplicates=matching_context.get(
+                                            "allow_duplicates",
+                                            True,
+                                        ),
+                                        unique_keys=matching_context.get("unique_keys"),
+                                        auto_counting=matching_context.get(
+                                            "auto_counting",
+                                        ),
+                                    )
+                        except:
+                            # If re-creation fails, remove from created list
+                            created_contexts.remove(created_name)
+
+        except Exception as e:
+            self.session.rollback()
+            raise ValueError(f"Failed to bulk create contexts: {str(e)}")
+
+        return {
+            "created": created_contexts,
+            "errors": errors,
+        }
 
     def filter(
         self,
