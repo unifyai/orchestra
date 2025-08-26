@@ -203,5 +203,79 @@ async def test_repeated_external_logging(client: AsyncClient):
     assert len(response.json()) == 2, response.json()
 
 
+@pytest.mark.anyio
+async def test_consume_credits_validation_missing_response_body(client: AsyncClient):
+    """Test that consume_credits=True requires response_body"""
+    endpoint = "/v0/queries"
+    data = copy.deepcopy(external_data)
+    data["endpoint"] = "gpt-4@openai"
+    data["consume_credits"] = True
+    del data["response_body"]  # Remove response_body to trigger validation error
+
+    response = await client.post(endpoint, headers=HEADERS, json=data)
+    assert response.status_code == 400
+    assert (
+        "response_body is required when consume_credits=True"
+        in response.json()["detail"]
+    )
+
+
+@pytest.mark.anyio
+async def test_consume_credits_validation_invalid_endpoint_format(client: AsyncClient):
+    """Test that endpoint must be in model@provider format"""
+    endpoint = "/v0/queries"
+    data = copy.deepcopy(external_data)
+    data["endpoint"] = "gpt-4-no-provider"  # Invalid format (no @)
+    data["consume_credits"] = True
+
+    response = await client.post(endpoint, headers=HEADERS, json=data)
+    assert response.status_code == 400
+    assert "endpoint must be in format 'model@provider'" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_consume_credits_validation_unsupported_provider(client: AsyncClient):
+    """Test that provider must be supported when consume_credits=True"""
+    endpoint = "/v0/queries"
+    data = copy.deepcopy(external_data)
+    data["endpoint"] = "gpt-4@unsupported-provider"  # Unsupported provider
+    data["consume_credits"] = True
+
+    response = await client.post(endpoint, headers=HEADERS, json=data)
+    assert response.status_code == 400
+    assert "unsupported provider 'unsupported-provider'" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_consume_credits_validation_missing_usage_tokens(client: AsyncClient):
+    """Test that usage must contain prompt_tokens and completion_tokens"""
+    endpoint = "/v0/queries"
+    data = copy.deepcopy(external_data)
+    data["endpoint"] = "gpt-4@openai"
+    data["consume_credits"] = True
+    # Remove required token fields from usage
+    data["response_body"]["usage"] = {"total_tokens": 144}
+
+    response = await client.post(endpoint, headers=HEADERS, json=data)
+    assert response.status_code == 400
+    assert (
+        "must contain 'prompt_tokens' and 'completion_tokens' fields"
+        in response.json()["detail"]
+    )
+
+
+@pytest.mark.anyio
+async def test_consume_credits_success(client: AsyncClient):
+    """Test successful credit consumption with valid data"""
+    endpoint = "/v0/queries"
+    data = copy.deepcopy(external_data)
+    data["endpoint"] = "gpt-4@openai"  # Use valid supported provider
+    data["consume_credits"] = True
+
+    response = await client.post(endpoint, headers=HEADERS, json=data)
+    assert response.status_code == 200
+    assert response.json()["info"] == "Query logged successfully"
+
+
 if __name__ == "__main__":
     pass
