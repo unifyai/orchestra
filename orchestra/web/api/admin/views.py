@@ -1781,6 +1781,8 @@ def get_file_contents(
             "path": full_path,
         }
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get file contents: {str(e)}",
@@ -1864,6 +1866,8 @@ def delete_file_or_folder(
             "path": full_path,
         }
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(
             status_code=500,
             detail=f"Failed to delete file or folder: {str(e)}",
