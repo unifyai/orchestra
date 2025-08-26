@@ -600,3 +600,358 @@ async def test_delete_empty_fields_flag(client: AsyncClient):
     assert response.status_code == 200, response.json()
     fields = response.json()
     assert shared_field not in fields
+
+
+@pytest.mark.anyio
+async def test_delete_all_logs_removes_all_fields_when_empty(client: AsyncClient):
+    """Test that deleting all logs with delete_empty_fields=True removes all unused fields."""
+    project_name = "delete-all-logs-fields-test"
+    _ = await _create_project(client, project_name)
+
+    num_logs = 5
+
+    # Create multiple logs with various fields
+    log_ids = []
+    for i in range(num_logs):
+        entries = {
+            "grades/maths": 80 + i,
+            "topics/physics": 70 + i,
+            "topics/chemistry": 60 + i,
+            "x": i,
+            "y": num_logs - i,
+            "explicit_types": {
+                "grades/maths": {"mutable": True},
+                "topics/physics": {"mutable": True},
+                "topics/chemistry": {"mutable": True},
+                "x": {"mutable": True},
+                "y": {"mutable": True},
+            },
+        }
+        response = await _create_log(client, project_name, entries=entries)
+        assert response.status_code == 200, response.json()
+        log_ids.append(response.json()["log_event_ids"][0])
+
+    # Verify logs were created
+    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    original_logs = response.json()["logs"]
+    assert len(original_logs) == num_logs
+
+    # Verify fields were created
+    response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    original_fields = response.json()
+    expected_fields = ["grades/maths", "topics/physics", "topics/chemistry", "x", "y"]
+    for field in expected_fields:
+        assert field in original_fields
+
+    # Delete all logs using the format [[log_id, None], ...]
+    ids_and_fields = [[log_id, None] for log_id in log_ids]
+    response = await _delete_logs(
+        client,
+        ids_and_fields,
+        project_name=project_name,
+        delete_empty_fields=True,
+        delete_empty_logs=True,
+    )
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Logs and fields deleted successfully!"
+
+    # Verify all logs were deleted
+    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    remaining_logs = response.json()["logs"]
+    assert len(remaining_logs) == 0
+
+    # Verify all fields were deleted since no logs remain
+    response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    remaining_fields = response.json()
+    for field in expected_fields:
+        assert (
+            field not in remaining_fields
+        ), f"Field '{field}' should have been deleted but still exists"
+
+
+@pytest.mark.anyio
+async def test_delete_some_logs_keeps_fields_used_by_remaining_logs(
+    client: AsyncClient,
+):
+    """Test that deleting some logs with delete_empty_fields=True keeps fields used by remaining logs but deletes unused fields."""
+    project_name = "partial-log-deletion-field-test"
+    _ = await _create_project(client, project_name)
+
+    # Create logs with overlapping fields
+    # Log 1: has fields A, B, C
+    entries1 = {
+        "field/A": "value_A1",
+        "field/B": "value_B1",
+        "field/C": "value_C1",
+        "explicit_types": {
+            "field/A": {"mutable": True},
+            "field/B": {"mutable": True},
+            "field/C": {"mutable": True},
+        },
+    }
+
+    # Log 2: has fields A, B, D
+    entries2 = {
+        "field/A": "value_A2",
+        "field/B": "value_B2",
+        "field/D": "value_D2",
+        "explicit_types": {
+            "field/A": {"mutable": True},
+            "field/B": {"mutable": True},
+            "field/D": {"mutable": True},
+        },
+    }
+
+    # Log 3: has fields C, E (will be deleted)
+    entries3 = {
+        "field/C": "value_C3",
+        "field/E": "value_E3",
+        "explicit_types": {
+            "field/C": {"mutable": True},
+            "field/E": {"mutable": True},
+        },
+    }
+
+    response1 = await _create_log(client, project_name, entries=entries1)
+    response2 = await _create_log(client, project_name, entries=entries2)
+    response3 = await _create_log(client, project_name, entries=entries3)
+
+    assert response1.status_code == 200, response1.json()
+    assert response2.status_code == 200, response2.json()
+    assert response3.status_code == 200, response3.json()
+
+    log_id1 = response1.json()["log_event_ids"][0]
+    log_id2 = response2.json()["log_event_ids"][0]
+    log_id3 = response3.json()["log_event_ids"][0]
+
+    # Verify all fields were created
+    response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    original_fields = response.json()
+    all_fields = ["field/A", "field/B", "field/C", "field/D", "field/E"]
+    for field in all_fields:
+        assert field in original_fields
+
+    # Delete log3 (has field/C and field/E)
+    # After deletion:
+    # - field/A should remain (used by log1, log2)
+    # - field/B should remain (used by log1, log2)
+    # - field/C should remain (used by log1)
+    # - field/D should remain (used by log2)
+    # - field/E should be deleted (only used by log3)
+    ids_and_fields = [[log_id3, None]]
+    response = await _delete_logs(
+        client,
+        ids_and_fields,
+        project_name=project_name,
+        delete_empty_fields=True,
+    )
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Logs and fields deleted successfully!"
+
+    # Verify log3 was deleted
+    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    remaining_logs = response.json()["logs"]
+    assert len(remaining_logs) == 2
+    remaining_log_ids = [log["id"] for log in remaining_logs]
+    assert log_id1 in remaining_log_ids
+    assert log_id2 in remaining_log_ids
+    assert log_id3 not in remaining_log_ids
+
+    # Verify field deletion behavior
+    response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    remaining_fields = response.json()
+
+    # These fields should still exist (used by remaining logs)
+    fields_that_should_remain = ["field/A", "field/B", "field/C", "field/D"]
+    for field in fields_that_should_remain:
+        assert (
+            field in remaining_fields
+        ), f"Field '{field}' should still exist but was deleted"
+
+    # This field should be deleted (only used by deleted log3)
+    assert (
+        "field/E" not in remaining_fields
+    ), "Field 'field/E' should have been deleted but still exists"
+
+
+@pytest.mark.anyio
+async def test_delete_logs_keeps_fields_used_by_other_contexts(client: AsyncClient):
+    """Test that deleting logs with delete_empty_fields=True keeps fields used by logs in other contexts."""
+    project_name = "cross-context-field-deletion-test"
+    _ = await _create_project(client, project_name)
+
+    # Create two contexts
+    context1 = "context1"
+    context2 = "context2"
+
+    # Create logs in context1 with certain fields
+    entries_ctx1_log1 = {
+        "shared/field": "ctx1_value1",
+        "context1/unique": "ctx1_unique1",
+        "will/be/orphaned": "orphaned_value",
+        "explicit_types": {
+            "shared/field": {"mutable": True},
+            "context1/unique": {"mutable": True},
+            "will/be/orphaned": {"mutable": True},
+        },
+    }
+
+    entries_ctx1_log2 = {
+        "shared/field": "ctx1_value2",
+        "will/be/orphaned": "orphaned_value2",
+        "explicit_types": {
+            "shared/field": {"mutable": True},
+            "will/be/orphaned": {"mutable": True},
+        },
+    }
+
+    # Create logs in context1
+    response1 = await _create_log(
+        client,
+        project_name,
+        entries=entries_ctx1_log1,
+        context=context1,
+    )
+    response2 = await _create_log(
+        client,
+        project_name,
+        entries=entries_ctx1_log2,
+        context=context1,
+    )
+    assert response1.status_code == 200, response1.json()
+    assert response2.status_code == 200, response2.json()
+
+    ctx1_log_id1 = response1.json()["log_event_ids"][0]
+    ctx1_log_id2 = response2.json()["log_event_ids"][0]
+
+    # Create context2 and logs in context2 with overlapping fields
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context2},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    entries_ctx2 = {
+        "shared/field": "ctx2_value",
+        "context2/unique": "ctx2_unique",
+        "explicit_types": {
+            "shared/field": {"mutable": True},
+            "context2/unique": {"mutable": True},
+        },
+    }
+
+    response3 = await _create_log(
+        client,
+        project_name,
+        entries=entries_ctx2,
+        context=context2,
+    )
+    assert response3.status_code == 200, response3.json()
+    ctx2_log_id = response3.json()["log_event_ids"][0]
+
+    # Verify all fields exist
+    response = await client.get(
+        f"/v0/logs/fields?project={project_name}&context={context1}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    ctx1_fields = response.json()
+    all_fields = ["shared/field", "context1/unique", "will/be/orphaned"]
+    for field in all_fields:
+        assert field in ctx1_fields
+
+    response = await client.get(
+        f"/v0/logs/fields?project={project_name}&context={context2}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    ctx2_fields = response.json()
+    all_fields = ["shared/field", "context2/unique"]
+    for field in all_fields:
+        assert field in ctx2_fields
+
+    # Delete all logs from context1
+    # After deletion:
+    # - "shared/field" should remain (used by context2)
+    # - "context2/unique" should remain (used by context2)
+    # - "context1/unique" should be deleted (only used by context1)
+    # - "will/be/orphaned" should be deleted (only used by context1)
+    ids_and_fields = [[ctx1_log_id1, None], [ctx1_log_id2, None]]
+    response = await _delete_logs(
+        client,
+        ids_and_fields,
+        project_name=project_name,
+        context=context1,
+        delete_empty_fields=True,
+    )
+    assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Logs and fields deleted successfully!"
+
+    # Verify logs were deleted from context1
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"context": context1},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    ctx1_logs = response.json()["logs"]
+    assert len(ctx1_logs) == 0
+
+    # Verify logs still exist in context2
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"context": context2},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    ctx2_logs = response.json()["logs"]
+    assert len(ctx2_logs) == 1
+    assert ctx2_logs[0]["id"] == ctx2_log_id
+
+    # Verify field deletion behavior across contexts
+    response = await client.get(
+        f"/v0/logs/fields?project={project_name}&context={context2}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    ctx2_fields = response.json()
+
+    # These fields should still exist (used by context2)
+    fields_that_should_remain = ["shared/field", "context2/unique"]
+    for field in fields_that_should_remain:
+        assert (
+            field in ctx2_fields
+        ), f"Field '{field}' should still exist but was deleted"
+
+    # These fields should be deleted (only used by deleted context1 logs)
+    response = await client.get(
+        f"/v0/logs/fields?project={project_name}&context={context1}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    ctx1_fields = response.json()
+    fields_that_should_be_deleted = ["context1/unique", "will/be/orphaned"]
+    for field in fields_that_should_be_deleted:
+        assert (
+            field not in ctx1_fields
+        ), f"Field '{field}' should have been deleted but still exists"

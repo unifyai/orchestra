@@ -288,6 +288,8 @@ def _delete_logs(
     source_type=None,
     project_name=None,
     context=None,
+    delete_empty_fields=False,
+    delete_empty_logs=False,
 ):
     _headers = HEADERS if user == 1 else HEADERS_2
     json_data = {"ids_and_fields": log_ids}
@@ -297,6 +299,10 @@ def _delete_logs(
         json_data["project"] = project_name
     if context:
         json_data["context"] = context
+    if delete_empty_fields:
+        json_data["delete_empty_fields"] = delete_empty_fields
+    if delete_empty_logs:
+        json_data["delete_empty_logs"] = delete_empty_logs
     request = Request(
         "DELETE",
         str(client.base_url) + "/v0/logs",
