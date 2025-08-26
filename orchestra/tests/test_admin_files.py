@@ -7,7 +7,7 @@ from fastapi import status
 from orchestra.tests.utils import ADMIN_HEADERS, create_test_user
 
 
-@pytest.mark.asyncio
+@pytest.mark.anyio
 async def test_admin_file_endpoints_end_to_end(client):
     # Create a test user and a project
     user = await create_test_user(client, email="filetests@example.com")
