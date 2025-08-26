@@ -1885,7 +1885,7 @@ def delete_logs(
         if context_description:
             context_updated = True
 
-    # Group 2: Entire log event deletions (fields is empty)
+    # Group 2: Entire log event deletions (fields is empty i.e. passed in as None)
     entire_log_deletions = []
     for log_id, fields in ids_and_fields.items():
         if log_id is not None and len(fields) == 0:
@@ -1903,6 +1903,15 @@ def delete_logs(
                 status_code=400,
                 detail="Cannot delete derived logs without specifying fields.",
             )
+
+        # Get all field types and add to deleted_fields set
+        deleted_fields.update(
+            field_type_dao.get_field_types(
+                project_id,
+                context_id=context_id,
+                return_mutable=True,
+            ).keys(),
+        )
 
         # Check which logs exist in other contexts
         logs_in_other_contexts = []
