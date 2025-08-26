@@ -1,6 +1,7 @@
 import base64
 from typing import Dict
 
+import httpx
 import pytest
 from fastapi import status
 
@@ -154,22 +155,31 @@ async def test_admin_file_signed_url_endpoints(client):
     assert "upload_url" in up_data and "path" in up_data
     assert up_data["path"].endswith("/signed/file.bin")
 
-    # 2) Write a real small object so download URL can be generated
-    content_bytes = b"small-object"
-    put_payload = {
-        "user_id": user_id,
-        "project": project_name,
-        "files": {"signed/file.bin": base64.b64encode(content_bytes).decode("ascii")},
-        "staging": True,
+    # 2) Upload small content via the resumable upload URL and verify round-trip
+    content_bytes = b"resumable-small-object"
+    headers = {
+        "Content-Type": "application/octet-stream",
+        "Content-Length": str(len(content_bytes)),
+        "Content-Range": f"bytes 0-{len(content_bytes)-1}/{len(content_bytes)}",
     }
-    put_resp = await client.post(
-        "/v0/admin/file",
-        json=put_payload,
+    async with httpx.AsyncClient(timeout=30) as ac:
+        up_put = await ac.put(
+            up_data["upload_url"],
+            content=content_bytes,
+            headers=headers,
+        )
+    assert up_put.status_code in (200, 201), up_put.text
+
+    # Verify via get_file_contents
+    read_resp = await client.get(
+        f"/v0/admin/file/contents?user_id={user_id}&project={project_name}&path=signed/file.bin&staging=true",
         headers=ADMIN_HEADERS,
     )
-    assert put_resp.status_code == status.HTTP_200_OK, put_resp.json()
+    assert read_resp.status_code == status.HTTP_200_OK, read_resp.json()
+    read_data = read_resp.json()
+    assert base64.b64decode(read_data["contents"]) == content_bytes
 
-    # 3) Create download URL
+    # 3) Create download URL and verify content
     down_resp = await client.get(
         f"/v0/admin/file/download_url?user_id={user_id}&project={project_name}&path=signed/file.bin&staging=true",
         headers=ADMIN_HEADERS,
@@ -178,6 +188,10 @@ async def test_admin_file_signed_url_endpoints(client):
     down_data = down_resp.json()
     assert "download_url" in down_data and "path" in down_data
     assert down_data["path"].endswith("/signed/file.bin")
+    async with httpx.AsyncClient(timeout=30) as ac:
+        dl = await ac.get(down_data["download_url"])
+    assert dl.status_code == 200
+    assert dl.content == content_bytes
 
     # 4) Invalid path should 400
     bad_req = {
@@ -215,6 +229,63 @@ async def test_admin_file_signed_url_endpoints(client):
     # Cleanup the uploaded object
     del_resp = await client.delete(
         f"/v0/admin/file?user_id={user_id}&project={project_name}&path=signed&staging=true",
+        headers=ADMIN_HEADERS,
+    )
+    assert del_resp.status_code == status.HTTP_200_OK, del_resp.json()
+
+
+@pytest.mark.anyio
+async def test_admin_file_download_url_prefix(client):
+    # Create a test user and a project
+    user = await create_test_user(client, email="filetests-prefix@example.com")
+    project_name = "files-project-prefix"
+    create_project_resp = await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=user["headers"],
+    )
+    assert (
+        create_project_resp.status_code == status.HTTP_200_OK
+    ), create_project_resp.json()
+
+    user_id = user["id"]
+
+    # Upload a couple of files under a common prefix
+    files_payload = {
+        "home/install/script.sh": base64.b64encode(b"#!/bin/sh\necho hi\n").decode(
+            "ascii",
+        ),
+        "home/install/readme.txt": base64.b64encode(b"install notes").decode("ascii"),
+        "home/other/skip.txt": base64.b64encode(b"skip").decode("ascii"),
+    }
+    put_resp = await client.post(
+        "/v0/admin/file",
+        json={
+            "user_id": user_id,
+            "project": project_name,
+            "files": files_payload,
+            "staging": True,
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert put_resp.status_code == status.HTTP_200_OK, put_resp.json()
+
+    # Request download URLs by prefix
+    resp = await client.get(
+        f"/v0/admin/file/download_url?user_id={user_id}&project={project_name}&path=home/install&staging=true&as_prefix=true",
+        headers=ADMIN_HEADERS,
+    )
+    assert resp.status_code == status.HTTP_200_OK, resp.json()
+    data = resp.json()
+    assert data["prefix"].endswith("/home/install")
+    paths = [item["path"] for item in data["items"]]
+    assert any(p.endswith("/home/install/script.sh") for p in paths)
+    assert any(p.endswith("/home/install/readme.txt") for p in paths)
+    assert not any(p.endswith("/home/other/skip.txt") for p in paths)
+
+    # Cleanup
+    del_resp = await client.delete(
+        f"/v0/admin/file?user_id={user_id}&project={project_name}&path=home&staging=true",
         headers=ADMIN_HEADERS,
     )
     assert del_resp.status_code == status.HTTP_200_OK, del_resp.json()
