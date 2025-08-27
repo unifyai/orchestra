@@ -5,7 +5,7 @@ import pytest
 from httpx import AsyncClient
 
 from .test_interface import _create_test_interface, _list_interfaces, _update_interface
-from .test_legacy_interface import _create_context, _create_interface, _create_project
+from .test_legacy_interface import _create_context, _create_project
 from .test_log import _create_derived_entry, _create_log, _update_logs
 from .test_tab import _create_test_tab, _list_tabs, _update_tab
 from .test_tile import (
@@ -253,36 +253,20 @@ async def test_list_projects(client: AsyncClient):
     assert all(isinstance(project, str) for project in projects)
 
 
-@pytest.mark.skip(reason="Uses legacy interface API which has been deprecated")
 @pytest.mark.anyio
 async def test_delete_project_logs(client: AsyncClient):
     # Create a test project with context, interface and logs
     project = "test_project"
     context = "test_context"
     interface_name = "test_interface"
-    items = [
-        {
-            "i": "n0",
-            "x": 0,
-            "y": 0,
-            "w": 3,
-            "h": 3,
-            "tab": None,
-            "moved": False,
-            "static": False,
-        },
-    ]
-    new_counter = 1
 
     # Create project and its components
     await _create_project(client, project)
     await _create_context(client, project, context, "test description")
-    await _create_interface(
+    await _create_test_interface(
         client,
-        interface_name,
-        project,
-        items,
-        new_counter,
+        name=interface_name,
+        project=project,
     )
 
     # Create some logs in the project
@@ -332,7 +316,6 @@ async def test_delete_project_logs(client: AsyncClient):
     assert interfaces[0]["name"] == interface_name
 
 
-@pytest.mark.skip(reason="Uses legacy interface API which has been deprecated")
 @pytest.mark.anyio
 async def test_delete_project_contexts(client: AsyncClient):
     # Create a test project with multiple contexts, interface and logs
@@ -340,30 +323,15 @@ async def test_delete_project_contexts(client: AsyncClient):
     context1 = "test_context_1"
     context2 = "test_context_2"
     interface_name = "test_interface"
-    items = [
-        {
-            "i": "n0",
-            "x": 0,
-            "y": 0,
-            "w": 3,
-            "h": 3,
-            "tab": None,
-            "moved": False,
-            "static": False,
-        },
-    ]
-    new_counter = 1
 
     # Create project and its components
     await _create_project(client, project)
     await _create_context(client, project, context1, "test description 1")
     await _create_context(client, project, context2, "test description 2")
-    await _create_interface(
+    await _create_test_interface(
         client,
-        interface_name,
-        project,
-        items,
-        new_counter,
+        name=interface_name,
+        project=project,
     )
 
     # Create logs for each context
@@ -421,7 +389,6 @@ async def test_delete_project_contexts(client: AsyncClient):
     assert interfaces[0]["name"] == interface_name
 
 
-@pytest.mark.skip(reason="Uses legacy interface API which has been deprecated")
 @pytest.mark.anyio
 async def test_share_project(client: AsyncClient):
     """
@@ -464,25 +431,10 @@ async def test_share_project(client: AsyncClient):
     # create a new context in the project
     _ = await _create_context(client, project_name, context_name, "test description")
     # create a new interface in the project
-    items = [
-        {
-            "i": "n0",
-            "x": 0,
-            "y": 0,
-            "w": 3,
-            "h": 3,
-            "tab": None,
-            "moved": False,
-            "static": False,
-        },
-    ]
-    new_counter = 1
-    _ = await _create_interface(
+    _ = await _create_test_interface(
         client,
-        interface_name,
-        project_name,
-        items,
-        new_counter,
+        name=interface_name,
+        project=project_name,
     )
     # create a new log in the project
     _ = await _create_log(

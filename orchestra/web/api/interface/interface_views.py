@@ -651,29 +651,6 @@ def update_interface(
     return _create_interface_response(updated, tabs, session)
 
 
-def update_interface_by_id(
-    request_fastapi: Request,
-    request: UpdateInterfaceRequest,
-    interface_id: str,  # Path parameter
-    checkpoint: bool = Query(
-        False,
-        description="Whether this is a checkpoint update (manual save)",
-    ),
-    session: Session = Depends(get_db_session),
-):
-    """Update an interface by ID (path parameter version)."""
-    # Call the main update function with interface_id as a direct parameter
-    return update_interface(
-        request_fastapi=request_fastapi,
-        request=request,
-        interface_id=interface_id,  # Pass as keyword argument
-        project=None,  # Not needed when using ID
-        name=None,  # Not needed when using ID
-        checkpoint=checkpoint,
-        session=session,
-    )
-
-
 @router.post(
     "/checkpoint",
     response_model=InterfaceSchema,

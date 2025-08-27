@@ -42,11 +42,3 @@ router.add_api_route(
     methods=["POST"],
     tags=["interface"],
 )
-
-# Add path parameter version for interface update
-router.add_api_route(
-    "/interface/{interface_id}",
-    _new_if_views.update_interface_by_id,
-    methods=["PUT"],
-    tags=["interface"],
-)
