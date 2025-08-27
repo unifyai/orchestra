@@ -2011,12 +2011,7 @@ def create_download_url(
         raise HTTPException(status_code=400, detail="Invalid path")
 
     try:
-        client = Client.from_service_account_json(
-            os.getenv(
-                "GOOGLE_APPLICATION_CREDENTIALS",
-                "application_default_credentials.json",
-            ),
-        )
+        client = Client()
         bucket = client.bucket(
             "interface-file-system-staging" if staging else "interface-file-system",
         )
