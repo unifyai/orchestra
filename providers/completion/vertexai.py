@@ -124,12 +124,6 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 0.25, "completion": 1.25},
     },
-    "claude-3.5-sonnet": {
-        "endpoint": "vertex_ai/claude-3-5-sonnet-v2@20241022",
-        "region": "us-east5",
-        "context_window": 200000,
-        "cost": {"prompt": 3, "completion": 15},
-    },
     "claude-3.5-haiku": {
         "endpoint": "vertex_ai/claude-3-5-haiku@20241022",
         "region": "us-east5",
@@ -160,35 +154,11 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 15, "completion": 75},
     },
-    "llama-3.1-8b-chat": {
-        "endpoint": "vertex_ai/meta/llama3-8b-instruct-maas",
-        "region": "us-central1",
-        "context_window": 128000,
-        "cost": {"prompt": 0.22, "completion": 0.22},
-    },
-    "llama-3.1-70b-chat": {
-        "endpoint": "vertex_ai/meta/llama3-70b-instruct-maas",
-        "region": "us-central1",
-        "context_window": 128000,
-        "cost": {"prompt": 0.99, "completion": 0.99},
-    },
     "llama-3.1-405b-chat": {
         "endpoint": "vertex_ai/meta/llama3-405b-instruct-maas",
         "region": "us-central1",
         "context_window": 128000,
         "cost": {"prompt": 5, "completion": 16},
-    },
-    "llama-3.2-11b-chat": {
-        "endpoint": "vertex_ai/meta/llama-3.2-90b-vision-instruct-maas",
-        "region": "us-central1",
-        "context_window": 128000,
-        "cost": {"prompt": 0.35, "completion": 0.35},
-    },
-    "llama-3.2-90b-chat": {
-        "endpoint": "vertex_ai/meta/llama-3.2-90b-vision-instruct-maas",
-        "region": "us-central1",
-        "context_window": 128000,
-        "cost": {"prompt": 2, "completion": 2},
     },
     "llama-3.3-70b-chat": {
         "endpoint": "vertex_ai/meta/llama-3.3-70b-instruct-maas",

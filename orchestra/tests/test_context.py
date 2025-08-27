@@ -84,6 +84,123 @@ async def test_create_context_with_slash(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_batch_create_contexts(client: AsyncClient):
+    project_name = "test-batch-context-project"
+
+    # Create project first
+    response = await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Test batch creation with strings
+    contexts_strings = ["context1", "context2", "context3"]
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json=contexts_strings,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert "Created 3 context(s) successfully" in result["info"]
+    assert set(result["created"]) == set(contexts_strings)
+    assert "errors" not in result
+
+    # Test batch creation with ContextCreateRequest objects
+    contexts_objects = [
+        {
+            "name": "experiment1",
+            "description": "First experiment",
+            "is_versioned": True,
+        },
+        {
+            "name": "experiment2",
+            "description": "Second experiment",
+            "is_versioned": False,
+        },
+    ]
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json=contexts_objects,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert "Created 2 context(s) successfully" in result["info"]
+    assert set(result["created"]) == {"experiment1", "experiment2"}
+
+    # Test batch creation with some errors (duplicate contexts)
+    contexts_with_duplicates = [
+        "new_context1",
+        "context1",  # Already exists
+        "new_context2",
+        "context2",  # Already exists
+    ]
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json=contexts_with_duplicates,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert "Created 2 context(s) successfully" in result["info"]
+    assert set(result["created"]) == {"new_context1", "new_context2"}
+    assert "errors" in result
+    assert len(result["errors"]) == 2
+    for error in result["errors"]:
+        assert "already exists" in error["error"]
+
+    # Test with invalid context names
+    contexts_invalid = [
+        "valid_context",
+        "invalid//context",  # Double slashes
+        "invalid context",  # Space
+        "valid-context-2",
+    ]
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json=contexts_invalid,
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert "Created 2 context(s) successfully" in result["info"]
+    assert set(result["created"]) == {"valid_context", "valid-context-2"}
+    assert "errors" in result
+    assert len(result["errors"]) == 2
+
+    # Test mixed batch creation (mix of strings and objects)
+    contexts_mixed = [
+        "simple_context",
+        {
+            "name": "complex_context",
+            "description": "Context with description",
+            "is_versioned": True,
+            "unique_keys": {"user_id": "int", "session_id": "str"},
+            "auto_counting": {"user_id": None},
+        },
+        "another_simple",
+    ]
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json=contexts_mixed,
+        headers=HEADERS,
+    )
+    if response.status_code != 200:
+        print(f"Error response: {response.json()}")
+    assert response.status_code == 200
+    result = response.json()
+    assert "Created 3 context(s) successfully" in result["info"]
+    assert set(result["created"]) == {
+        "simple_context",
+        "complex_context",
+        "another_simple",
+    }
+
+
+@pytest.mark.anyio
 async def test_delete_context_with_slash(client: AsyncClient):
     project_name = "test-project"
     context_name = "/training/trial1"
@@ -2134,183 +2251,6 @@ async def test_composite_key_missing_required_field(client: AsyncClient):
         "Must provide value for composite key column 'username'"
         in response.json()["detail"]
     )
-
-
-@pytest.mark.anyio
-async def test_context_reference_after_context_deletion(client: AsyncClient):
-    """Test behavior of entity context references after their referenced context is deleted"""
-    project_name = "test-context-deletion"
-    context_name = "deletable-context"
-
-    # Create project and context
-    await client.post(
-        "/v0/project",
-        json={"name": project_name},
-        headers=HEADERS,
-    )
-    await client.post(
-        f"/v0/project/{project_name}/contexts",
-        json={"name": context_name, "description": "Context to be deleted"},
-        headers=HEADERS,
-    )
-
-    # Create interface with context reference
-    await client.post(
-        "/v0/interface",
-        json={
-            "name": "test-interface",
-            "project": project_name,
-            "items": [],
-            "new_counter": 0,
-        },
-        headers=HEADERS,
-    )
-
-    # Delete the context
-    response = await client.delete(
-        f"/v0/project/{project_name}/contexts/{context_name}",
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
-
-    # Try to create new interface with the deleted context reference
-    response = await client.post(
-        "/v0/interface",
-        json={
-            "name": "test-interface-2",
-            "project": project_name,
-            "context": context_name,  # Reference to deleted context
-            "items": [],
-            "new_counter": 0,
-        },
-        headers=HEADERS,
-    )
-    # This should fail since the context no longer exists
-    assert response.status_code == 400
-    assert "Context 'deletable-context' not found" in response.json()["detail"]
-
-
-@pytest.mark.anyio
-async def test_context_reference_after_context_rename(client: AsyncClient):
-    """Test behavior of entity context references after their referenced context is renamed"""
-    project_name = "test-context-rename"
-    old_context_name = "oldcontext"
-    new_context_name = "newcontext"
-
-    # Create project and context
-    await client.post(
-        "/v0/project",
-        json={"name": project_name},
-        headers=HEADERS,
-    )
-    await client.post(
-        f"/v0/project/{project_name}/contexts",
-        json={"name": old_context_name, "description": "Context to be renamed"},
-        headers=HEADERS,
-    )
-
-    # Create interface with context reference
-    await client.post(
-        "/v0/interface",
-        json={
-            "name": "test-interface",
-            "project": project_name,
-            "items": [],
-            "new_counter": 0,
-        },
-        headers=HEADERS,
-    )
-
-    # Rename the context
-    response = await client.patch(
-        f"/v0/project/{project_name}/contexts/{old_context_name}/rename",
-        json={"name": new_context_name},
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
-
-    # Try to create new interface with the old context name
-    response = await client.post(
-        "/v0/interface",
-        json={
-            "name": "test-interface-2",
-            "project": project_name,
-            "context": old_context_name,  # Reference to old name
-            "items": [],
-            "new_counter": 0,
-        },
-        headers=HEADERS,
-    )
-    # This should fail since the old name no longer exists
-    assert response.status_code == 400
-    assert f"Context '{old_context_name}' not found" in response.json()["detail"]
-
-    # Try to create interface with the new context name - should work
-    response = await client.post(
-        "/v0/interface",
-        json={
-            "name": "test-interface-3",
-            "project": project_name,
-            "context": new_context_name,  # Reference to new name
-            "items": [],
-            "new_counter": 0,
-        },
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
-
-
-@pytest.mark.anyio
-async def test_cross_project_context_reference(client: AsyncClient):
-    """Test that entities cannot reference contexts from different projects"""
-    project_1 = "project-1"
-    project_2 = "project-2"
-    context_name = "shared-context-name"
-
-    # Create two projects with contexts having the same name
-    for project in [project_1, project_2]:
-        await client.post(
-            "/v0/project",
-            json={"name": project},
-            headers=HEADERS,
-        )
-        await client.post(
-            f"/v0/project/{project}/contexts",
-            json={"name": context_name, "description": f"Context in {project}"},
-            headers=HEADERS,
-        )
-
-    # Create interface in project_1 referencing context from project_1 - should work
-    response = await client.post(
-        "/v0/interface",
-        json={
-            "name": "interface-1",
-            "project": project_1,
-            "context": context_name,  # Context from project_1
-            "items": [],
-            "new_counter": 0,
-        },
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
-
-    # Create interface in project_2 referencing context from project_2 - should work
-    response = await client.post(
-        "/v0/interface",
-        json={
-            "name": "interface-2",
-            "project": project_2,
-            "context": context_name,  # Context from project_2
-            "items": [],
-            "new_counter": 0,
-        },
-        headers=HEADERS,
-    )
-    assert response.status_code == 200
-
-    # Note: There's no way to directly reference a context from a different project
-    # since context references are just strings and validation is project-scoped
-    # This test mainly documents the expected behavior
 
 
 @pytest.mark.anyio

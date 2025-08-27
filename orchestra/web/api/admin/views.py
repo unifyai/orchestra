@@ -1,3 +1,4 @@
+import base64
 import os
 import subprocess
 import sys
@@ -63,6 +64,7 @@ from orchestra.web.api.admin.schema import (  # noqa: WPS235
     DemoModelRequest,
     EndpointModelRequest,
     EndpointModelResponse,
+    FileUploadUrlRequest,
     FileWriteRequest,
     MetricModelRequest,
     MetricModelResponse,
@@ -1598,7 +1600,9 @@ def write_files(
 
             # Create a new blob and upload the file contents
             blob = bucket.blob(full_path)
-            blob.upload_from_string(file_content)
+            # Expect file_content to be a base64-encoded string; decode and upload bytes
+            data_bytes = base64.b64decode(file_content)
+            blob.upload_from_string(data_bytes, content_type="application/octet-stream")
 
         return {
             "message": "Files uploaded successfully",
@@ -1618,8 +1622,8 @@ def write_files(
             "content": {
                 "application/json": {
                     "example": {
-                        "123/my-project/file1.txt": "Hello, world!",
-                        "123/my-project/folder/file2.txt": "Hello, world!",
+                        "123/my-project/file1.txt": "SGVsbG8sIHdvcmxkIQ==",
+                        "123/my-project/folder/file2.txt": "SGVsbG8sIHdvcmxkIQ==",
                     },
                 },
             },
@@ -1644,7 +1648,7 @@ def get_files(
 ):
     """
     Get all files in a user's project folder in the bucket.
-    Returns a flat list of file paths and contents.
+    Returns a flat list of file paths mapped to base64-encoded contents.
     """
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
@@ -1672,12 +1676,15 @@ def get_files(
         # List all blobs under the prefix
         blobs = bucket.list_blobs(prefix=prefix)
 
-        # Extract the full paths and contents
+        # Extract the full paths and contents (base64-encoded)
         files = dict()
         for blob in blobs:
-            # Download the content of each file
-            content = blob.download_as_text() if not blob.name.endswith("/") else ""
-            files[blob.name.replace(prefix, "")] = content
+            if blob.name.endswith("/"):
+                # Skip folder placeholders
+                continue
+            data_bytes = blob.download_as_bytes()
+            content_b64 = base64.b64encode(data_bytes).decode("ascii")
+            files[blob.name.replace(prefix, "")] = content_b64
 
         return files
     except Exception as e:
@@ -1695,7 +1702,7 @@ def get_files(
             "content": {
                 "application/json": {
                     "example": {
-                        "contents": "Hello, world!",
+                        "contents": "SGVsbG8sIHdvcmxkIQ==",
                         "path": "my-app/folder/file.txt",
                     },
                 },
@@ -1766,14 +1773,17 @@ def get_file_contents(
                 detail=f"File not found at path: {full_path}",
             )
 
-        # Download the contents
-        contents = blob.download_as_text()
+        # Download the contents and return as base64
+        data_bytes = blob.download_as_bytes()
+        contents_b64 = base64.b64encode(data_bytes).decode("ascii")
 
         return {
-            "contents": contents,
+            "contents": contents_b64,
             "path": full_path,
         }
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(
             status_code=500,
             detail=f"Failed to get file contents: {str(e)}",
@@ -1857,9 +1867,205 @@ def delete_file_or_folder(
             "path": full_path,
         }
     except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(
             status_code=500,
             detail=f"Failed to delete file or folder: {str(e)}",
+        )
+
+
+@router.post(
+    "/file/upload_url",
+    responses={
+        200: {
+            "description": "Signed resumable upload URL created",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "upload_url": "https://storage.googleapis.com/upload/storage/v1/b/...",
+                        "path": "123/my-project/path/to/file.bin",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project <project> not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def create_upload_url(
+    request: FileUploadUrlRequest,
+    session=Depends(get_db_session),
+):
+    """
+    Create a signed URL for a GCS resumable upload session.
+    Clients should upload the file directly to this URL using the resumable protocol.
+    """
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project = project_dao.get_by_user_and_name(
+        user_id=request.user_id,
+        name=request.project,
+    )
+    if not project:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {request.project} not found.",
+        )
+
+    # Basic path validation: no traversal, no leading slash
+    if request.path.startswith("/") or ".." in request.path:
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    try:
+        client = Client()
+        bucket = client.bucket(
+            (
+                "interface-file-system-staging"
+                if request.staging
+                else "interface-file-system"
+            ),
+        )
+
+        full_path = f"{request.user_id}/{project.name}/{request.path}"
+        blob = bucket.blob(full_path)
+
+        upload_url = blob.create_resumable_upload_session(
+            content_type=request.content_type or "application/octet-stream",
+            timeout=3600,
+        )
+
+        return {
+            "upload_url": upload_url,
+            "path": full_path,
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create upload URL: {str(e)}",
+        )
+
+
+@router.get(
+    "/file/download_url",
+    responses={
+        200: {
+            "description": "Signed download URL created",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "download_url": "https://storage.googleapis.com/storage/v1/b/...",
+                        "path": "123/my-project/path/to/file.bin",
+                        "expires_in": 3600,
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project or File Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project <project> not found or file not found",
+                    },
+                },
+            },
+        },
+    },
+)
+def create_download_url(
+    user_id: str,
+    project: str,
+    path: str,
+    staging: bool = False,
+    expires_in: int = 3600,
+    as_prefix: bool = False,
+    session=Depends(get_db_session),
+):
+    """
+    Create a time-bound signed URL for downloading a file from GCS.
+    """
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_obj = project_dao.get_by_user_and_name(
+        user_id=user_id,
+        name=project,
+    )
+    if not project_obj:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {project} not found.",
+        )
+
+    if path.startswith("/") or ".." in path:
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    try:
+        client = Client()
+        bucket = client.bucket(
+            "interface-file-system-staging" if staging else "interface-file-system",
+        )
+        full_path = f"{user_id}/{project_obj.name}/{path}"
+
+        if as_prefix:
+            blobs = list(bucket.list_blobs(prefix=full_path))
+            # Filter out directory placeholders
+            blobs = [b for b in blobs if not b.name.endswith("/")]
+            if not blobs:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"No files found under prefix: {full_path}",
+                )
+            items = []
+            for b in blobs:
+                url = b.generate_signed_url(
+                    expiration=timedelta(seconds=expires_in),
+                    method="GET",
+                )
+                items.append(
+                    {
+                        "path": b.name,
+                        "download_url": url,
+                    },
+                )
+            return {
+                "prefix": full_path,
+                "expires_in": expires_in,
+                "items": items,
+            }
+        else:
+            blob = bucket.blob(full_path)
+            if not blob.exists():
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"File not found at path: {full_path}",
+                )
+
+            download_url = blob.generate_signed_url(
+                expiration=timedelta(seconds=expires_in),
+                method="GET",
+            )
+            return {
+                "download_url": download_url,
+                "path": full_path,
+                "expires_in": expires_in,
+            }
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise e
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to create download URL: {str(e)}",
         )
 
 

@@ -360,11 +360,36 @@ class DemoModelRequest(BaseModel):
 
 
 class FileWriteRequest(BaseModel):
-    """Schema for file write/update request."""
+    """Schema for file write/update request.
+
+    Notes:
+        - `files` maps relative file paths to base64-encoded contents (bytes).
+        - All files, including text, should be provided as base64 to avoid
+          accidental text decoding. Clients should base64-encode on write and
+          base64-decode on read.
+    """
 
     user_id: str
     project: str
     files: dict[str, str]
+    staging: bool = False
+
+
+class FileUploadUrlRequest(BaseModel):
+    """Schema for creating a signed resumable upload URL for GCS.
+
+    Attributes:
+        user_id: Owner of the project.
+        project: Project name.
+        path: Relative file path within the project (no leading slash).
+        content_type: Optional MIME type to set on the object.
+        staging: Whether to use the staging bucket.
+    """
+
+    user_id: str
+    project: str
+    path: str
+    content_type: Optional[str] = None
     staging: bool = False
 
 
