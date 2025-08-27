@@ -289,6 +289,7 @@ class CreateInterfaceRequest(BaseInterfaceTemplateSchema):
 
     interface_id: Optional[str] = None
     project: str
+    context: Optional[str] = None
 
     class Config:
         extra = "forbid"  # Reject unknown fields

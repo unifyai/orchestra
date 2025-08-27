@@ -2944,3 +2944,67 @@ async def test_export_tile_template_with_valid_schema_no_specialized_data(
     assert "view_tile" not in template or template["view_tile"] is None
     assert "editor_tile" not in template or template["editor_tile"] is None
     assert "terminal_tile" not in template or template["terminal_tile"] is None
+
+
+@pytest.mark.anyio
+async def test_tile_context_validation(client: AsyncClient):
+    """Test that tile API validates context references"""
+    project_name = f"test-tile-context-{uuid.uuid4()}"
+    context_name = "valid-context"
+    invalid_context = "nonexistent-context"
+
+    # Create project and context
+    await _create_project(client, project_name)
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "description": "Valid context"},
+        headers=HEADERS,
+    )
+
+    # Create interface and tab
+    interface_response = await _create_test_interface(
+        client,
+        name="test-interface",
+        project=project_name,
+    )
+    interface_id = interface_response.json()["id"]
+
+    tab_response = await _create_test_tab(
+        client,
+        name="test-tab",
+        interface_id=interface_id,
+    )
+    tab_id = tab_response.json()["id"]
+
+    # Create tile with valid context - should succeed
+    response = await client.post(
+        "/v0/tile/",
+        json={
+            "name": "valid-context-tile",
+            "tab_id": tab_id,
+            "type": "Table",
+            "context": context_name,
+            "position": {"x": 0, "y": 0, "width": 6, "height": 4},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 201
+    assert response.json()["context"] == context_name
+
+    # Try to create tile with invalid context - should fail
+    response = await client.post(
+        "/v0/tile/",
+        json={
+            "name": "invalid-context-tile",
+            "tab_id": tab_id,
+            "type": "Table",
+            "context": invalid_context,
+            "position": {"x": 6, "y": 0, "width": 6, "height": 4},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 400
+    assert f"Context '{invalid_context}' not found" in response.json()["detail"]
+
+    # Clean up
+    await _delete_project(client, project_name)
