@@ -2012,7 +2012,10 @@ def create_download_url(
 
     try:
         client = Client.from_service_account_json(
-            os.getenv("GOOGLE_APPLICATION_CREDENTIALS"),
+            os.getenv(
+                "GOOGLE_APPLICATION_CREDENTIALS",
+                "application_default_credentials.json",
+            ),
         )
         bucket = client.bucket(
             "interface-file-system-staging" if staging else "interface-file-system",
