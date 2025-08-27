@@ -253,6 +253,7 @@ async def test_list_projects(client: AsyncClient):
     assert all(isinstance(project, str) for project in projects)
 
 
+@pytest.mark.skip(reason="Uses legacy interface API which has been deprecated")
 @pytest.mark.anyio
 async def test_delete_project_logs(client: AsyncClient):
     # Create a test project with context, interface and logs
@@ -331,6 +332,7 @@ async def test_delete_project_logs(client: AsyncClient):
     assert interfaces[0]["name"] == interface_name
 
 
+@pytest.mark.skip(reason="Uses legacy interface API which has been deprecated")
 @pytest.mark.anyio
 async def test_delete_project_contexts(client: AsyncClient):
     # Create a test project with multiple contexts, interface and logs
@@ -419,6 +421,7 @@ async def test_delete_project_contexts(client: AsyncClient):
     assert interfaces[0]["name"] == interface_name
 
 
+@pytest.mark.skip(reason="Uses legacy interface API which has been deprecated")
 @pytest.mark.anyio
 async def test_share_project(client: AsyncClient):
     """

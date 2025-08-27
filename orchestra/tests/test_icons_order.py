@@ -27,7 +27,7 @@ async def _create_interface(
         payload["order"] = order
     if icon:
         payload["icon"] = icon
-    resp = await client.post("/v0/interface", json=payload, headers=HEADERS)
+    resp = await client.post("/v0/interfaces/", json=payload, headers=HEADERS)
     assert resp.status_code in (200, 201)
     return resp.json()["id"]
 
@@ -87,8 +87,7 @@ async def test_project_interface_tab_icons_and_order(client: AsyncClient):
 
     # update interface icon and order
     resp = await client.put(
-        "/v0/interface",
-        params={"interface_id": iface1_id},
+        f"/v0/interface/{iface1_id}",
         json={"icon": "panel-updated", "order": 2},
         headers=HEADERS,
     )

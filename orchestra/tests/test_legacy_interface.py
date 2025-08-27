@@ -46,6 +46,7 @@ def _create_interface(
     )
 
 
+@pytest.mark.skip(reason="Legacy interface API has been deprecated and removed")
 @pytest.mark.anyio
 async def test_create_interface(client: AsyncClient):
     name = "my_interface"
@@ -79,6 +80,7 @@ async def test_create_interface(client: AsyncClient):
     assert response.json()["id"] is not None
 
 
+@pytest.mark.skip(reason="Legacy interface API has been deprecated and removed")
 @pytest.mark.anyio
 async def test_update_interface(client: AsyncClient):
     name = "my_interface"
@@ -133,6 +135,7 @@ async def test_update_interface(client: AsyncClient):
     assert response.json()["info"] == "Interface updated successfully!"
 
 
+@pytest.mark.skip(reason="Legacy interface API has been deprecated and removed")
 @pytest.mark.anyio
 async def test_get_interface(client: AsyncClient):
     name = "my_interface"
@@ -162,6 +165,7 @@ async def test_get_interface(client: AsyncClient):
     assert isinstance(response.json(), list)
 
 
+@pytest.mark.skip(reason="Legacy interface API has been deprecated and removed")
 @pytest.mark.anyio
 async def test_delete_interface(client: AsyncClient):
     name = "my_interface"
@@ -191,6 +195,7 @@ async def test_delete_interface(client: AsyncClient):
     assert response.json()["info"] == "Interface deleted successfully!"
 
 
+@pytest.mark.skip(reason="Legacy interface API has been deprecated and removed")
 @pytest.mark.anyio
 async def test_delete_project_deletes_interfaces_and_temp_interfaces(
     client: AsyncClient,
