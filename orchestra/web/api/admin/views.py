@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 import stripe
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.param_functions import Depends
+from google.auth import default
 from google.cloud.storage import Client
 from sqlalchemy import select
 
@@ -2016,6 +2017,7 @@ def create_download_url(
             "interface-file-system-staging" if staging else "interface-file-system",
         )
         full_path = f"{user_id}/{project_obj.name}/{path}"
+        creds, _ = default()
 
         if as_prefix:
             blobs = list(bucket.list_blobs(prefix=full_path))
@@ -2054,6 +2056,7 @@ def create_download_url(
             download_url = blob.generate_signed_url(
                 expiration=timedelta(seconds=expires_in),
                 method="GET",
+                service_account_email=creds.service_account_email,
             )
             return {
                 "download_url": download_url,
