@@ -10,6 +10,7 @@ import stripe
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.param_functions import Depends
 from google.cloud.storage import Client
+from google.oauth2.service_account import Credentials
 from sqlalchemy import select
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
@@ -2011,7 +2012,10 @@ def create_download_url(
         raise HTTPException(status_code=400, detail="Invalid path")
 
     try:
-        client = Client()
+        creds = Credentials.from_service_account_file(
+            os.getenv("ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON"),
+        )
+        client = Client(credentials=creds)
         bucket = client.bucket(
             "interface-file-system-staging" if staging else "interface-file-system",
         )
@@ -2029,6 +2033,7 @@ def create_download_url(
             items = []
             for b in blobs:
                 url = b.generate_signed_url(
+                    version="v4",
                     expiration=timedelta(seconds=expires_in),
                     method="GET",
                 )
@@ -2052,6 +2057,7 @@ def create_download_url(
                 )
 
             download_url = blob.generate_signed_url(
+                version="v4",
                 expiration=timedelta(seconds=expires_in),
                 method="GET",
             )
