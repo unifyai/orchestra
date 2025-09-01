@@ -38,6 +38,11 @@ supported_models = {
         "context_window": 131072,
         "cost": {"prompt": 0.15, "completion": 0.6},
     },
+    "deepseek-v3.1": {
+        "endpoint": "together_ai/deepseek-ai/DeepSeek-V3.1",
+        "context_window": 160000,
+        "cost": {"prompt": 0.6, "completion": 1.7},
+    },
     "deepseek-r1": {
         "endpoint": "together_ai/deepseek-ai/DeepSeek-R1",
         "context_window": 128000,
@@ -67,11 +72,6 @@ supported_models = {
         "endpoint": "together_ai/meta-llama/Llama-3.2-3B-Instruct-Turbo",
         "context_window": 131072,
         "cost": {"prompt": 0.06, "completion": 0.06},
-    },
-    "llama-3.2-90b-chat": {
-        "endpoint": "together_ai/meta-llama/Llama-3.2-90B-Vision-Instruct-Turbo",
-        "context_window": 131072,
-        "cost": {"prompt": 1.2, "completion": 1.2},
     },
     "llama-3.1-8b-chat": {
         "endpoint": "together_ai/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
