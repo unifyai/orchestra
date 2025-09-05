@@ -70,6 +70,7 @@ from orchestra.web.api.utils.assistant_infra import (
     delete_phone_number,
     delete_pubsub_topic,
     get_social_platforms_costs,
+    stop_jobs,
     watch_email,
 )
 
@@ -769,6 +770,14 @@ def delete_assistant(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Assistant not found.",
             )
+
+        # Suspend any jobs that might be currently running with that assistant
+        try:
+            response = stop_jobs(assistant_id, staging=settings.is_staging)
+            print(f"JOB STOPPED: {response['job_names']}")
+        except Exception as e:
+            logging.error(f"Failed to stop job: {str(e)}")
+            cleanup_errors.append(f"Failed to stop job: {str(e)}")
 
         # Delete the associated chat transcript context from the "Assistants" project
         try:
