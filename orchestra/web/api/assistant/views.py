@@ -1038,6 +1038,7 @@ def update_assistant_config(
                         f"Phone number creation failed: {phone_response['detail']}",
                     )
                 phone_to_update = phone_response.get("phoneNumber")
+                assistant_phone = phone_to_update
                 print(f"PHONE CREATED ON UPDATE: {phone_to_update}")
             except Exception as e:
                 # If phone creation fails, we should not proceed with the update
@@ -1156,7 +1157,7 @@ def update_assistant_config(
                 max_parallel=updated.max_parallel,
                 created_at=updated.created_at,
                 updated_at=updated.updated_at,
-                phone=updated.phone,
+                phone=assistant_phone,
                 email=updated.email,
                 user_whatsapp_number=updated.user_whatsapp_number,
                 assistant_whatsapp_number=assistant_whatsapp_number,
