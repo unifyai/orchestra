@@ -160,16 +160,16 @@ class TemplateValidator:
         path = f"{component_path}.{tab_name}" if component_path else tab_name
 
         # Check global context
-        if tab_data.get("global_context"):
-            if tab_data["global_context"] not in validation_schema.contexts:
+        if tab_data.get("context"):
+            if tab_data["context"] not in validation_schema.contexts:
                 issues.append(
                     ValidationIssue(
                         level="error",
                         component="tab",
                         component_name=tab_name,
                         issue_type="missing_context",
-                        message=f"Global context '{tab_data['global_context']}' not found in target project",
-                        suggested_fix=f"Remove global_context or create context '{tab_data['global_context']}'",
+                        message=f"Global context '{tab_data['context']}' not found in target project",
+                        suggested_fix=f"Remove context or create context '{tab_data['context']}'",
                     ),
                 )
 
@@ -310,10 +310,10 @@ class TemplateSanitizer:
             sanitized = tab_template.copy()
 
         # Remove invalid global context
-        if sanitized.get("global_context"):
-            if sanitized["global_context"] not in self.validation_schema.contexts:
+        if sanitized.get("context"):
+            if sanitized["context"] not in self.validation_schema.contexts:
                 if remove_invalid:
-                    sanitized["global_context"] = None
+                    sanitized["context"] = None
                 elif not preserve_structure:
                     return None
 
@@ -524,7 +524,7 @@ class TemplateConverter:
             visible=tab.visible,
             active=tab.active,
             order=tab.order,
-            global_context=tab.global_context,
+            context=tab.context,
             color=tab.color,
             tiles=tiles,
             description=description,

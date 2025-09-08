@@ -65,6 +65,7 @@ def _create_interface_response(
         id=str(interface.id),
         name=interface.name,
         project_id=interface.project_id,
+        context=interface.context,
         tabs=tab_list,
         active_tab_id=str(interface.active_tab_id) if interface.active_tab_id else None,
         color=interface.color,
@@ -250,6 +251,18 @@ def create_interface(
             detail=f"Interface with name {request.name} already exists in this project.",
         )
 
+    # Validate context if provided (non-empty string)
+    if request.context and request.context.strip():
+        existing_contexts = context_dao.filter(
+            project_id=project.id,
+            name=request.context,
+        )
+        if not existing_contexts:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Context '{request.context}' not found in project.",
+            )
+
     # Create the interface
     interface = interface_dao.create_interface(
         name=request.name,
@@ -257,6 +270,7 @@ def create_interface(
         color=request.color,
         icon=request.icon or "folder",
         order=request.order,
+        context=request.context,
         is_checkpoint=checkpoint,
     )
 
@@ -592,6 +606,23 @@ def update_interface(
 
     # Convert Pydantic model to dict
     update_dict = request.model_dump()
+
+    # Validate context if provided (non-empty string)
+    if update_dict.get("context") and str(update_dict["context"]).strip():
+        context_name = update_dict["context"]
+        # Get the project ID from the interface
+        if interface_id:
+            project_id = interface.project_id
+        else:
+            project_id = project_obj.id
+
+        # Check if context exists in the project
+        existing_contexts = context_dao.filter(project_id=project_id, name=context_name)
+        if not existing_contexts:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Context '{context_name}' not found in project.",
+            )
 
     # Verify that the tab exists and belongs to this interface if active_tab_id is being updated
     if update_dict.get("active_tab_id"):
@@ -1266,7 +1297,7 @@ def import_interface_template(
             visible=tab_data.visible if tab_data.visible is not None else True,
             active=tab_data.active if tab_data.active is not None else False,
             order=tab_data.order if tab_data.order is not None else 0,
-            global_context=tab_data.global_context,
+            context=tab_data.context,
             color=tab_data.color,
             is_checkpoint=False,
         )
