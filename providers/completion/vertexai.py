@@ -196,4 +196,28 @@ supported_models = {
         "context_window": 256000,
         "cost": {"prompt": 0.25, "completion": 1},
     },
+    "deepseek-v3.1": {
+        "endpoint": "vertex_ai/deepseek-ai/deepseek-v3.1-maas",
+        "region": "us-west2",
+        "context_window": 160000,
+        "cost": {"prompt": 0.6, "completion": 1.7},
+    },
+    "deepseek-r1": {
+        "endpoint": "vertex_ai/deepseek-ai/deepseek-r1-0528-maas",
+        "region": "us-central1",
+        "context_window": 128000,
+        "cost": {"prompt": 1.35, "completion": 5.4},
+    },
+    "gpt-oss-20b": {
+        "endpoint": "vertex_ai/openai/gpt-oss-20b-maas",
+        "region": "us-central1",
+        "context_window": 131072,
+        "cost": {"prompt": 0.075, "completion": 0.3},
+    },
+    "gpt-oss-120b": {
+        "endpoint": "vertex_ai/openai/gpt-oss-120b-maas",
+        "region": "us-central1",
+        "context_window": 131072,
+        "cost": {"prompt": 0.15, "completion": 0.6},
+    },
 }
