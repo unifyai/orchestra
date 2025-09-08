@@ -9,7 +9,7 @@ from httpx import AsyncClient
 from orchestra.tests.utils import ADMIN_HEADERS, HEADERS, create_test_user
 
 
-@pytest.fixture(scope="module", autouse=True)
+@pytest.fixture(scope="function", autouse=True)
 async def approve_default_user(client: AsyncClient):
     """Ensures the default test user for this module is approved for hiring."""
     # Get the user ID associated with the default HEADERS

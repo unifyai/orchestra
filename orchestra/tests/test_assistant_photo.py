@@ -19,7 +19,7 @@ from orchestra.settings import settings
 from orchestra.tests.utils import ADMIN_HEADERS, HEADERS
 
 
-@pytest.fixture(scope="module", autouse=True)
+@pytest.fixture(scope="function", autouse=True)
 async def approve_default_user(client: AsyncClient):
     """Ensures the default test user for this module is approved for hiring."""
     credits_resp = await client.get("/v0/credits", headers=HEADERS)
