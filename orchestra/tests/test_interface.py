@@ -1825,7 +1825,8 @@ async def test_interface_context_validation_valid_reference(client: AsyncClient)
 
     # Update with valid context field - should work
     response = await client.put(
-        f"/v0/interface/{interface_id}",
+        "/v0/interfaces/",
+        params={"interface_id": interface_id},
         json={
             "context": context_name,
         },

@@ -307,13 +307,13 @@ async def test_delete_project_logs(client: AsyncClient):
 
     # Verify interface still exists
     interface_response = await client.get(
-        f"/v0/interface?name={interface_name}&project={project}",
+        f"/v0/interfaces/",
+        params={"project": project, "name": interface_name},
         headers=HEADERS,
     )
     assert interface_response.status_code == 200
-    interfaces = interface_response.json()
-    assert len(interfaces) > 0
-    assert interfaces[0]["name"] == interface_name
+    interface = interface_response.json()
+    assert interface["name"] == interface_name
 
 
 @pytest.mark.anyio
@@ -380,13 +380,13 @@ async def test_delete_project_contexts(client: AsyncClient):
 
     # Verify interface still exists
     interface_response = await client.get(
-        f"/v0/interface?name={interface_name}&project={project}",
+        f"/v0/interfaces/",
+        params={"project": project, "name": interface_name},
         headers=HEADERS,
     )
     assert interface_response.status_code == 200
-    interfaces = interface_response.json()
-    assert len(interfaces) > 0
-    assert interfaces[0]["name"] == interface_name
+    interface = interface_response.json()
+    assert interface["name"] == interface_name
 
 
 @pytest.mark.anyio
@@ -490,7 +490,7 @@ async def test_share_project(client: AsyncClient):
 
     # 3) Verify the new user can access the project's interfaces
     response = await client.get(
-        f"/v0/interface",
+        f"/v0/interfaces/list",
         params={"project": project_name},
         headers=new_headers,
     )

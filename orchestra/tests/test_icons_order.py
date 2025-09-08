@@ -87,7 +87,8 @@ async def test_project_interface_tab_icons_and_order(client: AsyncClient):
 
     # update interface icon and order
     resp = await client.put(
-        f"/v0/interface/{iface1_id}",
+        "/v0/interfaces/",
+        params={"interface_id": iface1_id},
         json={"icon": "panel-updated", "order": 2},
         headers=HEADERS,
     )
