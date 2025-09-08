@@ -33,7 +33,7 @@ from orchestra.db.dao.recording_dao import RecordingDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import Context
+from orchestra.db.models.orchestra_models import AuthUser, Context
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.call_recording_service import CallRecordingService
 from orchestra.services.cartesia_service import CartesiaAPIError, CartesiaService
@@ -83,6 +83,26 @@ def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:
     if raw_phone and raw_phone.startswith(" "):
         return "+" + raw_phone[1:]
     return raw_phone
+
+
+def check_assistant_hiring_approval(
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    user_id = request.state.user_id
+    user = session.query(AuthUser).filter(AuthUser.id == user_id).one_or_none()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Authenticated user not found.",
+        )
+
+    if user.assistant_hiring_approval != "approved":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You need to request approval first by going to console.unify.ai/assistants",
+        )
 
 
 router = APIRouter()
@@ -162,6 +182,7 @@ def create_assistant(
     assistant_in: AssistantCreate,
     request: Request,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[AssistantRead]:
     """
     Create a new assistant for the authenticated user.
@@ -653,6 +674,7 @@ def list_assistants(
         None,
         description="Only return assistants whose email address matches this value.",
     ),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[List[AssistantRead]]:
     """
     List all assistants for the authenticated user.
@@ -743,6 +765,7 @@ def delete_assistant(
     assistant_id: int,
     request: Request,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[str]:
     """
     Delete an assistant by ID for the authenticated user.
@@ -978,6 +1001,7 @@ def update_assistant_config(
     update: AssistantUpdate,
     request: Request,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[AssistantRead]:
     """
     Update about, phone, email, weekly_limit, and/or max_parallel for an existing assistant.
@@ -1297,6 +1321,7 @@ def list_recordings(
     assistant_id: int,
     request: Request,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[List[RecordingInfo]]:
     """
     List all call recordings for the specified assistant.
@@ -1366,6 +1391,7 @@ def delete_recording(
     recording_id: int,
     request: Request,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[str]:
     """
     Delete a call recording by ID for the specified assistant.
@@ -1456,6 +1482,7 @@ def register_voice(
     voice_in: VoiceCreate,
     request: Request,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[VoiceRead]:
     dao = VoiceDAO(session)
     try:
@@ -1529,6 +1556,7 @@ async def clone_voice(
     gender: Optional[str] = Form(None, example="female"),
     provider: str = Form("cartesia"),
     file: UploadFile = File(..., example="voice_sample.wav"),
+    _: None = Depends(check_assistant_hiring_approval),
 ):
     user_id = request.state.user_id
     voice_dao = VoiceDAO(session)
@@ -1704,6 +1732,7 @@ async def clone_voice(
 def list_voices(
     request: Request,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[List[VoiceRead]]:
     """
     List all voices saved by the authenticated user.
@@ -1765,6 +1794,7 @@ def delete_voice(
     session: Session = Depends(get_db_session),
     cartesia_service: CartesiaService = Depends(),
     elevenlabs_service: ElevenLabsService = Depends(),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[str]:
     user_id = request.state.user_id
     voice_dao = VoiceDAO(session)
@@ -1882,6 +1912,7 @@ async def generate_speech(
     session: Session = Depends(get_db_session),
     cartesia_service: CartesiaService = Depends(),
     elevenlabs_service: ElevenLabsService = Depends(),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> Response:
     user_id = request.state.user_id
     audio_bytes: bytes
@@ -1952,6 +1983,7 @@ async def design_voice_generate_previews_endpoint(
     session: Session = Depends(get_db_session),
     elevenlabs_service: ElevenLabsService = Depends(),
     openai_service: OpenAIService = Depends(),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[VoiceDesignGeneratePreviewsAPIResponse]:
     user_id = request.state.user_id
     final_voice_description = request_data.voice_description
@@ -2036,6 +2068,7 @@ async def design_voice_create_from_preview_endpoint(
     elevenlabs_service: ElevenLabsService = Depends(),
     deepgram_service: DeepgramService = Depends(),
     openai_service: OpenAIService = Depends(),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[VoiceRead]:
     user_id = request.state.user_id
     voice_dao = VoiceDAO(session)
@@ -2210,6 +2243,7 @@ async def design_voice_create_from_preview_endpoint(
 async def upload_assistant_photo(
     request: Request,
     file: UploadFile = File(..., example="assistant_photo.jpg"),
+    _: None = Depends(check_assistant_hiring_approval),
 ):
     bucket_service = BucketService()
     user_id = request.state.user_id
@@ -2269,6 +2303,7 @@ async def upload_assistant_photo(
 async def upload_assistant_video(
     request: Request,
     file: UploadFile = File(..., example="assistant_video.mp4"),
+    _: None = Depends(check_assistant_hiring_approval),
 ):
     bucket_service = BucketService()
     user_id = request.state.user_id
@@ -2331,6 +2366,7 @@ def generate_assistant_photo(
     session: Session = Depends(get_db_session),
     replicate_service: ReplicateService = Depends(),
     openai_service: OpenAIService = Depends(),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[str]:
     """
     Generate a new assistant profile photo from a text prompt.
@@ -2425,6 +2461,7 @@ async def edit_assistant_photo(
     aspect_ratio: str = Form("match_input_image", example="1:1"),
     output_format: str = Form("jpg", example="jpg"),
     safety_tolerance: float = Form(2.0, example=2.0),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[str]:
     """
     Edit an assistant profile photo using a text prompt and an input image.
@@ -2589,6 +2626,7 @@ async def animate_video_endpoint(
     min_resolution: Optional[int] = Form(512),
     inference_steps: Optional[int] = Form(25),
     keep_resolution: Optional[bool] = Form(True),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[ReplicatePredictionResponse]:
     user_id = request.state.user_id
     users_dao = UsersDAO(session)
@@ -2802,7 +2840,9 @@ async def animate_video_endpoint(
 )
 def get_animation_prediction(
     prediction_id: str,
+    request: Request,
     replicate_service: ReplicateService = Depends(),
+    _: None = Depends(check_assistant_hiring_approval),
 ):
     try:
         prediction = replicate_service.get_prediction(prediction_id)
@@ -2825,7 +2865,9 @@ def get_animation_prediction(
 )
 def cancel_animation_prediction(
     prediction_id: str,
+    request: Request,
     replicate_service: ReplicateService = Depends(),
+    _: None = Depends(check_assistant_hiring_approval),
 ):
     try:
         prediction = replicate_service.cancel_prediction(prediction_id)

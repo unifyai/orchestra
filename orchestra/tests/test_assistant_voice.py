@@ -18,7 +18,19 @@ from orchestra.services.elevenlabs_service import (
     ElevenLabsService as OriginalElevenLabsService,
 )
 from orchestra.services.openai_service import OpenAIService as OriginalOpenAIService
-from orchestra.tests.utils import HEADERS
+from orchestra.tests.utils import ADMIN_HEADERS, HEADERS, create_test_user
+
+
+@pytest.fixture(scope="function", autouse=True)
+async def approve_default_user(client: AsyncClient):
+    """Ensures the default test user for this module is approved for hiring."""
+    credits_resp = await client.get("/v0/credits", headers=HEADERS)
+    user_id = credits_resp.json()["id"]
+    approve_url = f"/v0/admin/auth-user/{user_id}/assistant-hiring-approval/approved"
+    approve_resp = await client.put(approve_url, headers=ADMIN_HEADERS)
+    assert (
+        approve_resp.status_code == status.HTTP_200_OK
+    ), f"Failed to approve default user {user_id}: {approve_resp.json()}"
 
 
 def _get_sample_wav_bytes() -> bytes:
@@ -112,7 +124,7 @@ async def get_user_id_from_request_state(
     client: AsyncClient,
     path: str = "/v0/assistant/voice",
 ) -> str:
-    return "test-user-id-default"
+    return "test-user"
 
 
 # --- Test Voice CRUD ---
@@ -331,6 +343,8 @@ async def test_list_voices(
     mock_tts_services_factory,
 ):
     user_id = await get_user_id_from_request_state(client)
+    other_user = await create_test_user(client, "other_user@voice.com")
+    other_user_id = other_user["id"]
 
     custom_voice_payload = {
         "voice_id": "user-custom-list",
@@ -350,7 +364,6 @@ async def test_list_voices(
         "provider": "elevenlabs",
         "is_preset": True,
     }
-    other_user_id = "other-user-for-global-preset"
     global_preset_payload = {
         "voice_id": "global-preset-for-list",
         "name": "Global Preset EN",
@@ -379,7 +392,7 @@ async def test_list_voices(
         await client.post(
             "/v0/assistant/voice",
             json=global_preset_payload,
-            headers=HEADERS,
+            headers=other_user["headers"],
         )
 
     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
@@ -409,7 +422,7 @@ async def test_list_voices(
         mock_state.user_id = other_user_id
         await client.delete(
             f"/v0/assistant/voice/{global_preset_payload['voice_id']}",
-            headers=HEADERS,
+            headers=other_user["headers"],
         )
 
 
