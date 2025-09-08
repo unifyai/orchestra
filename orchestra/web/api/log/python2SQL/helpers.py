@@ -3,7 +3,7 @@ import functools
 import json
 import os
 import re
-from typing import Optional
+from typing import Optional, Union
 
 import unify
 from openai import OpenAI
@@ -947,6 +947,15 @@ def _build_subquery_for_base_call(
     return filtered_subquery
 
 
+def _embeddable(text: Union[str | None]) -> bool:
+    """
+    Check if the text is valid for embedding.
+    """
+    if text is None or text.strip() == "":
+        return False
+    return True
+
+
 def _ensure_vectors_exist(
     session: Session,
     id_to_text: dict[int, str],
@@ -990,7 +999,9 @@ def _ensure_vectors_exist(
     )
     existing_set = set(existing_refs)
 
-    ids_to_embed = [id for id in all_ids if id not in existing_set]
+    ids_to_embed = [
+        id for id in all_ids if id not in existing_set and _embeddable(id_to_text[id])
+    ]
     if not ids_to_embed:
         return
 
