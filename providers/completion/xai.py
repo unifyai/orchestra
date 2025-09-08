@@ -27,6 +27,11 @@ class XAI(BaseCompletionProvider):
 
 
 supported_models = {
+    "grok-code-fast": {
+        "endpoint": "xai/grok-code-fast-1",
+        "context_window": 256000,
+        "cost": {"prompt": 0.2, "completion": 1.5},
+    },
     "grok-4": {
         "endpoint": "xai/grok-4",
         "context_window": 256000,
