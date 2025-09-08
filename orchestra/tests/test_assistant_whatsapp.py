@@ -7,6 +7,18 @@ from httpx import AsyncClient
 from orchestra.tests.utils import ADMIN_HEADERS, HEADERS, create_test_user
 
 
+@pytest.fixture(scope="module", autouse=True)
+async def approve_default_user(client: AsyncClient):
+    """Ensures the default test user for this module is approved for hiring."""
+    credits_resp = await client.get("/v0/credits", headers=HEADERS)
+    user_id = credits_resp.json()["id"]
+    approve_url = f"/v0/admin/auth-user/{user_id}/assistant-hiring-approval/approved"
+    approve_resp = await client.put(approve_url, headers=ADMIN_HEADERS)
+    assert (
+        approve_resp.status_code == status.HTTP_200_OK
+    ), f"Failed to approve default user {user_id}: {approve_resp.json()}"
+
+
 # Helper to assign an available WhatsApp number not in use by any assistant for a given user
 async def _assign_whatsapp_sender(
     client: AsyncClient,
@@ -496,7 +508,11 @@ async def test_assistant_whatsapp_conflict_single_sharing_contact(client: AsyncC
     assert log_resp.status_code == status.HTTP_200_OK
 
     # Check conflict
-    user = await create_test_user(client, "whatsapp_conflict_none@example.com")
+    user = await create_test_user(
+        client,
+        "whatsapp_conflict_none@example.com",
+        hiring_approved=True,
+    )
     user_id = user["id"]
     conflict = await _get_conflict_whatsapp_number(
         client,
