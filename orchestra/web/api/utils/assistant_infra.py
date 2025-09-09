@@ -225,4 +225,4 @@ def wake_up_assistant(assistant_number: str, is_staging: bool = False):
     return requests.post(
         wake_up_url,
         data={"assistant_number": assistant_number},
-    ).json()
+    )

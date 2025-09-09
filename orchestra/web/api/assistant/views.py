@@ -577,7 +577,13 @@ def create_assistant(
         )
 
     # Phase 3: Wake up assistant
-    wake_up_assistant(assistant.phone, is_staging=settings.is_staging)
+    response = wake_up_assistant(assistant.phone, is_staging=settings.is_staging)
+    if response.status_code != 200:
+        logging.error(f"Failed to wake up assistant: {response.text}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to wake up assistant.",
+        )
 
     # Phase 4: Prepare and return response
     return InfoResponse(
