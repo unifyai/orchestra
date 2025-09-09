@@ -190,3 +190,14 @@ def get_social_platforms_costs():
         f"{COMMS_URL}/social/available-platforms",
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},
     ).json()
+
+
+def wake_up_assistant(assistant_number: str, is_staging: bool = False):
+    wake_up_url = (
+        "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/"
+        "assistant-wakeup-webhook" + ("-staging" if is_staging else "")
+    )
+    return requests.post(
+        wake_up_url,
+        data={"assistant_number": assistant_number},
+    ).json()
