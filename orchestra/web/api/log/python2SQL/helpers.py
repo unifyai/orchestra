@@ -71,6 +71,7 @@ except Exception as e:
 
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
 MAX_EMBEDDING_DIMS = 1536
+MAX_TOKENS_PER_REQUEST = 300000
 
 
 @functools.lru_cache(maxsize=4096)
@@ -92,18 +93,30 @@ def _get_embeddings_batch(
     dimensions: int | None = None,
 ) -> list[list[float]]:
     """
-    Get embedding vectors for a batch of text strings using OpenAI's API.
+    Get embedding vectors for a *batch* of text strings using OpenAI's API.
 
-    Args:
-        texts (list[str]): The list of texts to embed.
-        model (str, optional): The embedding model to use. Defaults to DEFAULT_EMBEDDING_MODEL.
-        dimensions (int, optional): The number of dimensions for the embedding vector.
+    Behavior
+    --------
+    - Tries to embed the full list in a single API call.
+    - If the API raises a 'max_tokens_per_request' error (i.e., the *combined*
+      request is too large), it progressively slices the **list of texts**
+      into smaller sub-batches until the request(s) succeed.
+    - The slicing reduces the maximum sub-batch size by 500 items each time
+      (down to a minimum of 1), as requested.
+    - Results from sub-batches are concatenated in the original order.
 
-    Returns:
-        list[list[float]]: A list of embedding vectors.
+    Notes
+    -----
+    - This function **does not** modify any individual text. It only adjusts
+      how many texts are sent per request.
+    - The order of outputs matches the order of `texts`.
+    - If a single-text batch (size=1) still fails with a token-limit error,
+      the error is surfaced.
 
-    Raises:
-        ValueError: If OpenAI API key is not set or API call fails.
+    Raises
+    ------
+    ValueError: if the API key is missing, the API call fails for a non-token-limit
+                reason, or embedding dimensions exceed `MAX_EMBEDDING_DIMS`.
     """
     if not OPENAI_API_KEY:
         raise ValueError(
@@ -112,25 +125,71 @@ def _get_embeddings_batch(
 
     model = model or DEFAULT_EMBEDDING_MODEL
 
+    # First, try the full batch once
     try:
         kwargs = {"model": model, "input": texts}
         if dimensions is not None:
             kwargs["dimensions"] = dimensions
-
         resp = _client.embeddings.create(**kwargs)
-
-        # Sort results by index to ensure order is preserved
         resp.data.sort(key=lambda x: x.index)
-
         embeddings = [d.embedding for d in resp.data]
-
-        if len(embeddings[0]) > MAX_EMBEDDING_DIMS:
+        if embeddings and len(embeddings[0]) > MAX_EMBEDDING_DIMS:
             raise ValueError(
                 f"Embedding dimension {len(embeddings[0])} exceeds {MAX_EMBEDDING_DIMS}",
             )
         return embeddings
     except Exception as e:
-        raise ValueError(f"Failed to get embeddings: {str(e)}")
+        # If this is not a combined-request token-limit error, surface it.
+        if "max_tokens_per_request" not in str(e).lower():
+            raise ValueError(f"Failed to get embeddings: {str(e)}")
+
+    # Fallback: slice the *list of texts* into smaller sub-batches.
+    n = len(texts)
+    if n == 0:
+        return []
+
+    # Start from full size; reduce by 500 until successful
+    max_batch_size = n
+    step = 500
+
+    # Defensive clamp to at least 1
+    max_batch_size = max(1, max_batch_size)
+
+    while max_batch_size >= 1:
+        try:
+            out: list[list[float]] = []
+            for start in range(0, n, max_batch_size):
+                end = min(start + max_batch_size, n)
+                sub = texts[start:end]
+                sub_kwargs = {"model": model, "input": sub}
+                if dimensions is not None:
+                    sub_kwargs["dimensions"] = dimensions
+                sub_resp = _client.embeddings.create(**sub_kwargs)
+                sub_resp.data.sort(key=lambda x: x.index)
+                sub_embeddings = [d.embedding for d in sub_resp.data]
+                if sub_embeddings and len(sub_embeddings[0]) > MAX_EMBEDDING_DIMS:
+                    raise ValueError(
+                        f"Embedding dimension {len(sub_embeddings[0])} exceeds {MAX_EMBEDDING_DIMS}",
+                    )
+                out.extend(sub_embeddings)
+
+            # Successfully embedded all sub-batches with this max_batch_size
+            return out
+
+        except Exception as e:
+            # Only reduce batch size if it's a combined-request token-limit issue
+            if "max_tokens_per_request" in str(e).lower():
+                if max_batch_size == 1:
+                    # Cannot shrink further; surface the error
+                    raise ValueError(f"Failed to get embeddings: {str(e)}")
+                # Reduce by 500 (or down to 1)
+                max_batch_size = max(1, max_batch_size - step)
+                continue
+            # Non token-limit error: surface it immediately
+            raise ValueError(f"Failed to get embeddings: {str(e)}")
+
+    # Should not be reachable; defensive fallback
+    raise ValueError("Failed to get embeddings: exhausted batch-size backoff.")
 
 
 def _extract_placeholders(equation: str) -> list:
