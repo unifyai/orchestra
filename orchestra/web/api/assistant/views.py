@@ -70,6 +70,7 @@ from orchestra.web.api.utils.assistant_infra import (
     delete_phone_number,
     delete_pubsub_topic,
     get_social_platforms_costs,
+    wake_up_assistant,
     watch_email,
 )
 
@@ -553,7 +554,10 @@ def create_assistant(
             detail="Failed to create assistant.",
         )
 
-    # Phase 3: Prepare and return response
+    # Phase 3: Wake up assistant
+    wake_up_assistant(assistant.phone, is_staging=settings.is_staging)
+
+    # Phase 4: Prepare and return response
     return InfoResponse(
         info=AssistantRead(
             agent_id=str(assistant.agent_id),
