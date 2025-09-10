@@ -293,57 +293,6 @@ def create_assistant(
         # This ensures the assistant persists even if we refresh the session later
         session.commit()
 
-        # Log pre-hire chat if provided
-        if assistant_in.pre_hire_chat:
-            try:
-                context_name = f"{assistant.first_name}{assistant.surname}/Transcripts"
-                chat_context_id = context_dao.get_or_create(
-                    assistants_project.id,
-                    name=context_name,
-                )
-                chat_context_obj = session.get(Context, chat_context_id)
-
-                # Prepare entries for logging using jsonable_encoder
-                chat_entries = jsonable_encoder(assistant_in.pre_hire_chat)
-                num_entries = len(chat_entries)
-
-                if num_entries > 0:
-                    log_event_ids = log_event_dao.bulk_create(
-                        project_id=assistants_project.id,
-                        count=num_entries,
-                        context_id=chat_context_id,
-                    )
-
-                    # Prepare all log rows for bulk creation
-                    log_rows_to_create = []
-                    for i, entry_dict in enumerate(chat_entries):
-                        log_event_id = log_event_ids[i]
-                        for key, value in entry_dict.items():
-                            log_rows_to_create.append(
-                                {
-                                    "project_id": assistants_project.id,
-                                    "log_event_id": log_event_id,
-                                    "key": key,
-                                    "value": value,
-                                    "context_id": chat_context_id,
-                                },
-                            )
-
-                    # Bulk create the log rows (this will flush)
-                    if log_rows_to_create:
-                        log_dao.bulk_create(
-                            log_rows_to_create,
-                            context_obj=chat_context_obj,
-                        )
-
-                    session.commit()  # Commit the logs
-
-            except Exception as e_log:
-                session.rollback()  # Rollback the log transaction
-                logging.warning(
-                    f"Failed to log pre-hire chat for assistant {assistant.agent_id}. Error: {str(e_log)}",
-                )
-
         assistant_id = assistant.agent_id
         # Infrastructure creation with rollback on failure
         created_email = None
@@ -586,6 +535,57 @@ def create_assistant(
         )
     else:
         print(f"ASSISTANT AWAKENED: {assistant.phone}")
+
+    # (Optional) Log pre-hire chat if provided
+    if assistant_in.pre_hire_chat:
+        try:
+            context_name = f"{assistant.first_name}{assistant.surname}/Transcripts"
+            chat_context_id = context_dao.get_or_create(
+                assistants_project.id,
+                name=context_name,
+            )
+            chat_context_obj = session.get(Context, chat_context_id)
+
+            # Prepare entries for logging using jsonable_encoder
+            chat_entries = jsonable_encoder(assistant_in.pre_hire_chat)
+            num_entries = len(chat_entries)
+
+            if num_entries > 0:
+                log_event_ids = log_event_dao.bulk_create(
+                    project_id=assistants_project.id,
+                    count=num_entries,
+                    context_id=chat_context_id,
+                )
+
+                # Prepare all log rows for bulk creation
+                log_rows_to_create = []
+                for i, entry_dict in enumerate(chat_entries):
+                    log_event_id = log_event_ids[i]
+                    for key, value in entry_dict.items():
+                        log_rows_to_create.append(
+                            {
+                                "project_id": assistants_project.id,
+                                "log_event_id": log_event_id,
+                                "key": key,
+                                "value": value,
+                                "context_id": chat_context_id,
+                            },
+                        )
+
+                # Bulk create the log rows (this will flush)
+                if log_rows_to_create:
+                    log_dao.bulk_create(
+                        log_rows_to_create,
+                        context_obj=chat_context_obj,
+                    )
+
+                session.commit()  # Commit the logs
+
+        except Exception as e_log:
+            session.rollback()  # Rollback the log transaction
+            logging.warning(
+                f"Failed to log pre-hire chat for assistant {assistant.agent_id}. Error: {str(e_log)}",
+            )
 
     # Phase 4: Prepare and return response
     return InfoResponse(
