@@ -293,17 +293,6 @@ def create_assistant(
         # This ensures the assistant persists even if we refresh the session later
         session.commit()
 
-        # Wake up assistant
-        wakup_response = wake_up_assistant(
-            assistant.phone, is_staging=settings.is_staging
-        )
-        if wakup_response.status_code != 200:
-            logging.error(f"Failed to wake up assistant: {wakup_response.text}")
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to wake up assistant.",
-            )
-
         # Log pre-hire chat if provided
         if assistant_in.pre_hire_chat:
             try:
@@ -587,7 +576,18 @@ def create_assistant(
             detail="Failed to create assistant.",
         )
 
-    # Phase 3: Prepare and return response
+    # Phase 3: Wake up assistant
+    response = wake_up_assistant(assistant.phone, is_staging=settings.is_staging)
+    if response.status_code != 200:
+        logging.error(f"Failed to wake up assistant: {response.text}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to wake up assistant.",
+        )
+    else:
+        print(f"ASSISTANT AWAKENED: {assistant.phone}")
+
+    # Phase 4: Prepare and return response
     return InfoResponse(
         info=AssistantRead(
             agent_id=str(assistant.agent_id),
