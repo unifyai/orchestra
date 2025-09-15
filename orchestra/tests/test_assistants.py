@@ -179,7 +179,7 @@ async def test_update_weekly_limit_only(client: AsyncClient):
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     aid = create.json()["info"]["agent_id"]
     new_limit = 45.5
-    update_payload = {"weekly_limit": new_limit}
+    update_payload = {"weekly_limit": new_limit, "create_infra": False}
     patch = await client.patch(
         f"/v0/assistant/{aid}/config",
         json=update_payload,
@@ -214,7 +214,7 @@ async def test_update_max_parallel_only(client: AsyncClient):
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     aid = create.json()["info"]["agent_id"]
     new_parallel = 7
-    update_payload = {"max_parallel": new_parallel}
+    update_payload = {"max_parallel": new_parallel, "create_infra": False}
     patch = await client.patch(
         f"/v0/assistant/{aid}/config",
         json=update_payload,
@@ -289,7 +289,7 @@ async def test_update_about_only(client: AsyncClient):
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     aid = create.json()["info"]["agent_id"]
     new_about = "Updated bio with additional qualifications and expertise"
-    update_payload = {"about": new_about}
+    update_payload = {"about": new_about, "create_infra": False}
     patch = await client.patch(
         f"/v0/assistant/{aid}/config",
         json=update_payload,
@@ -321,7 +321,7 @@ async def test_update_phone_only(client: AsyncClient):
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     aid = create.json()["info"]["agent_id"]
     new_phone = "+1-555-123-4567"
-    update_payload = {"phone": new_phone}
+    update_payload = {"phone": new_phone, "create_infra": False}
     patch = await client.patch(
         f"/v0/assistant/{aid}/config",
         json=update_payload,
@@ -352,7 +352,7 @@ async def test_update_email_only(client: AsyncClient):
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     aid = create.json()["info"]["agent_id"]
     new_email = "julia.garcia@example.com"
-    update_payload = {"email": new_email}
+    update_payload = {"email": new_email, "create_infra": False}
     patch = await client.patch(
         f"/v0/assistant/{aid}/config",
         json=update_payload,
@@ -386,6 +386,7 @@ async def test_update_multiple_fields(client: AsyncClient):
         "about": "Updated professional bio with new skills",
         "phone": "+1-555-987-6543",
         "email": "kevin.brown@example.com",
+        "create_infra": False,
     }
     patch = await client.patch(
         f"/v0/assistant/{aid}/config",
@@ -507,12 +508,12 @@ async def test_admin_list_assistant_emails(client: AsyncClient):
     # Update the assistants with emails
     update1 = await client.patch(
         f"/v0/assistant/{aid1}/config",
-        json={"email": email1},
+        json={"email": email1, "create_infra": False},
         headers=HEADERS,
     )
     update2 = await client.patch(
         f"/v0/assistant/{aid2}/config",
-        json={"email": email2},
+        json={"email": email2, "create_infra": False},
         headers=HEADERS,
     )
     assert update1.status_code == 200 and update2.status_code == 200

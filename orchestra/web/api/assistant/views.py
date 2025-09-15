@@ -302,33 +302,33 @@ def create_assistant(
 
         if assistant_in.create_infra:
             try:
-                # Step 1: create email
-                email_local = (
-                    assistant_in.email.split("@")[0]
-                    if "@" in assistant_in.email
-                    else assistant_in.email
-                )
-                email_response = create_email(
-                    email_local,
-                    assistant_in.first_name,
-                    assistant_in.surname,
-                )
-                if "detail" in email_response:
-                    raise Exception(
-                        f"Email creation failed: {email_response['detail']}",
+                # Step 1 & 2: create and watch email
+                if assistant_in.email:
+                    email_local = (
+                        assistant_in.email.split("@")[0]
+                        if "@" in assistant_in.email
+                        else assistant_in.email
                     )
-                created_email = email_response.get("user").get("primaryEmail")
-                print(f"EMAIL CREATED: {created_email}")
+                    email_response = create_email(
+                        email_local,
+                        assistant_in.first_name,
+                        assistant_in.surname,
+                    )
+                    if "detail" in email_response:
+                        raise Exception(
+                            f"Email creation failed: {email_response['detail']}",
+                        )
+                    created_email = email_response.get("user").get("primaryEmail")
+                    print(f"EMAIL CREATED: {created_email}")
 
-                # Step 2: watch email
-                time.sleep(10)
-                watch_response = watch_email(created_email)
-                print(watch_response)
-                if "detail" in watch_response:
-                    raise Exception(
-                        f"Email watch setup failed: {watch_response['detail']}",
-                    )
-                print(f"EMAIL WATCHED: {created_email}")
+                    time.sleep(10)
+                    watch_response = watch_email(created_email)
+                    print(watch_response)
+                    if "detail" in watch_response:
+                        raise Exception(
+                            f"Email watch setup failed: {watch_response['detail']}",
+                        )
+                    print(f"EMAIL WATCHED: {created_email}")
 
                 # Step 3: create phone number if user_phone is provided
                 if assistant_in.user_phone:
@@ -1032,6 +1032,10 @@ def update_assistant_config(
     old_video_url = None
     is_video_changing = False
 
+    # Variables to track newly created resources for potential rollback
+    email_to_update: Optional[str] = None
+    phone_to_update: Optional[str] = None
+
     # Check assistant existence before any updates
     existing_assistant = assistant_dao.get_assistant_by_id(
         user_id=request.state.user_id,
@@ -1053,83 +1057,129 @@ def update_assistant_config(
         update.profile_video is not None and update.profile_video != old_video_url
     )
 
+    # Initialize variables with values from the update payload or existing record
+    assistant_email = update.email
+    assistant_phone = update.phone
+    assistant_whatsapp_number = (
+        existing_assistant.assistant_whatsapp_number
+        if existing_assistant.assistant_whatsapp_number
+        else None
+    )
+
     try:
         weekly_limit: Optional[Decimal] = None
         if update.weekly_limit is not None:
             weekly_limit = Decimal(update.weekly_limit)
 
-        # Create / update assistant phone
-        # 1- Check if the assistant doesn't have a phone number already and if a user phone is provided
-        # 2- If so, create an assistant phone number
-        assistant_phone = update.phone
-        if update.user_phone and not existing_assistant.phone:
-            try:
-                country = update.country if update.country else "US"
-                phone_response = create_phone_number(
-                    country=country,
-                    is_staging=settings.is_staging,
-                )
-                if "detail" in phone_response:
-                    raise Exception(
-                        f"Phone number creation failed: {phone_response['detail']}",
-                    )
-                phone_to_update = phone_response.get("phoneNumber")
-                assistant_phone = phone_to_update
-                print(f"PHONE CREATED ON UPDATE: {phone_to_update}")
-            except Exception as e:
-                # If phone creation fails, we should not proceed with the update
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to create phone number during update: {str(e)}",
-                )
-
-        # Create / update social account:
-        # 1- Check if the assistant doesn't have a user account already and if a user account value is provided
-        # 2- If so and if user has enough credits (production), assign the whatsapp account to the assistant
-        assistant_whatsapp_number = (
-            existing_assistant.assistant_whatsapp_number
-            if existing_assistant.assistant_whatsapp_number
-            else None
-        )
-        if update.user_whatsapp_number and not existing_assistant.user_whatsapp_number:
-            if not settings.is_staging:
-                # Cost to create a social account
+        if update.create_infra:
+            # Create / update assistant email
+            # 1- Check if the assistant doesn't have an email address already and if an assistant email is provided
+            # 2- If so, create an assistant email
+            if update.email and not existing_assistant.email:
                 try:
-                    platforms_response = get_social_platforms_costs()
-                    platforms = platforms_response.get("platforms")
+                    email_local = (
+                        update.email.split("@")[0]
+                        if "@" in update.email
+                        else update.email
+                    )
+                    email_response = create_email(
+                        email_local,
+                        existing_assistant.first_name,
+                        existing_assistant.surname,
+                    )
+                    if "detail" in email_response:
+                        raise Exception(
+                            f"Email creation failed on assistant update: {email_response['detail']}",
+                        )
+                    email_to_update = email_response.get("user").get("primaryEmail")
+                    print(f"EMAIL CREATED ON ASSISTANT UPDATE: {email_to_update}")
 
-                    if not isinstance(platforms, dict):
-                        raise HTTPException(
-                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail=f"Could not parse social platform costs. Expected a dictionary, got: {platforms}",
+                    time.sleep(10)
+                    watch_response = watch_email(email_to_update)
+                    print(watch_response)
+                    if "detail" in watch_response:
+                        raise Exception(
+                            f"Email watch setup failed: {watch_response['detail']}",
                         )
-                    cost = platforms.get("whatsapp")
-                    if cost is None:
-                        raise HTTPException(
-                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail="WhatsApp cost not found in social platform costs response.",
-                        )
-                except Exception as e_costs:
+                    print(f"EMAIL WATCHED ON ASSISTANT UPDATE: {email_to_update}")
+
+                    assistant_email = email_to_update
+
+                except Exception as e:
                     raise HTTPException(
                         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail=f"Failed to fetch or process social platform costs. Details: {str(e_costs)}",
+                        detail=f"Failed to create email during update: {str(e)}",
                     )
-                user = users_dao.get_user_with_id(user_id)
-                decimal_cost = Decimal(cost)
-                if user.credits < decimal_cost:
-                    raise HTTPException(
-                        status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                        detail="Insufficient credits to add a WhatsApp number.",
-                    )
-                users_dao.recharge_credit(
-                    user_id=user_id,
-                    quantity=-float(decimal_cost),
-                )
 
-            assistant_whatsapp_number = assign_whatsapp_sender(
-                update.user_whatsapp_number,
-                is_staging=settings.is_staging,
-            )["whatsapp_number"]
+            # Create / update assistant phone
+            # 1- Check if the assistant doesn't have a phone number already and if a user phone is provided
+            # 2- If so, create an assistant phone number
+            if update.user_phone and not existing_assistant.phone:
+                try:
+                    country = update.country if update.country else "US"
+                    phone_response = create_phone_number(
+                        country=country,
+                        is_staging=settings.is_staging,
+                    )
+                    if "detail" in phone_response:
+                        raise Exception(
+                            f"Phone number creation failed: {phone_response['detail']}",
+                        )
+                    phone_to_update = phone_response.get("phoneNumber")
+                    assistant_phone = phone_to_update
+                    print(f"PHONE CREATED ON UPDATE: {phone_to_update}")
+                except Exception as e:
+                    # If phone creation fails, we should not proceed with the update
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail=f"Failed to create phone number during update: {str(e)}",
+                    )
+
+            # Create / update social account:
+            # 1- Check if the assistant doesn't have a user account already and if a user account value is provided
+            # 2- If so and if user has enough credits (production), assign the whatsapp account to the assistant
+            if (
+                update.user_whatsapp_number
+                and not existing_assistant.user_whatsapp_number
+            ):
+                if not settings.is_staging:
+                    # Cost to create a social account
+                    try:
+                        platforms_response = get_social_platforms_costs()
+                        platforms = platforms_response.get("platforms")
+
+                        if not isinstance(platforms, dict):
+                            raise HTTPException(
+                                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                detail=f"Could not parse social platform costs. Expected a dictionary, got: {platforms}",
+                            )
+                        cost = platforms.get("whatsapp")
+                        if cost is None:
+                            raise HTTPException(
+                                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                detail="WhatsApp cost not found in social platform costs response.",
+                            )
+                    except Exception as e_costs:
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"Failed to fetch or process social platform costs. Details: {str(e_costs)}",
+                        )
+                    user = users_dao.get_user_with_id(user_id)
+                    decimal_cost = Decimal(cost)
+                    if user.credits < decimal_cost:
+                        raise HTTPException(
+                            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                            detail="Insufficient credits to add a WhatsApp number.",
+                        )
+                    users_dao.recharge_credit(
+                        user_id=user_id,
+                        quantity=-float(decimal_cost),
+                    )
+
+                assistant_whatsapp_number = assign_whatsapp_sender(
+                    update.user_whatsapp_number,
+                    is_staging=settings.is_staging,
+                )["whatsapp_number"]
 
         updated = assistant_dao.update_assistant(
             user_id=request.state.user_id,
@@ -1138,7 +1188,7 @@ def update_assistant_config(
             profile_video=update.profile_video,
             about=update.about,
             phone=assistant_phone,
-            email=update.email,
+            email=assistant_email,
             user_phone=update.user_phone,
             user_whatsapp_number=update.user_whatsapp_number,
             assistant_whatsapp_number=assistant_whatsapp_number,
@@ -1177,6 +1227,8 @@ def update_assistant_config(
                     f"Failed to delete old profile video {old_video_url} for assistant {assistant_id} during update. Error: {str(e)}",
                 )
 
+        session.commit()
+
         return InfoResponse(
             info=AssistantRead(
                 agent_id=str(updated.agent_id),
@@ -1194,7 +1246,7 @@ def update_assistant_config(
                 created_at=updated.created_at,
                 updated_at=updated.updated_at,
                 phone=assistant_phone,
-                email=updated.email,
+                email=assistant_email,
                 user_whatsapp_number=updated.user_whatsapp_number,
                 assistant_whatsapp_number=assistant_whatsapp_number,
                 user_phone=updated.user_phone,
@@ -1202,10 +1254,35 @@ def update_assistant_config(
             ),
         )
     except Exception as e:
+        session.rollback()
+
+        if email_to_update:
+            logging.warning(
+                f"Update failed. Rolling back created email: {email_to_update}",
+            )
+            try:
+                delete_email(email_to_update)
+            except Exception as cleanup_err:
+                logging.error(
+                    f"Failed to clean up (delete) email '{email_to_update}' during rollback: {cleanup_err}",
+                )
+
+        if phone_to_update:
+            logging.warning(
+                f"Update failed. Rolling back created phone number: {phone_to_update}",
+            )
+            try:
+                delete_phone_number(phone_to_update)
+            except Exception as cleanup_err:
+                logging.error(
+                    f"Failed to clean up (delete) phone number '{phone_to_update}' during rollback: {cleanup_err}",
+                )
+
         if isinstance(e, HTTPException):
             raise e
+
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error updating assistant config: {str(e)}",
         )
 
