@@ -774,7 +774,7 @@ async def test_generate_speech_openai_success(
     payload = {
         "text": "Hello OpenAI",
         "provider": "openai",
-        "voice_id": "oai_marin",
+        "voice_id": "marin",
         "model_id": "gpt-4o-mini-tts",
         "output_format": "mp3",
     }

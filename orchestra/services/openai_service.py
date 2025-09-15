@@ -2,7 +2,7 @@ import io
 import json
 import logging
 import mimetypes
-from typing import Optional
+from typing import Optional, Tuple
 
 import httpx
 from fastapi import HTTPException, status
