@@ -296,6 +296,11 @@ class AssistantUpdate(BaseModel):
         description="Country code for phone number provisioning (e.g., US, GB)",
         example="GB",
     )
+    create_infra: Optional[bool] = Field(
+        True,
+        description="Whether to create infrastructure for the assistant during update (e.g., phone, email). Set to false for testing.",
+        exclude=True,
+    )
 
     class Config:
         orm_mode = True

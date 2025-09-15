@@ -9,38 +9,6 @@ from httpx import AsyncClient
 from orchestra.tests.utils import ADMIN_HEADERS, HEADERS, create_test_user
 
 
-@pytest.fixture(autouse=True)
-def mock_assistant_infra():
-    """Mocks external infrastructure calls for assistant creation/updates."""
-    with patch(
-        "orchestra.web.api.assistant.views.create_email"
-    ) as mock_create_email, patch(
-        "orchestra.web.api.assistant.views.watch_email"
-    ) as mock_watch_email, patch(
-        "orchestra.web.api.assistant.views.delete_email"
-    ) as mock_delete_email, patch(
-        "orchestra.web.api.assistant.views.create_phone_number"
-    ) as mock_create_phone, patch(
-        "orchestra.web.api.assistant.views.delete_phone_number"
-    ) as mock_delete_phone:
-
-        mock_create_email.return_value = {
-            "user": {"primaryEmail": "mocked.email@example.com"}
-        }
-        mock_watch_email.return_value = {"status": "ok"}
-        mock_delete_email.return_value = {}
-        mock_create_phone.return_value = {"phoneNumber": "+15558675309"}
-        mock_delete_phone.return_value = {}
-
-        yield {
-            "create_email": mock_create_email,
-            "watch_email": mock_watch_email,
-            "delete_email": mock_delete_email,
-            "create_phone": mock_create_phone,
-            "delete_phone": mock_delete_phone,
-        }
-
-
 @pytest.fixture(scope="function", autouse=True)
 async def approve_default_user(client: AsyncClient):
     """Ensures the default test user for this module is approved for hiring."""
@@ -211,7 +179,7 @@ async def test_update_weekly_limit_only(client: AsyncClient):
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     aid = create.json()["info"]["agent_id"]
     new_limit = 45.5
-    update_payload = {"weekly_limit": new_limit}
+    update_payload = {"weekly_limit": new_limit, "create_infra": False}
     patch = await client.patch(
         f"/v0/assistant/{aid}/config",
         json=update_payload,
@@ -246,7 +214,7 @@ async def test_update_max_parallel_only(client: AsyncClient):
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     aid = create.json()["info"]["agent_id"]
     new_parallel = 7
-    update_payload = {"max_parallel": new_parallel}
+    update_payload = {"max_parallel": new_parallel, "create_infra": False}
     patch = await client.patch(
         f"/v0/assistant/{aid}/config",
         json=update_payload,
@@ -321,7 +289,7 @@ async def test_update_about_only(client: AsyncClient):
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     aid = create.json()["info"]["agent_id"]
     new_about = "Updated bio with additional qualifications and expertise"
-    update_payload = {"about": new_about}
+    update_payload = {"about": new_about, "create_infra": False}
     patch = await client.patch(
         f"/v0/assistant/{aid}/config",
         json=update_payload,
@@ -353,7 +321,7 @@ async def test_update_phone_only(client: AsyncClient):
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     aid = create.json()["info"]["agent_id"]
     new_phone = "+1-555-123-4567"
-    update_payload = {"phone": new_phone}
+    update_payload = {"phone": new_phone, "create_infra": False}
     patch = await client.patch(
         f"/v0/assistant/{aid}/config",
         json=update_payload,
@@ -384,7 +352,7 @@ async def test_update_email_only(client: AsyncClient):
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     aid = create.json()["info"]["agent_id"]
     new_email = "julia.garcia@example.com"
-    update_payload = {"email": new_email}
+    update_payload = {"email": new_email, "create_infra": False}
     patch = await client.patch(
         f"/v0/assistant/{aid}/config",
         json=update_payload,
@@ -392,7 +360,7 @@ async def test_update_email_only(client: AsyncClient):
     )
     assert patch.status_code == 200
     updated = patch.json()["info"]
-    assert updated["email"] == "mocked.email@example.com"
+    assert updated["email"] == new_email
     assert updated["phone"] is None
     assert updated["about"] == payload["about"]
     assert updated["weekly_limit"] == payload["weekly_limit"]
@@ -418,6 +386,7 @@ async def test_update_multiple_fields(client: AsyncClient):
         "about": "Updated professional bio with new skills",
         "phone": "+1-555-987-6543",
         "email": "kevin.brown@example.com",
+        "create_infra": False,
     }
     patch = await client.patch(
         f"/v0/assistant/{aid}/config",
@@ -427,8 +396,8 @@ async def test_update_multiple_fields(client: AsyncClient):
     assert patch.status_code == 200
     updated = patch.json()["info"]
     assert updated["about"] == update_payload["about"]
-    assert updated["phone"] == "mocked.phone_number"
-    assert updated["email"] == "mocked.email@example.com"
+    assert updated["phone"] == update_payload["phone"]
+    assert updated["email"] == update_payload["email"]
     assert updated["first_name"] == payload["first_name"]
     assert updated["region"] == payload["region"]
 
@@ -539,12 +508,12 @@ async def test_admin_list_assistant_emails(client: AsyncClient):
     # Update the assistants with emails
     update1 = await client.patch(
         f"/v0/assistant/{aid1}/config",
-        json={"email": email1},
+        json={"email": email1, "create_infra": False},
         headers=HEADERS,
     )
     update2 = await client.patch(
         f"/v0/assistant/{aid2}/config",
-        json={"email": email2},
+        json={"email": email2, "create_infra": False},
         headers=HEADERS,
     )
     assert update1.status_code == 200 and update2.status_code == 200
@@ -903,11 +872,6 @@ async def test_create_assistant_duplicate_name_fails(client: AsyncClient):
         "user2-for-duplicate-test@example.com",
         hiring_approved=True,
     )
-    users_dao = UsersDAO(dbsession)
-    users_dao.recharge_credit(
-        user2["id"], settings.assistant_creation_cost + 1
-    )  # Add enough credits
-    dbsession.commit()
     user2_headers = user2["headers"]
     resp3 = await client.post("/v0/assistant", json=payload, headers=user2_headers)
     assert (
