@@ -76,7 +76,7 @@ supported_models = {
     "llama-3.2-3b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.2-3B-Instruct",
         "context_window": 128000,
-        "cost": {"prompt": 0.012, "completion": 0.024},
+        "cost": {"prompt": 0.02, "completion": 0.02},
     },
     "llama-3.2-11b-chat": {
         "endpoint": "deepinfra/meta-llama/Llama-3.2-11B-Vision-Instruct",
@@ -91,12 +91,12 @@ supported_models = {
     "llama-3.1-70b-chat": {
         "endpoint": "deepinfra/meta-llama/Meta-Llama-3.1-70B-Instruct",
         "context_window": 128000,
-        "cost": {"prompt": 0.23, "completion": 0.40},
+        "cost": {"prompt": 0.4, "completion": 0.4},
     },
     "llama-3.1-nemotron-70b-chat": {
         "endpoint": "deepinfra/nvidia/Llama-3.1-Nemotron-70B-Instruct",
         "context_window": 128000,
-        "cost": {"prompt": 0.12, "completion": 0.30},
+        "cost": {"prompt": 0.6, "completion": 0.6},
     },
     "llama-3-8b-chat": {
         "endpoint": "deepinfra/meta-llama/Meta-Llama-3-8B-Instruct",
@@ -106,7 +106,7 @@ supported_models = {
     "gemma-3-27b-it": {
         "endpoint": "deepinfra/google/gemma-3-27b-it",
         "context_window": 128000,
-        "cost": {"prompt": 0.09, "completion": 0.17},
+        "cost": {"prompt": 0.09, "completion": 0.16},
     },
     "gemma-3-12b-it": {
         "endpoint": "deepinfra/google/gemma-3-12b-it",
@@ -126,7 +126,7 @@ supported_models = {
     "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "deepinfra/mistralai/Mixtral-8x7B-Instruct-v0.1",
         "context_window": 32768,
-        "cost": {"prompt": 0.08, "completion": 0.24},
+        "cost": {"prompt": 0.4, "completion": 0.4},
     },
     "qwen-3-235b-a22b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen3-235B-A22B-Instruct-2507",
