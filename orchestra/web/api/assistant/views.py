@@ -1924,6 +1924,7 @@ async def generate_speech(
     session: Session = Depends(get_db_session),
     cartesia_service: CartesiaService = Depends(),
     elevenlabs_service: ElevenLabsService = Depends(),
+    openai_service: OpenAIService = Depends(),
     _: None = Depends(check_assistant_hiring_approval),
 ) -> Response:
     user_id = request.state.user_id
@@ -1952,6 +1953,13 @@ async def generate_speech(
                 stability=request_data.elevenlabs_voice_settings_stability,
                 similarity_boost=request_data.elevenlabs_voice_settings_similarity_boost,
             )
+        elif request_data.provider == "openai":
+            audio_bytes, content_type = openai_service.generate_speech(
+                text=request_data.text,
+                voice_id=request_data.voice_id,
+                model_id=request_data.model_id or "gpt-4o-mini-tts",
+                output_format=request_data.output_format,
+            )
         else:
             # This case should be prevented by Pydantic's Literal validation
             raise HTTPException(
@@ -1961,7 +1969,7 @@ async def generate_speech(
 
         return Response(content=audio_bytes, media_type=content_type)
 
-    except (CartesiaAPIError, ElevenLabsAPIError) as e:
+    except (CartesiaAPIError, ElevenLabsAPIError, OpenAIAPIError) as e:
         logging.error(
             f"TTS API error for user {user_id}, provider {request_data.provider}: {e.detail}",
         )
