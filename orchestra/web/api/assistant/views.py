@@ -302,33 +302,33 @@ def create_assistant(
 
         if assistant_in.create_infra:
             try:
-                # Step 1: create email
-                email_local = (
-                    assistant_in.email.split("@")[0]
-                    if "@" in assistant_in.email
-                    else assistant_in.email
-                )
-                email_response = create_email(
-                    email_local,
-                    assistant_in.first_name,
-                    assistant_in.surname,
-                )
-                if "detail" in email_response:
-                    raise Exception(
-                        f"Email creation failed: {email_response['detail']}",
+                # Step 1 & 2: create and watch email
+                if assistant_in.email:
+                    email_local = (
+                        assistant_in.email.split("@")[0]
+                        if "@" in assistant_in.email
+                        else assistant_in.email
                     )
-                created_email = email_response.get("user").get("primaryEmail")
-                print(f"EMAIL CREATED: {created_email}")
+                    email_response = create_email(
+                        email_local,
+                        assistant_in.first_name,
+                        assistant_in.surname,
+                    )
+                    if "detail" in email_response:
+                        raise Exception(
+                            f"Email creation failed: {email_response['detail']}",
+                        )
+                    created_email = email_response.get("user").get("primaryEmail")
+                    print(f"EMAIL CREATED: {created_email}")
 
-                # Step 2: watch email
-                time.sleep(10)
-                watch_response = watch_email(created_email)
-                print(watch_response)
-                if "detail" in watch_response:
-                    raise Exception(
-                        f"Email watch setup failed: {watch_response['detail']}",
-                    )
-                print(f"EMAIL WATCHED: {created_email}")
+                    time.sleep(10)
+                    watch_response = watch_email(created_email)
+                    print(watch_response)
+                    if "detail" in watch_response:
+                        raise Exception(
+                            f"Email watch setup failed: {watch_response['detail']}",
+                        )
+                    print(f"EMAIL WATCHED: {created_email}")
 
                 # Step 3: create phone number if user_phone is provided
                 if assistant_in.user_phone:
@@ -1032,6 +1032,10 @@ def update_assistant_config(
     old_video_url = None
     is_video_changing = False
 
+    # Variables to track newly created resources for potential rollback
+    email_to_update: Optional[str] = None
+    phone_to_update: Optional[str] = None
+
     # Check assistant existence before any updates
     existing_assistant = assistant_dao.get_assistant_by_id(
         user_id=request.state.user_id,
@@ -1057,6 +1061,44 @@ def update_assistant_config(
         weekly_limit: Optional[Decimal] = None
         if update.weekly_limit is not None:
             weekly_limit = Decimal(update.weekly_limit)
+
+        # Create / update assistant email
+        # 1- Check if the assistant doesn't have an email address already and if an assistant email is provided
+        # 2- If so, create an assistant email
+        assistant_email = update.email
+        if update.email and not existing_assistant.email:
+            try:
+                email_local = (
+                    update.email.split("@")[0] if "@" in update.email else update.email
+                )
+                email_response = create_email(
+                    email_local,
+                    existing_assistant.first_name,
+                    existing_assistant.surname,
+                )
+                if "detail" in email_response:
+                    raise Exception(
+                        f"Email creation failed on assistant update: {email_response['detail']}",
+                    )
+                email_to_update = email_response.get("user").get("primaryEmail")
+                print(f"EMAIL CREATED ON ASSISTANT UPDATE: {email_to_update}")
+
+                time.sleep(10)
+                watch_response = watch_email(email_to_update)
+                print(watch_response)
+                if "detail" in watch_response:
+                    raise Exception(
+                        f"Email watch setup failed: {watch_response['detail']}",
+                    )
+                print(f"EMAIL WATCHED ON ASSISTANT UPDATE: {email_to_update}")
+
+                assistant_email = email_to_update
+
+            except Exception as e:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to create email during update: {str(e)}",
+                )
 
         # Create / update assistant phone
         # 1- Check if the assistant doesn't have a phone number already and if a user phone is provided
@@ -1138,7 +1180,7 @@ def update_assistant_config(
             profile_video=update.profile_video,
             about=update.about,
             phone=assistant_phone,
-            email=update.email,
+            email=assistant_email,
             user_phone=update.user_phone,
             user_whatsapp_number=update.user_whatsapp_number,
             assistant_whatsapp_number=assistant_whatsapp_number,
@@ -1177,6 +1219,8 @@ def update_assistant_config(
                     f"Failed to delete old profile video {old_video_url} for assistant {assistant_id} during update. Error: {str(e)}",
                 )
 
+        session.commit()
+
         return InfoResponse(
             info=AssistantRead(
                 agent_id=str(updated.agent_id),
@@ -1194,7 +1238,7 @@ def update_assistant_config(
                 created_at=updated.created_at,
                 updated_at=updated.updated_at,
                 phone=assistant_phone,
-                email=updated.email,
+                email=assistant_email,
                 user_whatsapp_number=updated.user_whatsapp_number,
                 assistant_whatsapp_number=assistant_whatsapp_number,
                 user_phone=updated.user_phone,
@@ -1202,10 +1246,35 @@ def update_assistant_config(
             ),
         )
     except Exception as e:
+        session.rollback()
+
+        if email_to_update:
+            logging.warning(
+                f"Update failed. Rolling back created email: {email_to_update}"
+            )
+            try:
+                delete_email(email_to_update)
+            except Exception as cleanup_err:
+                logging.error(
+                    f"Failed to clean up (delete) email '{email_to_update}' during rollback: {cleanup_err}"
+                )
+
+        if phone_to_update:
+            logging.warning(
+                f"Update failed. Rolling back created phone number: {phone_to_update}"
+            )
+            try:
+                delete_phone_number(phone_to_update)
+            except Exception as cleanup_err:
+                logging.error(
+                    f"Failed to clean up (delete) phone number '{phone_to_update}' during rollback: {cleanup_err}"
+                )
+
         if isinstance(e, HTTPException):
             raise e
+
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error updating assistant config: {str(e)}",
         )
 
