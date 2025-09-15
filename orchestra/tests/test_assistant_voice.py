@@ -64,6 +64,7 @@ def mock_tts_services_factory(fastapi_app):
     mock_audio_bytes = b"mock_audio_data"
     cartesia_mock.generate_speech.return_value = (mock_audio_bytes, "audio/mpeg")
     elevenlabs_mock.generate_speech.return_value = (mock_audio_bytes, "audio/mpeg")
+    openai_mock.generate_speech.return_value = (mock_audio_bytes, "audio/mpeg")
 
     # Clone voice endpoint data
     cartesia_mock.clone_voice.return_value = {
@@ -758,6 +759,41 @@ async def test_generate_speech_elevenlabs_success(
         optimize_streaming_latency=None,
         stability=0.5,
         similarity_boost=None,
+    )
+
+
+@pytest.mark.anyio
+async def test_generate_speech_openai_success(
+    client: AsyncClient,
+    mock_tts_services_factory,
+    dbsession,
+):
+    _, _, _, openai_mock = mock_tts_services_factory
+    user_id = await get_user_id_from_request_state(client)
+
+    payload = {
+        "text": "Hello OpenAI",
+        "provider": "openai",
+        "voice_id": "oai_marin",
+        "model_id": "gpt-4o-mini-tts",
+        "output_format": "mp3",
+    }
+    with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
+        mock_state.user_id = user_id
+        resp = await client.post(
+            "/v0/assistant/voice/generate",
+            json=payload,
+            headers=HEADERS,
+        )
+
+    assert resp.status_code == status.HTTP_200_OK
+    assert resp.content == b"mock_audio_data"
+    assert resp.headers["content-type"] == "audio/mpeg"
+    openai_mock.generate_speech.assert_called_once_with(
+        text="Hello OpenAI",
+        voice_id="marin",
+        model_id="gpt-4o-mini-tts",
+        output_format="mp3",
     )
 
 

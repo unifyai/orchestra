@@ -18,7 +18,8 @@ class InfoResponse(GenericModel, Generic[T]):
 
 class ChatMessage(BaseModel):
     message_id: int = Field(
-        ..., description="Unique identifier for the message in the exchange"
+        ...,
+        description="Unique identifier for the message in the exchange",
     )
     medium: str = Field("unify_chat", description="Communication medium")
     sender_id: int = Field(..., description="ID of the sender")
@@ -421,12 +422,12 @@ class RecordingInfo(BaseModel):
 class VoiceCreate(BaseModel):
     """
     Schema for creating a new assistant voice entry in our DB.
-    The voice_id is provided by Cartesia after a successful clone/localize, or is a known preset ID.
+    The voice_id is provided by the provider.
     """
 
     voice_id: str = Field(
         ...,
-        description="Cartesia Voice ID",
+        description="Provider Voice ID",
         example="bf0a246a-8642-498a-9950-80c35e9276b5",
     )
     name: str = Field(
@@ -449,14 +450,14 @@ class VoiceCreate(BaseModel):
         description="Language code of the voice",
         example="en",
     )
-    provider: Literal["cartesia", "elevenlabs"] = Field(
+    provider: Literal["cartesia", "elevenlabs", "openai"] = Field(
         "cartesia",
-        description="Provider of the voice (cartesia or elevenlabs)",
+        description="Provider of the voice (cartesia, elevenlabs or openai)",
         example="cartesia",
     )
     is_preset: Optional[bool] = Field(
         False,
-        description="Whether this voice is a Cartesia preset or user-created.",
+        description="Whether this voice is a preset or user-created voice.",
         example=True,
     )
 
@@ -506,14 +507,14 @@ class VoiceCloneRequestData(BaseModel):
 
 class VoiceGenerateRequest(BaseModel):
     text: str = Field(..., description="Text to synthesize.")
-    provider: Literal["cartesia", "elevenlabs"] = Field(
+    provider: Literal["cartesia", "elevenlabs", "openai"] = Field(
         ...,
         description="TTS provider.",
     )
     voice_id: str = Field(..., description="Provider-specific voice ID for the speech.")
     model_id: Optional[str] = Field(
         None,
-        description="Provider-specific model ID (e.g., 'sonic-2' for Cartesia, 'eleven_multilingual_v2' for ElevenLabs).",
+        description="Provider-specific model ID (e.g., 'sonic-2' for Cartesia, 'eleven_multilingual_v2' for ElevenLabs, 'gpt-4o-mini-tts' for OpenAI).",
     )
 
     output_format: Literal["mp3", "wav", "flac", "pcm_s16le", "pcm_mulaw"] = Field(
@@ -581,6 +582,13 @@ class VoiceGenerateRequest(BaseModel):
                 "output_format": "mp3",
                 "elevenlabs_voice_settings_stability": 0.75,
                 "elevenlabs_voice_settings_similarity_boost": 0.75,
+            },
+            "example_openai": {
+                "text": "Hello from OpenAI!",
+                "provider": "openai",
+                "voice_id": "alloy",
+                "model_id": "gpt-4o-mini-tts",
+                "output_format": "mp3",
             },
         }
 
