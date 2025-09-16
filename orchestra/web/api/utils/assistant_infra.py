@@ -1,6 +1,7 @@
 import os
 
 import requests
+import unify
 
 COMMS_URL = os.environ.get("UNITY_COMMS_URL")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
@@ -192,6 +193,30 @@ def get_social_platforms_costs():
     ).json()
 
 
+def stop_jobs(assistant_id: str, staging: bool = False):
+    """
+    Stop a job by making a POST request to the comms endpoint.
+    """
+    # get running jobs for the assistant
+    logs = unify.get_logs(
+        project="Debug",
+        context="startup_events",
+        filter=f"assistant_id == {assistant_id} and running == True",
+    )
+    job_names = [log.to_json()["entries"]["job_name"] for log in logs]
+
+    # if running job found, stop it
+    if len(job_names) > 0:
+        response = requests.post(
+            f"{COMMS_URL}/infra/job/stop",
+            data={"job_name": job_names[0]},
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        )
+        response.raise_for_status()
+
+    return {"success": True, "job_names": job_names}
+
+
 def wake_up_assistant(assistant_number: str, is_staging: bool = False):
     wake_up_url = (
         "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/"
@@ -200,4 +225,4 @@ def wake_up_assistant(assistant_number: str, is_staging: bool = False):
     return requests.post(
         wake_up_url,
         data={"assistant_number": assistant_number},
-    ).json()
+    )

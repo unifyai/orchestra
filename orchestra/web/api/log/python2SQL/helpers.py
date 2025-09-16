@@ -1,9 +1,10 @@
 import copy
 import functools
 import json
+import math
 import os
 import re
-from typing import Optional
+from typing import Optional, Union
 
 import unify
 from openai import OpenAI
@@ -62,6 +63,7 @@ __all__ = [
     "_get_embeddings_batch",
     "DEFAULT_EMBEDDING_MODEL",
 ]
+
 # Initialize OpenAI client if API key is available
 try:
     OPENAI_API_KEY = os.getenv("ORCHESTRA_OPENAI_API_KEY")
@@ -71,6 +73,23 @@ except Exception as e:
 
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
 MAX_EMBEDDING_DIMS = 1536
+MAX_TOKENS_PER_REQUEST = 2970000
+MAX_TOKENS_PER_INPUT = 8000
+
+
+def count_tokens_per_utf_byte(document: str) -> float:
+    """
+    Estimates token count based on UTF-8 byte length.
+    Open AI uses this rather than `tiktoken` contrary
+    to what is mentioned in the docs:
+    https://community.openai.com/t/max-total-embeddings-tokens-per-request/1254699/6
+    """
+    total_estimated_tokens = 0
+    for char in document:
+        byte_length = len(char.encode("utf-8"))
+        total_estimated_tokens += byte_length * 0.25  # 0.25 tokens per byte
+
+    return total_estimated_tokens
 
 
 @functools.lru_cache(maxsize=4096)
@@ -94,16 +113,27 @@ def _get_embeddings_batch(
     """
     Get embedding vectors for a batch of text strings using OpenAI's API.
 
-    Args:
-        texts (list[str]): The list of texts to embed.
-        model (str, optional): The embedding model to use. Defaults to DEFAULT_EMBEDDING_MODEL.
-        dimensions (int, optional): The number of dimensions for the embedding vector.
+    Token-aware batching
+    --------------------
+    - Estimates tokens per input with `count_tokens_per_utf_byte`.
+    - Enforces `MAX_TOKENS_PER_INPUT` for each text. If any input exceeds the
+      per-input limit, raises a ValueError.
+    - Greedily splits the list of texts into sub-batches whose combined
+      estimated tokens are <= `MAX_TOKENS_PER_REQUEST`.
+    - Calls the API per sub-batch and concatenates results in original order.
+    - If the API still returns a token-limit error for a sub-batch, recursively
+      splits that sub-batch until it succeeds or the sub-batch size is 1.
 
-    Returns:
-        list[list[float]]: A list of embedding vectors.
+    Notes
+    -----
+    - This function does not modify individual texts.
+    - The order of outputs matches the order of `texts`.
 
-    Raises:
-        ValueError: If OpenAI API key is not set or API call fails.
+    Raises
+    ------
+    ValueError: if the API key is missing, any input exceeds
+                `MAX_TOKENS_PER_INPUT`, an API call fails for a non-token-limit
+                reason, or embedding dimensions exceed `MAX_EMBEDDING_DIMS`.
     """
     if not OPENAI_API_KEY:
         raise ValueError(
@@ -112,25 +142,70 @@ def _get_embeddings_batch(
 
     model = model or DEFAULT_EMBEDDING_MODEL
 
-    try:
-        kwargs = {"model": model, "input": texts}
+    if not texts:
+        return []
+
+    # 1) Estimate tokens per input and validate per-input limit
+    token_estimates = [math.ceil(count_tokens_per_utf_byte(t)) for t in texts]
+    too_large = [
+        (i, est) for i, est in enumerate(token_estimates) if est > MAX_TOKENS_PER_INPUT
+    ]
+    if too_large:
+        examples = ", ".join(
+            [f"idx={i}, tokens={est}" for i, est in too_large[:5]],
+        )
+        raise ValueError(
+            f"One or more inputs exceed MAX_TOKENS_PER_INPUT={MAX_TOKENS_PER_INPUT}. "
+            f"Examples: {examples}",
+        )
+
+    # 2) Greedily group texts into batches under MAX_TOKENS_PER_REQUEST
+    batches: list[list[str]] = []
+    current_batch: list[str] = []
+    current_tokens = 0
+    for text, est in zip(texts, token_estimates):
+        if current_batch and (current_tokens + est > MAX_TOKENS_PER_REQUEST):
+            batches.append(current_batch)
+            current_batch = []
+            current_tokens = 0
+        current_batch.append(text)
+        current_tokens += est
+    if current_batch:
+        batches.append(current_batch)
+
+    def _embed_or_split(batch_texts: list[str]) -> list[list[float]]:
+        """Try to embed the given batch; on token-limit error, split and retry."""
+        kwargs = {"model": model, "input": batch_texts}
         if dimensions is not None:
             kwargs["dimensions"] = dimensions
+        try:
+            resp = _client.embeddings.create(**kwargs)
+            resp.data.sort(key=lambda x: x.index)
+            embs = [d.embedding for d in resp.data]
+            if embs and len(embs[0]) > MAX_EMBEDDING_DIMS:
+                raise ValueError(
+                    f"Embedding dimension {len(embs[0])} exceeds {MAX_EMBEDDING_DIMS}",
+                )
+            return embs
+        except Exception as e:
+            msg = str(e).lower()
+            if "max_tokens_per_request" in msg or "too many tokens" in msg:
+                if len(batch_texts) == 1:
+                    # Cannot split further; surface error
+                    raise ValueError(f"Failed to get embeddings: {str(e)}")
+                mid = len(batch_texts) // 2
+                print(f"left: {batch_texts[:mid]}")
+                print(f"right: {batch_texts[mid:]}")
+                left = _embed_or_split(batch_texts[:mid])
+                right = _embed_or_split(batch_texts[mid:])
+                return left + right
+            raise ValueError(f"Failed to get embeddings: {str(e)}")
 
-        resp = _client.embeddings.create(**kwargs)
-
-        # Sort results by index to ensure order is preserved
-        resp.data.sort(key=lambda x: x.index)
-
-        embeddings = [d.embedding for d in resp.data]
-
-        if len(embeddings[0]) > MAX_EMBEDDING_DIMS:
-            raise ValueError(
-                f"Embedding dimension {len(embeddings[0])} exceeds {MAX_EMBEDDING_DIMS}",
-            )
-        return embeddings
-    except Exception as e:
-        raise ValueError(f"Failed to get embeddings: {str(e)}")
+    # 3) Embed each batch and concatenate results in-order
+    out: list[list[float]] = []
+    for batch in batches:
+        out.extend(_embed_or_split(batch))
+    return out
 
 
 def _extract_placeholders(equation: str) -> list:
@@ -947,6 +1022,15 @@ def _build_subquery_for_base_call(
     return filtered_subquery
 
 
+def _embeddable(text: Union[str | None]) -> bool:
+    """
+    Check if the text is valid for embedding.
+    """
+    if text is None or text.strip() == "":
+        return False
+    return True
+
+
 def _ensure_vectors_exist(
     session: Session,
     id_to_text: dict[int, str],
@@ -990,7 +1074,9 @@ def _ensure_vectors_exist(
     )
     existing_set = set(existing_refs)
 
-    ids_to_embed = [id for id in all_ids if id not in existing_set]
+    ids_to_embed = [
+        id for id in all_ids if id not in existing_set and _embeddable(id_to_text[id])
+    ]
     if not ids_to_embed:
         return
 

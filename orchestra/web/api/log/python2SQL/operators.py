@@ -1177,13 +1177,13 @@ def _handle_cosine(
         # Special handling for when vector operations receive JSONB values
         # This happens with copy=False joins where new log_event_ids
         # are generated but the logs/derived logs are original ones
-        if lval_type == "list" and hasattr(lval, "type"):
+        if lval_type == "list" and hasattr(lval, "op"):
             # Use PostgreSQL's ability to cast JSONB arrays to vector type
-            lval = func.cast(lval.op("#>>")("{}"), Vector)
+            lval = func.cast(lval.op("#>>")("{}"), Vector(len(lval)))
 
-        if rval_type == "list" and hasattr(rval, "type"):
+        if rval_type == "list" and hasattr(rval, "op"):
             # Use PostgreSQL's ability to cast JSONB arrays to vector type
-            rval = func.cast(rval.op("#>>")("{}"), Vector)
+            rval = func.cast(rval.op("#>>")("{}"), Vector(len(rval)))
 
         dist = lval.op("<=>")(rval).cast(Float)
         return _join_subqueries(lhs, rhs, dist, "float", session=session)
@@ -1195,13 +1195,13 @@ def _handle_cosine(
         # Special handling for when vector operations receive JSONB values
         # This happens with copy=False joins where new log_event_ids
         # are generated but the logs/derived logs are original ones
-        if lval_type == "list" and hasattr(lval, "type"):
+        if lval_type == "list" and hasattr(lval, "op"):
             # Use PostgreSQL's ability to cast JSONB arrays to vector type
-            lval = func.cast(lval.op("#>>")("{}"), Vector)
+            lval = func.cast(lval.op("#>>")("{}"), Vector(len(lval)))
 
-        if rval_type == "list" and hasattr(rval, "type"):
+        if rval_type == "list" and hasattr(rval, "op"):
             # Use PostgreSQL's ability to cast JSONB arrays to vector type
-            rval = func.cast(rval.op("#>>")("{}"), Vector)
+            rval = func.cast(rval.op("#>>")("{}"), Vector(len(rval)))
 
         dist = lval.op("<=>")(rval).cast(Float)
         select_cols = [lhs.c.log_event_id.label("log_event_id")]
@@ -1224,13 +1224,13 @@ def _handle_cosine(
         # Special handling for when vector operations receive JSONB values
         # This happens with copy=False joins where new log_event_ids
         # are generated but the logs/derived logs are original ones
-        if lval_type == "list" and hasattr(lval, "type"):
+        if lval_type == "list" and hasattr(lval, "op"):
             # Use PostgreSQL's ability to cast JSONB arrays to vector type
-            lval = func.cast(lval.op("#>>")("{}"), Vector)
+            lval = func.cast(lval.op("#>>")("{}"), Vector(len(lval)))
 
-        if rval_type == "list" and hasattr(rval, "type"):
+        if rval_type == "list" and hasattr(rval, "op"):
             # Use PostgreSQL's ability to cast JSONB arrays to vector type
-            rval = func.cast(rval.op("#>>")("{}"), Vector)
+            rval = func.cast(rval.op("#>>")("{}"), Vector(len(rval)))
 
         dist = lval.op("<=>")(rval).cast(Float)
         select_cols = [rhs.c.log_event_id.label("log_event_id")]
