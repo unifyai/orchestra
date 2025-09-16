@@ -1,6 +1,7 @@
 import copy
 import functools
 import json
+import math
 import os
 import re
 from typing import Optional, Union
@@ -62,6 +63,7 @@ __all__ = [
     "_get_embeddings_batch",
     "DEFAULT_EMBEDDING_MODEL",
 ]
+
 # Initialize OpenAI client if API key is available
 try:
     OPENAI_API_KEY = os.getenv("ORCHESTRA_OPENAI_API_KEY")
@@ -71,7 +73,23 @@ except Exception as e:
 
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
 MAX_EMBEDDING_DIMS = 1536
-MAX_TOKENS_PER_REQUEST = 300000
+MAX_TOKENS_PER_REQUEST = 2970000
+MAX_TOKENS_PER_INPUT = 8000
+
+
+def count_tokens_per_utf_byte(document: str) -> float:
+    """
+    Estimates token count based on UTF-8 byte length.
+    Open AI uses this rather than `tiktoken` contrary
+    to what is mentioned in the docs:
+    https://community.openai.com/t/max-total-embeddings-tokens-per-request/1254699/6
+    """
+    total_estimated_tokens = 0
+    for char in document:
+        byte_length = len(char.encode("utf-8"))
+        total_estimated_tokens += byte_length * 0.25  # 0.25 tokens per byte
+
+    return total_estimated_tokens
 
 
 @functools.lru_cache(maxsize=4096)
@@ -93,29 +111,28 @@ def _get_embeddings_batch(
     dimensions: int | None = None,
 ) -> list[list[float]]:
     """
-    Get embedding vectors for a *batch* of text strings using OpenAI's API.
+    Get embedding vectors for a batch of text strings using OpenAI's API.
 
-    Behavior
-    --------
-    - Tries to embed the full list in a single API call.
-    - If the API raises a 'max_tokens_per_request' error (i.e., the *combined*
-      request is too large), it progressively slices the **list of texts**
-      into smaller sub-batches until the request(s) succeed.
-    - The slicing reduces the maximum sub-batch size by 500 items each time
-      (down to a minimum of 1), as requested.
-    - Results from sub-batches are concatenated in the original order.
+    Token-aware batching
+    --------------------
+    - Estimates tokens per input with `count_tokens_per_utf_byte`.
+    - Enforces `MAX_TOKENS_PER_INPUT` for each text. If any input exceeds the
+      per-input limit, raises a ValueError.
+    - Greedily splits the list of texts into sub-batches whose combined
+      estimated tokens are <= `MAX_TOKENS_PER_REQUEST`.
+    - Calls the API per sub-batch and concatenates results in original order.
+    - If the API still returns a token-limit error for a sub-batch, recursively
+      splits that sub-batch until it succeeds or the sub-batch size is 1.
 
     Notes
     -----
-    - This function **does not** modify any individual text. It only adjusts
-      how many texts are sent per request.
+    - This function does not modify individual texts.
     - The order of outputs matches the order of `texts`.
-    - If a single-text batch (size=1) still fails with a token-limit error,
-      the error is surfaced.
 
     Raises
     ------
-    ValueError: if the API key is missing, the API call fails for a non-token-limit
+    ValueError: if the API key is missing, any input exceeds
+                `MAX_TOKENS_PER_INPUT`, an API call fails for a non-token-limit
                 reason, or embedding dimensions exceed `MAX_EMBEDDING_DIMS`.
     """
     if not OPENAI_API_KEY:
@@ -125,71 +142,70 @@ def _get_embeddings_batch(
 
     model = model or DEFAULT_EMBEDDING_MODEL
 
-    # First, try the full batch once
-    try:
-        kwargs = {"model": model, "input": texts}
-        if dimensions is not None:
-            kwargs["dimensions"] = dimensions
-        resp = _client.embeddings.create(**kwargs)
-        resp.data.sort(key=lambda x: x.index)
-        embeddings = [d.embedding for d in resp.data]
-        if embeddings and len(embeddings[0]) > MAX_EMBEDDING_DIMS:
-            raise ValueError(
-                f"Embedding dimension {len(embeddings[0])} exceeds {MAX_EMBEDDING_DIMS}",
-            )
-        return embeddings
-    except Exception as e:
-        # If this is not a combined-request token-limit error, surface it.
-        if "max_tokens_per_request" not in str(e).lower():
-            raise ValueError(f"Failed to get embeddings: {str(e)}")
-
-    # Fallback: slice the *list of texts* into smaller sub-batches.
-    n = len(texts)
-    if n == 0:
+    if not texts:
         return []
 
-    # Start from full size; reduce by 500 until successful
-    max_batch_size = n
-    step = 500
+    # 1) Estimate tokens per input and validate per-input limit
+    token_estimates = [math.ceil(count_tokens_per_utf_byte(t)) for t in texts]
+    too_large = [
+        (i, est) for i, est in enumerate(token_estimates) if est > MAX_TOKENS_PER_INPUT
+    ]
+    if too_large:
+        examples = ", ".join(
+            [f"idx={i}, tokens={est}" for i, est in too_large[:5]],
+        )
+        raise ValueError(
+            f"One or more inputs exceed MAX_TOKENS_PER_INPUT={MAX_TOKENS_PER_INPUT}. "
+            f"Examples: {examples}",
+        )
 
-    # Defensive clamp to at least 1
-    max_batch_size = max(1, max_batch_size)
+    # 2) Greedily group texts into batches under MAX_TOKENS_PER_REQUEST
+    batches: list[list[str]] = []
+    current_batch: list[str] = []
+    current_tokens = 0
+    for text, est in zip(texts, token_estimates):
+        if current_batch and (current_tokens + est > MAX_TOKENS_PER_REQUEST):
+            batches.append(current_batch)
+            current_batch = []
+            current_tokens = 0
+        current_batch.append(text)
+        current_tokens += est
+    if current_batch:
+        batches.append(current_batch)
 
-    while max_batch_size >= 1:
+    def _embed_or_split(batch_texts: list[str]) -> list[list[float]]:
+        """Try to embed the given batch; on token-limit error, split and retry."""
+        kwargs = {"model": model, "input": batch_texts}
+        if dimensions is not None:
+            kwargs["dimensions"] = dimensions
         try:
-            out: list[list[float]] = []
-            for start in range(0, n, max_batch_size):
-                end = min(start + max_batch_size, n)
-                sub = texts[start:end]
-                sub_kwargs = {"model": model, "input": sub}
-                if dimensions is not None:
-                    sub_kwargs["dimensions"] = dimensions
-                sub_resp = _client.embeddings.create(**sub_kwargs)
-                sub_resp.data.sort(key=lambda x: x.index)
-                sub_embeddings = [d.embedding for d in sub_resp.data]
-                if sub_embeddings and len(sub_embeddings[0]) > MAX_EMBEDDING_DIMS:
-                    raise ValueError(
-                        f"Embedding dimension {len(sub_embeddings[0])} exceeds {MAX_EMBEDDING_DIMS}",
-                    )
-                out.extend(sub_embeddings)
-
-            # Successfully embedded all sub-batches with this max_batch_size
-            return out
-
+            resp = _client.embeddings.create(**kwargs)
+            resp.data.sort(key=lambda x: x.index)
+            embs = [d.embedding for d in resp.data]
+            if embs and len(embs[0]) > MAX_EMBEDDING_DIMS:
+                raise ValueError(
+                    f"Embedding dimension {len(embs[0])} exceeds {MAX_EMBEDDING_DIMS}",
+                )
+            return embs
         except Exception as e:
-            # Only reduce batch size if it's a combined-request token-limit issue
-            if "max_tokens_per_request" in str(e).lower():
-                if max_batch_size == 1:
-                    # Cannot shrink further; surface the error
+            msg = str(e).lower()
+            if "max_tokens_per_request" in msg or "too many tokens" in msg:
+                if len(batch_texts) == 1:
+                    # Cannot split further; surface error
                     raise ValueError(f"Failed to get embeddings: {str(e)}")
-                # Reduce by 500 (or down to 1)
-                max_batch_size = max(1, max_batch_size - step)
-                continue
-            # Non token-limit error: surface it immediately
+                mid = len(batch_texts) // 2
+                print(f"left: {batch_texts[:mid]}")
+                print(f"right: {batch_texts[mid:]}")
+                left = _embed_or_split(batch_texts[:mid])
+                right = _embed_or_split(batch_texts[mid:])
+                return left + right
             raise ValueError(f"Failed to get embeddings: {str(e)}")
 
-    # Should not be reachable; defensive fallback
-    raise ValueError("Failed to get embeddings: exhausted batch-size backoff.")
+    # 3) Embed each batch and concatenate results in-order
+    out: list[list[float]] = []
+    for batch in batches:
+        out.extend(_embed_or_split(batch))
+    return out
 
 
 def _extract_placeholders(equation: str) -> list:
