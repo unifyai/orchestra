@@ -131,7 +131,7 @@ class BaseTabTemplateSchema(BaseModel):
     visible: bool = True
     active: bool = False
     order: Optional[int] = None
-    global_context: Optional[str] = None
+    context: Optional[str] = None
     color: Optional[str] = None
     icon: Optional[str] = None
 
@@ -201,6 +201,7 @@ class BaseInterfaceSchema(BaseInterfaceTemplateSchema):
 
     id: str
     project_id: int
+    context: Optional[str] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     is_checkpoint: bool = False
@@ -275,7 +276,7 @@ class UpdateTabRequest(BaseModel):
     visible: Optional[bool] = None
     active: Optional[bool] = None
     order: Optional[int] = None
-    global_context: Optional[str] = None
+    context: Optional[str] = None
     color: Optional[str] = None
     icon: Optional[str] = None
 
@@ -288,6 +289,7 @@ class CreateInterfaceRequest(BaseInterfaceTemplateSchema):
 
     interface_id: Optional[str] = None
     project: str
+    context: Optional[str] = None
 
     class Config:
         extra = "forbid"  # Reject unknown fields
@@ -301,6 +303,7 @@ class UpdateInterfaceRequest(BaseModel):
     order: Optional[int] = None
     color: Optional[str] = None
     icon: Optional[str] = None
+    context: Optional[str] = None
 
     class Config:
         extra = "forbid"  # Reject unknown fields

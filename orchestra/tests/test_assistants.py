@@ -3,14 +3,55 @@ import datetime
 from pathlib import Path
 
 import pytest
+from fastapi import status
 from httpx import AsyncClient
 
 from orchestra.tests.utils import ADMIN_HEADERS, HEADERS, create_test_user
 
 
+@pytest.fixture(scope="function", autouse=True)
+async def approve_default_user(client: AsyncClient):
+    """Ensures the default test user for this module is approved for hiring."""
+    # Get the user ID associated with the default HEADERS
+    credits_resp = await client.get("/v0/credits", headers=HEADERS)
+    user_id = credits_resp.json()["id"]
+
+    # Approve the user
+    approve_url = f"/v0/admin/auth-user/{user_id}/assistant-hiring-approval/approved"
+    approve_resp = await client.put(approve_url, headers=ADMIN_HEADERS)
+    assert (
+        approve_resp.status_code == status.HTTP_200_OK
+    ), f"Failed to approve default user {user_id}: {approve_resp.json()}"
+
+
 def _get_sample_wav_bytes() -> bytes:
     sample_path = Path(__file__).parent / "sample_datasets" / "sample_recording.wav"
     return sample_path.read_bytes()
+
+
+@pytest.mark.anyio
+async def test_create_assistant_unapproved_user_fails(client: AsyncClient):
+    """Test that a user who is not approved cannot create an assistant."""
+    unapproved_user = await create_test_user(
+        client,
+        "unapproved@example.com",
+        hiring_approved=False,
+    )
+    payload = {
+        "first_name": "Should",
+        "surname": "Fail",
+        "create_infra": False,
+    }
+    resp = await client.post(
+        "/v0/assistant",
+        json=payload,
+        headers=unapproved_user["headers"],
+    )
+    assert resp.status_code == status.HTTP_403_FORBIDDEN
+    assert (
+        "You need to request approval first by going to console.unify.ai/assistants"
+        in resp.json()["detail"]
+    )
 
 
 @pytest.mark.anyio
@@ -138,7 +179,7 @@ async def test_update_weekly_limit_only(client: AsyncClient):
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     aid = create.json()["info"]["agent_id"]
     new_limit = 45.5
-    update_payload = {"weekly_limit": new_limit}
+    update_payload = {"weekly_limit": new_limit, "create_infra": False}
     patch = await client.patch(
         f"/v0/assistant/{aid}/config",
         json=update_payload,
@@ -173,7 +214,7 @@ async def test_update_max_parallel_only(client: AsyncClient):
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     aid = create.json()["info"]["agent_id"]
     new_parallel = 7
-    update_payload = {"max_parallel": new_parallel}
+    update_payload = {"max_parallel": new_parallel, "create_infra": False}
     patch = await client.patch(
         f"/v0/assistant/{aid}/config",
         json=update_payload,
@@ -248,7 +289,7 @@ async def test_update_about_only(client: AsyncClient):
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     aid = create.json()["info"]["agent_id"]
     new_about = "Updated bio with additional qualifications and expertise"
-    update_payload = {"about": new_about}
+    update_payload = {"about": new_about, "create_infra": False}
     patch = await client.patch(
         f"/v0/assistant/{aid}/config",
         json=update_payload,
@@ -280,7 +321,7 @@ async def test_update_phone_only(client: AsyncClient):
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     aid = create.json()["info"]["agent_id"]
     new_phone = "+1-555-123-4567"
-    update_payload = {"phone": new_phone}
+    update_payload = {"phone": new_phone, "create_infra": False}
     patch = await client.patch(
         f"/v0/assistant/{aid}/config",
         json=update_payload,
@@ -311,7 +352,7 @@ async def test_update_email_only(client: AsyncClient):
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     aid = create.json()["info"]["agent_id"]
     new_email = "julia.garcia@example.com"
-    update_payload = {"email": new_email}
+    update_payload = {"email": new_email, "create_infra": False}
     patch = await client.patch(
         f"/v0/assistant/{aid}/config",
         json=update_payload,
@@ -345,6 +386,7 @@ async def test_update_multiple_fields(client: AsyncClient):
         "about": "Updated professional bio with new skills",
         "phone": "+1-555-987-6543",
         "email": "kevin.brown@example.com",
+        "create_infra": False,
     }
     patch = await client.patch(
         f"/v0/assistant/{aid}/config",
@@ -466,12 +508,12 @@ async def test_admin_list_assistant_emails(client: AsyncClient):
     # Update the assistants with emails
     update1 = await client.patch(
         f"/v0/assistant/{aid1}/config",
-        json={"email": email1},
+        json={"email": email1, "create_infra": False},
         headers=HEADERS,
     )
     update2 = await client.patch(
         f"/v0/assistant/{aid2}/config",
-        json={"email": email2},
+        json={"email": email2, "create_infra": False},
         headers=HEADERS,
     )
     assert update1.status_code == 200 and update2.status_code == 200
@@ -678,7 +720,7 @@ async def test_admin_list_assistants_filter_email(client: AsyncClient):
 async def test_admin_list_assistants_for_user(client: AsyncClient):
     # Create a second test user via create_test_user
     # (default HEADERS user will serve as user1)
-    user2 = await create_test_user(client, "u2@test.com")
+    user2 = await create_test_user(client, "u2@test.com", hiring_approved=True)
 
     # Determine default user ID for HEADERS (user1)
     credits_resp = await client.get("/v0/credits", headers=HEADERS)
@@ -828,6 +870,7 @@ async def test_create_assistant_duplicate_name_fails(client: AsyncClient):
     user2 = await create_test_user(
         client,
         "user2-for-duplicate-test@example.com",
+        hiring_approved=True,
     )
     user2_headers = user2["headers"]
     resp3 = await client.post("/v0/assistant", json=payload, headers=user2_headers)

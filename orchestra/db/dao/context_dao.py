@@ -724,6 +724,58 @@ class ContextDAO:
         )
         return result.scalar()
 
+    def check_for_duplicates_subset(
+        self,
+        context_id: int,
+        log_event_id: int,
+        keys_to_check: List[str],
+    ) -> bool:
+        """
+        Check for duplicates based only on a subset of keys.
+
+        Returns True if there exists another log_event in the same context whose
+        values for keys_to_check match the updated log_event's values for those keys.
+        """
+        if not keys_to_check:
+            return False
+
+        query = """
+        WITH updated_pairs AS (
+            SELECT l.key, l.value
+            FROM log l
+            JOIN log_event_log lel ON l.id = lel.log_id
+            WHERE lel.log_event_id = :log_event_id AND l.key = ANY(:keys)
+        ),
+        context_other_events AS (
+            SELECT le.id
+            FROM log_event le
+            JOIN log_event_context lec ON le.id = lec.log_event_id
+            WHERE lec.context_id = :context_id AND le.id != :log_event_id
+        ),
+        matching_other AS (
+            SELECT cle.id, COUNT(*) AS match_count
+            FROM context_other_events cle
+            JOIN log_event_log lel ON cle.id = lel.log_event_id
+            JOIN log l ON lel.log_id = l.id
+            JOIN updated_pairs up ON up.key = l.key AND up.value = l.value
+            WHERE l.key = ANY(:keys)
+            GROUP BY cle.id
+        )
+        SELECT EXISTS (
+            SELECT 1 FROM matching_other WHERE match_count = :num_keys
+        ) AS has_duplicate
+        """
+        result = self.session.execute(
+            text(query),
+            {
+                "context_id": context_id,
+                "log_event_id": log_event_id,
+                "keys": keys_to_check,
+                "num_keys": len(keys_to_check),
+            },
+        )
+        return result.scalar()
+
     def add_logs_copy(self, context_id: int, log_ids: List[int]) -> None:
         """Associate copies of LogEvent instances with the specified context.
 

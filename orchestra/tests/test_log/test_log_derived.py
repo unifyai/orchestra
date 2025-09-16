@@ -1537,3 +1537,211 @@ async def test_create_static_entries_with_correct_id_alignment(client: AsyncClie
             f"ID misalignment detected for log {log['id']}. "
             f"Expected {original_value + 100}, but got {computed_value}."
         )
+
+
+@pytest.mark.anyio
+async def test_derived_embedding_and_filtering_with_partial_null_values(
+    client: AsyncClient,
+):
+    """
+    Test creating embedding derived columns and filtering when some logs have null or empty
+    values for the field being embedded. This verifies that embedding operations handle
+    partial null values gracefully and filtering still works correctly.
+    """
+    project = "embed_partial_null_demo"
+    await _create_project(client, project)
+
+    # Create base logs with mixed description values
+    log_ids = []
+
+    # Log 0: Valid description
+    response = await _create_log(
+        client,
+        project,
+        entries={"desc": "a cute little cat", "category": "animal"},
+    )
+    assert response.status_code == 200
+    log_ids.append(response.json()["log_event_ids"][0])
+
+    # Log 1: Valid description
+    response = await _create_log(
+        client,
+        project,
+        entries={"desc": "a friendly dog", "category": "animal"},
+    )
+    assert response.status_code == 200
+    log_ids.append(response.json()["log_event_ids"][0])
+
+    # Log 2: Empty string description
+    response = await _create_log(
+        client,
+        project,
+        entries={"desc": "", "category": "empty"},
+    )
+    assert response.status_code == 200
+    log_ids.append(response.json()["log_event_ids"][0])
+
+    # Log 3: Null description
+    response = await _create_log(
+        client,
+        project,
+        entries={"desc": None, "category": "null"},
+    )
+    assert response.status_code == 200
+    log_ids.append(response.json()["log_event_ids"][0])
+
+    # Log 4: Missing description field entirely
+    response = await _create_log(client, project, entries={"category": "missing"})
+    assert response.status_code == 200
+    log_ids.append(response.json()["log_event_ids"][0])
+
+    # Log 5: Valid description
+    response = await _create_log(
+        client,
+        project,
+        entries={"desc": "a wooden chair", "category": "furniture"},
+    )
+    assert response.status_code == 200
+    log_ids.append(response.json()["log_event_ids"][0])
+
+    # Log 6: Whitespace-only description
+    response = await _create_log(
+        client,
+        project,
+        entries={"desc": "   ", "category": "whitespace"},
+    )
+    assert response.status_code == 200
+    log_ids.append(response.json()["log_event_ids"][0])
+
+    # Log 7: Valid description
+    response = await _create_log(
+        client,
+        project,
+        entries={"desc": "a small kitten", "category": "animal"},
+    )
+    assert response.status_code == 200
+    log_ids.append(response.json()["log_event_ids"][0])
+
+    # Create derived embedding column for descriptions
+    # This should succeed even though some logs have null/empty descriptions
+    key = "desc_vec"
+    equation = "embed({log:desc})"
+    referenced_logs = {"log": log_ids}
+
+    response = await _create_derived_entry(
+        client,
+        project,
+        key,
+        equation,
+        referenced_logs,
+    )
+    assert (
+        response.status_code == 200
+    ), f"Expected 200 but got {response.status_code}: {response.text}"
+
+    # Verify that the derived field was created
+    response = await client.get(
+        f"/v0/logs/fields?project={project}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    fields = response.json()
+    assert key in fields
+    # Embedding fields should be of type 'list' (vector)
+    assert fields[key]["data_type"] in ["list", "array", "vector"]
+
+    # Test filtering by similarity to 'little kitty'
+    # This should match logs with valid cat-related descriptions
+    filter_expr = "cosine(desc_vec, embed('little kitty')) < 0.5"
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project,
+            "filter_expr": filter_expr,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Verify filtering results
+    logs = response.json()["logs"]
+    assert len(logs) == 2, "Expected 2 logs to match the filter"
+
+    # Check that cat-related logs are included
+    cat_related_found = False
+    kitten_related_found = False
+    for log in logs:
+        desc = log["entries"].get("desc", "")
+        print(f"desc: {desc}")
+        if desc and "cat" in desc:
+            cat_related_found = True
+        if desc and "kitten" in desc:
+            kitten_related_found = True
+
+    assert cat_related_found, "Expected to find cat-related logs in the results"
+    assert kitten_related_found, "Expected to find kitten-related logs in the results"
+
+    # Test filtering by similarity to a more specific term
+    # This should not match logs with null/empty descriptions
+    filter_expr_strict = "cosine(desc_vec, embed('brown furniture')) < 0.7"
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project,
+            "filter_expr": filter_expr_strict,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    furniture_logs = response.json()["logs"]
+    assert len(furniture_logs) == 1, "Expected 1 log to match the filter"
+
+    # Check that chair is found but null/empty description logs are not
+    chair_found = False
+    null_empty_found = False
+    for log in furniture_logs:
+        desc = log["entries"].get("desc", "")
+        print(f"desc: {desc}")
+        if desc and "chair" in desc:
+            chair_found = True
+        # Check if any logs with null/empty/missing descriptions are returned
+        category = log["entries"].get("category", "")
+        if category in ["empty", "null", "missing", "whitespace"]:
+            null_empty_found = True
+
+    # Chair should be found for furniture-related query
+    assert chair_found, "Expected to find chair in furniture-related query"
+
+    # Logs with null/empty descriptions should not match semantic queries
+    assert (
+        not null_empty_found
+    ), "Logs with null/empty descriptions should not match semantic queries"
+
+    # Test getting all logs to verify that null/empty logs still exist but have null embeddings
+    response = await client.get(
+        f"/v0/logs?project={project}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    all_logs = response.json()["logs"]
+
+    # Verify we have all 8 logs
+    assert len(all_logs) == 8, f"Expected 8 logs but got {len(all_logs)}"
+
+    # Check that logs with null/empty descriptions have null or empty derived embeddings
+    null_embedding_count = 0
+    for log in all_logs:
+        category = log["entries"].get("category", "")
+        derived_entries = log.get("derived_entries", {})
+
+        if category in ["empty", "null", "missing", "whitespace"]:
+            # These logs should have null or empty embeddings
+            embedding = derived_entries.get(key)
+            if embedding is None or (
+                isinstance(embedding, list) and len(embedding) == 0
+            ):
+                null_embedding_count += 1
+
+    # We should have some logs with null/empty embeddings
+    assert null_embedding_count == 4, "Expected 4 logs to have null/empty embeddings"

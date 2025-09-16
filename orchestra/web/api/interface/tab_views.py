@@ -48,7 +48,7 @@ def _create_tab_response(tab: Tab, tiles: Optional[List[Tile]] = None) -> TabSch
         visible=tab.visible,
         active=tab.active,
         order=tab.order,
-        global_context=tab.global_context,
+        context=tab.context,
         color=tab.color,
         icon=tab.icon,
         is_checkpoint=tab.is_checkpoint,
@@ -143,7 +143,7 @@ def _get_tab(
                         "visible": True,
                         "active": True,
                         "order": 1,
-                        "global_context": {},
+                        "context": {},
                         "color": "blue",
                         "is_checkpoint": False,
                         "tiles": [],
@@ -216,6 +216,25 @@ def create_tab(
             detail=f"Tab with name {request.name} already exists for this interface.",
         )
 
+    # Validate context if provided (non-empty string)
+    if request.context and request.context.strip():
+        organization_member_dao = OrganizationMemberDAO(session)
+        context_dao = ContextDAO(session)
+        project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+
+        # Get the project ID from the interface
+        project_obj = project_dao.get(interface.project_id)
+        if project_obj:
+            existing_contexts = context_dao.filter(
+                project_id=project_obj.id,
+                name=request.context,
+            )
+            if not existing_contexts:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Context '{request.context}' not found in project.",
+                )
+
     # Create the tab
     tab = tab_dao.create_tab(
         tab_id=getattr(request, "tab_id", None),
@@ -224,7 +243,7 @@ def create_tab(
         visible=request.visible,
         active=request.active,
         order=request.order,
-        global_context=request.global_context,
+        context=request.context,
         color=request.color,
         is_checkpoint=checkpoint,
         icon=request.icon,
@@ -251,7 +270,7 @@ def create_tab(
                         "visible": True,
                         "active": True,
                         "order": 1,
-                        "global_context": {},
+                        "context": {},
                         "color": "blue",
                         "is_checkpoint": False,
                         "tiles": [
@@ -342,7 +361,7 @@ def get_tab(
                             "visible": True,
                             "active": True,
                             "order": 1,
-                            "global_context": {},
+                            "context": {},
                             "color": "blue",
                             "is_checkpoint": False,
                             "tiles": [],
@@ -356,7 +375,7 @@ def get_tab(
                             "visible": True,
                             "active": False,
                             "order": 2,
-                            "global_context": {},
+                            "context": {},
                             "color": "green",
                             "is_checkpoint": False,
                             "tiles": [],
@@ -433,7 +452,7 @@ def list_tabs(
                         "visible": True,
                         "active": True,
                         "order": 1,
-                        "global_context": {},
+                        "context": {},
                         "color": "red",
                         "is_checkpoint": False,
                         "tiles": [],
@@ -487,6 +506,45 @@ def update_tab(
     # Convert Pydantic model to dict, excluding unset fields
     update_dict = request.model_dump(exclude_unset=True)
 
+    # Validate context if provided (non-empty string)
+    if update_dict.get("context") and update_dict["context"].strip():
+        organization_member_dao = OrganizationMemberDAO(session)
+        context_dao = ContextDAO(session)
+        project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+
+        # Get the tab first to determine the project
+        if not tab_id:
+            tab, _ = _get_tab(
+                tab_id=tab_id,
+                interface_id=interface_id,
+                name=name,
+                checkpoint=checkpoint,
+                interface_dao=interface_dao,
+                tab_dao=tab_dao,
+            )
+            tab_interface = interface_dao.get(tab.interface_id)
+        else:
+            tab = tab_dao.get(tab_id, is_checkpoint=checkpoint)
+            if not tab:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Tab with ID {tab_id} not found.",
+                )
+            tab_interface = interface_dao.get(tab.interface_id)
+
+        if tab_interface:
+            project_obj = project_dao.get(tab_interface.project_id)
+            if project_obj:
+                existing_contexts = context_dao.filter(
+                    project_id=project_obj.id,
+                    name=update_dict["context"],
+                )
+                if not existing_contexts:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Context '{update_dict['context']}' not found in project.",
+                    )
+
     # Update the tab
     if tab_id:
         updated = tab_dao.update_tab(id=tab_id, is_checkpoint=checkpoint, **update_dict)
@@ -529,7 +587,7 @@ def update_tab(
                         "visible": True,
                         "active": True,
                         "order": 1,
-                        "global_context": {},
+                        "context": {},
                         "color": "blue",
                         "is_checkpoint": True,
                         "tiles": [],
@@ -748,7 +806,7 @@ def delete_tab(
                         "visible": True,
                         "active": True,
                         "order": 1,
-                        "global_context": {},
+                        "context": {},
                         "color": "blue",
                         "is_checkpoint": True,
                         "tiles": [],
@@ -1063,7 +1121,7 @@ def import_tab_template(
             request.template.active if request.template.active is not None else False
         ),
         order=request.template.order if request.template.order is not None else 0,
-        global_context=request.template.global_context,
+        context=request.template.context,
         color=request.template.color,
         is_checkpoint=False,
     )

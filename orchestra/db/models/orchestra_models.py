@@ -1435,7 +1435,7 @@ class Tab(Base):
     visible = Column(Boolean(), nullable=False, server_default="t")
     active = Column(Boolean(), nullable=False, server_default="f")
     order = Column(Integer, nullable=False, server_default="0")
-    global_context = Column(String(), nullable=True)
+    context = Column(String(), nullable=True)
     color = Column(String(), nullable=True)
     # Flag to indicate if this is a checkpoint (manual save) or auto-save
     is_checkpoint = Column(Boolean(), nullable=False, server_default="f")

@@ -1150,129 +1150,152 @@ async def test_context_allow_duplicates(client: AsyncClient):
     assert response.status_code == 200
 
 
-# TODO: fix this test if we add support for duplicate context in update_logs endpoint.
-# @pytest.mark.anyio
-# async def test_context_duplicate_updates(client: AsyncClient):
-#     """Test that updates which would create duplicates are rejected in contexts with allow_duplicates=False"""
-#     project_name = "test-duplicate-updates"
+@pytest.mark.anyio
+async def test_context_duplicate_updates(client: AsyncClient):
+    """Test that updates which would create duplicates are rejected in contexts with allow_duplicates=False"""
+    project_name = "test-duplicate-updates"
 
-#     # Create project
-#     await _create_project(client, project_name)
+    # Create project
+    await _create_project(client, project_name)
 
-#     # Create a context with allow_duplicates=False
-#     no_duplicates_context = "no-duplicates-context"
-#     response = await client.post(
-#         f"/v0/project/{project_name}/contexts",
-#         json={
-#             "name": no_duplicates_context,
-#             "description": "Context that doesn't allow duplicates",
-#             "allow_duplicates": False,
-#         },
-#         headers=HEADERS,
-#     )
-#     assert response.status_code == 200
+    # Create a context with allow_duplicates=False
+    no_duplicates_context = "no-duplicates-context"
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": no_duplicates_context,
+            "description": "Context that doesn't allow duplicates",
+            "allow_duplicates": False,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
 
-#     # Create a default context (allow_duplicates=True by default)
-#     default_context = "default-context"
-#     response = await client.post(
-#         f"/v0/project/{project_name}/contexts",
-#         json={
-#             "name": default_context,
-#             "description": "Default context that allows duplicates",
-#         },
-#         headers=HEADERS,
-#     )
-#     assert response.status_code == 200
+    # Create a default context (allow_duplicates=True by default)
+    default_context = "default-context"
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": default_context,
+            "description": "Default context that allows duplicates",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
 
-#     # Create two logs with different values in the no-duplicates context
-#     log_data_1 = {
-#         "project": project_name,
-#         "params": {"model": "gpt-4", "temperature": 0.7},
-#         "entries": {
-#             "accuracy": 0.95,
-#             "latency": 120,
-#             "timestamp": datetime.now(timezone.utc).isoformat(),
-#         },
-#         "context": no_duplicates_context,
-#     }
+    # Create two logs with different values in the no-duplicates context
+    log_data_1 = {
+        "project": project_name,
+        "params": {"model": "gpt-4", "temperature": 0.7},
+        "entries": {
+            "accuracy": 0.95,
+            "latency": 120,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        },
+        "context": no_duplicates_context,
+    }
 
-#     log_data_2 = {
-#         "project": project_name,
-#         "params": {"model": "gpt-4", "temperature": 0.7},
-#         "entries": {
-#             "accuracy": 0.85,
-#             "latency": 150,
-#             "timestamp": datetime.now(timezone.utc).isoformat(),
-#         },
-#         "context": no_duplicates_context,
-#     }
+    log_data_2 = {
+        "project": project_name,
+        "params": {"model": "gpt-4", "temperature": 0.7},
+        "entries": {
+            "accuracy": 0.85,
+            "latency": 150,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        },
+        "context": no_duplicates_context,
+    }
 
-#     # Create first log
-#     response = await _create_log(client, project_name, params=log_data_1["params"], entries=log_data_1["entries"], context=log_data_1["context"])
-#     assert response.status_code == 200
-#     log_id_1 = response.json()['log_event_ids'][0]
+    # Create first log
+    response = await _create_log(
+        client,
+        project_name,
+        params=log_data_1["params"],
+        entries=log_data_1["entries"],
+        context=log_data_1["context"],
+    )
+    assert response.status_code == 200
+    log_id_1 = response.json()["log_event_ids"][0]
 
-#     # Create second log
-#     response = await _create_log(client, project_name, params=log_data_2["params"], entries=log_data_2["entries"], context=log_data_2["context"])
-#     assert response.status_code == 200
-#     log_id_2 = response.json()['log_event_ids'][0]
+    # Create second log
+    response = await _create_log(
+        client,
+        project_name,
+        params=log_data_2["params"],
+        entries=log_data_2["entries"],
+        context=log_data_2["context"],
+    )
+    assert response.status_code == 200
+    log_id_2 = response.json()["log_event_ids"][0]
+
+    # Try to update the second log to have the same values as the first - should be rejected
+    update_response = await _update_logs(
+        client,
+        [log_id_2],
+        {"accuracy": 0.95, "latency": 120},
+        context=no_duplicates_context,
+        overwrite=True,
+    )
+    assert update_response.status_code == 400
+    assert "Duplicate log entry detected" in update_response.json()["detail"]
+
+    # Create two logs with different values in the default context
+    log_data_3 = {
+        "project": project_name,
+        "params": {"model": "gpt-3.5", "temperature": 0.5},
+        "entries": {
+            "accuracy": 0.90,
+            "latency": 100,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        },
+        "context": default_context,
+    }
+
+    log_data_4 = {
+        "project": project_name,
+        "params": {"model": "gpt-3.5", "temperature": 0.5},
+        "entries": {
+            "accuracy": 0.80,
+            "latency": 130,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        },
+        "context": default_context,
+    }
+
+    # Create third log
+    response = await _create_log(
+        client,
+        project_name,
+        params=log_data_3["params"],
+        entries=log_data_3["entries"],
+        context=log_data_3["context"],
+    )
+    assert response.status_code == 200
+    log_id_3 = response.json()["log_event_ids"][0]
+
+    # Create fourth log
+    response = await _create_log(
+        client,
+        project_name,
+        params=log_data_4["params"],
+        entries=log_data_4["entries"],
+        context=log_data_4["context"],
+    )
+    assert response.status_code == 200
+    log_id_4 = response.json()["log_event_ids"][0]
+
+    # Update the fourth log to have the same values as the third - should be accepted
+    # since the default context allows duplicates
+    update_response = await _update_logs(
+        client,
+        [log_id_4],
+        {"accuracy": 0.90, "latency": 100},
+        context=default_context,
+        overwrite=True,
+    )
+    assert update_response.status_code == 200
 
 
-#     # Try to update the second log to have the same values as the first - should be rejected
-#     update_response = await _update_logs(
-#         client,
-#         [log_id_2],
-#         {"accuracy": 0.95, "latency": 120},
-#         context=no_duplicates_context,
-#         overwrite=True,
-#     )
-#     assert update_response.status_code == 400
-#     assert "Duplicate log entry detected" in update_response.json()["detail"]
-
-#     # Create two logs with different values in the default context
-#     log_data_3 = {
-#         "project": project_name,
-#         "params": {"model": "gpt-3.5", "temperature": 0.5},
-#         "entries": {
-#             "accuracy": 0.90,
-#             "latency": 100,
-#             "timestamp": datetime.now(timezone.utc).isoformat(),
-#         },
-#         "context": default_context,
-#     }
-
-#     log_data_4 = {
-#         "project": project_name,
-#         "params": {"model": "gpt-3.5", "temperature": 0.5},
-#         "entries": {
-#             "accuracy": 0.80,
-#             "latency": 130,
-#             "timestamp": datetime.now(timezone.utc).isoformat(),
-#         },
-#         "context": default_context,
-#     }
-
-#     # Create third log
-#     response = await _create_log(client, project_name, params=log_data_3["params"], entries=log_data_3["entries"], context=log_data_3["context"])
-#     assert response.status_code == 200
-#     log_id_3 = response.json()['log_event_ids'][0]
-
-#     # Create fourth log
-#     response = await _create_log(client, project_name, params=log_data_4["params"], entries=log_data_4["entries"], context=log_data_4["context"])
-#     assert response.status_code == 200
-#     log_id_4 = response.json()['log_event_ids'][0]
-
-
-#     # Update the fourth log to have the same values as the third - should be accepted
-#     # since the default context allows duplicates
-#     update_response = await _update_logs(
-#         client,
-#         [log_id_4],
-#         {"accuracy": 0.90, "latency": 100},
-#         context=default_context,
-#         overwrite=True,
-#     )
-#     assert update_response.status_code == 200
 @pytest.mark.anyio
 async def test_add_logs_with_copy_false(client: AsyncClient):
     """Test that when copy=false, the original logs are associated with the context"""

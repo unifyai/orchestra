@@ -1790,3 +1790,80 @@ async def test_export_interface_template_with_valid_schema_multiple_active_tabs(
 
     assert tab1_template["active"] is True
     assert tab2_template["active"] is False
+
+
+@pytest.mark.anyio
+async def test_interface_context_validation_valid_reference(client: AsyncClient):
+    """Test that interface API validates context field with valid reference"""
+    project_name = f"test-interface-context-{uuid.uuid4()}"
+    context_name = "valid-context"
+
+    # Create project and context
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "description": "Valid context"},
+        headers=HEADERS,
+    )
+
+    # Create interface with valid context
+    response = await client.post(
+        "/v0/interfaces/",
+        json={
+            "name": "test-interface",
+            "project": project_name,
+            "context": context_name,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 201
+    interface_id = response.json()["id"]
+
+    # Update with valid context field - should work
+    response = await client.put(
+        "/v0/interfaces/",
+        params={"interface_id": interface_id},
+        json={
+            "context": context_name,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Clean up
+    await _delete_project(client, project_name)
+
+
+@pytest.mark.anyio
+async def test_interface_context_validation_invalid_reference(client: AsyncClient):
+    """Test that interface API rejects invalid context references"""
+    project_name = f"test-interface-invalid-context-{uuid.uuid4()}"
+    invalid_context = "nonexistent-context"
+
+    # Create project only (no context)
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+
+    # Try to create interface with invalid context
+    response = await client.post(
+        "/v0/interfaces/",
+        json={
+            "name": "test-interface",
+            "project": project_name,
+            "context": invalid_context,
+        },
+        headers=HEADERS,
+    )
+    # Should fail with validation error
+    assert response.status_code == 400
+    assert f"Context '{invalid_context}' not found" in response.json()["detail"]
+
+    # Clean up
+    await _delete_project(client, project_name)

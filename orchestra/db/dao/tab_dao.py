@@ -21,7 +21,7 @@ class TabDAO:
         active: bool = False,
         order: Optional[int] = None,
         tab_id: Optional[str] = None,
-        global_context: Optional[str] = None,
+        context: Optional[str] = None,
         color: Optional[str] = None,
         icon: Optional[str] = "tab",
         is_checkpoint: bool = False,
@@ -47,7 +47,7 @@ class TabDAO:
             visible=visible,
             active=active,
             order=order_value,
-            global_context=global_context,
+            context=context,
             color=color,
             icon=icon,
             is_checkpoint=is_checkpoint,
@@ -149,7 +149,7 @@ class TabDAO:
         visible: Optional[bool] = None,
         active: Optional[bool] = None,
         order: Optional[int] = None,
-        global_context: Optional[str] = None,
+        context: Optional[str] = None,
         color: Optional[str] = None,
         icon: Optional[str] = None,
     ) -> Optional[Tab]:
@@ -186,8 +186,8 @@ class TabDAO:
                 tab.active = active
         if order is not None:
             tab.order = order
-        if global_context is not None:
-            tab.global_context = global_context
+        if context is not None:
+            tab.context = context
         if color is not None:
             tab.color = color
         if icon is not None:
@@ -402,7 +402,7 @@ class TabDAO:
                 visible=source_tab.visible,
                 active=source_tab.active,
                 order=source_tab.order,
-                global_context=source_tab.global_context,
+                context=source_tab.context,
                 color=source_tab.color,
                 is_checkpoint=True,
             )
@@ -424,7 +424,7 @@ class TabDAO:
                 visible=source_tab.visible,
                 active=source_tab.active,
                 order=source_tab.order,
-                global_context=source_tab.global_context,
+                context=source_tab.context,
                 color=source_tab.color,
                 is_checkpoint=True,
                 checkpoint_or_active_id=source_tab.id,
@@ -594,7 +594,7 @@ class TabDAO:
                                 "visible": tab.visible,
                                 "active": tab.active,
                                 "order": tab.order,
-                                "global_context": tab.global_context,
+                                "context": tab.context,
                                 "color": tab.color,
                                 "is_checkpoint": tab.is_checkpoint,
                                 "checkpoint_or_active_id": None,  # Will be updated if needed
@@ -613,7 +613,7 @@ class TabDAO:
                             visible=source_tab.visible,
                             active=source_tab.active,
                             order=source_tab.order,
-                            global_context=source_tab.global_context,
+                            context=source_tab.context,
                             color=source_tab.color,
                             is_checkpoint=source_tab.is_checkpoint,
                         )

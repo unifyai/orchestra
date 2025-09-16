@@ -78,7 +78,11 @@ tools = [
 ]
 
 
-async def create_test_user(client: AsyncClient, email: str) -> Dict[str, Any]:
+async def create_test_user(
+    client: AsyncClient,
+    email: str,
+    hiring_approved: bool = False,
+) -> Dict[str, Any]:
     response = await client.post(
         "/v0/admin/auth-user",
         json={"email": email, "name": "Test"},
@@ -87,6 +91,16 @@ async def create_test_user(client: AsyncClient, email: str) -> Dict[str, Any]:
     assert response.status_code == status.HTTP_200_OK, response.json()
     user_data = response.json()
     user_id = user_data["id"]
+
+    if hiring_approved:
+        approve_url = (
+            f"/v0/admin/auth-user/{user_id}/assistant-hiring-approval/approved"
+        )
+        approve_resp = await client.put(approve_url, headers=ADMIN_HEADERS)
+        assert (
+            approve_resp.status_code == status.HTTP_200_OK
+        ), f"Failed to approve user {email}: {approve_resp.json()}"
+
     api_key = user_data.get("apiKey")
     if not api_key:
         user_details_resp = await client.get(

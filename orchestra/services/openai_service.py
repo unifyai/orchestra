@@ -2,7 +2,7 @@ import io
 import json
 import logging
 import mimetypes
-from typing import Optional
+from typing import Optional, Tuple
 
 import httpx
 from fastapi import HTTPException, status
@@ -444,4 +444,56 @@ class OpenAIService:
             raise OpenAIAPIError(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail=f"An error occurred with the voice description generation service: {str(e)}",
+            ) from e
+
+    def generate_speech(
+        self,
+        text: str,
+        voice_id: str,
+        model_id: Optional[str] = "gpt-4o-mini-tts",
+        output_format: str = "mp3",
+    ) -> Tuple[bytes, str]:
+        """
+        Generates speech from text using OpenAI API and returns raw audio bytes and content type.
+        """
+
+        allowed_voices = ["marin", "cedar", "alloy", "ash", "shimmer", "coral"]
+        if voice_id not in allowed_voices:
+            raise OpenAIAPIError(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unsupported OpenAI voice '{voice_id}'. Supported voices are: {allowed_voices}",
+            )
+
+        # Map our common format to OpenAI's `response_format`
+        supported_formats = {
+            "mp3": ("mp3", "audio/mpeg"),
+            "flac": ("flac", "audio/flac"),
+        }
+
+        if output_format not in supported_formats:
+            raise OpenAIAPIError(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Unsupported output format '{output_format}' for OpenAI. Supported formats are: {list(supported_formats.keys())}.",
+            )
+
+        openai_format, content_type = supported_formats[output_format]
+
+        try:
+            response = self.client.audio.speech.create(
+                model=model_id or "gpt-4o-mini-tts",
+                voice=voice_id,
+                input=text,
+                response_format=openai_format,
+            )
+            audio_bytes = response.read()
+            return audio_bytes, content_type
+        except Exception as e:
+            logging.error(
+                f"An error occurred with OpenAI speech generation: {e}",
+                exc_info=True,
+            )
+            # This will catch API errors from OpenAI client as well.
+            raise OpenAIAPIError(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"An error occurred with the speech generation service: {str(e)}",
             ) from e

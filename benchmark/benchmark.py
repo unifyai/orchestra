@@ -201,10 +201,7 @@ async def worker_loop(  # noqa: WPS210
             input_queue.task_done()
             continue
 
-        client = AsyncOpenAI(
-            base_url="https://api.unify.ai/v0",
-            api_key=os.getenv("UNIFY_API_KEY"),
-        )
+        client = AsyncOpenAI(base_url="https://api.unify.ai/v0")
 
         def endpoint_fn(prompt, max_tokens, stream):
             return client.chat.completions.create(

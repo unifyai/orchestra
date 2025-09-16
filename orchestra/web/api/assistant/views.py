@@ -33,7 +33,7 @@ from orchestra.db.dao.recording_dao import RecordingDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import Context
+from orchestra.db.models.orchestra_models import AuthUser, Context
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.call_recording_service import CallRecordingService
 from orchestra.services.cartesia_service import CartesiaAPIError, CartesiaService
@@ -70,6 +70,7 @@ from orchestra.web.api.utils.assistant_infra import (
     delete_phone_number,
     delete_pubsub_topic,
     get_social_platforms_costs,
+    stop_jobs,
     wake_up_assistant,
     watch_email,
 )
@@ -83,6 +84,26 @@ def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:
     if raw_phone and raw_phone.startswith(" "):
         return "+" + raw_phone[1:]
     return raw_phone
+
+
+def check_assistant_hiring_approval(
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    user_id = request.state.user_id
+    user = session.query(AuthUser).filter(AuthUser.id == user_id).one_or_none()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Authenticated user not found.",
+        )
+
+    if user.assistant_hiring_approval != "approved":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You need to request approval first by going to console.unify.ai/assistants",
+        )
 
 
 router = APIRouter()
@@ -162,6 +183,7 @@ def create_assistant(
     assistant_in: AssistantCreate,
     request: Request,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[AssistantRead]:
     """
     Create a new assistant for the authenticated user.
@@ -271,57 +293,6 @@ def create_assistant(
         # This ensures the assistant persists even if we refresh the session later
         session.commit()
 
-        # Log pre-hire chat if provided
-        if assistant_in.pre_hire_chat:
-            try:
-                context_name = f"{assistant.first_name}{assistant.surname}/Transcripts"
-                chat_context_id = context_dao.get_or_create(
-                    assistants_project.id,
-                    name=context_name,
-                )
-                chat_context_obj = session.get(Context, chat_context_id)
-
-                # Prepare entries for logging using jsonable_encoder
-                chat_entries = jsonable_encoder(assistant_in.pre_hire_chat)
-                num_entries = len(chat_entries)
-
-                if num_entries > 0:
-                    log_event_ids = log_event_dao.bulk_create(
-                        project_id=assistants_project.id,
-                        count=num_entries,
-                        context_id=chat_context_id,
-                    )
-
-                    # Prepare all log rows for bulk creation
-                    log_rows_to_create = []
-                    for i, entry_dict in enumerate(chat_entries):
-                        log_event_id = log_event_ids[i]
-                        for key, value in entry_dict.items():
-                            log_rows_to_create.append(
-                                {
-                                    "project_id": assistants_project.id,
-                                    "log_event_id": log_event_id,
-                                    "key": key,
-                                    "value": value,
-                                    "context_id": chat_context_id,
-                                },
-                            )
-
-                    # Bulk create the log rows (this will flush)
-                    if log_rows_to_create:
-                        log_dao.bulk_create(
-                            log_rows_to_create,
-                            context_obj=chat_context_obj,
-                        )
-
-                    session.commit()  # Commit the logs
-
-            except Exception as e_log:
-                session.rollback()  # Rollback the log transaction
-                logging.warning(
-                    f"Failed to log pre-hire chat for assistant {assistant.agent_id}. Error: {str(e_log)}",
-                )
-
         assistant_id = assistant.agent_id
         # Infrastructure creation with rollback on failure
         created_email = None
@@ -331,33 +302,33 @@ def create_assistant(
 
         if assistant_in.create_infra:
             try:
-                # Step 1: create email
-                email_local = (
-                    assistant_in.email.split("@")[0]
-                    if "@" in assistant_in.email
-                    else assistant_in.email
-                )
-                email_response = create_email(
-                    email_local,
-                    assistant_in.first_name,
-                    assistant_in.surname,
-                )
-                if "detail" in email_response:
-                    raise Exception(
-                        f"Email creation failed: {email_response['detail']}",
+                # Step 1 & 2: create and watch email
+                if assistant_in.email:
+                    email_local = (
+                        assistant_in.email.split("@")[0]
+                        if "@" in assistant_in.email
+                        else assistant_in.email
                     )
-                created_email = email_response.get("user").get("primaryEmail")
-                print(f"EMAIL CREATED: {created_email}")
+                    email_response = create_email(
+                        email_local,
+                        assistant_in.first_name,
+                        assistant_in.surname,
+                    )
+                    if "detail" in email_response:
+                        raise Exception(
+                            f"Email creation failed: {email_response['detail']}",
+                        )
+                    created_email = email_response.get("user").get("primaryEmail")
+                    print(f"EMAIL CREATED: {created_email}")
 
-                # Step 2: watch email
-                time.sleep(10)
-                watch_response = watch_email(created_email)
-                print(watch_response)
-                if "detail" in watch_response:
-                    raise Exception(
-                        f"Email watch setup failed: {watch_response['detail']}",
-                    )
-                print(f"EMAIL WATCHED: {created_email}")
+                    time.sleep(10)
+                    watch_response = watch_email(created_email)
+                    print(watch_response)
+                    if "detail" in watch_response:
+                        raise Exception(
+                            f"Email watch setup failed: {watch_response['detail']}",
+                        )
+                    print(f"EMAIL WATCHED: {created_email}")
 
                 # Step 3: create phone number if user_phone is provided
                 if assistant_in.user_phone:
@@ -555,7 +526,66 @@ def create_assistant(
         )
 
     # Phase 3: Wake up assistant
-    wake_up_assistant(assistant.phone, is_staging=settings.is_staging)
+    response = wake_up_assistant(assistant.phone, is_staging=settings.is_staging)
+    if response.status_code != 200:
+        logging.error(f"Failed to wake up assistant: {response.text}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to wake up assistant.",
+        )
+    else:
+        print(f"ASSISTANT AWAKENED: {assistant.phone}")
+
+    # (Optional) Log pre-hire chat if provided
+    if assistant_in.pre_hire_chat:
+        try:
+            context_name = f"{assistant.first_name}{assistant.surname}/Transcripts"
+            chat_context_id = context_dao.get_or_create(
+                assistants_project.id,
+                name=context_name,
+            )
+            chat_context_obj = session.get(Context, chat_context_id)
+
+            # Prepare entries for logging using jsonable_encoder
+            chat_entries = jsonable_encoder(assistant_in.pre_hire_chat)
+            num_entries = len(chat_entries)
+
+            if num_entries > 0:
+                log_event_ids = log_event_dao.bulk_create(
+                    project_id=assistants_project.id,
+                    count=num_entries,
+                    context_id=chat_context_id,
+                )
+
+                # Prepare all log rows for bulk creation
+                log_rows_to_create = []
+                for i, entry_dict in enumerate(chat_entries):
+                    log_event_id = log_event_ids[i]
+                    for key, value in entry_dict.items():
+                        log_rows_to_create.append(
+                            {
+                                "project_id": assistants_project.id,
+                                "log_event_id": log_event_id,
+                                "key": key,
+                                "value": value,
+                                "context_id": chat_context_id,
+                            },
+                        )
+
+                # Bulk create the log rows (this will flush)
+                if log_rows_to_create:
+                    log_dao.bulk_create(
+                        log_rows_to_create,
+                        context_obj=chat_context_obj,
+                    )
+
+                session.commit()  # Commit the logs
+
+        except Exception as e_log:
+            session.rollback()  # Rollback the log transaction
+            logging.warning(
+                f"Failed to log pre-hire chat for assistant {assistant.agent_id}. Error: {str(e_log)}",
+            )
 
     # Phase 4: Prepare and return response
     return InfoResponse(
@@ -656,6 +686,7 @@ def list_assistants(
         None,
         description="Only return assistants whose email address matches this value.",
     ),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[List[AssistantRead]]:
     """
     List all assistants for the authenticated user.
@@ -746,6 +777,7 @@ def delete_assistant(
     assistant_id: int,
     request: Request,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[str]:
     """
     Delete an assistant by ID for the authenticated user.
@@ -773,6 +805,14 @@ def delete_assistant(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Assistant not found.",
             )
+
+        # Suspend any jobs that might be currently running with that assistant
+        try:
+            response = stop_jobs(assistant_id, staging=settings.is_staging)
+            print(f"JOB STOPPED: {response['job_names']}")
+        except Exception as e:
+            logging.error(f"Failed to stop job: {str(e)}")
+            cleanup_errors.append(f"Failed to stop job: {str(e)}")
 
         # Delete the associated chat transcript context from the "Assistants" project
         try:
@@ -973,6 +1013,7 @@ def update_assistant_config(
     update: AssistantUpdate,
     request: Request,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[AssistantRead]:
     """
     Update about, phone, email, weekly_limit, and/or max_parallel for an existing assistant.
@@ -990,6 +1031,10 @@ def update_assistant_config(
     is_photo_changing = False
     old_video_url = None
     is_video_changing = False
+
+    # Variables to track newly created resources for potential rollback
+    email_to_update: Optional[str] = None
+    phone_to_update: Optional[str] = None
 
     # Check assistant existence before any updates
     existing_assistant = assistant_dao.get_assistant_by_id(
@@ -1012,82 +1057,129 @@ def update_assistant_config(
         update.profile_video is not None and update.profile_video != old_video_url
     )
 
+    # Initialize variables with values from the update payload or existing record
+    assistant_email = update.email
+    assistant_phone = update.phone
+    assistant_whatsapp_number = (
+        existing_assistant.assistant_whatsapp_number
+        if existing_assistant.assistant_whatsapp_number
+        else None
+    )
+
     try:
         weekly_limit: Optional[Decimal] = None
         if update.weekly_limit is not None:
             weekly_limit = Decimal(update.weekly_limit)
 
-        # Create / update assistant phone
-        # 1- Check if the assistant doesn't have a phone number already and if a user phone is provided
-        # 2- If so, create an assistant phone number
-        assistant_phone = update.phone
-        if update.user_phone and not existing_assistant.phone:
-            try:
-                country = update.country if update.country else "US"
-                phone_response = create_phone_number(
-                    country=country,
-                    is_staging=settings.is_staging,
-                )
-                if "detail" in phone_response:
-                    raise Exception(
-                        f"Phone number creation failed: {phone_response['detail']}",
-                    )
-                phone_to_update = phone_response.get("phoneNumber")
-                print(f"PHONE CREATED ON UPDATE: {phone_to_update}")
-            except Exception as e:
-                # If phone creation fails, we should not proceed with the update
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to create phone number during update: {str(e)}",
-                )
-
-        # Create / update social account:
-        # 1- Check if the assistant doesn't have a user account already and if a user account value is provided
-        # 2- If so and if user has enough credits (production), assign the whatsapp account to the assistant
-        assistant_whatsapp_number = (
-            existing_assistant.assistant_whatsapp_number
-            if existing_assistant.assistant_whatsapp_number
-            else None
-        )
-        if update.user_whatsapp_number and not existing_assistant.user_whatsapp_number:
-            if not settings.is_staging:
-                # Cost to create a social account
+        if update.create_infra:
+            # Create / update assistant email
+            # 1- Check if the assistant doesn't have an email address already and if an assistant email is provided
+            # 2- If so, create an assistant email
+            if update.email and not existing_assistant.email:
                 try:
-                    platforms_response = get_social_platforms_costs()
-                    platforms = platforms_response.get("platforms")
+                    email_local = (
+                        update.email.split("@")[0]
+                        if "@" in update.email
+                        else update.email
+                    )
+                    email_response = create_email(
+                        email_local,
+                        existing_assistant.first_name,
+                        existing_assistant.surname,
+                    )
+                    if "detail" in email_response:
+                        raise Exception(
+                            f"Email creation failed on assistant update: {email_response['detail']}",
+                        )
+                    email_to_update = email_response.get("user").get("primaryEmail")
+                    print(f"EMAIL CREATED ON ASSISTANT UPDATE: {email_to_update}")
 
-                    if not isinstance(platforms, dict):
-                        raise HTTPException(
-                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail=f"Could not parse social platform costs. Expected a dictionary, got: {platforms}",
+                    time.sleep(10)
+                    watch_response = watch_email(email_to_update)
+                    print(watch_response)
+                    if "detail" in watch_response:
+                        raise Exception(
+                            f"Email watch setup failed: {watch_response['detail']}",
                         )
-                    cost = platforms.get("whatsapp")
-                    if cost is None:
-                        raise HTTPException(
-                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail="WhatsApp cost not found in social platform costs response.",
-                        )
-                except Exception as e_costs:
+                    print(f"EMAIL WATCHED ON ASSISTANT UPDATE: {email_to_update}")
+
+                    assistant_email = email_to_update
+
+                except Exception as e:
                     raise HTTPException(
                         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail=f"Failed to fetch or process social platform costs. Details: {str(e_costs)}",
+                        detail=f"Failed to create email during update: {str(e)}",
                     )
-                user = users_dao.get_user_with_id(user_id)
-                decimal_cost = Decimal(cost)
-                if user.credits < decimal_cost:
-                    raise HTTPException(
-                        status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                        detail="Insufficient credits to add a WhatsApp number.",
-                    )
-                users_dao.recharge_credit(
-                    user_id=user_id,
-                    quantity=-float(decimal_cost),
-                )
 
-            assistant_whatsapp_number = assign_whatsapp_sender(
-                update.user_whatsapp_number,
-                is_staging=settings.is_staging,
-            )["whatsapp_number"]
+            # Create / update assistant phone
+            # 1- Check if the assistant doesn't have a phone number already and if a user phone is provided
+            # 2- If so, create an assistant phone number
+            if update.user_phone and not existing_assistant.phone:
+                try:
+                    country = update.country if update.country else "US"
+                    phone_response = create_phone_number(
+                        country=country,
+                        is_staging=settings.is_staging,
+                    )
+                    if "detail" in phone_response:
+                        raise Exception(
+                            f"Phone number creation failed: {phone_response['detail']}",
+                        )
+                    phone_to_update = phone_response.get("phoneNumber")
+                    assistant_phone = phone_to_update
+                    print(f"PHONE CREATED ON UPDATE: {phone_to_update}")
+                except Exception as e:
+                    # If phone creation fails, we should not proceed with the update
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail=f"Failed to create phone number during update: {str(e)}",
+                    )
+
+            # Create / update social account:
+            # 1- Check if the assistant doesn't have a user account already and if a user account value is provided
+            # 2- If so and if user has enough credits (production), assign the whatsapp account to the assistant
+            if (
+                update.user_whatsapp_number
+                and not existing_assistant.user_whatsapp_number
+            ):
+                if not settings.is_staging:
+                    # Cost to create a social account
+                    try:
+                        platforms_response = get_social_platforms_costs()
+                        platforms = platforms_response.get("platforms")
+
+                        if not isinstance(platforms, dict):
+                            raise HTTPException(
+                                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                detail=f"Could not parse social platform costs. Expected a dictionary, got: {platforms}",
+                            )
+                        cost = platforms.get("whatsapp")
+                        if cost is None:
+                            raise HTTPException(
+                                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                detail="WhatsApp cost not found in social platform costs response.",
+                            )
+                    except Exception as e_costs:
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"Failed to fetch or process social platform costs. Details: {str(e_costs)}",
+                        )
+                    user = users_dao.get_user_with_id(user_id)
+                    decimal_cost = Decimal(cost)
+                    if user.credits < decimal_cost:
+                        raise HTTPException(
+                            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                            detail="Insufficient credits to add a WhatsApp number.",
+                        )
+                    users_dao.recharge_credit(
+                        user_id=user_id,
+                        quantity=-float(decimal_cost),
+                    )
+
+                assistant_whatsapp_number = assign_whatsapp_sender(
+                    update.user_whatsapp_number,
+                    is_staging=settings.is_staging,
+                )["whatsapp_number"]
 
         updated = assistant_dao.update_assistant(
             user_id=request.state.user_id,
@@ -1096,7 +1188,7 @@ def update_assistant_config(
             profile_video=update.profile_video,
             about=update.about,
             phone=assistant_phone,
-            email=update.email,
+            email=assistant_email,
             user_phone=update.user_phone,
             user_whatsapp_number=update.user_whatsapp_number,
             assistant_whatsapp_number=assistant_whatsapp_number,
@@ -1135,6 +1227,8 @@ def update_assistant_config(
                     f"Failed to delete old profile video {old_video_url} for assistant {assistant_id} during update. Error: {str(e)}",
                 )
 
+        session.commit()
+
         return InfoResponse(
             info=AssistantRead(
                 agent_id=str(updated.agent_id),
@@ -1151,8 +1245,8 @@ def update_assistant_config(
                 max_parallel=updated.max_parallel,
                 created_at=updated.created_at,
                 updated_at=updated.updated_at,
-                phone=updated.phone,
-                email=updated.email,
+                phone=assistant_phone,
+                email=assistant_email,
                 user_whatsapp_number=updated.user_whatsapp_number,
                 assistant_whatsapp_number=assistant_whatsapp_number,
                 user_phone=updated.user_phone,
@@ -1160,10 +1254,35 @@ def update_assistant_config(
             ),
         )
     except Exception as e:
+        session.rollback()
+
+        if email_to_update:
+            logging.warning(
+                f"Update failed. Rolling back created email: {email_to_update}",
+            )
+            try:
+                delete_email(email_to_update)
+            except Exception as cleanup_err:
+                logging.error(
+                    f"Failed to clean up (delete) email '{email_to_update}' during rollback: {cleanup_err}",
+                )
+
+        if phone_to_update:
+            logging.warning(
+                f"Update failed. Rolling back created phone number: {phone_to_update}",
+            )
+            try:
+                delete_phone_number(phone_to_update)
+            except Exception as cleanup_err:
+                logging.error(
+                    f"Failed to clean up (delete) phone number '{phone_to_update}' during rollback: {cleanup_err}",
+                )
+
         if isinstance(e, HTTPException):
             raise e
+
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error updating assistant config: {str(e)}",
         )
 
@@ -1291,6 +1410,7 @@ def list_recordings(
     assistant_id: int,
     request: Request,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[List[RecordingInfo]]:
     """
     List all call recordings for the specified assistant.
@@ -1360,6 +1480,7 @@ def delete_recording(
     recording_id: int,
     request: Request,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[str]:
     """
     Delete a call recording by ID for the specified assistant.
@@ -1450,6 +1571,7 @@ def register_voice(
     voice_in: VoiceCreate,
     request: Request,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[VoiceRead]:
     dao = VoiceDAO(session)
     try:
@@ -1523,6 +1645,7 @@ async def clone_voice(
     gender: Optional[str] = Form(None, example="female"),
     provider: str = Form("cartesia"),
     file: UploadFile = File(..., example="voice_sample.wav"),
+    _: None = Depends(check_assistant_hiring_approval),
 ):
     user_id = request.state.user_id
     voice_dao = VoiceDAO(session)
@@ -1698,6 +1821,7 @@ async def clone_voice(
 def list_voices(
     request: Request,
     session: Session = Depends(get_db_session),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[List[VoiceRead]]:
     """
     List all voices saved by the authenticated user.
@@ -1759,6 +1883,7 @@ def delete_voice(
     session: Session = Depends(get_db_session),
     cartesia_service: CartesiaService = Depends(),
     elevenlabs_service: ElevenLabsService = Depends(),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[str]:
     user_id = request.state.user_id
     voice_dao = VoiceDAO(session)
@@ -1876,6 +2001,8 @@ async def generate_speech(
     session: Session = Depends(get_db_session),
     cartesia_service: CartesiaService = Depends(),
     elevenlabs_service: ElevenLabsService = Depends(),
+    openai_service: OpenAIService = Depends(),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> Response:
     user_id = request.state.user_id
     audio_bytes: bytes
@@ -1903,6 +2030,13 @@ async def generate_speech(
                 stability=request_data.elevenlabs_voice_settings_stability,
                 similarity_boost=request_data.elevenlabs_voice_settings_similarity_boost,
             )
+        elif request_data.provider == "openai":
+            audio_bytes, content_type = openai_service.generate_speech(
+                text=request_data.text,
+                voice_id=request_data.voice_id,
+                model_id=request_data.model_id or "gpt-4o-mini-tts",
+                output_format=request_data.output_format,
+            )
         else:
             # This case should be prevented by Pydantic's Literal validation
             raise HTTPException(
@@ -1912,7 +2046,7 @@ async def generate_speech(
 
         return Response(content=audio_bytes, media_type=content_type)
 
-    except (CartesiaAPIError, ElevenLabsAPIError) as e:
+    except (CartesiaAPIError, ElevenLabsAPIError, OpenAIAPIError) as e:
         logging.error(
             f"TTS API error for user {user_id}, provider {request_data.provider}: {e.detail}",
         )
@@ -1946,6 +2080,7 @@ async def design_voice_generate_previews_endpoint(
     session: Session = Depends(get_db_session),
     elevenlabs_service: ElevenLabsService = Depends(),
     openai_service: OpenAIService = Depends(),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[VoiceDesignGeneratePreviewsAPIResponse]:
     user_id = request.state.user_id
     final_voice_description = request_data.voice_description
@@ -2030,6 +2165,7 @@ async def design_voice_create_from_preview_endpoint(
     elevenlabs_service: ElevenLabsService = Depends(),
     deepgram_service: DeepgramService = Depends(),
     openai_service: OpenAIService = Depends(),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[VoiceRead]:
     user_id = request.state.user_id
     voice_dao = VoiceDAO(session)
@@ -2204,6 +2340,7 @@ async def design_voice_create_from_preview_endpoint(
 async def upload_assistant_photo(
     request: Request,
     file: UploadFile = File(..., example="assistant_photo.jpg"),
+    _: None = Depends(check_assistant_hiring_approval),
 ):
     bucket_service = BucketService()
     user_id = request.state.user_id
@@ -2263,6 +2400,7 @@ async def upload_assistant_photo(
 async def upload_assistant_video(
     request: Request,
     file: UploadFile = File(..., example="assistant_video.mp4"),
+    _: None = Depends(check_assistant_hiring_approval),
 ):
     bucket_service = BucketService()
     user_id = request.state.user_id
@@ -2325,6 +2463,7 @@ def generate_assistant_photo(
     session: Session = Depends(get_db_session),
     replicate_service: ReplicateService = Depends(),
     openai_service: OpenAIService = Depends(),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[str]:
     """
     Generate a new assistant profile photo from a text prompt.
@@ -2419,6 +2558,7 @@ async def edit_assistant_photo(
     aspect_ratio: str = Form("match_input_image", example="1:1"),
     output_format: str = Form("jpg", example="jpg"),
     safety_tolerance: float = Form(2.0, example=2.0),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[str]:
     """
     Edit an assistant profile photo using a text prompt and an input image.
@@ -2583,6 +2723,7 @@ async def animate_video_endpoint(
     min_resolution: Optional[int] = Form(512),
     inference_steps: Optional[int] = Form(25),
     keep_resolution: Optional[bool] = Form(True),
+    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[ReplicatePredictionResponse]:
     user_id = request.state.user_id
     users_dao = UsersDAO(session)
@@ -2796,7 +2937,9 @@ async def animate_video_endpoint(
 )
 def get_animation_prediction(
     prediction_id: str,
+    request: Request,
     replicate_service: ReplicateService = Depends(),
+    _: None = Depends(check_assistant_hiring_approval),
 ):
     try:
         prediction = replicate_service.get_prediction(prediction_id)
@@ -2819,7 +2962,9 @@ def get_animation_prediction(
 )
 def cancel_animation_prediction(
     prediction_id: str,
+    request: Request,
     replicate_service: ReplicateService = Depends(),
+    _: None = Depends(check_assistant_hiring_approval),
 ):
     try:
         prediction = replicate_service.cancel_prediction(prediction_id)
