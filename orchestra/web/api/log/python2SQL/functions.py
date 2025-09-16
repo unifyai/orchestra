@@ -35,6 +35,7 @@ from .core import build_sql_query
 from .helpers import (
     _build_subquery_for_base_call,
     _build_subquery_for_identifier,
+    _embeddable,
     _ensure_vectors_exist,
     _get_embedding,
     _get_parent_idx,
@@ -928,6 +929,11 @@ def _handle_functions(
             if not isinstance(text, str):
                 raise ValueError(
                     f"embed() requires a string, got {type(text).__name__}",
+                )
+
+            if not _embeddable(text):
+                raise ValueError(
+                    f"embed() requires a valid embeddable string, got {text}",
                 )
 
             # Get the embedding vector

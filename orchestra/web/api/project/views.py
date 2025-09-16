@@ -1329,7 +1329,7 @@ def import_project_template(
                 visible=tab_data.visible if tab_data.visible is not None else True,
                 active=tab_data.active if tab_data.active is not None else False,
                 order=tab_data.order if tab_data.order is not None else 0,
-                global_context=tab_data.global_context,
+                context=tab_data.context,
                 color=tab_data.color,
                 is_checkpoint=False,
             )

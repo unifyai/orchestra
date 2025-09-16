@@ -1849,3 +1849,56 @@ async def test_export_tab_template_with_valid_schema_tile_positioning(
 
     assert tiles_by_name["bottom_full"]["position"]["width"] == 12
     assert tiles_by_name["bottom_full"]["position"]["height"] == 4
+
+
+@pytest.mark.anyio
+async def test_tab_context_validation(client: AsyncClient):
+    """Test that tab API validates context references"""
+    project_name = f"test-tab-context-{uuid.uuid4()}"
+    context_name = "valid-context"
+    invalid_context = "nonexistent-context"
+
+    # Create project and context
+    await _create_project(client, project_name)
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "description": "Valid context"},
+        headers=HEADERS,
+    )
+
+    # Create interface
+    interface_response = await _create_test_interface(
+        client,
+        name="test-interface",
+        project=project_name,
+    )
+    interface_id = interface_response.json()["id"]
+
+    # Create tab with valid context - should succeed
+    response = await client.post(
+        "/v0/tab/",
+        json={
+            "name": "valid-context-tab",
+            "interface_id": interface_id,
+            "context": context_name,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 201
+    assert response.json()["context"] == context_name
+
+    # Try to create tab with invalid context - should fail
+    response = await client.post(
+        "/v0/tab/",
+        json={
+            "name": "invalid-context-tab",
+            "interface_id": interface_id,
+            "context": invalid_context,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 400
+    assert f"Context '{invalid_context}' not found" in response.json()["detail"]
+
+    # Clean up
+    await _delete_project(client, project_name)

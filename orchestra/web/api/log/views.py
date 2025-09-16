@@ -1366,6 +1366,7 @@ def update_logs(
     all_updates = []
     new_field_types = []
     updates_by_log_id = {}  # For context versioning
+    updated_entry_keys = set()  # Track which entry keys are being updated
 
     # Process both params and entries
     for data_type in ("params", "entries"):
@@ -1437,9 +1438,13 @@ def update_logs(
 
                     # Track this update for context versioning
                     updated_ids.add((base_key, log_id))
+                    if data_type == "entries":
+                        updated_entry_keys.add(base_key)
                 else:
                     # This is a flat update, keep it for normal processing
                     flat_data[k] = v
+                    if data_type == "entries":
+                        updated_entry_keys.add(k)
 
             # Process flat updates normally
             for k, v in flat_data.items():
@@ -1570,14 +1575,16 @@ def update_logs(
                         if ctx_obj and not ctx_obj.allow_duplicates:
                             # Check each log ID for duplicates
                             for log_id in ids_to_update:
-                                duplicate = context_dao.check_for_duplicates(
-                                    context_id,
-                                    log_id,
+                                # Use subset duplicate detection limited to the updated entry keys
+                                duplicate = context_dao.check_for_duplicates_subset(
+                                    context_id=context_id,
+                                    log_event_id=log_id,
+                                    keys_to_check=list(updated_entry_keys),
                                 )
                                 if duplicate:
                                     raise HTTPException(
                                         status_code=400,
-                                        detail=f"Update would create a duplicate in context '{ctx_obj.name}' which doesn't allow duplicates. Log ID: {log_id}",
+                                        detail=f"Duplicate log entry detected in context '{ctx_obj.name}'. Log ID: {log_id}",
                                     )
             elif ctx_id is not None:
                 # Single context case
@@ -1587,11 +1594,15 @@ def update_logs(
                 if ctx_obj and not ctx_obj.allow_duplicates:
                     # Check each log ID for duplicates
                     for log_id in ids_to_update:
-                        duplicate = context_dao.check_for_duplicates(ctx_id, log_id)
+                        duplicate = context_dao.check_for_duplicates_subset(
+                            context_id=ctx_id,
+                            log_event_id=log_id,
+                            keys_to_check=list(updated_entry_keys),
+                        )
                         if duplicate:
                             raise HTTPException(
                                 status_code=400,
-                                detail=f"Update would create a duplicate in context '{ctx_obj.name}' which doesn't allow duplicates. Log ID: {log_id}",
+                                detail=f"Duplicate log entry detected in context '{ctx_obj.name}'. Log ID: {log_id}",
                             )
         except ValueError as e:
             raise HTTPException(
@@ -4345,7 +4356,7 @@ async def process_traffic_logs(
             try:
                 data = json.loads(received_message.message.data.decode("utf-8"))
             except json.JSONDecodeError:
-                # Malformed payload – acknowledge and skip so it doesn’t poison the queue
+                # Malformed payload – acknowledge and skip so it doesn't poison the queue
                 continue
 
             for key in ("project_id", "context_id", "project_name"):

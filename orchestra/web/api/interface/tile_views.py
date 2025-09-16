@@ -308,6 +308,29 @@ def create_tile(
             detail=f"Tab not found. Please provide valid tab_id.",
         )
 
+    # Validate context fields if provided (non-empty strings)
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    interface_dao = InterfaceDAO(session)
+
+    # Get the project ID from the tab's interface
+    interface = interface_dao.get(tab.interface_id)
+    if interface:
+        project_obj = project_dao.get(interface.project_id)
+        if project_obj:
+            # Validate context field
+            if request.context and request.context.strip():
+                existing_contexts = context_dao.filter(
+                    project_id=project_obj.id,
+                    name=request.context,
+                )
+                if not existing_contexts:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Context '{request.context}' not found in project.",
+                    )
+
     try:
         # Create tile with position from the request
         position_data = {
@@ -721,6 +744,58 @@ def update_tile(
 
     # Convert Pydantic model to dict, excluding unset fields
     update_dict = request.model_dump(exclude_unset=True)
+
+    # Validate context fields if they're being updated
+    if "context" in update_dict:
+        from orchestra.db.dao.context_dao import ContextDAO
+        from orchestra.db.dao.interface_dao import InterfaceDAO
+        from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+        from orchestra.db.dao.project_dao import ProjectDAO
+
+        organization_member_dao = OrganizationMemberDAO(session)
+        context_dao = ContextDAO(session)
+        project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+        interface_dao = InterfaceDAO(session)
+
+        # Get the tile first to determine the project
+        if tile_id:
+            tile = tile_dao.get(tile_id, is_checkpoint=checkpoint)
+            if not tile:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Tile with ID {tile_id} not found.",
+                )
+            tile_tab = tab_dao.get(tile.tab_id)
+        else:
+            tile, tile_tab = _get_tile(
+                tile_id=tile_id,
+                tab_id=tab_id,
+                name=name,
+                checkpoint=checkpoint,
+                tab_dao=tab_dao,
+                tile_dao=tile_dao,
+            )
+
+        if tile_tab:
+            interface = interface_dao.get(tile_tab.interface_id)
+            if interface:
+                project_obj = project_dao.get(interface.project_id)
+                if project_obj:
+                    # Validate context field
+                    if (
+                        "context" in update_dict
+                        and update_dict["context"]
+                        and str(update_dict["context"]).strip()
+                    ):
+                        existing_contexts = context_dao.filter(
+                            project_id=project_obj.id,
+                            name=update_dict["context"],
+                        )
+                        if not existing_contexts:
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"Context '{update_dict['context']}' not found in project.",
+                            )
 
     # Update the tile
     if tile_id:
@@ -1198,7 +1273,7 @@ def patch_tile(
     Only the fields included in the request body will be updated.
     """
     # Use helper function to get tile
-    tile, _ = _get_tile(
+    tile, tab = _get_tile(
         tile_id=tile_id,
         tab_id=tab_id,
         name=name,
@@ -1206,6 +1281,38 @@ def patch_tile(
         tab_dao=tab_dao,
         tile_dao=tile_dao,
     )
+
+    # Validate context fields if they're being updated
+    if "context" in update_data:
+        from orchestra.db.dao.context_dao import ContextDAO
+        from orchestra.db.dao.interface_dao import InterfaceDAO
+        from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+        from orchestra.db.dao.project_dao import ProjectDAO
+
+        organization_member_dao = OrganizationMemberDAO(session)
+        context_dao = ContextDAO(session)
+        project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+        interface_dao = InterfaceDAO(session)
+
+        interface = interface_dao.get(tab.interface_id)
+        if interface:
+            project_obj = project_dao.get(interface.project_id)
+            if project_obj:
+                # Validate context field
+                if (
+                    "context" in update_data
+                    and update_data["context"]
+                    and str(update_data["context"]).strip()
+                ):
+                    existing_contexts = context_dao.filter(
+                        project_id=project_obj.id,
+                        name=update_data["context"],
+                    )
+                    if not existing_contexts:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"Context '{update_data['context']}' not found in project.",
+                        )
 
     # Apply the patch
     updated = tile_dao.patch_tile(

@@ -88,6 +88,19 @@ def create_interface(
             status_code=400,
             detail="Interface already exists, update the interface instead.",
         )
+
+    # Validate context if provided (non-empty string)
+    if request.context and request.context.strip():
+        existing_contexts = context_dao.filter(
+            project_id=project.id,
+            name=request.context,
+        )
+        if not existing_contexts:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Context '{request.context}' not found in project.",
+            )
+
     # icon and order are accepted by both LegacyInterfaceDAO and TempInterfaceDAO implementations
     dao.create_interface(  # type: ignore[arg-type]
         name=request.name,
@@ -180,6 +193,19 @@ def update_interface(
             status_code=404,
             detail="Interface not added yet. Create it first.",
         )
+
+    # Validate context if provided (non-empty string)
+    if request.context and request.context.strip():
+        existing_contexts = context_dao.filter(
+            project_id=project.id,
+            name=request.context,
+        )
+        if not existing_contexts:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Context '{request.context}' not found in project.",
+            )
+
     dao.update_interface(
         name=request.name,
         project_id=project.id,
