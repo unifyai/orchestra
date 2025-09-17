@@ -121,7 +121,7 @@ supported_models = {
     "mistral-small": {
         "endpoint": "deepinfra/mistralai/Mistral-Small-3.2-24B-Instruct-2506",
         "context_window": 125000,
-        "cost": {"prompt": 0.05, "completion": 0.1},
+        "cost": {"prompt": 0.075, "completion": 0.2},
     },
     "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "deepinfra/mistralai/Mixtral-8x7B-Instruct-v0.1",
