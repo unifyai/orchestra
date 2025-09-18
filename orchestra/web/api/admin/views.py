@@ -531,6 +531,7 @@ def admin_list_assistants(
                     region=a.region,
                     profile_photo=a.profile_photo,
                     profile_video=a.profile_video,
+                    desktop_url=a.desktop_url,
                     about=a.about,
                     weekly_limit=float(a.weekly_limit),
                     max_parallel=a.max_parallel,
@@ -648,6 +649,7 @@ def admin_update_assistant(
             region=updated.region,
             profile_photo=updated.profile_photo,
             profile_video=updated.profile_video,
+            desktop_url=updated.desktop_url,
             about=updated.about,
             country=updated.country,
             weekly_limit=float(updated.weekly_limit)
@@ -722,6 +724,7 @@ def admin_list_assistants_for_user(
                     region=a.region,
                     profile_photo=a.profile_photo,
                     profile_video=a.profile_video,
+                    desktop_url=a.desktop_url,
                     about=a.about,
                     weekly_limit=float(a.weekly_limit),
                     max_parallel=a.max_parallel,

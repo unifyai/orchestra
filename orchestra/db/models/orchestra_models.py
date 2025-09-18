@@ -1335,6 +1335,7 @@ class Assistant(Base):
     region = Column(String, nullable=True)
     profile_photo = Column(String, nullable=True)
     profile_video = Column(String, nullable=True)
+    desktop_url = Column(String, nullable=True)
     about = Column(String, nullable=True)
     country = Column(String, nullable=True)
     weekly_limit = Column(Numeric, nullable=True)

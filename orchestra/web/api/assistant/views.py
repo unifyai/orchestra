@@ -279,6 +279,7 @@ def create_assistant(
             region=assistant_in.region,
             profile_photo=assistant_in.profile_photo,
             profile_video=assistant_in.profile_video,
+            desktop_url=assistant_in.desktop_url,
             about=assistant_in.about,
             weekly_limit=parsed_weekly_limit,
             max_parallel=assistant_in.max_parallel,
@@ -598,6 +599,7 @@ def create_assistant(
             region=assistant.region,
             profile_photo=assistant.profile_photo,
             profile_video=assistant.profile_video,
+            desktop_url=assistant.desktop_url,
             about=assistant.about,
             weekly_limit=(
                 float(assistant.weekly_limit)
@@ -724,6 +726,7 @@ def list_assistants(
                     region=a.region,
                     profile_photo=a.profile_photo,
                     profile_video=a.profile_video,
+                    desktop_url=a.desktop_url,
                     about=a.about,
                     country=a.country,
                     weekly_limit=(
@@ -1186,6 +1189,7 @@ def update_assistant_config(
             agent_id=assistant_id,
             profile_photo=update.profile_photo,
             profile_video=update.profile_video,
+            desktop_url=update.desktop_url,
             about=update.about,
             phone=assistant_phone,
             email=assistant_email,
@@ -1239,6 +1243,7 @@ def update_assistant_config(
                 region=updated.region,
                 profile_photo=updated.profile_photo,
                 profile_video=updated.profile_video,
+                desktop_url=updated.desktop_url,
                 about=updated.about,
                 country=updated.country,
                 weekly_limit=float(updated.weekly_limit),
