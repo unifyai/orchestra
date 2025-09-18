@@ -1884,8 +1884,8 @@ def list_voices(
 )
 def delete_voice(
     voice_id: str,
-    provider: str = Query(..., description="The provider of the voice to delete"),
     request: Request,
+    provider: str = Query(..., description="The provider of the voice to delete"),
     session: Session = Depends(get_db_session),
     cartesia_service: CartesiaService = Depends(),
     elevenlabs_service: ElevenLabsService = Depends(),
@@ -1895,7 +1895,9 @@ def delete_voice(
     voice_dao = VoiceDAO(session)
 
     # Step 1: Get the voice from DB
-    voice_to_delete = voice_dao.get_voice_by_id(user_id=user_id, voice_id=voice_id, provider=provider)
+    voice_to_delete = voice_dao.get_voice_by_id(
+        user_id=user_id, voice_id=voice_id, provider=provider
+    )
     if not voice_to_delete:
         # No session.rollback() needed here as it's a read operation that failed to find.
         raise HTTPException(
