@@ -4,6 +4,8 @@ from typing import Any, Dict, Generic, List, Literal, Optional, TypeVar
 from pydantic import BaseModel, Field, HttpUrl
 from pydantic.generics import GenericModel
 
+from settings import selected_voice_provider
+
 T = TypeVar("T")
 
 
@@ -94,10 +96,15 @@ class AssistantCreate(BaseModel):
         description="Email of the assistant",
         example="ada.lovelace@unify.ai",
     )
-    voice_id: Optional[str] = Field(  # This is Cartesia's voice ID
+    voice_id: Optional[str] = Field(
         None,
-        description="Id of the voice (Cartesia ID) to use for the assistant",
+        description="Id of the provider voice to use for the assistant",
         example="bf0a246a-8642-498a-9950-80c35e9276b5",
+    )
+    voice_provider: Optional[str] = Field(
+        selected_voice_provider,
+        description="Provider of the selected voice (e.g., 'elevenlabs', 'openai')",
+        example="elevenlabs",
     )
     user_phone: Optional[str] = Field(
         None,
@@ -141,6 +148,7 @@ class AssistantCreate(BaseModel):
                 "country": "US",
                 "email": "ada.lovelace@unify.ai",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
+                "voice_provider": "cartesia",
                 "user_phone": "+15551234567",
                 "user_whatsapp_number": "+15551234567",
             },
@@ -181,11 +189,6 @@ class AssistantRead(AssistantCreate):
         None,
         description="WhatsApp number of the assistant",
         example="+15551234567",
-    )
-    tts_provider: Optional[str] = Field(
-        "cartesia",
-        description="TTS provider of the assistant",
-        example="cartesia",
     )
     api_key: Optional[str] = Field(
         None,
@@ -228,8 +231,8 @@ class AssistantRead(AssistantCreate):
                 "user_phone": "+15551234567",
                 "user_whatsapp_number": "+15551234567",
                 "assistant_whatsapp_number": "+15551234567",
-                "tts_provider": "cartesia",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
+                "voice_provider": "cartesia",
                 "agent_id": "12345",
                 "user_id": "123",
                 "created_at": "2025-04-25T10:30:00Z",
@@ -303,6 +306,11 @@ class AssistantUpdate(BaseModel):
         description="Id of the voice (Cartesia ID) to use for the assistant",
         example="bf0a246a-8642-498a-9950-80c35e9276b5",
     )
+    voice_provider: Optional[str] = Field(
+        None,
+        description="Provider of the selected voice (e.g., 'elevenlabs', 'openai')",
+        example="elevenlabs",
+    )
     country: Optional[str] = Field(
         None,
         description="Country code for phone number provisioning (e.g., US, GB)",
@@ -330,6 +338,7 @@ class AssistantUpdate(BaseModel):
                 "assistant_whatsapp_number": "+15559876543",
                 "email": "ada.lovelace@newdomain.com",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
+                "voice_provider": "cartesia",
                 "country": "GB",
             },
         }

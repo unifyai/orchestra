@@ -511,12 +511,7 @@ def admin_list_assistants(
             user_whatsapp_number=user_whatsapp_number,
             assistant_whatsapp_number=assistant_whatsapp_number,
         )
-        tts_providers = [
-            voice_dao.get_voice_by_id(a.user_id, a.voice_id).provider
-            if a.voice_id is not None
-            else "cartesia"
-            for a in assistants
-        ]
+
         api_keys = [api_key_dao.filter(user_id=a.user_id)[0][0].key for a in assistants]
         user_ids = [a.user_id for a in assistants]
         auth_users = [auth_user_dao.get_by_id(user_id)[0] for user_id in user_ids]
@@ -542,8 +537,8 @@ def admin_list_assistants(
                     email=a.email,
                     user_whatsapp_number=a.user_whatsapp_number,
                     assistant_whatsapp_number=a.assistant_whatsapp_number,
-                    tts_provider=tts_providers[i],
                     voice_id=a.voice_id,
+                    voice_provider=a.voice_provider,
                     api_key=api_keys[i],
                     user_first_name=auth_users[i].name,
                     user_last_name=auth_users[i].last_name,
@@ -664,6 +659,7 @@ def admin_update_assistant(
             user_whatsapp_number=updated.user_whatsapp_number,
             assistant_whatsapp_number=updated.assistant_whatsapp_number,
             voice_id=updated.voice_id,
+            voice_provider=updated.voice_provider,
         ),
     )
 
@@ -736,6 +732,7 @@ def admin_list_assistants_for_user(
                     user_whatsapp_number=a.user_whatsapp_number,
                     assistant_whatsapp_number=a.assistant_whatsapp_number,
                     voice_id=a.voice_id,
+                    voice_provider=a.voice_provider,
                 )
                 for a in assistants
             ],
