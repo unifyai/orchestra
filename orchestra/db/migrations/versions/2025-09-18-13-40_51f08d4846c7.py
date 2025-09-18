@@ -16,7 +16,10 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # 1. Ensure provider column is non-nullable
+    # 1. Drop the existing foreign key first
+    op.drop_constraint("fk_assistants_voices", "assistants", type_="foreignkey")
+
+    # 2. Ensure provider column is non-nullable
     op.alter_column(
         "voices",
         "provider",
@@ -25,15 +28,22 @@ def upgrade() -> None:
         existing_server_default=sa.text("'cartesia'::character varying"),
     )
 
-    # 2. Rebuild primary key on voices to include provider
+    # 3. Rebuild primary key on voices to include provider
     op.drop_constraint("voices_pkey", "voices", type_="primary")
     op.create_primary_key("voices_pkey", "voices", ["user_id", "voice_id", "provider"])
 
-    # 3. Add new column to assistants
+    # 4. Add new column to assistants
     op.add_column("assistants", sa.Column("voice_provider", sa.String(), nullable=True))
 
-    # 4. Rebuild foreign key between assistants and voices
-    op.drop_constraint("fk_assistants_voices", "assistants", type_="foreignkey")
+    # 5. Populate existing assistants with default provider
+    op.execute("""
+        UPDATE assistants a
+        SET voice_provider = 'elevenlabs'
+        FROM voices v
+        WHERE a.user_id = v.user_id AND a.voice_id = v.voice_id
+    """)
+
+    # 6. Rebuild the foreign key with the new composite key structure
     op.create_foreign_key(
         "fk_assistants_voices",
         "assistants",
@@ -43,11 +53,19 @@ def upgrade() -> None:
     )
 
 
+
 def downgrade() -> None:
     # 1. Drop the new foreign key
     op.drop_constraint("fk_assistants_voices", "assistants", type_="foreignkey")
 
-    # 2. Restore the old foreign key (without provider)
+    # 2. Remove the voice_provider column from assistants
+    op.drop_column("assistants", "voice_provider")
+
+    # 3. Rebuild voices primary key back to (user_id, voice_id)
+    op.drop_constraint("voices_pkey", "voices", type_="primary")
+    op.create_primary_key("voices_pkey", "voices", ["user_id", "voice_id"])
+
+    # 4. Restore the old foreign key (without provider)
     op.create_foreign_key(
         "fk_assistants_voices",
         "assistants",
@@ -55,13 +73,6 @@ def downgrade() -> None:
         ["user_id", "voice_id"],
         ["user_id", "voice_id"],
     )
-
-    # 3. Remove the voice_provider column
-    op.drop_column("assistants", "voice_provider")
-
-    # 4. Rebuild voices primary key back to (user_id, voice_id)
-    op.drop_constraint("voices_pkey", "voices", type_="primary")
-    op.create_primary_key("voices_pkey", "voices", ["user_id", "voice_id"])
 
     # 5. Make provider nullable again
     op.alter_column(
