@@ -4,7 +4,7 @@ from typing import Any, Dict, Generic, List, Literal, Optional, TypeVar
 from pydantic import BaseModel, Field, HttpUrl
 from pydantic.generics import GenericModel
 
-from settings import selected_voice_provider
+from orchestra.settings import settings
 
 T = TypeVar("T")
 
@@ -102,7 +102,7 @@ class AssistantCreate(BaseModel):
         example="bf0a246a-8642-498a-9950-80c35e9276b5",
     )
     voice_provider: Optional[str] = Field(
-        selected_voice_provider,
+        settings.selected_voice_provider,
         description="Provider of the selected voice (e.g., 'elevenlabs', 'openai')",
         example="elevenlabs",
     )
