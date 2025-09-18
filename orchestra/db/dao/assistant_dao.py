@@ -34,6 +34,7 @@ class AssistantDAO:
         email: Optional[str] = None,
         user_whatsapp_number: Optional[str] = None,
         voice_id: Optional[str] = None,
+        voice_provider: Optional[str] = None,
         country: Optional[str] = None,
     ) -> Assistant:
         """
@@ -56,6 +57,7 @@ class AssistantDAO:
             email=email,
             user_whatsapp_number=user_whatsapp_number,
             voice_id=voice_id,
+            voice_provider=voice_provider,
             country=country,
         )
         self.session.add(assistant)
@@ -128,6 +130,7 @@ class AssistantDAO:
         user_whatsapp_number: Optional[str] = None,
         assistant_whatsapp_number: Optional[str] = None,
         voice_id: Optional[str] = None,
+        voice_provider: Optional[str] = None,
         country: Optional[str] = None,
         profile_photo: Optional[str] = None,
         profile_video: Optional[str] = None,
@@ -158,6 +161,8 @@ class AssistantDAO:
             assistant.assistant_whatsapp_number = assistant_whatsapp_number
         if voice_id is not None:
             assistant.voice_id = voice_id
+        if voice_provider is not None:
+            assistant.voice_provider = voice_provider
         if country is not None:
             assistant.country = country
         if profile_photo is not None:
