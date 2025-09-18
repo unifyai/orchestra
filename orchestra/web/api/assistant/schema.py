@@ -74,6 +74,11 @@ class AssistantCreate(BaseModel):
         description="URL to the assistant's profile video",
         example="https://example.com/videos/ada.mp4",
     )
+    desktop_url: Optional[str] = Field(
+        None,
+        description="URL to the assistant's desktop profile/page",
+        example="https://app.example.com/assistants/ada",
+    )
     about: Optional[str] = Field(
         None,
         description="Brief description about the assistant",
@@ -131,6 +136,7 @@ class AssistantCreate(BaseModel):
                 "region": "North America",
                 "profile_photo": "https://example.com/photos/ada.jpg",
                 "profile_video": "https://example.com/videos/ada.mp4",
+                "desktop_url": "https://app.example.com/assistants/ada",
                 "about": "Mathematician and writer known for work on Analytical Engine",
                 "country": "US",
                 "email": "ada.lovelace@unify.ai",
@@ -214,6 +220,7 @@ class AssistantRead(AssistantCreate):
                 "region": "North America",
                 "profile_photo": "https://example.com/photos/ada.jpg",
                 "profile_video": "https://example.com/videos/ada.mp4",
+                "desktop_url": "https://app.example.com/assistants/ada",
                 "about": "Mathematician and writer known for work on Analytical Engine",
                 "country": "US",
                 "email": "ada.lovelace@unify.ai",
@@ -260,6 +267,11 @@ class AssistantUpdate(BaseModel):
         None,
         description="URL to the assistant's profile video",
         example="https://example.com/videos/ada_new.mp4",
+    )
+    desktop_url: Optional[str] = Field(
+        None,
+        description="URL to the assistant's desktop profile/page",
+        example="https://app.example.com/assistants/ada",
     )
     about: Optional[str] = Field(
         None,
@@ -310,6 +322,7 @@ class AssistantUpdate(BaseModel):
                 "max_parallel": 3,
                 "profile_photo": "https://example.com/photos/ada.jpg",
                 "profile_video": "https://example.com/videos/ada_new.mp4",
+                "desktop_url": "https://app.example.com/assistants/ada",
                 "about": "Award-winning mathematician specializing in algorithm development",
                 "user_phone": "+15551234567",
                 "phone": "+15559876543",
