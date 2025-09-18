@@ -36,12 +36,14 @@ def upgrade() -> None:
     op.add_column("assistants", sa.Column("voice_provider", sa.String(), nullable=True))
 
     # 5. Populate existing assistants with default provider
-    op.execute("""
+    op.execute(
+        """
         UPDATE assistants a
         SET voice_provider = 'elevenlabs'
         FROM voices v
         WHERE a.user_id = v.user_id AND a.voice_id = v.voice_id
-    """)
+    """
+    )
 
     # 6. Rebuild the foreign key with the new composite key structure
     op.create_foreign_key(
@@ -51,7 +53,6 @@ def upgrade() -> None:
         ["user_id", "voice_id", "voice_provider"],
         ["user_id", "voice_id", "provider"],
     )
-
 
 
 def downgrade() -> None:
