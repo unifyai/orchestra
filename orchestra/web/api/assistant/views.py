@@ -1241,7 +1241,11 @@ def update_assistant_config(
                 profile_video=updated.profile_video,
                 about=updated.about,
                 country=updated.country,
-                weekly_limit=float(updated.weekly_limit),
+                weekly_limit=(
+                    float(updated.weekly_limit)
+                    if updated.weekly_limit is not None
+                    else None
+                ),
                 max_parallel=updated.max_parallel,
                 created_at=updated.created_at,
                 updated_at=updated.updated_at,
