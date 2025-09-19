@@ -1245,7 +1245,11 @@ def update_assistant_config(
                 desktop_url=updated.desktop_url,
                 about=updated.about,
                 country=updated.country,
-                weekly_limit=float(updated.weekly_limit),
+                weekly_limit=(
+                    float(updated.weekly_limit)
+                    if updated.weekly_limit is not None
+                    else None
+                ),
                 max_parallel=updated.max_parallel,
                 created_at=updated.created_at,
                 updated_at=updated.updated_at,
@@ -1896,7 +1900,9 @@ def delete_voice(
 
     # Step 1: Get the voice from DB
     voice_to_delete = voice_dao.get_voice_by_id(
-        user_id=user_id, voice_id=voice_id, provider=provider
+        user_id=user_id,
+        voice_id=voice_id,
+        provider=provider,
     )
     if not voice_to_delete:
         # No session.rollback() needed here as it's a read operation that failed to find.
