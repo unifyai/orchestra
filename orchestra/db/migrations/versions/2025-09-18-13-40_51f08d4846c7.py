@@ -5,6 +5,7 @@ Revises: add_desktop_url_to_assistants
 Create Date: 2025-09-18 13:40:49.896531
 
 """
+
 import sqlalchemy as sa
 from alembic import op
 
@@ -16,36 +17,35 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # 1. Drop the existing foreign key first
+    # 1. Drop the existing foreign key constraint
     op.drop_constraint("fk_assistants_voices", "assistants", type_="foreignkey")
 
-    # 2. Ensure provider column is non-nullable
+    # 2. Add the new voice_provider column to the assistants table
+    op.add_column("assistants", sa.Column("voice_provider", sa.String(), nullable=True))
+
+    # 3. Populate 'voice_provider' using the provider from the 'voices' table
+    op.execute(
+        """
+        UPDATE assistants a
+        SET voice_provider = v.provider
+        FROM voices v
+        WHERE a.user_id = v.user_id AND a.voice_id = v.voice_id
+        """,
+    )
+
+    # 4. Make the 'provider' column in 'voices' non-nullable
     op.alter_column(
         "voices",
         "provider",
         existing_type=sa.VARCHAR(),
         nullable=False,
-        existing_server_default=sa.text("'cartesia'::character varying"),
     )
 
-    # 3. Rebuild primary key on voices to include provider
+    # 5. Rebuild the primary key on 'voices' to include 'provider'
     op.drop_constraint("voices_pkey", "voices", type_="primary")
     op.create_primary_key("voices_pkey", "voices", ["user_id", "voice_id", "provider"])
 
-    # 4. Add new column to assistants
-    op.add_column("assistants", sa.Column("voice_provider", sa.String(), nullable=True))
-
-    # 5. Populate existing assistants with default provider
-    op.execute(
-        """
-        UPDATE assistants a
-        SET voice_provider = 'elevenlabs'
-        FROM voices v
-        WHERE a.user_id = v.user_id AND a.voice_id = v.voice_id
-    """
-    )
-
-    # 6. Rebuild the foreign key with the new composite key structure
+    # 6. Re-create the foreign key constraint
     op.create_foreign_key(
         "fk_assistants_voices",
         "assistants",
