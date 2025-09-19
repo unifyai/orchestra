@@ -279,10 +279,12 @@ def create_assistant(
             region=assistant_in.region,
             profile_photo=assistant_in.profile_photo,
             profile_video=assistant_in.profile_video,
+            desktop_url=assistant_in.desktop_url,
             about=assistant_in.about,
             weekly_limit=parsed_weekly_limit,
             max_parallel=assistant_in.max_parallel,
             voice_id=assistant_in.voice_id,
+            voice_provider=assistant_in.voice_provider,
             phone=assistant_in.phone,
             email=assistant_in.email,
             country=assistant_in.country,
@@ -598,6 +600,7 @@ def create_assistant(
             region=assistant.region,
             profile_photo=assistant.profile_photo,
             profile_video=assistant.profile_video,
+            desktop_url=assistant.desktop_url,
             about=assistant.about,
             weekly_limit=(
                 float(assistant.weekly_limit)
@@ -610,6 +613,7 @@ def create_assistant(
             phone=assistant.phone,
             email=assistant.email,
             voice_id=assistant.voice_id,
+            voice_provider=assistant.voice_provider,
             country=assistant.country,
             user_whatsapp_number=assistant.user_whatsapp_number,
             assistant_whatsapp_number=assistant.assistant_whatsapp_number,
@@ -646,6 +650,7 @@ def create_assistant(
                                 "profile_video": "https://example.com/videos/alice.mp4",
                                 "about": "Mathematician and writer known for work on Analytical Engine",
                                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
+                                "voice_provider": "cartesia",
                                 "country": "US",
                                 "created_at": "2025-04-25T12:00:00Z",
                                 "updated_at": "2025-04-25T12:00:00Z",
@@ -664,6 +669,7 @@ def create_assistant(
                                 "profile_video": "https://example.com/videos/bob.mp4",
                                 "about": "Machine learning expert with focus on computer vision",
                                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
+                                "voice_provider": "cartesia",
                                 "country": "CA",
                                 "created_at": "2025-04-24T10:30:00Z",
                                 "updated_at": "2025-04-24T10:30:00Z",
@@ -705,14 +711,7 @@ def list_assistants(
             email=email,
         )
         voice_dao = VoiceDAO(session)
-        tts_providers = [
-            (
-                voice_dao.get_voice_by_id(a.user_id, a.voice_id).provider
-                if a.voice_id is not None
-                else "cartesia"
-            )
-            for a in assistants
-        ]
+
         return InfoResponse(
             info=[
                 AssistantRead(
@@ -724,6 +723,7 @@ def list_assistants(
                     region=a.region,
                     profile_photo=a.profile_photo,
                     profile_video=a.profile_video,
+                    desktop_url=a.desktop_url,
                     about=a.about,
                     country=a.country,
                     weekly_limit=(
@@ -737,10 +737,10 @@ def list_assistants(
                     user_whatsapp_number=a.user_whatsapp_number,
                     assistant_whatsapp_number=a.assistant_whatsapp_number,
                     email=a.email,
-                    tts_provider=tts_providers[i],
                     voice_id=a.voice_id,
+                    voice_provider=a.voice_provider,
                 )
-                for i, a in enumerate(assistants)
+                for a in assistants
             ],
         )
     except Exception as e:
@@ -976,6 +976,7 @@ def delete_assistant(
                             "profile_photo": "https://example.com/photos/alice.jpg",
                             "profile_video": "https://example.com/videos/alice.mp4",
                             "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
+                            "voice_provider": "cartesia",
                             "country": "US",
                             "created_at": "2025-04-25T12:00:00Z",
                             "updated_at": "2025-04-25T14:30:00Z",
@@ -1186,6 +1187,7 @@ def update_assistant_config(
             agent_id=assistant_id,
             profile_photo=update.profile_photo,
             profile_video=update.profile_video,
+            desktop_url=update.desktop_url,
             about=update.about,
             phone=assistant_phone,
             email=assistant_email,
@@ -1195,6 +1197,7 @@ def update_assistant_config(
             weekly_limit=weekly_limit,
             max_parallel=update.max_parallel,
             voice_id=update.voice_id,
+            voice_provider=update.voice_provider,
             country=update.country,
         )
         if not updated:
@@ -1239,6 +1242,7 @@ def update_assistant_config(
                 region=updated.region,
                 profile_photo=updated.profile_photo,
                 profile_video=updated.profile_video,
+                desktop_url=updated.desktop_url,
                 about=updated.about,
                 country=updated.country,
                 weekly_limit=(
@@ -1255,6 +1259,7 @@ def update_assistant_config(
                 assistant_whatsapp_number=assistant_whatsapp_number,
                 user_phone=updated.user_phone,
                 voice_id=updated.voice_id,
+                voice_provider=updated.voice_provider,
             ),
         )
     except Exception as e:
@@ -1884,6 +1889,7 @@ def list_voices(
 def delete_voice(
     voice_id: str,
     request: Request,
+    provider: str = Query(..., description="The provider of the voice to delete"),
     session: Session = Depends(get_db_session),
     cartesia_service: CartesiaService = Depends(),
     elevenlabs_service: ElevenLabsService = Depends(),
@@ -1893,7 +1899,11 @@ def delete_voice(
     voice_dao = VoiceDAO(session)
 
     # Step 1: Get the voice from DB
-    voice_to_delete = voice_dao.get_voice_by_id(user_id=user_id, voice_id=voice_id)
+    voice_to_delete = voice_dao.get_voice_by_id(
+        user_id=user_id,
+        voice_id=voice_id,
+        provider=provider,
+    )
     if not voice_to_delete:
         # No session.rollback() needed here as it's a read operation that failed to find.
         raise HTTPException(
@@ -1946,7 +1956,7 @@ def delete_voice(
     # - OR Provider deletion returned 404 (non-critical)
     # So, proceed to delete from our database.
     try:
-        voice_dao.delete_voice(user_id=user_id, voice_id=voice_id)
+        voice_dao.delete_voice(user_id=user_id, voice_id=voice_id, provider=provider)
         session.commit()
         return InfoResponse(info="Voice deleted successfully.")
     except (

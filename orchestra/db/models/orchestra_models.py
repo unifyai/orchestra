@@ -1335,6 +1335,7 @@ class Assistant(Base):
     region = Column(String, nullable=True)
     profile_photo = Column(String, nullable=True)
     profile_video = Column(String, nullable=True)
+    desktop_url = Column(String, nullable=True)
     about = Column(String, nullable=True)
     country = Column(String, nullable=True)
     weekly_limit = Column(Numeric, nullable=True)
@@ -1356,11 +1357,12 @@ class Assistant(Base):
         nullable=True,
         index=True,
     )
+    voice_provider = Column(String, nullable=True)
 
     __table_args__ = (
         ForeignKeyConstraint(
-            ["user_id", "voice_id"],
-            ["voices.user_id", "voices.voice_id"],
+            ["user_id", "voice_id", "voice_provider"],
+            ["voices.user_id", "voices.voice_id", "voices.provider"],
             name="fk_assistants_voices",
         ),
         UniqueConstraint(
@@ -1399,7 +1401,7 @@ class Voice(Base):
         nullable=False,
         index=True,
     )
-    provider = Column(String, nullable=True, server_default="cartesia")
+    provider = Column(String, primary_key=True, nullable=False)
     name = Column(String, nullable=False)
     description = Column(String, nullable=False)
     gender = Column(String, nullable=True)
@@ -1411,8 +1413,9 @@ class Voice(Base):
     )  # True if this is a Cartesia preset voice
 
     __table_args__ = (
+        sa.PrimaryKeyConstraint("user_id", "voice_id", "provider"),
         sa.CheckConstraint(
-            "provider IN ('cartesia', 'elevenlabs')",
+            "provider IN ('cartesia', 'elevenlabs', 'openai')",
             name="ck_voice_provider",
         ),
     )
