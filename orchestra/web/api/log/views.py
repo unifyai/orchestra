@@ -625,12 +625,21 @@ def create_from_logs(
             resolved_ids_dict = {}
             for key, ids in resolved_ids.items():
                 resolved_ids_dict.setdefault(alias_to_key_map[key], []).extend(ids)
-            # get the filtered log events
+
+            # Flatten all referenced log_event_ids across aliases
+            filtered_log_ids = list(
+                {int(i) for ids in resolved_ids_dict.values() for i in ids},
+            )
+
+            # Get the filtered log events scoped to provided IDs
             log_event_ids_subq = (
                 session.query(LogEvent.id)
                 .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
                 .filter(LogEvent.project_id == project_obj.id)
-                .filter(LogEventContext.context_id == context_id)
+                .filter(
+                    LogEventContext.context_id == context_id,
+                    LogEvent.id.in_(filtered_log_ids),
+                )
                 .subquery(name="log_event_ids_subq")
             )
             computed_values = _compute_expression(

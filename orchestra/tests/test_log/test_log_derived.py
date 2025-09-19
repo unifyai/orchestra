@@ -40,6 +40,49 @@ async def test_create_derived_entry_with_list(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_derived_creation_batched_counts_not_cumulative(client: AsyncClient):
+    """
+    Create logs in batches and immediately create derived logs for each batch's IDs.
+    Verify each create-derived call reports only the count for that batch (not cumulative).
+    """
+    project_name = "test_derived_batched_counts"
+    await _create_project(client, project_name, user=1)
+
+    key = "text_embed"
+    equation = "embed({log:text_content})"
+
+    batch_sizes = [5, 10, 15]
+    for batch_idx, size in enumerate(batch_sizes):
+        # Create a batch of base logs
+        entries = [
+            {"text_content": f"batch-{batch_idx}-sample-{i}"} for i in range(size)
+        ]
+        resp = await client.post(
+            "/v0/logs",
+            json={"project": project_name, "entries": entries},
+            headers=HEADERS,
+        )
+        assert resp.status_code == 200, resp.text
+        log_event_ids = resp.json()["log_event_ids"]
+        assert len(log_event_ids) == size
+
+        # Create derived logs referencing only this batch's IDs
+        derived_resp = await _create_derived_entry(
+            client,
+            project_name,
+            key,
+            equation,
+            referenced_logs={"log": log_event_ids},
+        )
+        assert derived_resp.status_code == 200, derived_resp.text
+        info_msg = derived_resp.json().get("info", "")
+        print(info_msg)
+        assert (
+            f"Created {size} derived logs" in info_msg
+        ), f"Unexpected info message for batch {batch_idx}: {info_msg}"
+
+
+@pytest.mark.anyio
 async def test_create_derived_entry_with_filter_expr(client: AsyncClient):
     project_name = "test_project_filter"
     await _create_project(client, project_name, user=1)
