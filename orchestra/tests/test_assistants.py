@@ -367,6 +367,36 @@ async def test_update_email_only(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_update_desktop_url_only(client: AsyncClient):
+    # Create assistant, then `PATCH /v0/assistant/{id}/config` desktop_url only -> updated
+    payload = {
+        "first_name": "Desktop",
+        "surname": "Updater",
+        "age": 27,
+        "weekly_limit": 12.0,
+        "max_parallel": 2,
+        "region": "Europe",
+        "profile_photo": "https://example.com/photos/desktop.jpg",
+        "about": "Testing desktop url update",
+        "create_infra": False,
+    }
+    create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert create.status_code == 200
+    aid = create.json()["info"]["agent_id"]
+
+    new_desktop_url = "https://app.example.com/assistants/desktop-updater"
+    update_payload = {"desktop_url": new_desktop_url, "create_infra": False}
+    patch = await client.patch(
+        f"/v0/assistant/{aid}/config",
+        json=update_payload,
+        headers=HEADERS,
+    )
+    assert patch.status_code == 200
+    updated = patch.json()["info"]
+    assert updated["desktop_url"] == new_desktop_url
+
+
+@pytest.mark.anyio
 async def test_update_multiple_fields(client: AsyncClient):
     # Create assistant, then `PATCH /v0/assistant/{id}/config` with multiple fields -> all updated
     payload = {

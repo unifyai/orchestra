@@ -42,13 +42,16 @@ class VoiceDAO:
         self.session.flush()
         return voice
 
-    def get_voice_by_id(self, user_id: str, voice_id: str) -> Optional[Voice]:
+    def get_voice_by_id(
+        self, user_id: str, voice_id: str, provider: str
+    ) -> Optional[Voice]:
         """
         Retrieve a Voice by user and its TTS provider voice_id.
         """
         stmt = select(Voice).where(
             Voice.voice_id == voice_id,
             Voice.user_id == user_id,
+            Voice.provider == provider,
         )
         result = self.session.execute(stmt).scalar_one_or_none()
         return result
@@ -61,18 +64,19 @@ class VoiceDAO:
         result = self.session.execute(stmt).scalars().all()
         return result
 
-    def delete_voice(self, user_id: str, voice_id: str) -> None:
+    def delete_voice(self, user_id: str, voice_id: str, provider: str) -> None:
         """
         Delete a Voice by user and its TTS provider voice_id.
         """
-        voice = self.get_voice_by_id(user_id, voice_id)
+        voice = self.get_voice_by_id(user_id, voice_id, provider=provider)
         if voice:
             # Manually nullify voice_id in referencing assistants for this user.
             stmt = (
                 update(Assistant)
                 .where(Assistant.user_id == user_id)
                 .where(Assistant.voice_id == voice_id)
-                .values(voice_id=None)
+                .where(Assistant.voice_provider == provider)
+                .values(voice_id=None, voice_provider=None)
             )
             self.session.execute(stmt)
 
