@@ -29,6 +29,7 @@ class AssistantDAO:
         profile_photo: Optional[str] = None,
         profile_video: Optional[str] = None,
         desktop_url: Optional[str] = None,
+        user_local_desktop: Optional[str] = None,
         phone: Optional[str] = None,
         user_phone: Optional[str] = None,
         email: Optional[str] = None,
@@ -49,6 +50,7 @@ class AssistantDAO:
             profile_photo=profile_photo,
             profile_video=profile_video,
             desktop_url=desktop_url,
+            user_local_desktop=user_local_desktop,
             about=about,
             weekly_limit=weekly_limit,
             max_parallel=max_parallel,
@@ -124,6 +126,7 @@ class AssistantDAO:
         max_parallel: Optional[int] = None,
         about: Optional[str] = None,
         desktop_url: Optional[str] = None,
+        user_local_desktop: Optional[str] = None,
         phone: Optional[str] = None,
         user_phone: Optional[str] = None,
         email: Optional[str] = None,
@@ -149,6 +152,8 @@ class AssistantDAO:
             assistant.about = about
         if desktop_url is not None:
             assistant.desktop_url = desktop_url
+        if user_local_desktop is not None:
+            assistant.user_local_desktop = user_local_desktop
         if phone is not None:
             assistant.phone = phone
         if user_phone is not None:
