@@ -1336,6 +1336,7 @@ class Assistant(Base):
     profile_photo = Column(String, nullable=True)
     profile_video = Column(String, nullable=True)
     desktop_url = Column(String, nullable=True)
+    user_local_desktop = Column(String, nullable=True)
     about = Column(String, nullable=True)
     country = Column(String, nullable=True)
     weekly_limit = Column(Numeric, nullable=True)
@@ -1370,6 +1371,10 @@ class Assistant(Base):
             "first_name",
             "surname",
             name="uq_user_assistant_name",
+        ),
+        sa.CheckConstraint(
+            "user_local_desktop IN ('ubuntu', 'windows', 'macos')",
+            name="ck_assistant_user_local_desktop",
         ),
     )
 
