@@ -160,7 +160,7 @@ async def test_register_preset_voice(
     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
         mock_state.user_id = user_id
         await client.delete(
-            f"/v0/assistant/voice/{payload['voice_id']}",
+            f"/v0/assistant/voice/{payload['voice_id']}?provider={payload['provider']}",
             headers=HEADERS,
         )
 
@@ -194,7 +194,7 @@ async def test_register_non_preset_voice(
     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
         mock_state.user_id = user_id
         await client.delete(
-            f"/v0/assistant/voice/{payload['voice_id']}",
+            f"/v0/assistant/voice/{payload['voice_id']}?provider={payload['provider']}",
             headers=HEADERS,
         )
 
@@ -229,7 +229,7 @@ async def test_register_voice_already_exists_in_db(
     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
         mock_state.user_id = user_id
         await client.delete(
-            f"/v0/assistant/voice/{payload['voice_id']}",
+            f"/v0/assistant/voice/{payload['voice_id']}?provider={payload['provider']}",
             headers=HEADERS,
         )
 
@@ -280,6 +280,7 @@ async def test_delete_non_preset_voice(
     cartesia_mock, _, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
     voice_id_to_delete = "delete-non-preset-test"
+    provider = "cartesia"
     reg_payload = {
         "voice_id": voice_id_to_delete,
         "name": "To Del NP",
@@ -287,14 +288,14 @@ async def test_delete_non_preset_voice(
         "gender": "f",
         "language": "de",
         "is_preset": False,
-        "provider": "cartesia",
+        "provider": provider,
     }
 
     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
         mock_state.user_id = user_id
         await client.post("/v0/assistant/voice", json=reg_payload, headers=HEADERS)
         resp_del = await client.delete(
-            f"/v0/assistant/voice/{voice_id_to_delete}",
+            f"/v0/assistant/voice/{voice_id_to_delete}?provider={provider}",
             headers=HEADERS,
         )
 
@@ -314,6 +315,7 @@ async def test_delete_preset_voice(
     cartesia_mock, _, _, _ = mock_tts_services_factory
     user_id = await get_user_id_from_request_state(client)
     voice_id_to_delete = "delete-preset-registration-test"
+    provider = "cartesia"
     reg_payload = {
         "voice_id": voice_id_to_delete,
         "name": "To Del P",
@@ -321,14 +323,14 @@ async def test_delete_preset_voice(
         "gender": "m",
         "language": "ja",
         "is_preset": True,
-        "provider": "cartesia",
+        "provider": provider,
     }
 
     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
         mock_state.user_id = user_id
         await client.post("/v0/assistant/voice", json=reg_payload, headers=HEADERS)
         resp_del = await client.delete(
-            f"/v0/assistant/voice/{voice_id_to_delete}",
+            f"/v0/assistant/voice/{voice_id_to_delete}?provider={provider}",
             headers=HEADERS,
         )
 
@@ -406,23 +408,23 @@ async def test_list_voices(
 
     assert custom_voice_payload["voice_id"] in listed_voice_ids
     assert user_registered_preset_payload["voice_id"] in listed_voice_ids
-    assert global_preset_payload["voice_id"] in listed_voice_ids
-    assert len(listed_voices) == 3
+    assert global_preset_payload["voice_id"] not in listed_voice_ids
+    assert len(listed_voices) == 2
 
     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
         mock_state.user_id = user_id
         await client.delete(
-            f"/v0/assistant/voice/{custom_voice_payload['voice_id']}",
+            f"/v0/assistant/voice/{custom_voice_payload['voice_id']}?provider={custom_voice_payload['provider']}",
             headers=HEADERS,
         )
         await client.delete(
-            f"/v0/assistant/voice/{user_registered_preset_payload['voice_id']}",
+            f"/v0/assistant/voice/{user_registered_preset_payload['voice_id']}?provider={user_registered_preset_payload['provider']}",
             headers=HEADERS,
         )
     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
         mock_state.user_id = other_user_id
         await client.delete(
-            f"/v0/assistant/voice/{global_preset_payload['voice_id']}",
+            f"/v0/assistant/voice/{global_preset_payload['voice_id']}?provider={global_preset_payload['provider']}",
             headers=other_user["headers"],
         )
 
@@ -480,7 +482,7 @@ async def test_clone_voice_cartesia(
     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
         mock_state.user_id = user_id
         await client.delete(
-            f"/v0/assistant/voice/{cloned_voice_data['voice_id']}",
+            f"/v0/assistant/voice/{cloned_voice_data['voice_id']}?provider=cartesia",
             headers=HEADERS,
         )
     cartesia_mock.delete_voice.assert_called_with(
@@ -538,7 +540,7 @@ async def test_clone_voice_autodetect_language(
     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
         mock_state.user_id = user_id
         await client.delete(
-            f"/v0/assistant/voice/{cloned_voice_data['voice_id']}",
+            f"/v0/assistant/voice/{cloned_voice_data['voice_id']}?provider=cartesia",
             headers=HEADERS,
         )
 
@@ -630,7 +632,7 @@ async def test_clone_voice_elevenlabs(
     with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
         mock_state.user_id = user_id
         await client.delete(
-            f"/v0/assistant/voice/{cloned_voice_data['voice_id']}",
+            f"/v0/assistant/voice/{cloned_voice_data['voice_id']}?provider=elevenlabs",
             headers=HEADERS,
         )
     elevenlabs_mock.delete_voice.assert_called_with(
