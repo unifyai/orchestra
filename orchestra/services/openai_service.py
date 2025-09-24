@@ -457,7 +457,21 @@ class OpenAIService:
         Generates speech from text using OpenAI API and returns raw audio bytes and content type.
         """
 
-        allowed_voices = ["marin", "cedar", "alloy", "ash", "shimmer", "coral"]
+        allowed_voices = [
+            "alloy",
+            "ash",
+            "ballad",
+            "cedar",
+            "coral",
+            "echo",
+            "fable",
+            "marin",
+            "nova",
+            "onyx",
+            "sage",
+            "shimmer",
+            "verse",
+        ]
         if voice_id not in allowed_voices:
             raise OpenAIAPIError(
                 status_code=status.HTTP_400_BAD_REQUEST,
