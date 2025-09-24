@@ -1,6 +1,7 @@
-FROM python:3.11.4-slim-bullseye as prod
+FROM python:3.11.4-slim-bullseye AS prod
 RUN apt-get update && apt-get install -y \
   gcc \
+  g++ \
   && rm -rf /var/lib/apt/lists/*
 
 # Install curl
@@ -40,6 +41,6 @@ CMD if [ "$ON_PREM" = "true" ]; then \
   /usr/local/bin/python -m orchestra; \
   fi
 
-FROM prod as dev
+FROM prod AS dev
 
 RUN poetry install
