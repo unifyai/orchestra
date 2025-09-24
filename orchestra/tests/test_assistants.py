@@ -367,6 +367,73 @@ async def test_update_email_only(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_update_desktop_url_only(client: AsyncClient):
+    # Create assistant, then `PATCH /v0/assistant/{id}/config` desktop_url only -> updated
+    payload = {
+        "first_name": "Desktop",
+        "surname": "Updater",
+        "age": 27,
+        "weekly_limit": 12.0,
+        "max_parallel": 2,
+        "region": "Europe",
+        "profile_photo": "https://example.com/photos/desktop.jpg",
+        "about": "Testing desktop url update",
+        "create_infra": False,
+    }
+    create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert create.status_code == 200
+    aid = create.json()["info"]["agent_id"]
+
+    new_desktop_url = "https://app.example.com/assistants/desktop-updater"
+    update_payload = {"desktop_url": new_desktop_url, "create_infra": False}
+    patch = await client.patch(
+        f"/v0/assistant/{aid}/config",
+        json=update_payload,
+        headers=HEADERS,
+    )
+    assert patch.status_code == 200
+    updated = patch.json()["info"]
+    assert updated["desktop_url"] == new_desktop_url
+
+
+@pytest.mark.anyio
+async def test_update_user_local_desktop_only(client: AsyncClient):
+    # Create an assistant with some initial data, leaving user_local_desktop as default (None)
+    payload = {
+        "first_name": "Desktop",
+        "surname": "Tester",
+        "age": 31,
+        "weekly_limit": 10.0,
+        "max_parallel": 2,
+        "region": "Digital Ocean",
+        "about": "An assistant for testing desktop updates.",
+        "create_infra": False,
+    }
+    create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert create_resp.status_code == 200
+    created_data = create_resp.json()["info"]
+    agent_id = created_data["agent_id"]
+    assert created_data["user_local_desktop"] is None
+
+    # Now, update only the user_local_desktop field
+    new_desktop = "macos"
+    update_payload = {"user_local_desktop": new_desktop, "create_infra": False}
+    patch_resp = await client.patch(
+        f"/v0/assistant/{agent_id}/config",
+        json=update_payload,
+        headers=HEADERS,
+    )
+
+    # Assert that the update was successful and only the intended field changed
+    assert patch_resp.status_code == 200
+    updated_data = patch_resp.json()["info"]
+    assert updated_data["user_local_desktop"] == new_desktop
+    assert updated_data["first_name"] == payload["first_name"]
+    assert updated_data["region"] == payload["region"]
+    assert updated_data["weekly_limit"] == payload["weekly_limit"]
+
+
+@pytest.mark.anyio
 async def test_update_multiple_fields(client: AsyncClient):
     # Create assistant, then `PATCH /v0/assistant/{id}/config` with multiple fields -> all updated
     payload = {
