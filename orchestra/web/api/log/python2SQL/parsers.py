@@ -610,6 +610,7 @@ def _transform_ast(node: ast.AST, preserve_string_literals: bool = False) -> dic
             "now",
             "round",
             "round_timestamp",
+            "num_tokens",
             "mean",
             "sum",
             "var",
