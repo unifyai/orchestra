@@ -233,6 +233,13 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
             },
         ),
         (
+            "num_tokens(content_field)",
+            {
+                "operand": "num_tokens",
+                "rhs": {"type": "identifier", "value": "content_field"},
+            },
+        ),
+        (
             "embed(content_field)",
             {
                 "operand": "embed",
@@ -977,6 +984,10 @@ def test_ast_parser(expression, expected_dict):
         # Reduction functions - mode
         ("mode(test_list) == 2", {"test_list": [1, 2, 2, 3]}, True),
         ("mode(test_dict) == 2", {"test_dict": {"a": 2, "b": 2, "c": 3}}, True),
+        # num_tokens basic checks (ceil 0.25*bytes)
+        ("num_tokens(s) == 2", {"s": "hello"}, True),  # 5 bytes -> ceil(1.25)=2
+        ("num_tokens(n) == 1", {"n": 123}, True),  # '123' -> 3 bytes -> ceil(0.75)=1
+        ("num_tokens(zh) == 2", {"zh": "世界"}, True),  # 6 bytes -> ceil(1.5)=2
     ],
 )
 async def test_log_filter_helper_w_arithmetic(
@@ -1260,6 +1271,31 @@ async def test_get_logs_with_derived_math_expressions_and_indexing(client: Async
     )
     assert resp.status_code == 200, resp.json()
 
+    # (J) Token estimate on description for logs with description
+    derived_conf_tokens = {
+        "key": "dl_desc_tokens",
+        "equation": "num_tokens({desc:_/description})",
+        "referenced_logs": {
+            "desc": [
+                log_id_boiling,
+                log_id_freezing,
+                log_id_sun,
+                log_id_nitrogen,
+                log_id_lava,
+                log_id_air,
+            ],
+        },
+    }
+    resp = await _create_derived_entry(
+        client,
+        project_name,
+        derived_conf_tokens["key"],
+        derived_conf_tokens["equation"],
+        derived_conf_tokens["referenced_logs"],
+        user=user_id,
+    )
+    assert resp.status_code == 200, resp.json()
+
     ############################################################################
     # 4) Verify the derived entries in GET /v0/logs
     ############################################################################
@@ -1367,6 +1403,14 @@ async def test_get_logs_with_derived_math_expressions_and_indexing(client: Async
             assert (
                 boil_floor_val == expected
             ), f"Floor division mismatch on log_id={log_id}. Got {boil_floor_val}, expected {expected}"
+
+        # (J) dl_desc_tokens should equal ceil(0.25 * byte_len(description))
+        desc_tokens = derived.get("dl_desc_tokens")
+        if desc_tokens is not None and desc is not None:
+            est = (len(desc.encode("utf-8")) + 3) // 4  # ceil(0.25*x) without floats
+            assert (
+                desc_tokens == est
+            ), f"Token estimate mismatch: log_id={log_id}, got {desc_tokens}, expected {est}"
 
 
 @pytest.mark.anyio
@@ -2053,6 +2097,75 @@ async def test_get_logs_w_filtering(client: AsyncClient):
     assert len(result["logs"]) == 2
     assert result["logs"][0]["entries"]["_/description"] is None
     assert result["logs"][1]["entries"]["_/description"] is None
+
+    # num_tokens derived behavior sanity
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"filter_expr": "num_tokens(_/description) >= 1"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    # Non-empty descriptions should match; two Nones should not
+    assert len(result["logs"]) >= 1
+
+
+@pytest.mark.anyio
+async def test_num_tokens_function_w_various_types(client: AsyncClient):
+    project_name = "test_num_tokens_types"
+    await _create_project(client, project_name)
+
+    # Create separate logs, one per data type/key
+    values_by_key = {
+        "s": "hello",
+        "n": 123,
+        "f": 3.14,
+        "b": True,
+        "dt": "2023-01-01T00:00:00+00:00",
+        "d": "2023-01-01",
+        "t": "14:30:00",
+        "td": "P1D",
+        "lst": [1, 2],
+        "obj": {"a": 1},
+        "none": None,
+        "zh": "世界",
+    }
+
+    log_id_by_key = {}
+    for k, v in values_by_key.items():
+        resp = await _create_log(client, project_name, entries={k: v})
+        assert resp.status_code == 200, resp.text
+        log_id_by_key[k] = resp.json()["log_event_ids"][0]
+
+    # For each expression, assert exactly the expected log returns
+    cases = [
+        ("num_tokens(s) == 2", "s"),  # 'hello' (5 bytes) -> ceil(1.25)=2
+        ("num_tokens(n) == 1", "n"),  # '123' (3 bytes) -> ceil(0.75)=1
+        ("num_tokens(f) >= 1", "f"),  # string cast of float, at least 1
+        ("num_tokens(b) == 1", "b"),  # 'True' (4 bytes) -> 1
+        ("num_tokens(dt) >= 6", "dt"),  # ISO timestamp -> many bytes
+        ("num_tokens(d) == 3", "d"),  # '2023-01-01' (10 bytes) -> ceil(2.5)=3
+        ("num_tokens(t) == 2", "t"),  # '14:30:00' (8 bytes) -> 2
+        ("num_tokens(td) == 1", "td"),  # 'P1D' (3 bytes) -> 1
+        ("num_tokens(lst) >= 1", "lst"),  # JSON/text for list
+        ("num_tokens(obj) >= 1", "obj"),  # JSON/text for dict
+        ("num_tokens(none) == 0", "none"),  # None -> 0
+        ("num_tokens(zh) == 2", "zh"),  # '世界' (6 bytes) -> ceil(1.5)=2
+    ]
+
+    for expr, expected_key in cases:
+        r = await client.get(
+            "/v0/logs",
+            params={"project": project_name, "filter_expr": expr},
+            headers=HEADERS,
+        )
+        assert r.status_code == 200, r.text
+        data = r.json()
+        got_ids = {log["id"] for log in data["logs"]}
+        exp_ids = {log_id_by_key[expected_key]}
+        assert (
+            got_ids == exp_ids
+        ), f"Unexpected result for {expr}. Got ids={got_ids}, expected ids={exp_ids}"
 
 
 @pytest.mark.anyio

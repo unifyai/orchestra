@@ -187,6 +187,7 @@ def build_sql_query(
         "type",
         "round",
         "round_timestamp",
+        "num_tokens",
         "exists",
         "version",
         "BASE",

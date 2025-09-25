@@ -77,19 +77,16 @@ MAX_TOKENS_PER_REQUEST = 2970000
 MAX_TOKENS_PER_INPUT = 8000
 
 
-def count_tokens_per_utf_byte(document: str) -> float:
+def count_tokens_per_utf_byte(document: str) -> int:
     """
     Estimates token count based on UTF-8 byte length.
     Open AI uses this rather than `tiktoken` contrary
     to what is mentioned in the docs:
     https://community.openai.com/t/max-total-embeddings-tokens-per-request/1254699/6
     """
-    total_estimated_tokens = 0
-    for char in document:
-        byte_length = len(char.encode("utf-8"))
-        total_estimated_tokens += byte_length * 0.25  # 0.25 tokens per byte
-
-    return total_estimated_tokens
+    # Single C-level pass to UTF-8; then take length
+    n_bytes = len(document.encode("utf-8"))
+    return math.ceil(0.25 * n_bytes)  # 0.25 tokens per byte
 
 
 @functools.lru_cache(maxsize=4096)

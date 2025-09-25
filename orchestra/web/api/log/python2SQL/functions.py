@@ -41,6 +41,7 @@ from .helpers import (
     _get_parent_idx,
     _select_value,
     cast_expr,
+    count_tokens_per_utf_byte,
     unify_inferred_types,
 )
 
@@ -228,6 +229,37 @@ def _handle_functions(
             )
         else:
             return len(rhs_expr)
+
+    elif operand == "num_tokens":
+        # Estimate tokens as ceil(0.25 * UTF-8 byte length), returned as integer
+        if isinstance(rhs_expr, (Subquery, ColumnClause)):
+            val, _val_type = _select_value(rhs_expr, session)
+            # Convert value to text (remove quotes if present), then take UTF-8 byte length
+            text_val = func.replace(cast(val, Text), '"', "")
+            byte_len = func.octet_length(
+                func.coalesce(text_val, literal("", type_=Text)),
+            )
+            expr = func.ceil(cast(byte_len, Float) * literal(0.25, type_=Float))
+            if isinstance(rhs_expr, ColumnClause):
+                return expr
+            select_cols = [rhs_expr.c.log_event_id.label("log_event_id")]
+            if "__comp_idx__" in rhs_expr.c.keys():
+                select_cols.append(rhs_expr.c.__comp_idx__.label("__comp_idx__"))
+            if "__parent_idx__" in rhs_expr.c.keys():
+                select_cols.append(rhs_expr.c.__parent_idx__.label("__parent_idx__"))
+            select_cols.extend(
+                [expr.label("value"), literal("int").label("inferred_type")],
+            )
+            return alias_utils.subquery_with_unique_alias(
+                select(*select_cols).select_from(rhs_expr),
+                prefix="func_result",
+            )
+        else:
+            # For literal Python values, use the shared helper
+            try:
+                return int(count_tokens_per_utf_byte(str(rhs_expr)))
+            except Exception:
+                return 0
 
     elif operand == "str":
         if isinstance(rhs_expr, (Subquery, ColumnClause)):
