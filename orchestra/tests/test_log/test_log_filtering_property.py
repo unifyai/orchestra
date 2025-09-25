@@ -22,6 +22,7 @@ SUPPORTED_FUNCTIONS = [
     "type",
     "round",
     "round_timestamp",
+    "num_tokens",
     "exists",
     "version",
     "BASE",
@@ -1143,7 +1144,9 @@ def value_function_strategy(draw, type_hint: Optional[str] = None) -> Tuple[str,
 
     if type_hint == "int":
         # Integer-returning functions
-        func_name = draw(st.sampled_from(["len", "round", "version", "BASE"]))
+        func_name = draw(
+            st.sampled_from(["len", "round", "version", "BASE", "num_tokens"]),
+        )
 
         if func_name == "len":
             # len works on strings, lists, dicts
@@ -1167,6 +1170,10 @@ def value_function_strategy(draw, type_hint: Optional[str] = None) -> Tuple[str,
             col_name, _ = draw(column_ref_strategy(allowed_types=["str"]))
             return (f"version({col_name})", "int")
 
+        elif func_name == "num_tokens":
+            # num_tokens works on any column type
+            col_name, _ = draw(column_ref_strategy())
+            return (f"num_tokens({col_name})", "int")
         else:  # BASE
             # BASE works on int columns
             col_name, _ = draw(column_ref_strategy(allowed_types=["int"]))
