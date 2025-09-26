@@ -803,7 +803,7 @@ def delete_project(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
     # Check if trying to delete the protected project (Unity)
-    if project.name == "Unity":
+    if project.name in ["Unity", "Debug"]:
         raise HTTPException(
             status_code=403,
             detail="The 'Unity' project cannot be deleted.",
