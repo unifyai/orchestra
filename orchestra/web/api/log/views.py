@@ -3144,6 +3144,11 @@ def get_log_groups(
         description="Name of the log entry to get distinct values from.",
         example="system_prompt",
     ),
+    context: Optional[str] = Query(
+        None,
+        description="Static context to filter logs by.",
+        example="training",
+    ),
     filter_expr: Optional[str] = Query(
         None,
         description="Boolean string to filter entries before grouping.",
@@ -3192,7 +3197,7 @@ def get_log_groups(
         request_fastapi=request_fastapi,
         project=project,
         column_context=None,
-        context=None,
+        context=context,
         filter_expr=filter_expr,
         sorting=None,
         from_ids=from_ids,
