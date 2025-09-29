@@ -32,6 +32,64 @@ async def test_get_logs_groups_project_not_found(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_get_log_groups_by_context(client: AsyncClient):
+    project_name = "test-groups-by-context"
+    _ = await _create_project(client, project_name)
+
+    ctx_a = "Context/A"
+    ctx_b = "Context/B"
+
+    # Create logs in two contexts with distinct param values
+    for sp in ["A1", "A2"]:
+        r = await _create_log(
+            client,
+            project_name,
+            params={"system_prompt": sp},
+            entries={"x": 1},
+            context=ctx_a,
+        )
+        assert r.status_code == 200, r.json()
+
+    for sp in ["B1", "B2"]:
+        r = await _create_log(
+            client,
+            project_name,
+            params={"system_prompt": sp},
+            entries={"x": 2},
+            context=ctx_b,
+        )
+        assert r.status_code == 200, r.json()
+
+    # Ensure groups for context A only
+    resp_a = await client.get(
+        "/v0/logs/groups",
+        params={
+            "project": project_name,
+            "key": "system_prompt",
+            "context": ctx_a,
+        },
+        headers=HEADERS,
+    )
+    assert resp_a.status_code == 200, resp_a.json()
+    groups_a = resp_a.json()
+    assert set(groups_a.values()) == {"A1", "A2"}
+
+    # Ensure groups for context B only
+    resp_b = await client.get(
+        "/v0/logs/groups",
+        params={
+            "project": project_name,
+            "key": "system_prompt",
+            "context": ctx_b,
+        },
+        headers=HEADERS,
+    )
+    assert resp_b.status_code == 200, resp_b.json()
+    groups_b = resp_b.json()
+    assert set(groups_b.values()) == {"B1", "B2"}
+
+
+@pytest.mark.anyio
 async def test_get_logs_with_group_threshold(client: AsyncClient):
     project_name = "group-threshold-test"
     _ = await _create_project(client, project_name)
