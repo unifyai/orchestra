@@ -24,12 +24,21 @@ def create_phone_number(country: str = "US", is_staging: bool = False):
     sms_url = "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/" + (
         "twilio-msg-webhook" if not is_staging else "twilio-msg-webhook-staging"
     )
+    status_callback = (
+        "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/"
+        + (
+            "twilio-status-callback"
+            if not is_staging
+            else "twilio-status-callback-staging"
+        )
+    )
     return requests.post(
         f"{COMMS_URL}/phone/create",
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         json={
             "voice_url": voice_url,
             "sms_url": sms_url,
+            "status_callback": status_callback,
             "country": country,
         },
     ).json()
