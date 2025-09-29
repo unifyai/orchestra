@@ -66,7 +66,7 @@ INSERT INTO model VALUES (11, 'mistral-small', NOW(), 'dummy_task', true);
 INSERT INTO model VALUES (12, 'claude-3.5-sonnet', NOW(), 'dummy_task', true);
 INSERT INTO model VALUES (13, 'llama-3.1-8b-chat', NOW(), 'dummy_task', true);
 INSERT INTO model VALUES (14, 'deepseek-v3', NOW(), 'dummy_task', true);
-INSERT INTO model VALUES (15, 'grok-2', NOW(), 'dummy_task', true);
+INSERT INTO model VALUES (15, 'grok-4', NOW(), 'dummy_task', true);
 
 INSERT INTO endpoint VALUES (1, 9, 3, NOW(), true);
 INSERT INTO endpoint VALUES (3, 13, 4, NOW(), true);
@@ -77,7 +77,7 @@ INSERT INTO endpoint VALUES (10, 6, 11, NOW(), true);
 INSERT INTO endpoint VALUES (11, 9, 11, NOW(), true);
 INSERT INTO endpoint VALUES (15, 7, 1, NOW(), true);
 INSERT INTO endpoint VALUES (16, 8, 12, NOW(), true);
-INSERT INTO endpoint VALUES (34, 9, 35, NOW(), true);
+INSERT INTO endpoint VALUES (34, 13, 35, NOW(), true);
 INSERT INTO endpoint VALUES (36, 12, 12, NOW(), true);
 INSERT INTO endpoint VALUES (37, 10, 36, NOW(), true);
 INSERT INTO endpoint VALUES (38, 13, 3, NOW(), true);
