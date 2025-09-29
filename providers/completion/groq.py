@@ -28,21 +28,6 @@ class Groq(BaseCompletionProvider):
 
 
 supported_models = {
-    "gemma-2-9b-it": {
-        "endpoint": "groq/gemma2-9b-it",
-        "context_window": 8192,
-        "cost": {"prompt": 0.2, "completion": 0.2},
-    },
-    "llama-3-8b-chat": {
-        "endpoint": "groq/llama3-8b-8192",
-        "context_window": 8192,
-        "cost": {"prompt": 0.05, "completion": 0.08},
-    },
-    "llama-3-70b-chat": {
-        "endpoint": "groq/llama3-70b-8192",
-        "context_window": 8192,
-        "cost": {"prompt": 0.59, "completion": 0.79},
-    },
     "llama-3.1-8b-chat": {
         "endpoint": "groq/llama-3.1-8b-instant",
         "context_window": 131072,

@@ -31,12 +31,12 @@ supported_models = {
     "gpt-oss-20b": {
         "endpoint": "deepinfra/openai/gpt-oss-20b",
         "context_window": 128000,
-        "cost": {"prompt": 0.04, "completion": 0.16},
+        "cost": {"prompt": 0.04, "completion": 0.15},
     },
     "gpt-oss-120b": {
         "endpoint": "deepinfra/openai/gpt-oss-120b",
         "context_window": 128000,
-        "cost": {"prompt": 0.09, "completion": 0.45},
+        "cost": {"prompt": 0.05, "completion": 0.45},
     },
     "deepseek-v3.1": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3.1",
@@ -46,7 +46,7 @@ supported_models = {
     "deepseek-v3-0324": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3-0324",
         "context_window": 160000,
-        "cost": {"prompt": 0.27, "completion": 0.88},
+        "cost": {"prompt": 0.25, "completion": 0.88},
     },
     "deepseek-r1": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-R1-0528",
@@ -131,7 +131,7 @@ supported_models = {
     "qwen-3-235b-a22b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen3-235B-A22B-Instruct-2507",
         "context_window": 256000,
-        "cost": {"prompt": 0.13, "completion": 0.6},
+        "cost": {"prompt": 0.09, "completion": 0.6},
     },
     "qwen-3-30b-a3b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen3-30B-A3B",

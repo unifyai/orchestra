@@ -32,6 +32,16 @@ supported_models = {
         "context_window": 256000,
         "cost": {"prompt": 0.2, "completion": 1.5},
     },
+    "grok-4-fast-reasoning": {
+        "endpoint": "xai/grok-4-fast-reasoning",
+        "context_window": 2000000,
+        "cost": {"prompt": 0.2, "completion": 0.5},
+    },
+    "grok-4-fast-non-reasoning": {
+        "endpoint": "xai/grok-4-fast-non-reasoning",
+        "context_window": 2000000,
+        "cost": {"prompt": 0.2, "completion": 0.5},
+    },
     "grok-4": {
         "endpoint": "xai/grok-4",
         "context_window": 256000,
