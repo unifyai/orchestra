@@ -513,6 +513,10 @@ def _transform_ast(node: ast.AST, preserve_string_literals: bool = False) -> dic
     """
     # Handle literals (constants)
     if isinstance(node, ast.Constant):
+        # Check for raw base64 image data URI first
+        if isinstance(node.value, str):
+            if node.value.startswith("data:image/") and ";base64," in node.value:
+                return {"type": "image", "value": node.value}
         # Skip timestamp normalization if we're in a string method context
         if preserve_string_literals:
             return node.value
