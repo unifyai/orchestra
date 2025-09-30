@@ -1,4 +1,6 @@
+import base64
 import json
+import os
 
 import pytest
 from httpx import AsyncClient
@@ -6,6 +8,7 @@ from httpx import AsyncClient
 from . import (
     HEADERS,
     _create_derived_entry,
+    _create_image_log,
     _create_log,
     _create_project,
     _create_several_logs,
@@ -1788,3 +1791,180 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
 
     # We should have some logs with null/empty embeddings
     assert null_embedding_count == 4, "Expected 4 logs to have null/empty embeddings"
+
+
+@pytest.mark.anyio
+async def test_visual_semantic_cache_e2e(client: AsyncClient):
+    """
+    Tests the Visual Semantic Cache by filtering for a subset of images
+    and then sorting them by visual similarity to find the best match.
+    """
+    project_name = "visual_cache_sorting_project"
+    context_name = "visual_cache_sorting_context"
+    user_id = 1
+
+    await _create_project(client, project_name, user=user_id)
+
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # 1. Log several images, including two very similar "cat" images
+    image_files = {
+        "cat_v1": "cat.png",  # this is the original
+        "cat_v2": "cat_2.png",  # this is a slightly different version
+        "dog": "dog.png",
+        "car": "car.png",
+    }
+
+    log_ids_map = {}
+    for name, path in image_files.items():
+        # We'll use a 'type' field to filter on
+        image_type = "animal" if "cat" in name or "dog" in name else "vehicle"
+        response = await _create_image_log(
+            client,
+            project_name,
+            context_name,
+            path,
+            {"name": name, "type": image_type},
+            image_col_name="img",
+        )
+        assert response.status_code == 200
+        log_ids_map[name] = response.json()["log_event_ids"][0]
+
+    # 2. Manually create the pHash derived log for each image
+    phash_key = "image_phash"
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key=phash_key,
+        equation=f"phash({{log:img}})",
+        referenced_logs={"log": list(log_ids_map.values())},
+        context=context_name,
+        user=user_id,
+    )
+    assert response.status_code == 200
+
+    # 3. Get the pHash of the 'cat_v2' image to use as our query hash
+    response = await client.get(
+        f"/v0/logs?project={project_name}&context={context_name}&filter_expr=name == 'cat_v2'",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    cat_v2_log = response.json()["logs"][0]
+    cat_v2_phash = cat_v2_log["derived_entries"]["image_phash"]
+
+    # 4. Query for the most visually similar image within the 'animal' type
+    sorting_expression = f"phash_distance(image_phash, '{cat_v2_phash}')"
+
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "context": context_name,
+            "filter_expr": "type == 'animal'",  # Filter down to relevant images first
+            "sorting": f'{{"{sorting_expression}": "ascending"}}',  # Sort by distance
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, f"Failed to query with sorting: {response.text}"
+
+    # 5. Verify the results
+    all_logs = response.json()["logs"]
+    assert len(all_logs) == 3, "Expected to find exactly three logs"
+    # The top result should be 'cat_v2' itself, as its distance is 0.
+    assert (
+        all_logs[0]["entries"]["name"] == "cat_v2"
+    ), "The best match should be the image itself"
+    assert (
+        all_logs[1]["entries"]["name"] == "cat_v1"
+    ), "The second best match should be the image itself"
+    assert (
+        all_logs[2]["entries"]["name"] == "dog"
+    ), "The third best match should be the dog image"
+
+
+@pytest.mark.anyio
+async def test_phash_distance_with_raw_image_literal(client: AsyncClient):
+    """
+    Tests that phash_distance can accept a raw base64 image string as an argument.
+    """
+    project_name = "visual_cache_raw_image_project"
+    context_name = "visual_cache_raw_image_context"
+    user_id = 1
+
+    # 1. Setup project, context, and log some images with their pHashes
+    await _create_project(client, project_name, user=user_id)
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name},
+        headers=HEADERS,
+    )
+    image_files = {
+        "cat_v1": "cat.png",
+        "dog": "dog.png",
+    }
+    log_ids_map = {}
+    for name, path in image_files.items():
+        response = await _create_image_log(
+            client,
+            project_name,
+            context_name,
+            path,
+            {"name": name},
+            image_col_name="img",
+        )
+        assert (
+            response.status_code == 200
+        ), f"Failed to create log for {name}: {response.text}"
+        log_ids_map[name] = response.json()["log_event_ids"][0]
+
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key="image_phash",
+        equation="phash({log:img})",
+        referenced_logs={"log": list(log_ids_map.values())},
+        context=context_name,
+        user=user_id,
+    )
+    assert (
+        response.status_code == 200
+    ), f"Failed to create pHash for {name}: {response.text}"
+
+    # 2. Get the raw base64 data URI for the 'cat' image to use in the query
+    cat_image_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
+        "sample_datasets/cat.png",
+    )
+    with open(cat_image_path, "rb") as f:
+        cat_b64 = base64.b64encode(f.read()).decode("utf-8")
+    cat_data_uri = f"'data:image/png;base64,{cat_b64}'"
+
+    # 3. Construct the filter expression with the raw image literal.
+    # The query should find the log whose 'image_phash' is closest to the pHash of the raw cat image.
+    filter_expr = f"phash_distance(image_phash, {cat_data_uri}) < 5"
+
+    # 4. Execute the query
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "context": context_name,
+            "filter_expr": filter_expr,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, f"Query with raw image failed: {response.text}"
+
+    # 5. Verify the results
+    matching_logs = response.json()["logs"]
+    assert (
+        len(matching_logs) == 1
+    ), "Expected to find exactly one match for the raw cat image"
+    assert (
+        matching_logs[0]["entries"]["name"] == "cat_v1"
+    ), "The matched log should be the cat"
