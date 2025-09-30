@@ -635,10 +635,12 @@ def _get_logs_query(
                             if parent and parent.get("operand") not in (
                                 "exists",
                                 "isNone",
+                                "phash",
+                                "phash_distance",
                             ):
                                 raise HTTPException(
                                     status_code=400,
-                                    detail=f"Field '{field}' is a media type and can only be used with 'exists' or 'isNone' operator",
+                                    detail=f"Field '{field}' is a media type and can only be used with 'exists' or 'isNone' or 'phash' or 'phash_distance' operator",
                                 )
                     for k, v in fd.items():
                         if isinstance(v, dict):
