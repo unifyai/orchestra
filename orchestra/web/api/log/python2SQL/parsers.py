@@ -11,7 +11,7 @@ from orchestra.db.dao.log_dao import (
     normalize_timestamp,
 )
 
-SIMILARITY_FUNCS = {"l2", "cosine", "ip", "l1", "hamming", "jaccard"}
+SIMILARITY_FUNCS = {"l2", "cosine", "ip", "l1", "hamming", "jaccard", "phash_distance"}
 
 __all__ = ["str_filter_exp_to_dict", "str_filter_exp_to_dict_using_ast"]
 
@@ -141,9 +141,7 @@ def _tokenize(s):
             value = (
                 None
                 if value == "None"
-                else float(value)
-                if "." in value
-                else int(value)
+                else float(value) if "." in value else int(value)
             )
             tokens.append(("NUMBER", value))
         elif kind == "STRING":
@@ -620,6 +618,7 @@ def _transform_ast(node: ast.AST, preserve_string_literals: bool = False) -> dic
             "median",
             "mode",
             "count",
+            "phash",
         ):
             if func_name == "count":
                 func_name = "len"
