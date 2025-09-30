@@ -76,6 +76,7 @@ def build_sql_query(
         _handle_l2,
         _handle_logical_operator,
         _handle_membership_operator,
+        _handle_phash_distance,
         _handle_slice_operator,
     )
 
@@ -204,6 +205,7 @@ def build_sql_query(
         "median",
         "mode",
         "embed",
+        "phash",
     ):
         return _handle_functions(
             filter_dict,
@@ -331,6 +333,15 @@ def build_sql_query(
         )
     elif operand == "jaccard":
         return _handle_jaccard(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope=local_scope,
+        )
+    elif operand == "phash_distance":
+        return _handle_phash_distance(
             filter_dict,
             log_event_alias,
             session,
