@@ -61,6 +61,39 @@ def _engine(worker_id) -> Generator[Engine, None, None]:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     meta.create_all(engine)
     with engine.begin() as conn:
+        # Create the hamming_distance function for tests
+        conn.execute(
+            text(
+                """
+            CREATE OR REPLACE FUNCTION hamming_distance(a text, b text)
+RETURNS integer
+LANGUAGE sql
+IMMUTABLE
+STRICT
+PARALLEL SAFE
+AS $$
+WITH ba AS (SELECT decode(a, 'hex') AS v),
+     bb AS (SELECT decode(b, 'hex') AS v)
+SELECT CASE
+  WHEN octet_length(ba.v) = 8 AND octet_length(bb.v) = 8 THEN
+       bit_count(((get_byte(ba.v,0) # get_byte(bb.v,0))::bit(8))) +
+       bit_count(((get_byte(ba.v,1) # get_byte(bb.v,1))::bit(8))) +
+       bit_count(((get_byte(ba.v,2) # get_byte(bb.v,2))::bit(8))) +
+       bit_count(((get_byte(ba.v,3) # get_byte(bb.v,3))::bit(8))) +
+       bit_count(((get_byte(ba.v,4) # get_byte(bb.v,4))::bit(8))) +
+       bit_count(((get_byte(ba.v,5) # get_byte(bb.v,5))::bit(8))) +
+       bit_count(((get_byte(ba.v,6) # get_byte(bb.v,6))::bit(8))) +
+       bit_count(((get_byte(ba.v,7) # get_byte(bb.v,7))::bit(8)))
+  ELSE 999
+END
+FROM ba, bb;
+$$;
+
+
+        """,
+            ),
+        )
+
         user_id = str(os.getenv("AUTH_ACCOUNT_USER_ID"))
         api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
         with open("orchestra/tests/seeding.sql") as file:
@@ -402,6 +435,39 @@ def _engine_session(worker_id) -> Generator[Engine, None, None]:
         conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     meta.create_all(engine)
     with engine.begin() as conn:
+        # Create the hamming_distance function for tests
+        conn.execute(
+            text(
+                """
+           CREATE OR REPLACE FUNCTION hamming_distance(a text, b text)
+RETURNS integer
+LANGUAGE sql
+IMMUTABLE
+STRICT
+PARALLEL SAFE
+AS $$
+WITH ba AS (SELECT decode(a, 'hex') AS v),
+     bb AS (SELECT decode(b, 'hex') AS v)
+SELECT CASE
+  WHEN octet_length(ba.v) = 8 AND octet_length(bb.v) = 8 THEN
+       bit_count(((get_byte(ba.v,0) # get_byte(bb.v,0))::bit(8))) +
+       bit_count(((get_byte(ba.v,1) # get_byte(bb.v,1))::bit(8))) +
+       bit_count(((get_byte(ba.v,2) # get_byte(bb.v,2))::bit(8))) +
+       bit_count(((get_byte(ba.v,3) # get_byte(bb.v,3))::bit(8))) +
+       bit_count(((get_byte(ba.v,4) # get_byte(bb.v,4))::bit(8))) +
+       bit_count(((get_byte(ba.v,5) # get_byte(bb.v,5))::bit(8))) +
+       bit_count(((get_byte(ba.v,6) # get_byte(bb.v,6))::bit(8))) +
+       bit_count(((get_byte(ba.v,7) # get_byte(bb.v,7))::bit(8)))
+  ELSE 999
+END
+FROM ba, bb;
+$$;
+
+
+        """,
+            ),
+        )
+
         user_id = str(os.getenv("AUTH_ACCOUNT_USER_ID"))
         api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
         with open("orchestra/tests/seeding.sql") as file:
