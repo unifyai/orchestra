@@ -1,7 +1,12 @@
+import base64
+import io
 from datetime import datetime, timezone
 
+import imagehash
+import unify
 from fastapi import HTTPException
 from pgvector.sqlalchemy import Vector
+from PIL import Image
 from sqlalchemy import (
     TIMESTAMP,
     BindParameter,
@@ -29,6 +34,7 @@ from sqlalchemy.sql.selectable import ColumnClause, Subquery
 
 from orchestra.db.dao.log_dao import LogDAO, _is_date_string, _is_time_string
 from orchestra.db.models.orchestra_models import Log, LogEventLog
+from orchestra.services.bucket_service import BucketService
 
 from . import alias_utils
 from .core import build_sql_query
@@ -975,6 +981,89 @@ def _handle_functions(
             vector_expr = literal(embedding, type_=Vector(len(embedding)))
 
             return vector_expr
+
+    elif operand == "phash":
+        # phash(image_url) - Converts image URL to a perceptual hash integer
+        if isinstance(rhs_expr, Subquery):
+            # 1. Execute the subquery to get log_event_ids and their corresponding image URLs
+            rows = session.execute(
+                select(rhs_expr.c.log_event_id, rhs_expr.c.value),
+            ).fetchall()
+            if not rows:
+                return None  # No images to process
+
+            # 2. Compute pHash for each image URL using parallel processing
+            def compute_image_hash(log_event_id, image_url):
+                """Helper function to compute perceptual hash for a single image."""
+                bucket_service = BucketService()
+                phash_hex = None
+                if image_url and isinstance(image_url, str):
+                    try:
+                        # The get_media function returns a base64 string, so we need to decode it
+                        base64_image = bucket_service.get_media(
+                            image_url.split("/")[-1],
+                        )
+                        if base64_image:
+                            image_data = base64.b64decode(base64_image)
+                            image = Image.open(io.BytesIO(image_data))
+                            hash_value = imagehash.phash(image)
+                            # Compute the perceptual hash and convert to an integer
+                            phash_hex = format(int(str(hash_value), 16), "016x")
+                    except Exception:
+                        # If any error occurs, the hash remains None
+                        pass
+                return {"log_event_id": log_event_id, "value": phash_hex}
+
+            # Use parallel processing to compute hashes for all images
+            formatted_args = [
+                ((log_event_id, image_url), {}) for log_event_id, image_url in rows
+            ]
+            results = unify.map(
+                compute_image_hash,
+                formatted_args,
+                mode="threading",
+                name="compute_image_hashes",
+            )
+
+            # 3. Construct a new subquery from the computed values
+            if not results:
+                return None
+
+            selects = [
+                select(
+                    literal(r["log_event_id"]).label("log_event_id"),
+                    literal(r["value"]).label("value"),
+                    literal("int").label("inferred_type"),
+                )
+                for r in results
+            ]
+
+            unioned_query = union_all(*selects)
+            return alias_utils.subquery_with_unique_alias(
+                unioned_query.select(),
+                prefix="phash_result",
+            )
+
+        elif isinstance(rhs_expr, BindParameter) and isinstance(rhs_expr.value, str):
+            # This handles the case for literal URLs, e.g., in a filter
+            image_url = rhs_expr.value
+            try:
+                bucket_service = BucketService()
+                base64_image = bucket_service.get_media(image_url.split("/")[-1])
+                if not base64_image:
+                    return literal(None)
+
+                image_data = base64.b64decode(base64_image)
+                image = Image.open(io.BytesIO(image_data))
+
+                hash_value = imagehash.phash(image)
+                return literal(format(int(str(hash_value), 16), "016x"))
+            except Exception:
+                return literal(None)
+        else:
+            raise ValueError(
+                "phash() expects a string URL or a subquery returning URLs as its argument.",
+            )
 
     elif operand in ["mean", "sum", "var", "std", "min", "max", "median", "mode"]:
         from ..utils.metric_utils import AggregationMetric, _get_reduction_expr
