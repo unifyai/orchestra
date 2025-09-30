@@ -1,8 +1,10 @@
+import base64
 import json
 import os
 from datetime import datetime, timezone
 
-from httpx import Request
+import cv2
+from httpx import AsyncClient, Request
 
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
 api_key_second_user = "2nd_api_key"
@@ -221,6 +223,54 @@ def _create_log(
             "context": context,
         },
         headers=_headers,
+    )
+
+
+async def _create_image_log(
+    client: AsyncClient,
+    project_name: str,
+    context_name: str,
+    image_path: str,
+    additional_entries: dict = None,
+    *,
+    image_col_name: str = "img",
+):
+    """
+    Helper function to create a log entry with an image.
+
+    Args:
+        client: AsyncClient for making HTTP requests
+        project_name: Name of the project
+        context_name: Name of the context
+        image_path: Path to the image file (relative to sample_datasets)
+        additional_entries: Additional entries to include in the log
+
+    Returns:
+        Response from the log creation API
+    """
+    # Construct the full path to the image file
+    full_img_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
+        "sample_datasets",
+        image_path,
+    )
+
+    # Read and encode the image like in test_create_log_w_image
+    success, buffer = cv2.imencode(".png", cv2.imread(full_img_path))
+    assert success, f"Failed to encode image at {full_img_path}"
+    img_raw = base64.b64encode(buffer).decode("utf-8")
+
+    entries = {
+        image_col_name: f"data:image/png;base64,{img_raw}",
+    }
+    if additional_entries:
+        entries.update(additional_entries)
+
+    return await _create_log(
+        client,
+        project_name,
+        entries=entries,
+        context=context_name,
     )
 
 
