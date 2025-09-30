@@ -670,9 +670,9 @@ class LogDAO:
                 log_event_composites = defaultdict(dict)
                 for entry in context_entries:
                     if entry["key"] in composite_keys:
-                        log_event_composites[entry["log_event_id"]][entry["key"]] = (
-                            entry["value"]
-                        )
+                        log_event_composites[entry["log_event_id"]][
+                            entry["key"]
+                        ] = entry["value"]
                 for log_event_id, kv_pair in log_event_composites.items():
                     # Create a frozenset of items to make it hashable for the batch check
                     composite_val = frozenset(kv_pair.items())
@@ -722,9 +722,9 @@ class LogDAO:
                 log_events_to_check = defaultdict(dict)
                 for entry in context_entries:
                     if entry["key"] in composite_keys:
-                        log_events_to_check[entry["log_event_id"]][entry["key"]] = (
-                            entry["value"]
-                        )
+                        log_events_to_check[entry["log_event_id"]][
+                            entry["key"]
+                        ] = entry["value"]
 
                 for log_event_id, key_values in log_events_to_check.items():
                     if len(key_values) != len(composite_keys):
