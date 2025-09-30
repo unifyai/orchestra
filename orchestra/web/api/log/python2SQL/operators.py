@@ -1,7 +1,11 @@
+import base64
+import io
 import json
 
+import imagehash
 from fastapi import HTTPException
 from pgvector.sqlalchemy import Vector
+from PIL import Image
 from sqlalchemy import (
     TIMESTAMP,
     BindParameter,
@@ -53,6 +57,7 @@ __all__ = [
     "_handle_l1",
     "_handle_hamming",
     "_handle_jaccard",
+    "_handle_phash_distance",
 ]
 
 
@@ -1552,3 +1557,105 @@ def _handle_jaccard(
         )
 
     return lhs.op("<%>")(rhs).cast(Float)
+
+
+def _handle_phash_distance(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+):
+    """
+    Handles Hamming distance operator between two pHash hex strings.
+    """
+
+    def compute_phash_from_base64(b64_string):
+        """Computes pHash from a base64 string, returning the integer value."""
+        try:
+            # Remove data URI prefix if present
+            if "," in b64_string:
+                b64_string = b64_string.split(",")[1]
+
+            image_data = base64.b64decode(b64_string)
+            image = Image.open(io.BytesIO(image_data))
+            hash_value = imagehash.phash(image)
+            return format(int(str(hash_value), 16), "016x")
+        except Exception:
+            return None
+
+    lhs_dict = filter_dict.get("lhs")
+    rhs_dict = filter_dict.get("rhs")
+
+    # Check for raw image literals and compute their pHash on the fly
+    if isinstance(lhs_dict, dict) and lhs_dict.get("type") == "image":
+        lhs_phash = compute_phash_from_base64(lhs_dict["value"])
+        lhs = literal(lhs_phash) if lhs_phash is not None else literal(None)
+    else:
+        lhs = build_sql_query(
+            lhs_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+        )
+
+    if isinstance(rhs_dict, dict) and rhs_dict.get("type") == "image":
+        rhs_phash = compute_phash_from_base64(rhs_dict["value"])
+        rhs = literal(rhs_phash) if rhs_phash is not None else literal(None)
+    else:
+        rhs = build_sql_query(
+            rhs_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+        )
+
+    lhs_is_sub = isinstance(lhs, Subquery)
+    rhs_is_sub = isinstance(rhs, Subquery)
+
+    if lhs_is_sub and rhs_is_sub:
+        lval, _ = _select_value(lhs, session)
+        rval, _ = _select_value(rhs, session)
+        expr = func.hamming_distance(cast(lval, Text), cast(rval, Text))
+        return _join_subqueries(lhs, rhs, expr, "int", session=session)
+
+    if lhs_is_sub:
+        lval, _ = _select_value(lhs, session)
+        rval, _ = _select_value(rhs, session)
+        expr = func.hamming_distance(cast(lval, Text), cast(rval, Text))
+        select_cols = [lhs.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in lhs.c.keys():
+            select_cols.append(lhs.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in lhs.c.keys():
+            select_cols.append(lhs.c.__parent_idx__.label("__parent_idx__"))
+        select_cols.extend(
+            [expr.label("value"), literal("int").label("inferred_type")],
+        )
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(lhs),
+            prefix="phash_distance",
+        )
+
+    if rhs_is_sub:
+        rval, _ = _select_value(rhs, session)
+        lval, _ = _select_value(lhs, session)
+        expr = func.hamming_distance(cast(lval, Text), cast(rval, Text))
+        select_cols = [rhs.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in rhs.c.keys():
+            select_cols.append(rhs.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in rhs.c.keys():
+            select_cols.append(rhs.c.__parent_idx__.label("__parent_idx__"))
+        select_cols.extend(
+            [expr.label("value"), literal("int").label("inferred_type")],
+        )
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(rhs),
+            prefix="phash_distance",
+        )
+
+    return func.hamming_distance(cast(lhs, Text), cast(rhs, Text))
