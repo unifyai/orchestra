@@ -247,7 +247,8 @@ class LogDAO:
             or "photo" in lower
             or "diagram" in lower
             or "pic" in lower
-        )
+            or "screenshot" in lower
+        ) and not "hash" in lower
 
     @staticmethod
     def possible_audio(raw_k):
@@ -282,6 +283,9 @@ class LogDAO:
                 if not maybe_img and not maybe_audio:
                     return "str"
 
+                # Remove data URI prefix if present
+                if "," in raw_v:
+                    raw_v = raw_v.split(",")[1]
                 binary = raw_v.encode("utf-8")
                 try:
                     assert base64.b64encode(base64.b64decode(binary)) == binary
@@ -666,9 +670,9 @@ class LogDAO:
                 log_event_composites = defaultdict(dict)
                 for entry in context_entries:
                     if entry["key"] in composite_keys:
-                        log_event_composites[entry["log_event_id"]][
-                            entry["key"]
-                        ] = entry["value"]
+                        log_event_composites[entry["log_event_id"]][entry["key"]] = (
+                            entry["value"]
+                        )
                 for log_event_id, kv_pair in log_event_composites.items():
                     # Create a frozenset of items to make it hashable for the batch check
                     composite_val = frozenset(kv_pair.items())
@@ -718,9 +722,9 @@ class LogDAO:
                 log_events_to_check = defaultdict(dict)
                 for entry in context_entries:
                     if entry["key"] in composite_keys:
-                        log_events_to_check[entry["log_event_id"]][
-                            entry["key"]
-                        ] = entry["value"]
+                        log_events_to_check[entry["log_event_id"]][entry["key"]] = (
+                            entry["value"]
+                        )
 
                 for log_event_id, key_values in log_events_to_check.items():
                     if len(key_values) != len(composite_keys):
