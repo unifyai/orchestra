@@ -138,11 +138,6 @@ supported_models = {
         "context_window": 40000,
         "cost": {"prompt": 0.08, "completion": 0.29},
     },
-    "qwen-2.5-7b-instruct": {
-        "endpoint": "deepinfra/Qwen/Qwen2.5-7B-Instruct",
-        "context_window": 32000,
-        "cost": {"prompt": 0.04, "completion": 0.1},
-    },
     "qwen-2.5-72b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen2.5-72B-Instruct",
         "context_window": 32000,
