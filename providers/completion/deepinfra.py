@@ -126,7 +126,7 @@ supported_models = {
     "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "deepinfra/mistralai/Mixtral-8x7B-Instruct-v0.1",
         "context_window": 32768,
-        "cost": {"prompt": 0.4, "completion": 0.4},
+        "cost": {"prompt": 0.54, "completion": 0.54},
     },
     "qwen-3-235b-a22b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen3-235B-A22B-Instruct-2507",
