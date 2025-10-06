@@ -31,12 +31,12 @@ supported_models = {
     "gpt-oss-20b": {
         "endpoint": "deepinfra/openai/gpt-oss-20b",
         "context_window": 128000,
-        "cost": {"prompt": 0.04, "completion": 0.15},
+        "cost": {"prompt": 0.03, "completion": 0.14},
     },
     "gpt-oss-120b": {
         "endpoint": "deepinfra/openai/gpt-oss-120b",
         "context_window": 128000,
-        "cost": {"prompt": 0.05, "completion": 0.45},
+        "cost": {"prompt": 0.05, "completion": 0.27},
     },
     "deepseek-v3.1": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3.1",
@@ -111,7 +111,7 @@ supported_models = {
     "gemma-3-12b-it": {
         "endpoint": "deepinfra/google/gemma-3-12b-it",
         "context_window": 128000,
-        "cost": {"prompt": 0.05, "completion": 0.1},
+        "cost": {"prompt": 0.04, "completion": 0.13},
     },
     "gemma-3-4b-it": {
         "endpoint": "deepinfra/google/gemma-3-4b-it",
