@@ -66,7 +66,7 @@ class CallRecordingService:
             url, file_path = self.bucket_service.upload_recording(
                 content,
                 content_type,
-                f"{user_id}/{agent_id}/{conference_name}.mp3",
+                f"{agent_id}/{conference_name}.mp3",
                 is_staging=is_staging,
             )
         except Exception as exc:
