@@ -423,6 +423,13 @@ class RecordingCreate(BaseModel):
         description="ID of the assistant to associate the recording with",
         example=123,
     )
+    conference_name: str = (
+        Field(
+            ...,
+            description="Name of the conference to associate the recording with",
+            example="Unity_Sample_Conference",
+        ),
+    )
     recording_raw: str = Field(
         ...,
         description="Base64-encoded audio payload",
