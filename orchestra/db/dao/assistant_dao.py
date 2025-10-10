@@ -184,6 +184,7 @@ class AssistantDAO:
         user_whatsapp_number: Optional[str] = None,
         assistant_whatsapp_number: Optional[str] = None,
         email: Optional[str] = None,
+        agent_id: Optional[int] = None,
     ) -> List[Assistant]:
         """
         List all Assistants across all users with optional filtering.
@@ -201,6 +202,8 @@ class AssistantDAO:
             )
         if email is not None:
             stmt = stmt.where(Assistant.email == email)
+        if agent_id is not None:
+            stmt = stmt.where(Assistant.agent_id == agent_id)
         result = self.session.execute(stmt).scalars().all()
         return result
 
