@@ -784,6 +784,52 @@ async def test_admin_list_assistants_filter_email(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_admin_list_assistants_filter_agent_id(client: AsyncClient):
+    # Create two assistants, filter by agent_id to return exactly one
+    payload1 = {
+        "first_name": "Agent",
+        "surname": "One",
+        "age": 21,
+        "weekly_limit": 10.0,
+        "max_parallel": 1,
+        "region": "Test",
+        "profile_photo": "https://example.com/a1.jpg",
+        "about": "Assistant One",
+        "create_infra": False,
+    }
+    payload2 = {
+        "first_name": "Agent",
+        "surname": "Two",
+        "age": 22,
+        "weekly_limit": 11.0,
+        "max_parallel": 2,
+        "region": "Test",
+        "profile_photo": "https://example.com/a2.jpg",
+        "about": "Assistant Two",
+        "create_infra": False,
+    }
+
+    resp1 = await client.post("/v0/assistant", json=payload1, headers=HEADERS)
+    resp2 = await client.post("/v0/assistant", json=payload2, headers=HEADERS)
+    assert resp1.status_code == 200 and resp2.status_code == 200
+
+    aid1 = resp1.json()["info"]["agent_id"]
+
+    # Filter by the first agent's id
+    admin_resp = await client.get(
+        f"/v0/admin/assistant?agent_id={aid1}",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    body = admin_resp.json()
+    assert "info" in body
+    results = body["info"]
+    assert isinstance(results, list)
+    assert len(results) == 1
+    assert results[0]["agent_id"] == aid1
+
+
+@pytest.mark.anyio
 async def test_admin_list_assistants_for_user(client: AsyncClient):
     # Create a second test user via create_test_user
     # (default HEADERS user will serve as user1)
