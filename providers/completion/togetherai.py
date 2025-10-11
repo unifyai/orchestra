@@ -68,6 +68,11 @@ supported_models = {
         "context_window": 131072,
         "cost": {"prompt": 0.06, "completion": 0.06},
     },
+    "llama-3.1-8b-chat": {
+        "endpoint": "together_ai/meta-llama/Meta-Llama-3.1-8B-Instruct-Turbo",
+        "context_window": 131072,
+        "cost": {"prompt": 0.18, "completion": 0.18},
+    },
     "llama-3.1-70b-chat": {
         "endpoint": "together_ai/meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo",
         "context_window": 8192,
