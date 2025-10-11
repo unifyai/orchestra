@@ -30,11 +30,11 @@ supported_models = {
     "deepseek-v3": {
         "endpoint": "deepseek/deepseek-chat",
         "context_window": 64000,
-        "cost": {"prompt": 0.28, "completion": 0.42},
+        "cost": {"prompt": 0.56, "completion": 1.68},
     },
     "deepseek-r1": {
         "endpoint": "deepseek/deepseek-reasoner",
         "context_window": 64000,
-        "cost": {"prompt": 0.28, "completion": 0.42},
+        "cost": {"prompt": 0.56, "completion": 1.68},
     },
 }
