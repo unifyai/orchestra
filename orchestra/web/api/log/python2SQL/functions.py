@@ -289,53 +289,6 @@ def _handle_functions(
             expr = rhs_expr[0] if isinstance(rhs_expr, list) else rhs_expr
             return cast(expr, String)
 
-    elif operand == "type":
-        # Return the system's inferred logical type of the given expression as a string
-        # Parser may supply one-arg calls as a singleton list for unrecognized functions like "type"
-        arg_node = filter_dict.get("rhs")
-        if isinstance(arg_node, list):
-            if len(arg_node) != 1:
-                raise ValueError("type(...) expects exactly 1 argument")
-            arg_node = arg_node[0]
-
-        arg_expr = build_sql_query(
-            arg_node,
-            log_event_alias,
-            session,
-            log_event_ids=log_event_ids,
-            is_derived=is_derived,
-            local_scope=local_scope,
-            is_vector=is_vector,
-        )
-
-        if isinstance(arg_expr, (Subquery, ColumnClause)):
-            _val, val_type = _select_value(arg_expr, session, is_vector=is_vector)
-            type_expr = literal(
-                val_type if val_type is not None else "NoneType",
-                type_=String,
-            )
-            if isinstance(arg_expr, ColumnClause):
-                return type_expr
-            select_cols = [arg_expr.c.log_event_id.label("log_event_id")]
-            if "__comp_idx__" in arg_expr.c.keys():
-                select_cols.append(arg_expr.c.__comp_idx__.label("__comp_idx__"))
-            if "__parent_idx__" in arg_expr.c.keys():
-                select_cols.append(arg_expr.c.__parent_idx__.label("__parent_idx__"))
-            select_cols.extend(
-                [type_expr.label("value"), literal("str").label("inferred_type")],
-            )
-            return alias_utils.subquery_with_unique_alias(
-                select(*select_cols).select_from(arg_expr),
-                prefix="func_result",
-            )
-        else:
-            inferred = (
-                LogDAO.infer_type("", arg_expr.value)
-                if isinstance(arg_expr, BindParameter)
-                else LogDAO.infer_type("", arg_expr)
-            )
-            return literal(inferred, type_=String)
-
     elif operand == "round":
         # 1) Normalize the "rhs_expr" into a list of length 1 or 2
         if not isinstance(rhs_expr, list):
