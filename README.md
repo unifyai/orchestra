@@ -81,10 +81,11 @@ docker run --name orchestra-db -p 5432:5432 \
   pgvector/pgvector:pg15
 ```
 
-Once the database server is running, you can run the tests using the poetry environment. Take into account that some tests will require **secrets and environment variables**.
+Once the database server is running, install dependencies (including dev) and run the tests using the poetry environment. Take into account that some tests will require **secrets and environment variables**.
 
 ```bash
-pytest -vv .
+poetry install --with dev
+poetry run pytest -vv .
 ```
 
 If you see an error like `extension "vector" is not available`, your Postgres instance lacks pgvector. Use the image above or install pgvector in your local Postgres and run `CREATE EXTENSION IF NOT EXISTS vector;` in the target database.
@@ -209,11 +210,7 @@ You can read more about BaseSettings class here: https://pydantic-docs.helpmanua
 
 ## Pytest async configuration
 
-We use pytest-asyncio in STRICT mode. To avoid fixture loop warnings, add the following to `pyproject.toml` under `[tool.pytest.ini_options]`:
-
-```toml
-asyncio_default_fixture_loop_scope = "function"
-```
+We use pytest-asyncio in STRICT mode. The default fixture loop scope is already set to `function` in `pyproject.toml`, so you should not see related deprecation warnings.
 
 ## OpenTelemetry
 
