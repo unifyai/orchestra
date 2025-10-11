@@ -1359,9 +1359,10 @@ async def create_recording(
     )
     try:
         mime = recording.content_type or "application/octet-stream"
-        recording_model = await recording_service.record_call_from_raw(
+        recording_model = await recording_service.record_call(
             user_id=recording.user_id,
             agent_id=recording.assistant_id,
+            conference_name=recording.conference_name,
             recording_raw=recording.recording_raw,
             content_type=mime,
             is_staging=settings.is_staging,
