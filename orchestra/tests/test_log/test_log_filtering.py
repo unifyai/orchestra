@@ -3531,3 +3531,48 @@ async def test_filter_on_field_with_existing_embedding(client: AsyncClient):
     assert (
         result["logs"][0]["id"] == log_id
     ), "The vector search returned the wrong log."
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "key,value,expected_type",
+    [
+        ("s", "hello", "str"),
+        ("n", 123, "int"),
+        ("f", 3.14, "float"),
+        ("b", True, "bool"),
+        ("dt", datetime(2023, 1, 1, tzinfo=timezone.utc).isoformat(), "datetime"),
+        ("d", "2023-01-01", "date"),
+        ("t", "14:30:00", "time"),
+        ("td", "P1D", "timedelta"),
+        ("lst", [1, 2], "list"),
+        ("obj", {"a": 1}, "dict"),
+        ("none", None, "NoneType"),
+        ("zh", "世界", "str"),
+    ],
+)
+async def test_type_function_in_filter_expressions(
+    client: AsyncClient,
+    key,
+    value,
+    expected_type,
+):
+    project_name = f"test_type_function_{key}"
+    await _create_project(client, project_name)
+
+    # Create a log with the specific key/value under test
+    response = await _create_log(client, project_name, entries={key: value})
+    assert response.status_code == 200, response.text
+    log_id = response.json()["log_event_ids"][0]
+
+    # Verify that type(key) matches the expected inferred type
+    filter_expr = f"type({key}) == '{expected_type}'"
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": filter_expr},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert len(data["logs"]) == 1, f"Expected 1 log for expression: {filter_expr}"
+    assert data["logs"][0]["id"] == log_id
