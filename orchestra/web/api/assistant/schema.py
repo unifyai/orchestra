@@ -333,6 +333,10 @@ class AssistantUpdate(BaseModel):
         description="Whether to create infrastructure for the assistant during update (e.g., phone, email). Set to false for testing.",
         exclude=True,
     )
+    restart_assistant: Optional[bool] = Field(
+        False,
+        description="If true, the assistant will be restarted after the contact update to apply changes immediately.",
+    )
 
     class Config:
         orm_mode = True
@@ -888,4 +892,8 @@ class AssistantContactRemoval(BaseModel):
         ...,
         description="The type of contact information to remove.",
         example="email",
+    )
+    restart_assistant: Optional[bool] = Field(
+        False,
+        description="If true, the assistant will be restarted after the contact removal to apply changes immediately.",
     )
