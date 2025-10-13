@@ -202,9 +202,9 @@ def get_social_platforms_costs():
     ).json()
 
 
-def stop_jobs(assistant_id: str, staging: bool = False):
+def get_running_jobs(assistant_id: str):
     """
-    Stop a job by making a POST request to the comms endpoint.
+    Get running jobs for the assistant.
     """
     # get running jobs for the assistant
     logs = unify.get_logs(
@@ -213,7 +213,14 @@ def stop_jobs(assistant_id: str, staging: bool = False):
         filter=f"assistant_id == {assistant_id} and running == True",
     )
     job_names = [log.to_json()["entries"]["job_name"] for log in logs]
+    return job_names
 
+
+def stop_jobs(assistant_id: str):
+    """
+    Stop a job by making a POST request to the comms endpoint.
+    """
+    job_names = get_running_jobs(assistant_id)
     # if running job found, stop it
     if len(job_names) > 0:
         response = requests.post(
