@@ -71,6 +71,7 @@ from orchestra.web.api.utils.assistant_infra import (
     delete_pubsub_topic,
     get_running_jobs,
     get_social_platforms_costs,
+    reawaken_assistant,
     stop_jobs,
     wake_up_assistant,
     watch_email,
@@ -1422,6 +1423,70 @@ def update_assistant_config(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error updating assistant config: {str(e)}",
+        )
+
+
+@router.post(
+    "/assistant/{assistant_id}/sync",
+    response_model=InfoResponse[str],
+    status_code=status.HTTP_200_OK,
+    summary="Sync an assistant",
+    description="Update an assistant to ensure it is fully synchronized with new contact information. Thos stops all running tasks and communication for the assistant.",
+    tags=["Assistant Management"],
+    responses={
+        200: {
+            "description": "Assistant sync process initiated successfully.",
+            "content": {
+                "application/json": {
+                    "example": {"info": "Assistant reawaken signal sent successfully."},
+                },
+            },
+        },
+        404: {
+            "description": "Assistant not found.",
+        },
+        500: {
+            "description": "Failed to send reawaken signal.",
+        },
+    },
+)
+def sync_assistant(
+    assistant_id: int,
+    request: Request,
+    session: Session = Depends(get_db_session),
+    _: None = Depends(check_assistant_hiring_approval),
+) -> InfoResponse[str]:
+    """
+    Sync and reawaken an assistant's service.
+
+    This endpoint is used to trigger the assistant's wakeup/update process,
+    which is useful for ensuring the assistant's container is running after a period
+    of inactivity or after configuration changes.
+    """
+    user_id = request.state.user_id
+    assistant_dao = AssistantDAO(session)
+
+    # First, verify the assistant exists and belongs to the user
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id, agent_id=assistant_id
+    )
+    if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+
+    try:
+        # Call the infrastructure utility to send the reawaken signal
+        reawaken_assistant(str(assistant_id), is_staging=settings.is_staging)
+        return InfoResponse(info="Assistant reawaken signal sent successfully.")
+    except Exception as e:
+        logging.error(
+            f"Failed to send reawaken signal for assistant {assistant_id}: {e}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to send reawaken signal: {str(e)}",
         )
 
 
