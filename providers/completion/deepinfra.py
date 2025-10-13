@@ -38,6 +38,11 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 0.05, "completion": 0.27},
     },
+    "deepseek-v3.2": {
+        "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3.2-Exp",
+        "context_window": 160000,
+        "cost": {"prompt": 0.27, "completion": 0.4},
+    },
     "deepseek-v3.1": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3.1",
         "context_window": 160000,
@@ -142,10 +147,5 @@ supported_models = {
         "endpoint": "deepinfra/Qwen/Qwen2.5-72B-Instruct",
         "context_window": 32000,
         "cost": {"prompt": 0.12, "completion": 0.39},
-    },
-    "qwen-qwq-32b": {
-        "endpoint": "deepinfra/Qwen/QwQ-32B",
-        "context_window": 128000,
-        "cost": {"prompt": 0.15, "completion": 0.4},
     },
 }

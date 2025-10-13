@@ -160,6 +160,12 @@ supported_models = {
         "context_window": 1048576,
         "cost": {"prompt": 0.25, "completion": 0.7},
     },
+    "mistral-medium": {
+        "endpoint": "vertex_ai/mistral-medium-3",
+        "region": "europe-west4",
+        "context_window": 128000,
+        "cost": {"prompt": 0.4, "completion": 2},
+    },
     "mistral-large": {
         "endpoint": "vertex_ai/mistral-large",
         "region": "europe-west4",
