@@ -1530,7 +1530,7 @@ def create_logs_internal(
     if context_obj and context_obj.is_versioned:
         context_obj.updated_at = datetime.now(timezone.utc)
 
-    # Build row_ids payload
+    # Build row_ids payload (unique key columns only)
     row_ids_payload = None
     unique_keys = context_obj.unique_keys or {}
 
@@ -1554,7 +1554,24 @@ def create_logs_internal(
         "names": names,
         "ids": ids_list,
     }
-    return {"log_event_ids": log_event_ids, "row_ids": row_ids_payload}
+
+    # Build auto_counting payload (all auto-counting columns with their values)
+    # row_ids from DAO contains dictionaries with ALL auto_counting columns (both in unique_keys and not)
+    # Always return a dict, empty if no auto-counting configured
+    auto_counting_payload = {}
+    auto_counting_cfg = context_obj.auto_counting or {}
+    if row_ids and auto_counting_cfg and isinstance(row_ids[0], dict):
+        # Extract auto-counting values as a dict mapping column name to list of values
+        for col_name in auto_counting_cfg.keys():
+            auto_counting_payload[col_name] = [
+                row_id.get(col_name) for row_id in row_ids
+            ]
+
+    return {
+        "log_event_ids": log_event_ids,
+        "row_ids": row_ids_payload,
+        "auto_counting": auto_counting_payload,
+    }
 
 
 # TODO(yusha): refactor get_logs_query to make it modular
