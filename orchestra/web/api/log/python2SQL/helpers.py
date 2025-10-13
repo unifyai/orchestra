@@ -828,7 +828,18 @@ def _parse_rhs_list_or_dict_if_needed(rhs_dict, rhs_val):
         except Exception:
             pass
 
-    if isinstance(val, (list, dict)):
+    if isinstance(val, dict):
+        # Unwrap type literal dicts from parser into their raw values
+        if val.get("type") == "type_literal":
+            return val.get("value")
+        return val
+
+    if isinstance(val, list):
+        # If this is a list of type literal dicts, unwrap to their values
+        if val and all(
+            isinstance(it, dict) and it.get("type") == "type_literal" for it in val
+        ):
+            return [it.get("value") for it in val]
         return val
 
     return None
