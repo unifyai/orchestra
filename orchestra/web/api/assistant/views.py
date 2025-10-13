@@ -71,7 +71,6 @@ from orchestra.web.api.utils.assistant_infra import (
     delete_pubsub_topic,
     get_running_jobs,
     get_social_platforms_costs,
-    reawaken_assistant,
     stop_jobs,
     wake_up_assistant,
     watch_email,
@@ -835,18 +834,6 @@ def delete_assistant_contact(
                 detail="Assistant not found during update.",
             )
 
-        if removal_payload.restart_assistant:
-            try:
-                reawaken_assistant(str(assistant_id), is_staging=settings.is_staging)
-                logging.info(
-                    f"Successfully triggered re-awakening for assistant {assistant_id}.",
-                )
-            except Exception as e:
-                # Log as a warning
-                logging.warning(
-                    f"Failed to re-awaken assistant {assistant_id} after contact removal: {str(e)}",
-                )
-
         return InfoResponse(
             info=AssistantRead(
                 agent_id=str(updated_assistant.agent_id),
@@ -1346,14 +1333,6 @@ def update_assistant_config(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Assistant not found.",
             )
-        contact_changed_after_update = (
-            updated.phone != existing_assistant.phone
-            or updated.email != existing_assistant.email
-            or updated.user_phone != existing_assistant.user_phone
-            or updated.user_whatsapp_number != existing_assistant.user_whatsapp_number
-            or updated.assistant_whatsapp_number
-            != existing_assistant.assistant_whatsapp_number
-        )
 
         # If the photo was updated, delete the old one from GCS.
         if is_photo_changing and old_photo_url and old_photo_url.startswith("gs://"):
@@ -1380,18 +1359,6 @@ def update_assistant_config(
                 )
 
         session.commit()
-
-        if update.restart_assistant and contact_changed_after_update:
-            try:
-                reawaken_assistant(str(assistant_id), is_staging=settings.is_staging)
-                logging.info(
-                    f"Successfully triggered re-awakening for assistant {assistant_id}.",
-                )
-            except Exception as e:
-                # Log this as a warning, not a critical failure, since the update succeeded.
-                logging.warning(
-                    f"Failed to re-awaken assistant {assistant_id} after update: {str(e)}",
-                )
 
         return InfoResponse(
             info=AssistantRead(

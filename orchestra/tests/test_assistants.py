@@ -1180,12 +1180,10 @@ async def test_delete_assistant_deletes_contexts(
 async def test_delete_assistant_contact(client: AsyncClient):
     # Mock the infrastructure deletion calls to avoid external API calls during testing
     with patch(
-        "orchestra.web.api.assistant.views.delete_phone_number",
+        "orchestra.web.api.assistant.views.delete_phone_number"
     ) as mock_delete_phone, patch(
-        "orchestra.web.api.assistant.views.delete_email",
-    ) as mock_delete_email, patch(
-        "orchestra.web.api.assistant.views.reawaken_assistant",
-    ) as mock_reawaken:
+        "orchestra.web.api.assistant.views.delete_email"
+    ) as mock_delete_email:
 
         # 1. Create a base assistant
         base_payload = {
@@ -1194,9 +1192,7 @@ async def test_delete_assistant_contact(client: AsyncClient):
             "create_infra": False,
         }
         create_resp = await client.post(
-            "/v0/assistant",
-            json=base_payload,
-            headers=HEADERS,
+            "/v0/assistant", json=base_payload, headers=HEADERS
         )
         assert create_resp.status_code == 200
         assistant_id = create_resp.json()["info"]["agent_id"]
@@ -1228,8 +1224,8 @@ async def test_delete_assistant_contact(client: AsyncClient):
             == assistant_whatsapp_number
         )
 
-        # 4. Delete Email contact with restart flag
-        delete_email_payload = {"contact_type": "email", "restart_assistant": True}
+        # 4. Delete Email contact
+        delete_email_payload = {"contact_type": "email"}
         delete_email_resp = await client.delete(
             f"/v0/assistant/{assistant_id}/contact",
             json=delete_email_payload,
@@ -1242,11 +1238,9 @@ async def test_delete_assistant_contact(client: AsyncClient):
             email_deleted_info["phone"] == contact_payload["phone"]
         )  # Should be unchanged
         mock_delete_email.assert_called_once_with(contact_payload["email"])
-        mock_reawaken.assert_called_once_with(str(assistant_id), is_staging=False)
-        mock_reawaken.reset_mock()
 
-        # 5. Delete Phone contact without restart flag
-        delete_phone_payload = {"contact_type": "phone", "restart_assistant": False}
+        # 5. Delete Phone contact
+        delete_phone_payload = {"contact_type": "phone"}
         delete_phone_resp = await client.delete(
             f"/v0/assistant/{assistant_id}/contact",
             json=delete_phone_payload,
@@ -1261,7 +1255,6 @@ async def test_delete_assistant_contact(client: AsyncClient):
             phone_deleted_info["assistant_whatsapp_number"] == assistant_whatsapp_number
         )  # Unchanged
         mock_delete_phone.assert_called_once_with(contact_payload["phone"])
-        mock_reawaken.assert_not_called()
 
         # 6. Delete WhatsApp contact
         delete_whatsapp_payload = {"contact_type": "whatsapp"}
@@ -1292,62 +1285,3 @@ async def test_delete_assistant_contact(client: AsyncClient):
             headers=HEADERS,
         )
         assert delete_nonexistent_resp.status_code == 404
-
-
-@pytest.mark.anyio
-async def test_update_assistant_contact_and_restart(client: AsyncClient):
-    with patch("orchestra.web.api.assistant.views.reawaken_assistant") as mock_reawaken:
-        # Create an assistant
-        payload = {
-            "first_name": "Restart",
-            "surname": "Test",
-            "create_infra": False,
-        }
-        create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-        assert create_resp.status_code == 200
-        assistant_id = create_resp.json()["info"]["agent_id"]
-
-        # 1. Update contact info WITH restart flag
-        update_payload_1 = {
-            "phone": "+15550001111",
-            "restart_assistant": True,
-            "create_infra": False,
-        }
-        patch_resp_1 = await client.patch(
-            f"/v0/assistant/{assistant_id}/config",
-            json=update_payload_1,
-            headers=HEADERS,
-        )
-        assert patch_resp_1.status_code == 200
-        mock_reawaken.assert_called_once_with(str(assistant_id), is_staging=False)
-        mock_reawaken.reset_mock()
-
-        # 2. Update contact info WITHOUT restart flag
-        update_payload_2 = {
-            "email": "restart@test.com",
-            "restart_assistant": False,
-            "create_infra": False,
-        }
-        patch_resp_2 = await client.patch(
-            f"/v0/assistant/{assistant_id}/config",
-            json=update_payload_2,
-            headers=HEADERS,
-        )
-        assert patch_resp_2.status_code == 200
-        mock_reawaken.assert_not_called()
-        mock_reawaken.reset_mock()
-
-        # 3. Update NON-contact info WITH restart flag (should NOT trigger)
-        update_payload_3 = {
-            "weekly_limit": 99.9,
-            "restart_assistant": True,
-            "create_infra": False,
-        }
-        patch_resp_3 = await client.patch(
-            f"/v0/assistant/{assistant_id}/config",
-            json=update_payload_3,
-            headers=HEADERS,
-        )
-        assert patch_resp_3.status_code == 200
-        mock_reawaken.assert_not_called()
-        mock_reawaken.reset_mock()
