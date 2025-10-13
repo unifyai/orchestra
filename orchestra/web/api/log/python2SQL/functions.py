@@ -1146,8 +1146,10 @@ def _handle_dict_method(
     local_scope=None,
     is_vector=False,
 ):
-    method = filter_dict["method"]  # e.g., "keys", "values", "items", "get"
-    if method == "get":
+    method = filter_dict[
+        "method"
+    ]  # e.g., "keys", "values", "items", "get", "setdefault"
+    if method in ("get", "setdefault"):
         return _handle_dict_get(
             filter_dict,
             log_event_alias,
