@@ -643,6 +643,38 @@ def _transform_ast(node: ast.AST, preserve_string_literals: bool = False) -> dic
                         for arg in node.args
                     ],
                 }
+        # Handle isinstance(x, "type") by lowering to: type(x) == "type"
+        elif func_name == "isinstance":
+            # Support isinstance(x, "type") and isinstance(x, ("type1", "type2", ...))
+            if len(node.args) != 2:
+                raise HTTPException(
+                    status_code=400,
+                    detail="isinstance() requires exactly 2 arguments",
+                )
+            value_expr = _transform_ast(node.args[0], preserve_string_literals)
+
+            def _as_type_literal(arg_node):
+                if isinstance(arg_node, ast.Constant) and isinstance(
+                    arg_node.value,
+                    str,
+                ):
+                    return {"type": "type_literal", "value": arg_node.value}
+                raise HTTPException(
+                    status_code=400,
+                    detail="isinstance() second argument must be a string literal or tuple/list of string literals",
+                )
+
+            rhs_arg = node.args[1]
+            type_expr = {"operand": "type", "rhs": value_expr}
+
+            # Tuple/List of string literals -> use membership: type(x) in [..]
+            if isinstance(rhs_arg, (ast.Tuple, ast.List)):
+                type_list = [_as_type_literal(elt) for elt in rhs_arg.elts]
+                return {"lhs": type_expr, "operand": "in", "rhs": type_list}
+            # Single string literal
+            rhs_literal = _as_type_literal(rhs_arg)
+            return {"lhs": type_expr, "operand": "==", "rhs": rhs_literal}
+
         # Handle embed function
         elif func_name == "embed":
             return {
@@ -741,24 +773,25 @@ def _transform_ast(node: ast.AST, preserve_string_literals: bool = False) -> dic
                     for a in node.args
                 ],
             }
-        # Handle dict methods (keys, values, items, get)
+        # Handle dict methods (keys, values, items, get, setdefault)
         elif isinstance(node.func, ast.Attribute) and node.func.attr in (
             "keys",
             "values",
             "items",
             "get",
+            "setdefault",
         ):
-            if node.func.attr == "get":
+            if node.func.attr in ("get", "setdefault"):
                 # Handle dict.get(key, default) method
                 if len(node.args) == 0:
                     raise HTTPException(
                         status_code=400,
-                        detail="dict.get() requires at least one argument",
+                        detail=f"dict.{node.func.attr}() requires at least one argument",
                     )
                 if len(node.args) > 2:
                     raise HTTPException(
                         status_code=400,
-                        detail="dict.get() accepts at most two arguments",
+                        detail=f"dict.{node.func.attr}() accepts at most two arguments",
                     )
 
                 container = _transform_ast(node.func.value, preserve_string_literals)
@@ -770,9 +803,12 @@ def _transform_ast(node: ast.AST, preserve_string_literals: bool = False) -> dic
                         preserve_string_literals,
                     )
 
+                method = "get" if node.func.attr == "get" else "setdefault"
+
                 filter_dict = {
                     "operand": "dict_method",
-                    "method": "get",
+                    # Route setdefault through the same executor branch as get()
+                    "method": method,
                     "rhs": container,
                     "key": key_expr,
                     "default": default_expr,
