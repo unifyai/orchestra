@@ -877,3 +877,15 @@ class ReplicatePredictionResponse(BaseModel):
     class Config:
         orm_mode = True
         from_attributes = True
+
+
+class AssistantContactRemoval(BaseModel):
+    """
+    Schema for removing a contact method from an assistant.
+    """
+
+    contact_type: Literal["phone", "email", "whatsapp"] = Field(
+        ...,
+        description="The type of contact information to remove.",
+        example="email",
+    )
