@@ -3055,9 +3055,11 @@ def admin_get_assistant_status(
     try:
         job_names = get_running_jobs(assistant_id)
         if len(job_names) > 0:
-            return InfoResponse(info={"status": "running", "job_name": job_names[0]})
+            return InfoResponse(
+                info=AssistantStatus(running=True, job_name=job_names[0]),
+            )
         else:
-            return InfoResponse(info={"status": "not_running"})
+            return InfoResponse(info=AssistantStatus(running=False, job_name=None))
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
