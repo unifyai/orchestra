@@ -4,7 +4,6 @@ import time
 from decimal import Decimal
 from typing import List, Optional
 
-import requests
 from fastapi import (
     APIRouter,
     Depends,
@@ -69,6 +68,7 @@ from orchestra.web.api.utils.assistant_infra import (
     delete_email,
     delete_phone_number,
     delete_pubsub_topic,
+    get_running_jobs,
     get_social_platforms_costs,
     stop_jobs,
     wake_up_assistant,
@@ -811,7 +811,7 @@ def delete_assistant(
 
         # Suspend any jobs that might be currently running with that assistant
         try:
-            response = stop_jobs(assistant_id, staging=settings.is_staging)
+            response = stop_jobs(assistant_id)
             print(f"JOB STOPPED: {response['job_names']}")
         except Exception as e:
             logging.error(f"Failed to stop job: {str(e)}")
@@ -3052,48 +3052,14 @@ def admin_get_assistant_status(
     """
     Get the live status of an assistant's dedicated service.
     """
-
-    # Prioritize the key from settings if unity admin key
-    # needs to be different from the orchestra admin key.
-    # Otherwise use the key provided in the auth header.
-    auth_header = None
-    if settings.UNITY_ADMIN_KEY:
-        auth_header = f"Bearer {settings.UNITY_ADMIN_KEY}"
-    else:
-        incoming_auth_header = request.headers.get("Authorization")
-        if incoming_auth_header:
-            auth_header = incoming_auth_header
-    if not auth_header:
+    try:
+        job_names = get_running_jobs(assistant_id)
+        if len(job_names) > 0:
+            return InfoResponse(info={"status": "running", "job_name": job_names[0]})
+        else:
+            return InfoResponse(info={"status": "not_running"})
+    except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Admin key is not configured.",
-        )
-
-    service_url = (
-        f"https://unity-{assistant_id}-262420637606.us-central1.run.app/status"
-    )
-    headers = {"Authorization": auth_header}
-
-    try:
-        response = requests.get(service_url, headers=headers, timeout=10)
-        response.raise_for_status()
-        return InfoResponse(info=response.json())
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 404:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Assistant service for ID '{assistant_id}' not found or failed to respond.",
-            )
-        try:
-            detail = e.response.json().get("detail", str(e))
-        except requests.exceptions.JSONDecodeError:
-            detail = str(e)
-        raise HTTPException(
-            status_code=e.response.status_code,
-            detail=f"Assistant service returned an error: {detail}",
-        )
-    except requests.exceptions.RequestException as e:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Connection to assistant service failed: {str(e)}",
+            detail=f"Failed to get assistant status: {str(e)}",
         )
