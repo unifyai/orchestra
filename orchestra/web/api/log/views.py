@@ -107,7 +107,11 @@ admin_router = APIRouter()
                     "example": {
                         "info": "Logs created successfully!",
                         "log_event_ids": [101, 102, 103],
-                        "row_ids": {"name": "row_id", "ids": [0, 1, 2]},
+                        "row_ids": {"names": ["row_id"], "ids": [[0], [1], [2]]},
+                        "auto_counting": {
+                            "row_id": [0, 1, 2],
+                            "exchange_id": [0, 1, 2],
+                        },
                     },
                 },
             },
@@ -161,7 +165,13 @@ def create_logs(
     Once a field is marked as mutable, only then can it be modified through
     the update endpoint.
 
-    This method returns the ids of the new stored logs.
+    **Response includes:**
+    - `log_event_ids`: List of created log event IDs
+    - `row_ids`: Object with `names` (unique key column names) and `ids` (nested list of values)
+    - `auto_counting`: Dictionary mapping auto-counting column names to their generated/provided values.
+      Empty dict `{}` when no auto-counting is configured.
+
+    This method returns the ids of the new stored logs along with any auto-counting values.
     """
     # Instantiate DAOs with shared session
     organization_member_dao = OrganizationMemberDAO(session)
@@ -223,6 +233,7 @@ def create_logs(
             "info": "Logs created successfully!",
             "log_event_ids": result["log_event_ids"],
             "row_ids": result["row_ids"],
+            "auto_counting": result["auto_counting"],
         }
     except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
