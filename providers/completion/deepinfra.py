@@ -31,12 +31,12 @@ supported_models = {
     "gpt-oss-20b": {
         "endpoint": "deepinfra/openai/gpt-oss-20b",
         "context_window": 128000,
-        "cost": {"prompt": 0.04, "completion": 0.15},
+        "cost": {"prompt": 0.03, "completion": 0.14},
     },
     "gpt-oss-120b": {
         "endpoint": "deepinfra/openai/gpt-oss-120b",
         "context_window": 128000,
-        "cost": {"prompt": 0.05, "completion": 0.45},
+        "cost": {"prompt": 0.05, "completion": 0.27},
     },
     "deepseek-v3.1": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3.1",
@@ -111,7 +111,7 @@ supported_models = {
     "gemma-3-12b-it": {
         "endpoint": "deepinfra/google/gemma-3-12b-it",
         "context_window": 128000,
-        "cost": {"prompt": 0.05, "completion": 0.1},
+        "cost": {"prompt": 0.04, "completion": 0.13},
     },
     "gemma-3-4b-it": {
         "endpoint": "deepinfra/google/gemma-3-4b-it",
@@ -126,7 +126,7 @@ supported_models = {
     "mixtral-8x7b-instruct-v0.1": {
         "endpoint": "deepinfra/mistralai/Mixtral-8x7B-Instruct-v0.1",
         "context_window": 32768,
-        "cost": {"prompt": 0.4, "completion": 0.4},
+        "cost": {"prompt": 0.54, "completion": 0.54},
     },
     "qwen-3-235b-a22b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen3-235B-A22B-Instruct-2507",
@@ -137,11 +137,6 @@ supported_models = {
         "endpoint": "deepinfra/Qwen/Qwen3-30B-A3B",
         "context_window": 40000,
         "cost": {"prompt": 0.08, "completion": 0.29},
-    },
-    "qwen-2.5-7b-instruct": {
-        "endpoint": "deepinfra/Qwen/Qwen2.5-7B-Instruct",
-        "context_window": 32000,
-        "cost": {"prompt": 0.04, "completion": 0.1},
     },
     "qwen-2.5-72b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen2.5-72B-Instruct",

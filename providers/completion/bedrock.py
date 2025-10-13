@@ -121,11 +121,6 @@ supported_models = {
         "context_window": 8192,
         "cost": {"prompt": 2.65, "completion": 3.5},
     },
-    "command-r-plus": {
-        "endpoint": "bedrock/cohere.command-r-plus-v1:0",
-        "context_window": 128000,
-        "cost": {"prompt": 3, "completion": 15},
-    },
     "claude-3-haiku": {
         "endpoint": "bedrock/us.anthropic.claude-3-haiku-20240307-v1:0",
         "context_window": 200000,
@@ -155,5 +150,10 @@ supported_models = {
         "endpoint": "bedrock/us.anthropic.claude-opus-4-1-20250805-v1:0",
         "context_window": 200000,
         "cost": {"prompt": 15, "completion": 75},
+    },
+    "claude-4.5-sonnet": {
+        "endpoint": "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "context_window": 200000,
+        "cost": {"prompt": 3, "completion": 15},
     },
 }
