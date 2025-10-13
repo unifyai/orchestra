@@ -49,6 +49,9 @@ async def test_create_logs(client: AsyncClient):
         range(min(log_event_ids), max(log_event_ids) + 1),
     )
 
+    # When no unique_keys/auto_counting are configured, auto_counting should be empty dict
+    assert response.json()["auto_counting"] == {}
+
 
 @pytest.mark.anyio
 async def test_create_log_w_image(client: AsyncClient):
@@ -168,6 +171,669 @@ async def test_create_logs_autoincrement_version(client: AsyncClient):
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
+
+
+@pytest.mark.anyio
+async def test_create_logs_returns_auto_counting_columns_and_values(
+    client: AsyncClient,
+):
+    """Ensure response includes auto_counting dict with column names -> values."""
+    project_name = "auto-counts-response-project"
+    context_name = "auto-counts-response-context"
+
+    # Create project and context: one unique key (message_id) and an independent auto-counting column (exchange_id)
+    await _create_project(client, project_name)
+    resp_ctx = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "unique_keys": {"message_id": "int"},
+            "auto_counting": {"message_id": None, "exchange_id": None},
+        },
+        headers=HEADERS,
+    )
+    assert resp_ctx.status_code == 200, resp_ctx.json()
+
+    # Create three logs; expect message_id in row_ids and both message_id and exchange_id in auto_counting
+    res1 = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={"text": "a"},
+    )
+    assert res1.status_code == 200, res1.text
+    body1 = res1.json()
+    assert body1["row_ids"]["names"] == ["message_id"]
+    assert body1["row_ids"]["ids"] == [[0]]
+    # auto_counting should be a dict mapping column names to lists of values
+    assert body1.get("auto_counting") is not None
+    assert "message_id" in body1["auto_counting"]
+    assert "exchange_id" in body1["auto_counting"]
+    assert body1["auto_counting"]["message_id"] == [0]
+    assert body1["auto_counting"]["exchange_id"] == [0]
+
+    res2 = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={"text": "b"},
+    )
+    assert res2.status_code == 200, res2.text
+    body2 = res2.json()
+    assert body2["row_ids"]["ids"] == [[1]]
+    assert body2["auto_counting"]["message_id"] == [1]
+    assert body2["auto_counting"]["exchange_id"] == [1]
+
+    res3 = await _create_log(
+        client,
+        project_name,
+        context=context_name,
+        entries={"text": "c"},
+    )
+    assert res3.status_code == 200, res3.text
+    body3 = res3.json()
+    assert body3["row_ids"]["ids"] == [[2]]
+    assert body3["auto_counting"]["message_id"] == [2]
+    assert body3["auto_counting"]["exchange_id"] == [2]
+
+
+@pytest.mark.anyio
+async def test_create_logs_with_batch_auto_counting(client: AsyncClient):
+    """Test batch log creation returns correct auto_counting values for multiple logs."""
+    project_name = "batch-auto-count-project"
+    context_name = "batch-context"
+
+    await _create_project(client, project_name)
+    resp_ctx = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "unique_keys": {"seq_id": "int"},
+            "auto_counting": {"seq_id": None},
+        },
+        headers=HEADERS,
+    )
+    assert resp_ctx.status_code == 200, resp_ctx.json()
+
+    # Create 5 logs in one batch
+    batch_entries = [{"data": f"item_{i}"} for i in range(5)]
+    res = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": context_name,
+            "entries": batch_entries,
+        },
+        headers=HEADERS,
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+
+    # Verify log_event_ids
+    assert len(body["log_event_ids"]) == 5
+    assert all(isinstance(lid, int) for lid in body["log_event_ids"])
+
+    # Verify row_ids for unique keys
+    assert body["row_ids"]["names"] == ["seq_id"]
+    assert body["row_ids"]["ids"] == [[0], [1], [2], [3], [4]]
+
+    # Verify auto_counting values
+    assert "seq_id" in body["auto_counting"]
+    assert body["auto_counting"]["seq_id"] == [0, 1, 2, 3, 4]
+
+
+@pytest.mark.anyio
+async def test_create_logs_with_independent_auto_counting_columns(client: AsyncClient):
+    """Test multiple independent auto-counting columns increment separately."""
+    project_name = "independent-counters-project"
+    context_name = "independent-context"
+
+    await _create_project(client, project_name)
+    resp_ctx = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "auto_counting": {"counter_a": None, "counter_b": None},
+        },
+        headers=HEADERS,
+    )
+    assert resp_ctx.status_code == 200, resp_ctx.json()
+
+    # Create 3 logs
+    for i in range(3):
+        res = await client.post(
+            "/v0/logs",
+            json={
+                "project": project_name,
+                "context": context_name,
+                "entries": {"value": f"log_{i}"},
+            },
+            headers=HEADERS,
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+
+        # Both counters should increment independently from 0
+        assert "counter_a" in body["auto_counting"]
+        assert "counter_b" in body["auto_counting"]
+        assert body["auto_counting"]["counter_a"] == [i]
+        assert body["auto_counting"]["counter_b"] == [i]
+
+        # No unique keys configured, so row_ids should be empty
+        assert body["row_ids"]["names"] == []
+        assert body["row_ids"]["ids"] == []
+
+
+@pytest.mark.anyio
+async def test_create_logs_with_hierarchical_auto_counting(client: AsyncClient):
+    """Test hierarchical auto-counting where child counter depends on parent."""
+    project_name = "hierarchical-counter-project"
+    context_name = "hierarchical-context"
+
+    await _create_project(client, project_name)
+    resp_ctx = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "unique_keys": {"user_id": "int", "session_id": "int"},
+            "auto_counting": {"user_id": None, "session_id": "user_id"},
+        },
+        headers=HEADERS,
+    )
+    assert resp_ctx.status_code == 200, resp_ctx.json()
+
+    # First log: Let both user_id and session_id auto-generate
+    res = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": context_name,
+            "entries": {"action": "first_session_user_0"},
+        },
+        headers=HEADERS,
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    # Both should be auto-generated starting from 0
+    assert body["auto_counting"]["user_id"] == [0]
+    assert body["auto_counting"]["session_id"] == [0]
+    user_0_id = body["auto_counting"]["user_id"][0]
+
+    # Create more sessions for user 0 by providing user_id
+    for session_num in range(1, 3):
+        res = await client.post(
+            "/v0/logs",
+            json={
+                "project": project_name,
+                "context": context_name,
+                "entries": {
+                    "user_id": user_0_id,
+                    "action": f"session_{session_num}_user_0",
+                },
+            },
+            headers=HEADERS,
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+
+        # user_id is provided, session_id auto-increments per user
+        assert body["auto_counting"]["user_id"] == [user_0_id]
+        assert body["auto_counting"]["session_id"] == [session_num]
+
+    # Create first log for user 1 (let user_id auto-generate)
+    res = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": context_name,
+            "entries": {"action": "first_session_user_1"},
+        },
+        headers=HEADERS,
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    # user_id auto-increments to 1, session_id restarts from 0 for this new user
+    assert body["auto_counting"]["user_id"] == [1]
+    assert body["auto_counting"]["session_id"] == [0]
+    user_1_id = body["auto_counting"]["user_id"][0]
+
+    # Create another session for user 1
+    res = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": context_name,
+            "entries": {"user_id": user_1_id, "action": "session_1_user_1"},
+        },
+        headers=HEADERS,
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["auto_counting"]["user_id"] == [user_1_id]
+    assert body["auto_counting"]["session_id"] == [1]
+
+
+@pytest.mark.anyio
+async def test_create_logs_with_mixed_unique_and_auto_counting(client: AsyncClient):
+    """Test context with both unique keys and separate auto-counting columns."""
+    project_name = "mixed-config-project"
+    context_name = "mixed-context"
+
+    await _create_project(client, project_name)
+    resp_ctx = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "unique_keys": {"task_id": "int"},
+            "auto_counting": {"task_id": None, "attempt_id": None},
+        },
+        headers=HEADERS,
+    )
+    assert resp_ctx.status_code == 200, resp_ctx.json()
+
+    # Create multiple logs
+    for i in range(4):
+        res = await client.post(
+            "/v0/logs",
+            json={
+                "project": project_name,
+                "context": context_name,
+                "entries": {"status": f"status_{i}"},
+            },
+            headers=HEADERS,
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+
+        # task_id is in unique_keys, should appear in row_ids
+        assert body["row_ids"]["names"] == ["task_id"]
+        assert body["row_ids"]["ids"] == [[i]]
+
+        # Both task_id and attempt_id should appear in auto_counting
+        assert set(body["auto_counting"].keys()) == {"task_id", "attempt_id"}
+        assert body["auto_counting"]["task_id"] == [i]
+        assert body["auto_counting"]["attempt_id"] == [i]
+
+
+@pytest.mark.anyio
+async def test_create_logs_with_user_provided_auto_counting_values(client: AsyncClient):
+    """Test that explicitly provided auto-counting values are returned correctly."""
+    project_name = "explicit-counter-project"
+    context_name = "explicit-context"
+
+    await _create_project(client, project_name)
+    resp_ctx = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "unique_keys": {"record_id": "int"},
+            "auto_counting": {"record_id": None},
+        },
+        headers=HEADERS,
+    )
+    assert resp_ctx.status_code == 200, resp_ctx.json()
+
+    # Explicitly provide record_id values (skip 0, 1, 2 and provide 10, 20)
+    res1 = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": context_name,
+            "entries": {"record_id": 10, "data": "custom_10"},
+        },
+        headers=HEADERS,
+    )
+    assert res1.status_code == 200, res1.text
+    body1 = res1.json()
+    assert body1["auto_counting"]["record_id"] == [10]
+    assert body1["row_ids"]["ids"] == [[10]]
+
+    res2 = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": context_name,
+            "entries": {"record_id": 20, "data": "custom_20"},
+        },
+        headers=HEADERS,
+    )
+    assert res2.status_code == 200, res2.text
+    body2 = res2.json()
+    assert body2["auto_counting"]["record_id"] == [20]
+    assert body2["row_ids"]["ids"] == [[20]]
+
+
+@pytest.mark.anyio
+async def test_create_logs_with_composite_unique_keys(client: AsyncClient):
+    """Test composite unique keys with auto-counting on one of them."""
+    project_name = "composite-keys-project"
+    context_name = "composite-context"
+
+    await _create_project(client, project_name)
+    resp_ctx = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "unique_keys": {"dept_id": "int", "emp_id": "int"},
+            "auto_counting": {"emp_id": None},
+        },
+        headers=HEADERS,
+    )
+    assert resp_ctx.status_code == 200, resp_ctx.json()
+
+    # Create employees in dept 100
+    for emp_num in range(3):
+        res = await client.post(
+            "/v0/logs",
+            json={
+                "project": project_name,
+                "context": context_name,
+                "entries": {"dept_id": 100, "name": f"emp_{emp_num}"},
+            },
+            headers=HEADERS,
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+
+        # Both dept_id and emp_id should be in row_ids
+        assert body["row_ids"]["names"] == ["dept_id", "emp_id"]
+        assert body["row_ids"]["ids"] == [[100, emp_num]]
+
+        # Only emp_id is auto-counting
+        assert body["auto_counting"] == {"emp_id": [emp_num]}
+
+
+@pytest.mark.anyio
+async def test_comprehensive_auto_counting_with_hierarchy_and_independent_counters(
+    client: AsyncClient,
+):
+    """
+    Comprehensive test covering:
+    - Nested hierarchical auto-counting (department -> team -> employee)
+    - Independent auto-counting columns (ticket_id, session_id)
+    - No unique keys configured
+    - Mix of auto-generated and user-provided values
+    - Proper counter scoping and resets
+    """
+    project_name = "comprehensive-auto-counting-project"
+    context_name = "comprehensive-context"
+
+    await _create_project(client, project_name)
+    resp_ctx = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": context_name,
+            "unique_keys": {
+                "dept_id": "int",
+                "team_id": "int",
+                "emp_id": "int",
+            },
+            "auto_counting": {
+                # Hierarchical: dept_id -> team_id -> emp_id
+                "dept_id": None,  # Root counter
+                "team_id": "dept_id",  # Scoped to dept_id
+                "emp_id": "team_id",  # Scoped to team_id
+                # Independent counters (not in unique_keys)
+                "ticket_id": None,  # Independent counter
+                "session_id": None,  # Another independent counter
+            },
+        },
+        headers=HEADERS,
+    )
+    assert resp_ctx.status_code == 200, resp_ctx.json()
+
+    # Test 1: Create first log - let all counters auto-generate to initialize them
+    res = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": context_name,
+            "entries": {"action": "initialize_counters"},
+        },
+        headers=HEADERS,
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+
+    # All counters auto-generate and initialize to 0
+    assert body["auto_counting"]["dept_id"] == [0]
+    assert body["auto_counting"]["team_id"] == [0]
+    assert body["auto_counting"]["emp_id"] == [0]
+    assert body["auto_counting"]["ticket_id"] == [0]
+    assert body["auto_counting"]["session_id"] == [0]
+
+    # unique_keys configured - row_ids should contain the hierarchical keys
+    assert body["row_ids"]["names"] == ["dept_id", "team_id", "emp_id"]
+    assert body["row_ids"]["ids"] == [[0, 0, 0]]
+
+    # Capture the initialized values
+    dept_0 = body["auto_counting"]["dept_id"][0]
+    team_0 = body["auto_counting"]["team_id"][0]
+
+    # Test 2: Add another employee to same team (now we can provide explicit values)
+    res = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": context_name,
+            "entries": {
+                "dept_id": dept_0,
+                "team_id": team_0,
+                "action": "add_emp_1_to_team_0",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+
+    assert body["auto_counting"]["dept_id"] == [dept_0]
+    assert body["auto_counting"]["team_id"] == [team_0]
+    assert body["auto_counting"]["emp_id"] == [1]
+    assert body["auto_counting"]["ticket_id"] == [1]
+    assert body["auto_counting"]["session_id"] == [1]
+
+    # Test 3: Add third employee to same team
+    res = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": context_name,
+            "entries": {
+                "dept_id": dept_0,
+                "team_id": team_0,
+                "action": "add_emp_2_to_team_0",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["auto_counting"]["emp_id"] == [2]
+    assert body["auto_counting"]["ticket_id"] == [2]
+    assert body["auto_counting"]["session_id"] == [2]
+
+    # Test 4: Create new team in same department (providing only dept_id also creates emp_id=0)
+    res = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": context_name,
+            "entries": {"dept_id": dept_0, "action": "create_team_1_emp_0"},
+        },
+        headers=HEADERS,
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+
+    assert body["auto_counting"]["dept_id"] == [dept_0]
+    assert body["auto_counting"]["team_id"] == [1]
+    assert body["auto_counting"]["emp_id"] == [0]  # emp_id resets for new team
+    assert body["auto_counting"]["ticket_id"] == [3]
+    assert body["auto_counting"]["session_id"] == [3]
+
+    team_1 = body["auto_counting"]["team_id"][0]
+
+    # Test 5: Add second employee to team_1
+    res = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": context_name,
+            "entries": {
+                "dept_id": dept_0,
+                "team_id": team_1,
+                "action": "add_emp_1_to_team_1",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["auto_counting"]["emp_id"] == [1]
+    assert body["auto_counting"]["ticket_id"] == [4]
+    assert body["auto_counting"]["session_id"] == [4]
+
+    # Test 6: Add third employee to team_1
+    res = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": context_name,
+            "entries": {
+                "dept_id": dept_0,
+                "team_id": team_1,
+                "action": "add_emp_2_to_team_1",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["auto_counting"]["emp_id"] == [2]
+    assert body["auto_counting"]["ticket_id"] == [5]
+    assert body["auto_counting"]["session_id"] == [5]
+
+    # Test 7: Create entirely new department (all levels auto-generate)
+    res = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": context_name,
+            "entries": {"action": "create_dept_1_team_0_emp_0"},
+        },
+        headers=HEADERS,
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+
+    assert body["auto_counting"]["dept_id"] == [1]
+    assert body["auto_counting"]["team_id"] == [0]  # Reset for new dept
+    assert body["auto_counting"]["emp_id"] == [0]  # Reset for new team
+    assert body["auto_counting"]["ticket_id"] == [6]
+    assert body["auto_counting"]["session_id"] == [6]
+
+    dept_1 = body["auto_counting"]["dept_id"][0]
+    team_0_dept_1 = body["auto_counting"]["team_id"][0]
+
+    # Test 8: Add second employee to dept_1, team_0
+    res = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": context_name,
+            "entries": {
+                "dept_id": dept_1,
+                "team_id": team_0_dept_1,
+                "action": "add_emp_1_to_dept_1_team_0",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["auto_counting"]["dept_id"] == [dept_1]
+    assert body["auto_counting"]["team_id"] == [team_0_dept_1]
+    assert body["auto_counting"]["emp_id"] == [1]
+    assert body["auto_counting"]["ticket_id"] == [7]
+    assert body["auto_counting"]["session_id"] == [7]
+
+    # Test 9: Create new team in dept_1 (also creates emp_id=0)
+    res = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": context_name,
+            "entries": {"dept_id": dept_1, "action": "create_team_1_emp_0_dept_1"},
+        },
+        headers=HEADERS,
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["auto_counting"]["dept_id"] == [dept_1]
+    assert body["auto_counting"]["team_id"] == [1]
+    assert body["auto_counting"]["emp_id"] == [0]  # Reset for new team
+    assert body["auto_counting"]["ticket_id"] == [8]
+    assert body["auto_counting"]["session_id"] == [8]
+    team_1_dept_1 = body["auto_counting"]["team_id"][0]
+
+    # Test 10: Batch with mixed hierarchy
+    batch_entries = [
+        {"dept_id": dept_1, "team_id": team_0_dept_1, "action": "batch_emp_2"},
+        {"dept_id": dept_1, "team_id": team_0_dept_1, "action": "batch_emp_3"},
+        {"dept_id": dept_1, "team_id": team_1_dept_1, "action": "batch_emp_1_team_1"},
+    ]
+    res = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": context_name,
+            "entries": batch_entries,
+        },
+        headers=HEADERS,
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+
+    # Should have 3 log events
+    assert len(body["log_event_ids"]) == 3
+
+    # First two: emp_id increments within team_0, third: second emp in team_1
+    assert body["auto_counting"]["dept_id"] == [dept_1, dept_1, dept_1]
+    assert body["auto_counting"]["team_id"] == [
+        team_0_dept_1,
+        team_0_dept_1,
+        team_1_dept_1,
+    ]
+    assert body["auto_counting"]["emp_id"] == [2, 3, 1]  # Third continues in team_1
+    # Independent counters continue sequentially
+    assert body["auto_counting"]["ticket_id"] == [9, 10, 11]
+    assert body["auto_counting"]["session_id"] == [9, 10, 11]
+
+    # Test 11: Verify we can provide explicit values for independent counters
+    res = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": context_name,
+            "entries": {
+                "ticket_id": 999,
+                "session_id": 888,
+                "action": "explicit_independent_values",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+
+    # Hierarchical counters auto-generate (creates new dept/team/emp)
+    assert body["auto_counting"]["dept_id"] == [2]
+    assert body["auto_counting"]["team_id"] == [0]
+    assert body["auto_counting"]["emp_id"] == [0]
+    # Independent counters use provided values
+    assert body["auto_counting"]["ticket_id"] == [999]
+    assert body["auto_counting"]["session_id"] == [888]
 
 
 @pytest.mark.anyio

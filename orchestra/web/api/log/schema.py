@@ -26,6 +26,11 @@ class CreateLogsResponse(BaseModel):
         description="Object containing the names of the unique ID columns and the corresponding nested row IDs.",
         example={"names": ["row_id"], "ids": [[0], [1], [2]]},
     )
+    auto_counting: Dict[str, List[Any]] = Field(
+        description="Dictionary mapping auto-counting column names to their generated/provided values for each created log. "
+        "Empty dict when no auto-counting columns are configured.",
+        example={"message_id": [0, 1, 2], "exchange_id": [0, 1, 2]},
+    )
 
 
 class EnumType(BaseModel):
