@@ -242,3 +242,24 @@ def wake_up_assistant(assistant_number: str, is_staging: bool = False):
         wake_up_url,
         data={"assistant_number": assistant_number},
     )
+
+
+def reawaken_assistant(assistant_id: str, is_staging: bool = False):
+    """
+    Triggers the assistant update webhook to reawaken or sync the assistant.
+    Args:
+        assistant_id (str): The ID of the assistant to reawaken.
+        is_staging (bool): Whether to use the staging or production webhook.
+    Returns:
+        The JSON response from the webhook.
+    """
+    reawaken_url = (
+        "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/"
+        "assistant-update-webhook" + ("-staging" if is_staging else "")
+    )
+    response = requests.post(
+        reawaken_url,
+        data={"assistant_id": assistant_id},
+    )
+    response.raise_for_status()  # Raise an exception for bad status codes
+    return response.json()

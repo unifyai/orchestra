@@ -1,6 +1,7 @@
 import base64
 import datetime
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from fastapi import status
@@ -1180,9 +1181,9 @@ async def test_delete_assistant_deletes_contexts(
 async def test_delete_assistant_contact(client: AsyncClient):
     # Mock the infrastructure deletion calls to avoid external API calls during testing
     with patch(
-        "orchestra.web.api.assistant.views.delete_phone_number"
+        "orchestra.web.api.assistant.views.delete_phone_number",
     ) as mock_delete_phone, patch(
-        "orchestra.web.api.assistant.views.delete_email"
+        "orchestra.web.api.assistant.views.delete_email",
     ) as mock_delete_email:
 
         # 1. Create a base assistant
@@ -1192,7 +1193,9 @@ async def test_delete_assistant_contact(client: AsyncClient):
             "create_infra": False,
         }
         create_resp = await client.post(
-            "/v0/assistant", json=base_payload, headers=HEADERS
+            "/v0/assistant",
+            json=base_payload,
+            headers=HEADERS,
         )
         assert create_resp.status_code == 200
         assistant_id = create_resp.json()["info"]["agent_id"]
@@ -1285,3 +1288,43 @@ async def test_delete_assistant_contact(client: AsyncClient):
             headers=HEADERS,
         )
         assert delete_nonexistent_resp.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_sync_assistant(client: AsyncClient):
+    # Mock the reawaken_assistant function to avoid actual HTTP calls
+    with patch("orchestra.web.api.assistant.views.reawaken_assistant") as mock_reawaken:
+        # Create an assistant to get a valid ID
+        payload = {
+            "first_name": "Sync",
+            "surname": "Tester",
+            "create_infra": False,
+        }
+        create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+        assert create_resp.status_code == 200
+        assistant_id = create_resp.json()["info"]["agent_id"]
+
+        # Call the sync endpoint for the created assistant
+        sync_resp = await client.post(
+            f"/v0/assistant/{assistant_id}/sync",
+            headers=HEADERS,
+        )
+
+        # Assert a successful response
+        assert sync_resp.status_code == 200, sync_resp.text
+        assert (
+            sync_resp.json()["info"] == "Assistant reawaken signal sent successfully."
+        )
+
+        # Assert that the underlying infra function was called correctly
+        mock_reawaken.assert_called_once()
+        assert mock_reawaken.call_args[0][0] == str(assistant_id)
+
+        # Test syncing a non-existent assistant
+        non_existent_id = 999999
+        sync_fail_resp = await client.post(
+            f"/v0/assistant/{non_existent_id}/sync",
+            headers=HEADERS,
+        )
+        assert sync_fail_resp.status_code == 404
+        assert sync_fail_resp.json()["detail"] == "Assistant not found."
