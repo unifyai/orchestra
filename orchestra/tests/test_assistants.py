@@ -1,7 +1,7 @@
 import base64
 import datetime
 from pathlib import Path
-from unittest.mock import patch
+
 import pytest
 from fastapi import status
 from httpx import AsyncClient
