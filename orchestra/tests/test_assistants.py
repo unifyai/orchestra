@@ -1174,3 +1174,114 @@ async def test_delete_assistant_deletes_contexts(
         assert (
             logs_after_delete.json()["count"] == 0
         ), f"Context still exists and is not empty. Found {logs_after_delete.json()['count']} logs."
+
+
+@pytest.mark.anyio
+async def test_delete_assistant_contact(client: AsyncClient):
+    # Mock the infrastructure deletion calls to avoid external API calls during testing
+    with patch(
+        "orchestra.web.api.assistant.views.delete_phone_number"
+    ) as mock_delete_phone, patch(
+        "orchestra.web.api.assistant.views.delete_email"
+    ) as mock_delete_email:
+
+        # 1. Create a base assistant
+        base_payload = {
+            "first_name": "Contact",
+            "surname": "Remover",
+            "create_infra": False,
+        }
+        create_resp = await client.post(
+            "/v0/assistant", json=base_payload, headers=HEADERS
+        )
+        assert create_resp.status_code == 200
+        assistant_id = create_resp.json()["info"]["agent_id"]
+
+        # 2. Update the assistant to have all contact details for the test
+        contact_payload = {
+            "email": "contact.remover@example.com",
+            "phone": "+15558675309",
+            "user_phone": "+15558675310",  # user_phone can be different
+            "user_whatsapp_number": "+15558675311",
+            "create_infra": False,
+        }
+        update_resp = await client.patch(
+            f"/v0/assistant/{assistant_id}/config",
+            json=contact_payload,
+            headers=HEADERS,
+        )
+        assert update_resp.status_code == 200
+
+        # 3. Use an admin endpoint to set the assistant_whatsapp_number for a complete test case
+        assistant_whatsapp_number = "+15551112222"
+        admin_patch_resp = await client.patch(
+            f"/v0/admin/assistant?phone={contact_payload['phone']}&new_assistant_whatsapp_number={assistant_whatsapp_number}",
+            headers=ADMIN_HEADERS,
+        )
+        assert admin_patch_resp.status_code == 200
+        assert (
+            admin_patch_resp.json()["info"]["assistant_whatsapp_number"]
+            == assistant_whatsapp_number
+        )
+
+        # 4. Delete Email contact
+        delete_email_payload = {"contact_type": "email"}
+        delete_email_resp = await client.delete(
+            f"/v0/assistant/{assistant_id}/contact",
+            json=delete_email_payload,
+            headers=HEADERS,
+        )
+        assert delete_email_resp.status_code == 200, delete_email_resp.text
+        email_deleted_info = delete_email_resp.json()["info"]
+        assert email_deleted_info["email"] is None
+        assert (
+            email_deleted_info["phone"] == contact_payload["phone"]
+        )  # Should be unchanged
+        mock_delete_email.assert_called_once_with(contact_payload["email"])
+
+        # 5. Delete Phone contact
+        delete_phone_payload = {"contact_type": "phone"}
+        delete_phone_resp = await client.delete(
+            f"/v0/assistant/{assistant_id}/contact",
+            json=delete_phone_payload,
+            headers=HEADERS,
+        )
+        assert delete_phone_resp.status_code == 200, delete_phone_resp.text
+        phone_deleted_info = delete_phone_resp.json()["info"]
+        assert phone_deleted_info["phone"] is None
+        assert phone_deleted_info["user_phone"] is None
+        assert phone_deleted_info["email"] is None  # Should still be None
+        assert (
+            phone_deleted_info["assistant_whatsapp_number"] == assistant_whatsapp_number
+        )  # Unchanged
+        mock_delete_phone.assert_called_once_with(contact_payload["phone"])
+
+        # 6. Delete WhatsApp contact
+        delete_whatsapp_payload = {"contact_type": "whatsapp"}
+        delete_whatsapp_resp = await client.delete(
+            f"/v0/assistant/{assistant_id}/contact",
+            json=delete_whatsapp_payload,
+            headers=HEADERS,
+        )
+        assert delete_whatsapp_resp.status_code == 200, delete_whatsapp_resp.text
+        whatsapp_deleted_info = delete_whatsapp_resp.json()["info"]
+        assert whatsapp_deleted_info["user_whatsapp_number"] is None
+        assert whatsapp_deleted_info["assistant_whatsapp_number"] is None
+        assert whatsapp_deleted_info["phone"] is None  # Should still be None
+
+        # 7. Test invalid contact type
+        delete_invalid_payload = {"contact_type": "carrier_pigeon"}
+        delete_invalid_resp = await client.delete(
+            f"/v0/assistant/{assistant_id}/contact",
+            json=delete_invalid_payload,
+            headers=HEADERS,
+        )
+        assert delete_invalid_resp.status_code == 422  # Unprocessable Entity
+
+        # 8. Test non-existent assistant
+        delete_nonexistent_resp = await client.delete(
+            f"/v0/assistant/999999/contact",
+            json=delete_email_payload,
+            headers=HEADERS,
+        )
+        assert delete_nonexistent_resp.status_code == 404

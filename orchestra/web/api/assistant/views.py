@@ -42,6 +42,7 @@ from orchestra.services.openai_service import OpenAIAPIError, OpenAIService
 from orchestra.services.replicate_service import ReplicateAPIError, ReplicateService
 from orchestra.settings import settings
 from orchestra.web.api.assistant.schema import (
+    AssistantContactRemoval,
     AssistantCreate,
     AssistantPhotoUploadResponse,
     AssistantRead,
@@ -750,6 +751,129 @@ def list_assistants(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Error fetching assistants: {str(e)}",
+        )
+
+
+@router.delete(
+    "/assistant/{assistant_id}/contact",
+    response_model=InfoResponse[AssistantRead],
+    status_code=status.HTTP_200_OK,
+    summary="Remove a contact method from an assistant",
+    description="Removes a contact method (phone, email, or WhatsApp) from an assistant and deprovisions the associated infrastructure.",
+    tags=["Assistant Management"],
+    responses={
+        200: {
+            "description": "Contact method removed successfully.",
+        },
+        404: {
+            "description": "Assistant not found.",
+        },
+        400: {
+            "description": "Invalid contact type or other error.",
+        },
+    },
+)
+def delete_assistant_contact(
+    assistant_id: int,
+    removal_payload: AssistantContactRemoval,
+    request: Request,
+    session: Session = Depends(get_db_session),
+    _: None = Depends(check_assistant_hiring_approval),
+) -> InfoResponse[AssistantRead]:
+    """
+    Remove a contact method from an assistant.
+
+    This endpoint deprovisions the infrastructure for a specific contact method
+    (e.g., deletes the Twilio phone number) and removes the information from the
+    assistant's record.
+    """
+    user_id = request.state.user_id
+    assistant_dao = AssistantDAO(session)
+
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+    )
+
+    if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+
+    contact_type = removal_payload.contact_type
+    update_data = {}
+
+    try:
+        if contact_type == "phone":
+            if assistant.phone:
+                delete_phone_number(assistant.phone)
+            update_data = {"phone": None, "user_phone": None}
+        elif contact_type == "email":
+            if assistant.email:
+                delete_email(assistant.email)
+            update_data = {"email": None}
+        elif contact_type == "whatsapp":
+            # No external infra deletion for WhatsApp based on existing delete_assistant logic
+            update_data = {
+                "user_whatsapp_number": None,
+                "assistant_whatsapp_number": None,
+            }
+
+        updated_assistant = assistant_dao.update_assistant(
+            user_id=user_id,
+            agent_id=assistant_id,
+            **update_data,
+        )
+        session.commit()
+
+        if not updated_assistant:
+            # This should not happen if the initial get succeeded
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Assistant not found during update.",
+            )
+
+        return InfoResponse(
+            info=AssistantRead(
+                agent_id=str(updated_assistant.agent_id),
+                user_id=updated_assistant.user_id,
+                first_name=updated_assistant.first_name,
+                surname=updated_assistant.surname,
+                age=updated_assistant.age,
+                region=updated_assistant.region,
+                profile_photo=updated_assistant.profile_photo,
+                profile_video=updated_assistant.profile_video,
+                desktop_url=updated_assistant.desktop_url,
+                user_local_desktop=updated_assistant.user_local_desktop,
+                about=updated_assistant.about,
+                country=updated_assistant.country,
+                weekly_limit=(
+                    float(updated_assistant.weekly_limit)
+                    if updated_assistant.weekly_limit is not None
+                    else None
+                ),
+                max_parallel=updated_assistant.max_parallel,
+                created_at=updated_assistant.created_at,
+                updated_at=updated_assistant.updated_at,
+                phone=updated_assistant.phone,
+                user_phone=updated_assistant.user_phone,
+                user_whatsapp_number=updated_assistant.user_whatsapp_number,
+                assistant_whatsapp_number=updated_assistant.assistant_whatsapp_number,
+                email=updated_assistant.email,
+                voice_id=updated_assistant.voice_id,
+                voice_provider=updated_assistant.voice_provider,
+            ),
+        )
+
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Failed to delete contact for assistant {assistant_id}: {e}")
+        if isinstance(e, HTTPException):
+            raise
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to remove contact: {str(e)}",
         )
 
 
