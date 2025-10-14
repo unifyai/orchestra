@@ -1,3 +1,4 @@
+import asyncio
 import base64
 from pathlib import Path
 from unittest.mock import ANY, patch
@@ -29,97 +30,107 @@ def _get_sample_wav_bytes() -> bytes:
     return sample_path.read_bytes()
 
 
-@patch("orchestra.web.api.utils.assistant_infra.send_unify_message")
-@patch("orchestra.db.dao.assistant_dao.AssistantDAO._get_latest_assistant_log_content")
-@patch(
-    "orchestra.db.dao.assistant_dao.AssistantDAO._get_latest_assistant_log_timestamp",
-)
 @pytest.mark.anyio
-async def test_message_assistant_happy_path(
-    mock_get_timestamp,
-    mock_get_content,
-    mock_send_message,
-    client: AsyncClient,
-):
-    # 1. Create an assistant
-    payload = {
-        "first_name": "Responder",
+@patch(
+    "orchestra.web.api.utils.assistant_infra.send_unify_message",
+    return_value={"status": "success"},
+)
+async def test_message_assistant_happy_path(mock_send_message, client: AsyncClient):
+    """
+    Tests the happy path for messaging an assistant using a full integration flow.
+    It starts the messaging call and then simulates the assistant's webhook by
+    logging the response, which the polling mechanism should then pick up.
+    """
+    # 1. Arrange: Create assistant and initial context
+    assistant_payload = {
+        "first_name": "AsyncResponder",
         "surname": "Bot",
         "create_infra": False,
     }
-    create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    create_resp = await client.post(
+        "/v0/assistant",
+        json=assistant_payload,
+        headers=HEADERS,
+    )
     assert create_resp.status_code == 200
-    assistant_id = int(create_resp.json()["info"]["agent_id"])
+    assistant_info = create_resp.json()["info"]
+    assistant_id = int(assistant_info["agent_id"])
+    context_name = (
+        f"{assistant_info['first_name']}{assistant_info['surname']}/Transcripts"
+    )
 
-    # Create the context by logging a dummy message, so the DAO finds it.
+    # Log an initial message to create the context and set a baseline timestamp
+    await client.post(
+        "/v0/logs",
+        json={
+            "project": "Assistants",
+            "context": context_name,
+            "entries": [{"content": "'hello'"}],
+        },
+        headers=HEADERS,
+    )
+
+    # 2. Act: Start the message call in a background task
+    message_payload = {
+        "assistant_id": assistant_id,
+        "contact_id": 1,
+        "message": "Test Message",
+    }
+    message_task = asyncio.create_task(
+        client.post("/v0/assistant/message", json=message_payload, headers=HEADERS),
+    )
+
+    # 3. Simulate Webhook: Wait a moment for polling to start, then log the response
+    await asyncio.sleep(
+        0.5,
+    )  # Give the poller time to get the initial timestamp before we log the new one.
+
+    assistant_response_msg = "This is the response from the assistant."
     log_payload = {
         "project": "Assistants",
-        "context": "ResponderBot/Transcripts",
+        "context": context_name,
         "entries": [
-            {"sender_id": '"0"', "medium": '"unify_message"', "content": '"initial"'}
+            {
+                "sender_id": '"0"',
+                "medium": '"unify_message"',
+                "content": f'"{assistant_response_msg}"',
+            },
         ],
     }
     log_resp = await client.post("/v0/logs", json=log_payload, headers=HEADERS)
     assert log_resp.status_code == 200
 
-    # 2. Configure mocks
-    initial_timestamp = 1700000000.0
-    new_timestamp = 1700000005.0
-    assistant_response_msg = "I am doing well, thank you!"
+    # 4. Assert: Await the background task and check the result
+    # The poll interval is 2s, so 5s timeout is safe.
+    response = await asyncio.wait_for(message_task, timeout=5)
 
-    # _get_latest_assistant_log_timestamp will be called in a loop.
-    # First call (before sending) returns the old timestamp.
-    # Second call (first poll) returns the new one.
-    mock_get_timestamp.side_effect = [initial_timestamp, new_timestamp]
-    mock_get_content.return_value = assistant_response_msg
-    mock_send_message.return_value = {"status": "success"}
-
-    # 3. Call the endpoint
-    message_payload = {
-        "assistant_id": assistant_id,
-        "contact_id": 1,
-        "message": "Hello, how are you?",
-    }
-    response = await client.post(
-        "/v0/assistant/message",
-        json=message_payload,
-        headers=HEADERS,
-    )
-
-    # 4. Assert results
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     assert response.json() == {"info": assistant_response_msg}
-
     mock_send_message.assert_called_once_with(
         assistant_id=str(assistant_id),
         contact_id=1,
-        message="Hello, how are you?",
+        message="Test Message",
         is_staging=ANY,
     )
-    # Assert that our internal DAO methods were called
-    assert mock_get_timestamp.call_count == 2
-    mock_get_content.assert_called_once()
 
 
 @patch("orchestra.web.api.utils.assistant_infra.send_unify_message")
-@patch(
-    "orchestra.db.dao.assistant_dao.AssistantDAO._get_latest_assistant_log_timestamp",
-)
 @patch("orchestra.db.dao.assistant_dao.time.sleep", return_value=None)
 @pytest.mark.anyio
 async def test_message_assistant_timeout(
     mock_sleep,
-    mock_get_timestamp,
     mock_send_message,
     client: AsyncClient,
 ):
+    """
+    Tests that the message assistant endpoint correctly times out if no new
+    message is received within the polling duration. Mocks time to avoid a long test.
+    """
     # Patch time.time to simulate a timeout
     with patch("orchestra.db.dao.assistant_dao.time.time") as mock_time:
-        # First call gets start_time, subsequent calls simulate time passing beyond the timeout
         timeout_duration = 60
         start_time = 1700000000.0
-        # Create a list of return values for time.time() to simulate time passing
-        # Provide extra values to prevent StopIteration in middleware after the loop times out.
+        # Create a list of return values to simulate time passing beyond the timeout
         time_side_effects = [start_time] + [
             start_time + (i * 2) for i in range(1, (timeout_duration // 2) + 5)
         ]
@@ -135,27 +146,18 @@ async def test_message_assistant_timeout(
         assert create_resp.status_code == 200
         assistant_id = int(create_resp.json()["info"]["agent_id"])
 
-        # Create the context by logging a dummy message so the DAO finds it.
-        log_payload = {
-            "project": "Assistants",
-            "context": "SilentBot/Transcripts",
-            "entries": [
-                {
-                    "sender_id": '"0"',
-                    "medium": '"unify_message"',
-                    "content": '"initial"',
-                }
-            ],
-        }
-        log_resp = await client.post("/v0/logs", json=log_payload, headers=HEADERS)
-        assert log_resp.status_code == 200
+        # Create the context so the DAO finds it.
+        await client.post(
+            "/v0/logs",
+            json={
+                "project": "Assistants",
+                "context": "SilentBot/Transcripts",
+                "entries": [{"content": '"initial"'}],
+            },
+            headers=HEADERS,
+        )
 
-        # 2. Configure mocks
-        # _get_latest_assistant_log_timestamp will always return the same timestamp, forcing a timeout
-        mock_get_timestamp.return_value = 1700000000.0
-        mock_send_message.return_value = {"status": "success"}
-
-        # 3. Call the endpoint
+        # 2. Call the endpoint. No new message will be logged, forcing a timeout.
         message_payload = {
             "assistant_id": assistant_id,
             "contact_id": 1,
@@ -167,7 +169,7 @@ async def test_message_assistant_timeout(
             headers=HEADERS,
         )
 
-        # 4. Assert timeout
+        # 3. Assert timeout
         assert response.status_code == status.HTTP_408_REQUEST_TIMEOUT
         assert "Did not receive a response" in response.json()["detail"]
 
@@ -234,7 +236,7 @@ async def test_create_assistant_success(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_create_assistant_missing_field(client: AsyncClient):
-    # `POST /v0/assistant` missing surname -> 422 Unprocessable Entity
+    # `POST /v0/assistant` missing surname -> 200 OK (as it's optional)
     payload = {
         "first_name": "Bob",
         # surname omitted
