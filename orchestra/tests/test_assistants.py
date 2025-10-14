@@ -51,6 +51,17 @@ async def test_message_assistant_happy_path(
     assert create_resp.status_code == 200
     assistant_id = int(create_resp.json()["info"]["agent_id"])
 
+    # Create the context by logging a dummy message, so the DAO finds it.
+    log_payload = {
+        "project": "Assistants",
+        "context": "ResponderBot/Transcripts",
+        "entries": [
+            {"sender_id": '"0"', "medium": '"unify_message"', "content": '"initial"'}
+        ],
+    }
+    log_resp = await client.post("/v0/logs", json=log_payload, headers=HEADERS)
+    assert log_resp.status_code == 200
+
     # 2. Configure mocks
     initial_timestamp = 1700000000.0
     new_timestamp = 1700000005.0
@@ -108,8 +119,9 @@ async def test_message_assistant_timeout(
         timeout_duration = 60
         start_time = 1700000000.0
         # Create a list of return values for time.time() to simulate time passing
+        # Provide extra values to prevent StopIteration in middleware after the loop times out.
         time_side_effects = [start_time] + [
-            start_time + (i * 2) for i in range(1, (timeout_duration // 2) + 2)
+            start_time + (i * 2) for i in range(1, (timeout_duration // 2) + 5)
         ]
         mock_time.side_effect = time_side_effects
 
@@ -122,6 +134,21 @@ async def test_message_assistant_timeout(
         )
         assert create_resp.status_code == 200
         assistant_id = int(create_resp.json()["info"]["agent_id"])
+
+        # Create the context by logging a dummy message so the DAO finds it.
+        log_payload = {
+            "project": "Assistants",
+            "context": "SilentBot/Transcripts",
+            "entries": [
+                {
+                    "sender_id": '"0"',
+                    "medium": '"unify_message"',
+                    "content": '"initial"',
+                }
+            ],
+        }
+        log_resp = await client.post("/v0/logs", json=log_payload, headers=HEADERS)
+        assert log_resp.status_code == 200
 
         # 2. Configure mocks
         # _get_latest_assistant_log_timestamp will always return the same timestamp, forcing a timeout
