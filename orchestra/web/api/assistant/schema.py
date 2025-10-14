@@ -31,6 +31,16 @@ class ChatMessage(BaseModel):
     )
 
 
+class UnifyMessage(BaseModel):
+    assistant_id: int = Field(..., description="The ID of the assistant to message.")
+    contact_id: int = Field(
+        ...,
+        description="The ID of the contact sending the message. Currently only '1' (the user) is supported.",
+        example=1,
+    )
+    message: str = Field(..., description="The message content.", example="Hello!")
+
+
 class AssistantCreate(BaseModel):
     """
     Schema for creating a new assistant.

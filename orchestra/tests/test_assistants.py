@@ -1,6 +1,6 @@
 import base64
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from fastapi import status
@@ -27,6 +27,145 @@ async def approve_default_user(client: AsyncClient):
 def _get_sample_wav_bytes() -> bytes:
     sample_path = Path(__file__).parent / "sample_datasets" / "sample_recording.wav"
     return sample_path.read_bytes()
+
+
+@patch("orchestra.web.api.assistant.views.send_unify_message")
+@patch("orchestra.web.api.assistant.views.unify.get_logs")
+@patch("orchestra.web.api.assistant.views.unify.get_logs_latest_timestamp")
+@pytest.mark.anyio
+async def test_message_assistant_happy_path(
+    mock_get_timestamp,
+    mock_get_logs,
+    mock_send_message,
+    client: AsyncClient,
+):
+    # 1. Create an assistant
+    payload = {
+        "first_name": "Responder",
+        "surname": "Bot",
+        "create_infra": False,
+    }
+    create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert create_resp.status_code == 200
+    assistant_id = int(create_resp.json()["info"]["agent_id"])
+
+    # 2. Configure mocks
+    initial_timestamp = 1700000000.0
+    new_timestamp = 1700000005.0
+    assistant_response_msg = "I am doing well, thank you!"
+
+    # get_logs_latest_timestamp will be called in a loop.
+    # First call (before sending) returns the old timestamp.
+    # Second call (first poll) returns the new one.
+    mock_get_timestamp.side_effect = [initial_timestamp, new_timestamp]
+
+    # Mock the log object that get_logs will return
+    mock_log = MagicMock()
+    mock_log.to_json.return_value = {
+        "entries": {"content": assistant_response_msg},
+    }
+    mock_get_logs.return_value = [mock_log]
+
+    mock_send_message.return_value = {"status": "success"}
+
+    # 3. Call the endpoint
+    message_payload = {
+        "assistant_id": assistant_id,
+        "contact_id": 1,
+        "message": "Hello, how are you?",
+    }
+    response = await client.post(
+        "/v0/assistant/message",
+        json=message_payload,
+        headers=HEADERS,
+    )
+
+    # 4. Assert results
+    assert response.status_code == 200
+    assert response.json() == {"info": assistant_response_msg}
+
+    mock_send_message.assert_called_once_with(
+        assistant_id=str(assistant_id),
+        contact_id=1,
+        message="Hello, how are you?",
+        is_staging=ANY,
+    )
+    mock_get_logs.assert_called_once()
+
+
+@patch("orchestra.web.api.assistant.views.send_unify_message")
+@patch("orchestra.web.api.assistant.views.unify.get_logs_latest_timestamp")
+@patch("orchestra.web.api.assistant.views.time.sleep", return_value=None)
+@pytest.mark.anyio
+async def test_message_assistant_timeout(
+    mock_sleep,
+    mock_get_timestamp,
+    mock_send_message,
+    client: AsyncClient,
+):
+    # Patch time.time to simulate a timeout
+    with patch("orchestra.web.api.assistant.views.time.time") as mock_time:
+        # First call gets start_time, subsequent calls simulate time passing beyond the timeout
+        timeout_duration = 60
+        start_time = 1700000000.0
+        mock_time.side_effect = [start_time, start_time + timeout_duration + 1]
+
+        # 1. Create assistant
+        payload = {"first_name": "Silent", "surname": "Bot", "create_infra": False}
+        create_resp = await client.post(
+            "/v0/assistant",
+            json=payload,
+            headers=HEADERS,
+        )
+        assert create_resp.status_code == 200
+        assistant_id = int(create_resp.json()["info"]["agent_id"])
+
+        # 2. Configure mocks
+        # get_logs_latest_timestamp will always return the same timestamp, forcing a timeout
+        mock_get_timestamp.return_value = 1700000000.0
+        mock_send_message.return_value = {"status": "success"}
+
+        # 3. Call the endpoint
+        message_payload = {
+            "assistant_id": assistant_id,
+            "contact_id": 1,
+            "message": "Are you there?",
+        }
+        response = await client.post(
+            "/v0/assistant/message",
+            json=message_payload,
+            headers=HEADERS,
+        )
+
+        # 4. Assert timeout
+        assert response.status_code == status.HTTP_408_REQUEST_TIMEOUT
+        assert "Did not receive a response" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_message_assistant_invalid_contact_id(client: AsyncClient):
+    # This test doesn't need mocks because the validation happens before the webhook/polling calls.
+    # 1. Create assistant
+    payload = {"first_name": "Contact", "surname": "Checker", "create_infra": False}
+    create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert create_resp.status_code == 200
+    assistant_id = int(create_resp.json()["info"]["agent_id"])
+
+    # 2. Call endpoint with invalid contact_id
+    message_payload = {
+        "assistant_id": assistant_id,
+        "contact_id": 2,  # Invalid
+        "message": "This should fail.",
+    }
+    response = await client.post(
+        "/v0/assistant/message",
+        json=message_payload,
+        headers=HEADERS,
+    )
+
+    # 3. Assert failure
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "Invalid contact_id" in response.json()["detail"]
 
 
 @pytest.mark.anyio

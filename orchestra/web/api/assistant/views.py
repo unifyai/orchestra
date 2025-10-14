@@ -4,6 +4,7 @@ import time
 from decimal import Decimal
 from typing import List, Optional
 
+import unify
 from fastapi import (
     APIRouter,
     Depends,
@@ -54,6 +55,7 @@ from orchestra.web.api.assistant.schema import (
     RecordingCreate,
     RecordingInfo,
     ReplicatePredictionResponse,
+    UnifyMessage,
     VoiceCreate,
     VoiceDesignCreateFromPreviewRequest,
     VoiceDesignGeneratePreviewsAPIResponse,
@@ -73,6 +75,7 @@ from orchestra.web.api.utils.assistant_infra import (
     get_social_platforms_costs,
     log_pre_hire_chat,
     reawaken_assistant,
+    send_unify_message,
     stop_jobs,
     wake_up_assistant,
     watch_email,
@@ -111,6 +114,121 @@ def check_assistant_hiring_approval(
 
 router = APIRouter()
 admin_router = APIRouter()
+
+
+@router.post(
+    "/assistant/message",
+    response_model=InfoResponse[str],
+    status_code=status.HTTP_200_OK,
+    summary="Send a message to an assistant and get a response",
+    description="Sends a message to a specified assistant and waits for the next reply from that assistant.",
+    tags=["Assistant Interaction"],
+)
+def message_assistant(
+    payload: UnifyMessage,
+    request: Request,
+    session: Session = Depends(get_db_session),
+    _: None = Depends(check_assistant_hiring_approval),
+) -> InfoResponse[str]:
+    user_id = request.state.user_id
+    assistant_dao = AssistantDAO(session)
+
+    # 1. Get assistant details to form the context name
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=payload.assistant_id,
+    )
+    if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Assistant with ID {payload.assistant_id} not found for this user.",
+        )
+
+    project_name = "Assistants"
+    context_name = f"{assistant.first_name}{assistant.surname}/Transcripts"
+    filter_expression = "medium=unify_message&sender_id==0"
+
+    try:
+        # 2. Get the latest timestamp *before* sending the message
+        initial_timestamp = unify.get_logs_latest_timestamp(
+            project=project_name,
+            context=context_name,
+            filter_expr=filter_expression,
+        )
+    except Exception as e:
+        # This can happen if no logs exist yet. We can treat the initial timestamp as 0.
+        logging.warning(
+            f"Could not get initial timestamp for assistant {payload.assistant_id}. Assuming 0. Error: {e}",
+        )
+        initial_timestamp = 0.0
+
+    try:
+        # 3. Send the message via the webhook
+        send_unify_message(
+            assistant_id=str(payload.assistant_id),
+            contact_id=payload.contact_id,
+            message=payload.message,
+            is_staging=settings.is_staging,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logging.error(
+            f"Failed to send message to assistant {payload.assistant_id} via webhook. Error: {e}",
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to send message to assistant.",
+        )
+
+    # 4. Poll for the response
+    timeout_seconds = 60
+    poll_interval_seconds = 2
+    start_time = time.time()
+    while time.time() - start_time < timeout_seconds:
+        try:
+            latest_timestamp = unify.get_logs_latest_timestamp(
+                project=project_name,
+                context=context_name,
+                filter_expr=filter_expression,
+            )
+            if latest_timestamp > initial_timestamp:
+                # 5. A new message has arrived, fetch it
+                logs = unify.get_logs(
+                    project=project_name,
+                    context=context_name,
+                    filter_expr=filter_expression,
+                    limit=1,  # We only need the most recent one
+                )
+                if not logs:
+                    # This is unlikely but possible in a race condition
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Detected new message but failed to retrieve it.",
+                    )
+
+                # 6. Extract and return the content
+                latest_log_json = logs[0].to_json()
+                response_content = latest_log_json.get("entries", {}).get("content")
+                if response_content is None:
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Could not find 'content' in the latest assistant message.",
+                    )
+                return InfoResponse(info=response_content)
+        except Exception as e:
+            # If get_logs_latest_timestamp fails, we log it and continue polling.
+            logging.warning(
+                f"Polling for assistant response failed on one attempt. Error: {e}",
+            )
+
+        time.sleep(poll_interval_seconds)
+
+    # 7. If the loop finishes, it's a timeout
+    raise HTTPException(
+        status_code=status.HTTP_408_REQUEST_TIMEOUT,
+        detail=f"Did not receive a response from the assistant within {timeout_seconds} seconds.",
+    )
 
 
 @router.post(
