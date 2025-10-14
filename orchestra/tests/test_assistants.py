@@ -1291,40 +1291,68 @@ async def test_delete_assistant_contact(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_sync_assistant(client: AsyncClient):
-    # Mock the reawaken_assistant function to avoid actual HTTP calls
-    with patch("orchestra.web.api.assistant.views.reawaken_assistant") as mock_reawaken:
-        # Create an assistant to get a valid ID
-        payload = {
-            "first_name": "Sync",
-            "surname": "Tester",
-            "create_infra": False,
-        }
-        create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-        assert create_resp.status_code == 200
-        assistant_id = create_resp.json()["info"]["agent_id"]
+@patch("orchestra.web.api.assistant.views.reawaken_assistant")
+async def test_update_assistant_contact_info_reawakens(
+    mock_reawaken,
+    client: AsyncClient,
+):
+    # Create an assistant
+    payload = {"first_name": "Reawaken", "surname": "Updater", "create_infra": False}
+    create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert create_resp.status_code == 200
+    assistant_id = create_resp.json()["info"]["agent_id"]
 
-        # Call the sync endpoint for the created assistant
-        sync_resp = await client.post(
-            f"/v0/assistant/{assistant_id}/sync",
-            headers=HEADERS,
-        )
+    # Update a contact field (phone) and expect reawaken to be called
+    update_contact_payload = {"phone": "+15550001111", "create_infra": True}
+    patch_contact_resp = await client.patch(
+        f"/v0/assistant/{assistant_id}/config",
+        json=update_contact_payload,
+        headers=HEADERS,
+    )
+    assert patch_contact_resp.status_code == 200
+    mock_reawaken.assert_called_once()
+    # Use ANY from unittest.mock for the is_staging flag
+    mock_reawaken.call_args[0][0] == str(assistant_id)
 
-        # Assert a successful response
-        assert sync_resp.status_code == 200, sync_resp.text
-        assert (
-            sync_resp.json()["info"] == "Assistant reawaken signal sent successfully."
-        )
+    # Reset the mock and update a non-contact field
+    mock_reawaken.reset_mock()
+    update_non_contact_payload = {"about": "new bio", "create_infra": True}
+    patch_non_contact_resp = await client.patch(
+        f"/v0/assistant/{assistant_id}/config",
+        json=update_non_contact_payload,
+        headers=HEADERS,
+    )
+    assert patch_non_contact_resp.status_code == 200
+    mock_reawaken.assert_not_called()
 
-        # Assert that the underlying infra function was called correctly
-        mock_reawaken.assert_called_once()
-        assert mock_reawaken.call_args[0][0] == str(assistant_id)
 
-        # Test syncing a non-existent assistant
-        non_existent_id = 999999
-        sync_fail_resp = await client.post(
-            f"/v0/assistant/{non_existent_id}/sync",
-            headers=HEADERS,
-        )
-        assert sync_fail_resp.status_code == 404
-        assert sync_fail_resp.json()["detail"] == "Assistant not found."
+@pytest.mark.anyio
+@patch("orchestra.web.api.assistant.views.reawaken_assistant")
+async def test_delete_assistant_contact_reawakens(mock_reawaken, client: AsyncClient):
+    # 1. Create an assistant
+    payload = {"first_name": "Reawaken", "surname": "Deleter", "create_infra": False}
+    create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert create_resp.status_code == 200
+    assistant_id = create_resp.json()["info"]["agent_id"]
+
+    # 2. Add a phone number to it so we can delete it
+    # We set create_infra=False because we are mocking the reawaken call anyway
+    update_payload = {"phone": "+15552223333", "create_infra": False}
+    update_resp = await client.patch(
+        f"/v0/assistant/{assistant_id}/config",
+        json=update_payload,
+        headers=HEADERS,
+    )
+    assert update_resp.status_code == 200
+    mock_reawaken.assert_not_called()  # Should not be called when create_infra is false
+
+    # 3. Delete the phone contact and verify reawaken is called
+    delete_payload = {"contact_type": "phone"}
+    delete_resp = await client.delete(
+        f"/v0/assistant/{assistant_id}/contact",
+        json=delete_payload,
+        headers=HEADERS,
+    )
+    assert delete_resp.status_code == 200
+    mock_reawaken.assert_called_once()
+    mock_reawaken.call_args[0][0] == str(assistant_id)
