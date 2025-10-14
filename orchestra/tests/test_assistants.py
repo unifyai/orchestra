@@ -1,5 +1,4 @@
 import base64
-import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -999,31 +998,11 @@ async def test_create_assistant_duplicate_name_fails(client: AsyncClient):
 # --- Assistant project creation and logging ---
 @pytest.fixture
 def pre_hire_chat_payload():
-    """Provides a sample pre_hire_chat payload."""
+    """Provides a sample pre_hire_chat payload with the new simplified schema."""
     return {
         "pre_hire_chat": [
-            {
-                "message_id": 1,
-                "medium": "unify_chat",
-                "sender_id": 1,
-                "receiver_ids": [0],
-                "timestamp": datetime.datetime.now(
-                    datetime.timezone.utc,
-                ).isoformat(),
-                "content": "Hello, are you available for an interview?",
-                "exchange_id": 101,
-            },
-            {
-                "message_id": 2,
-                "medium": "unify_chat",
-                "sender_id": 0,
-                "receiver_ids": [1],
-                "timestamp": datetime.datetime.now(
-                    datetime.timezone.utc,
-                ).isoformat(),
-                "content": "Yes, I am. When would be a good time?",
-                "exchange_id": 101,
-            },
+            {"role": "user", "msg": "Hello, are you available for an interview?"},
+            {"role": "assistant", "msg": "Yes, I am. When would be a good time?"},
         ],
     }
 
@@ -1049,21 +1028,19 @@ async def test_create_assistant_creates_assistants_project(
 
 
 @pytest.mark.anyio
+@patch("orchestra.web.api.assistant.views.log_pre_hire_chat")
 async def test_create_assistant_with_pre_hire_chat_logs_correctly(
+    mock_log_pre_hire_chat,
     client: AsyncClient,
     pre_hire_chat_payload,
 ):
     payload = {
         "first_name": "Chatty",
         "surname": "Cathy",
-        "age": 30,
-        "weekly_limit": 10,
-        "max_parallel": 1,
         "create_infra": False,
         **pre_hire_chat_payload,
     }
 
-    # Create the assistant
     create_resp = await client.post(
         "/v0/assistant",
         json=payload,
@@ -1073,83 +1050,54 @@ async def test_create_assistant_with_pre_hire_chat_logs_correctly(
         create_resp.status_code == 200
     ), f"Assistant creation failed: {create_resp.text}"
 
-    # Verify the logs were created
-    context_name = "ChattyCathy/Transcripts"
-    logs_resp = await client.get(
-        f"/v0/logs?project=Assistants&context={context_name}",
-        headers=HEADERS,
-    )
-    assert logs_resp.status_code == 200, f"Failed to get logs: {logs_resp.text}"
-    logs_data = logs_resp.json()
+    assistant_id = create_resp.json()["info"]["agent_id"]
 
-    assert logs_data["count"] == 2, f"Expected 2 logs, but found {logs_data['count']}."
-    assert (
-        len(logs_data["logs"]) == 2
-    ), f"Expected 2 log objects, but found {len(logs_data['logs'])}."
-
-    returned_logs = logs_data["logs"]
-    original_messages = pre_hire_chat_payload["pre_hire_chat"]
-
-    # Create a dictionary of returned logs keyed by their content for easy lookup
-    returned_logs_map = {
-        log["entries"]["content"]: log["entries"] for log in returned_logs
-    }
-
-    # Loop through the original messages and check if each one exists in the returned logs
-    for original_msg in original_messages:
-        content = original_msg["content"]
-
-        assert (
-            content in returned_logs_map
-        ), f"Message content '{content}' not found in returned logs."
-
-        returned_entry = returned_logs_map[content]
-
-        # Assert that all fields match
-        assert (
-            returned_entry["message_id"] == original_msg["message_id"]
-        ), f"Message ID mismatch for content '{content}'. Expected {original_msg['message_id']}, got {returned_entry['message_id']}"
-        assert (
-            returned_entry["sender_id"] == original_msg["sender_id"]
-        ), f"Sender ID mismatch for content '{content}'. Expected {original_msg['sender_id']}, got {returned_entry['sender_id']}"
-        assert (
-            returned_entry["receiver_ids"] == original_msg["receiver_ids"]
-        ), f"Receiver IDs mismatch for content '{content}'. Expected {original_msg['receiver_ids']}, got {returned_entry['receiver_ids']}"
-        assert (
-            returned_entry["exchange_id"] == original_msg["exchange_id"]
-        ), f"Exchange ID mismatch for content '{content}'. Expected {original_msg['exchange_id']}, got {returned_entry['exchange_id']}"
+    # Verify that the webhook function was called with the correct arguments
+    mock_log_pre_hire_chat.assert_called_once()
+    call_args, call_kwargs = mock_log_pre_hire_chat.call_args
+    assert call_kwargs["assistant_id"] == str(assistant_id)
+    assert call_kwargs["messages"] == pre_hire_chat_payload["pre_hire_chat"]
+    assert "is_staging" in call_kwargs
 
 
 @pytest.mark.anyio
 async def test_delete_assistant_deletes_contexts(
     client: AsyncClient,
-    pre_hire_chat_payload,
 ):
-    # Create an assistant with pre_hire_chat to ensure context is created
+    # Create an assistant
     payload = {
         "first_name": "Deletable",
         "surname": "Dan",
         "create_infra": False,
-        **pre_hire_chat_payload,
     }
-    create_resp = await client.post(
-        "/v0/assistant",
-        json=payload,
-        headers=HEADERS,
-    )
+    create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     assert create_resp.status_code == 200
-    assistant_id = create_resp.json()["info"]["agent_id"]
+    assistant_info = create_resp.json()["info"]
+    assistant_id = assistant_info["agent_id"]
+
+    # Manually create a project and context to simulate logs being present
+    project_name = "Assistants"
+    context_name = (
+        f"{assistant_info['first_name']}{assistant_info['surname']}/Transcripts"
+    )
+    # The "Assistants" project is created automatically on first assistant creation
+    log_payload = {
+        "project": project_name,
+        "context": context_name,
+        "entries": [{"message": "test"}],
+    }
+    log_resp = await client.post("/v0/logs", json=log_payload, headers=HEADERS)
+    assert log_resp.status_code == 200
 
     # Verify context and logs exist before deletion
-    context_name = "DeletableDan/Transcripts"
     logs_before_delete = await client.get(
-        f"/v0/logs?project=Assistants&context={context_name}",
+        f"/v0/logs?project={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert logs_before_delete.status_code == 200
     assert (
         logs_before_delete.json()["count"] > 0
-    ), "Context was created but no logs were found."
+    ), "Context was not created properly before test."
 
     # Delete the assistant
     delete_resp = await client.delete(
@@ -1162,7 +1110,7 @@ async def test_delete_assistant_deletes_contexts(
     # A successful deletion can result in either the context being empty (200 OK, count=0)
     # or the context itself being gone (404 Not Found). Both are valid success states.
     logs_after_delete = await client.get(
-        f"/v0/logs?project=Assistants&context={context_name}",
+        f"/v0/logs?project={project_name}&context={context_name}",
         headers=HEADERS,
     )
 

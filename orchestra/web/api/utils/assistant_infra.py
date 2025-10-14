@@ -263,3 +263,30 @@ def reawaken_assistant(assistant_id: str, is_staging: bool = False):
     )
     response.raise_for_status()  # Raise an exception for bad status codes
     return response.json()
+
+
+def log_pre_hire_chat(assistant_id: str, messages: list, is_staging: bool = False):
+    """
+    Logs pre-hire chat messages for an assistant using the webhook.
+    Args:
+        assistant_id (str): The ID of the assistant.
+        messages (list): A list of chat message dictionaries.
+        is_staging (bool): Whether to use the staging or production webhook.
+    Returns:
+        The JSON response from the webhook.
+    """
+    webhook_url = (
+        "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/log-pre-hire-chats-webhook"
+        + ("-staging" if is_staging else "")
+    )
+    payload = {"assistant_id": assistant_id, "body": messages}
+    response = requests.post(
+        webhook_url,
+        headers={
+            "Authorization": f"Bearer {ADMIN_KEY}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+    )
+    response.raise_for_status()
+    return response.json()

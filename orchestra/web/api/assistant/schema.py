@@ -19,16 +19,16 @@ class InfoResponse(GenericModel, Generic[T]):
 
 
 class ChatMessage(BaseModel):
-    message_id: int = Field(
+    role: Literal["user", "assistant"] = Field(
         ...,
-        description="Unique identifier for the message in the exchange",
+        description="The role of the message sender.",
+        example="assistant",
     )
-    medium: str = Field("unify_chat", description="Communication medium")
-    sender_id: int = Field(..., description="ID of the sender")
-    receiver_ids: List[int] = Field(..., description="List of receiver IDs")
-    timestamp: datetime = Field(..., description="Timestamp of the message")
-    content: str = Field(..., description="Content of the message")
-    exchange_id: int = Field(..., description="ID of the exchange")
+    msg: str = Field(
+        ...,
+        description="The content of the message.",
+        example="Hello, how can I help you?",
+    )
 
 
 class AssistantCreate(BaseModel):
