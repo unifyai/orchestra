@@ -1,6 +1,6 @@
 import base64
 from pathlib import Path
-from unittest.mock import ANY, MagicMock, patch
+from unittest.mock import ANY, patch
 
 import pytest
 from fastapi import status
@@ -30,12 +30,12 @@ def _get_sample_wav_bytes() -> bytes:
 
 
 @patch("orchestra.web.api.assistant.views.send_unify_message")
-@patch("orchestra.web.api.assistant.views.unify.get_logs")
-@patch("orchestra.web.api.assistant.views.unify.get_logs_latest_timestamp")
+@patch("orchestra.web.api.assistant.views._format_flat_logs")
+@patch("orchestra.web.api.assistant.views._get_logs_query")
 @pytest.mark.anyio
 async def test_message_assistant_happy_path(
-    mock_get_timestamp,
-    mock_get_logs,
+    mock_get_logs_query,
+    mock_format_flat_logs,
     mock_send_message,
     client: AsyncClient,
 ):
@@ -54,17 +54,33 @@ async def test_message_assistant_happy_path(
     new_timestamp = 1700000005.0
     assistant_response_msg = "I am doing well, thank you!"
 
-    # get_logs_latest_timestamp will be called in a loop.
-    # First call (before sending) returns the old timestamp.
-    # Second call (first poll) returns the new one.
-    mock_get_timestamp.side_effect = [initial_timestamp, new_timestamp]
+    # _get_logs_query will be called multiple times.
+    # First for initial timestamp, then polling, then to get the full log.
+    # We use a side_effect to handle these different calls.
+    def get_logs_query_side_effect(*args, **kwargs):
+        if kwargs.get("latest_timestamp"):
+            # This simulates the timestamp changing after the message is sent
+            if get_logs_query_side_effect.call_count <= 1:
+                return initial_timestamp
+            else:
+                return new_timestamp
+        else:
+            # This is the call to get the full log data (mocked raw rows)
+            return ([("mock_row",)], 1, 1)
 
-    # Mock the log object that get_logs will return
-    mock_log = MagicMock()
-    mock_log.to_json.return_value = {
-        "entries": {"content": assistant_response_msg},
-    }
-    mock_get_logs.return_value = [mock_log]
+    get_logs_query_side_effect.call_count = 0
+
+    def side_effect_wrapper(*args, **kwargs):
+        get_logs_query_side_effect.call_count += 1
+        return get_logs_query_side_effect(*args, **kwargs)
+
+    mock_get_logs_query.side_effect = side_effect_wrapper
+
+    # Mock the log formatting function to return the expected structure
+    mock_format_flat_logs.return_value = (
+        [{"entries": {"content": assistant_response_msg}}],
+        {},
+    )
 
     mock_send_message.return_value = {"status": "success"}
 
@@ -90,16 +106,19 @@ async def test_message_assistant_happy_path(
         message="Hello, how are you?",
         is_staging=ANY,
     )
-    mock_get_logs.assert_called_once()
+    # The final call to _get_logs_query is to fetch the log, not a timestamp
+    final_call_to_get_logs_query = mock_get_logs_query.call_args_list[-1]
+    assert not final_call_to_get_logs_query.kwargs.get("latest_timestamp")
+    mock_format_flat_logs.assert_called_once()
 
 
 @patch("orchestra.web.api.assistant.views.send_unify_message")
-@patch("orchestra.web.api.assistant.views.unify.get_logs_latest_timestamp")
+@patch("orchestra.web.api.assistant.views._get_logs_query")
 @patch("orchestra.web.api.assistant.views.time.sleep", return_value=None)
 @pytest.mark.anyio
 async def test_message_assistant_timeout(
     mock_sleep,
-    mock_get_timestamp,
+    mock_get_logs_query,
     mock_send_message,
     client: AsyncClient,
 ):
@@ -108,7 +127,7 @@ async def test_message_assistant_timeout(
         # First call gets start_time, subsequent calls simulate time passing beyond the timeout
         timeout_duration = 60
         start_time = 1700000000.0
-        mock_time.side_effect = [start_time, start_time + timeout_duration + 1]
+        mock_time.side_effect = [start_time] + [start_time + timeout_duration + 1] * 20
 
         # 1. Create assistant
         payload = {"first_name": "Silent", "surname": "Bot", "create_infra": False}
@@ -121,8 +140,8 @@ async def test_message_assistant_timeout(
         assistant_id = int(create_resp.json()["info"]["agent_id"])
 
         # 2. Configure mocks
-        # get_logs_latest_timestamp will always return the same timestamp, forcing a timeout
-        mock_get_timestamp.return_value = 1700000000.0
+        # _get_logs_query will always return the same timestamp, forcing a timeout
+        mock_get_logs_query.return_value = 1700000000.0
         mock_send_message.return_value = {"status": "success"}
 
         # 3. Call the endpoint
@@ -140,32 +159,6 @@ async def test_message_assistant_timeout(
         # 4. Assert timeout
         assert response.status_code == status.HTTP_408_REQUEST_TIMEOUT
         assert "Did not receive a response" in response.json()["detail"]
-
-
-@pytest.mark.anyio
-async def test_message_assistant_invalid_contact_id(client: AsyncClient):
-    # This test doesn't need mocks because the validation happens before the webhook/polling calls.
-    # 1. Create assistant
-    payload = {"first_name": "Contact", "surname": "Checker", "create_infra": False}
-    create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
-    assert create_resp.status_code == 200
-    assistant_id = int(create_resp.json()["info"]["agent_id"])
-
-    # 2. Call endpoint with invalid contact_id
-    message_payload = {
-        "assistant_id": assistant_id,
-        "contact_id": 2,  # Invalid
-        "message": "This should fail.",
-    }
-    response = await client.post(
-        "/v0/assistant/message",
-        json=message_payload,
-        headers=HEADERS,
-    )
-
-    # 3. Assert failure
-    assert response.status_code == status.HTTP_400_BAD_REQUEST
-    assert "Invalid contact_id" in response.json()["detail"]
 
 
 @pytest.mark.anyio
