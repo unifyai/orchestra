@@ -1,7 +1,6 @@
 import base64
-from datetime import datetime
 from pathlib import Path
-from unittest.mock import ANY, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 from fastapi import status
@@ -31,12 +30,12 @@ def _get_sample_wav_bytes() -> bytes:
 
 
 @patch("orchestra.web.api.assistant.views.send_unify_message")
-@patch("orchestra.web.api.assistant.views._format_flat_logs")
-@patch("orchestra.web.api.assistant.views._get_logs_query")
+@patch("orchestra.web.api.assistant.views.unify.get_logs")
+@patch("orchestra.web.api.assistant.views.unify.get_logs_latest_timestamp")
 @pytest.mark.anyio
 async def test_message_assistant_happy_path(
-    mock_get_logs_query,
-    mock_format_flat_logs,
+    mock_get_timestamp,
+    mock_get_logs,
     mock_send_message,
     client: AsyncClient,
 ):
@@ -55,36 +54,17 @@ async def test_message_assistant_happy_path(
     new_timestamp = 1700000005.0
     assistant_response_msg = "I am doing well, thank you!"
 
-    # _get_logs_query is called for timestamp, then for logs.
-    # 1st call: initial timestamp check
-    # 2nd call: timestamp check inside loop
-    # 3rd call: get actual logs
-    mock_get_logs_query.side_effect = [
-        initial_timestamp,
-        new_timestamp,
-        # return for getting logs (rows, context_len, total_count)
-        (
-            [
-                (
-                    "content",
-                    assistant_response_msg,
-                    "str",
-                    None,
-                    "entry",
-                    datetime.now(),
-                    1,
-                )
-            ],
-            1,
-            1,
-        ),
-    ]
+    # get_logs_latest_timestamp will be called in a loop.
+    # First call (before sending) returns the old timestamp.
+    # Second call (first poll) returns the new one.
+    mock_get_timestamp.side_effect = [initial_timestamp, new_timestamp]
 
-    # Mock the formatted log output
-    mock_format_flat_logs.return_value = (
-        [{"entries": {"content": assistant_response_msg}}],
-        {},  # params_out
-    )
+    # Mock the log object that get_logs will return
+    mock_log = MagicMock()
+    mock_log.to_json.return_value = {
+        "entries": {"content": assistant_response_msg},
+    }
+    mock_get_logs.return_value = [mock_log]
 
     mock_send_message.return_value = {"status": "success"}
 
@@ -110,18 +90,16 @@ async def test_message_assistant_happy_path(
         message="Hello, how are you?",
         is_staging=ANY,
     )
-    # It is called three times
-    assert mock_get_logs_query.call_count == 3
-    mock_format_flat_logs.assert_called_once()
+    mock_get_logs.assert_called_once()
 
 
 @patch("orchestra.web.api.assistant.views.send_unify_message")
-@patch("orchestra.web.api.assistant.views._get_logs_query")
+@patch("orchestra.web.api.assistant.views.unify.get_logs_latest_timestamp")
 @patch("orchestra.web.api.assistant.views.time.sleep", return_value=None)
 @pytest.mark.anyio
 async def test_message_assistant_timeout(
     mock_sleep,
-    mock_get_logs_query,
+    mock_get_timestamp,
     mock_send_message,
     client: AsyncClient,
 ):
@@ -143,8 +121,8 @@ async def test_message_assistant_timeout(
         assistant_id = int(create_resp.json()["info"]["agent_id"])
 
         # 2. Configure mocks
-        # _get_logs_query will always return the same timestamp, forcing a timeout
-        mock_get_logs_query.return_value = 1700000000.0
+        # get_logs_latest_timestamp will always return the same timestamp, forcing a timeout
+        mock_get_timestamp.return_value = 1700000000.0
         mock_send_message.return_value = {"status": "success"}
 
         # 3. Call the endpoint

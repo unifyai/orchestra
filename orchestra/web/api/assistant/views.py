@@ -1,9 +1,10 @@
-import json
+import base64
 import logging
 import time
 from decimal import Decimal
 from typing import List, Optional
 
+import unify
 from fastapi import (
     APIRouter,
     Depends,
@@ -24,7 +25,6 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
@@ -63,7 +63,6 @@ from orchestra.web.api.assistant.schema import (
     VoiceGenerateRequest,
     VoiceRead,
 )
-from orchestra.web.api.log.views import _format_flat_logs, _get_logs_query
 from orchestra.web.api.utils.assistant_infra import (
     assign_whatsapp_sender,
     create_email,
@@ -133,10 +132,6 @@ def message_assistant(
 ) -> InfoResponse[str]:
     user_id = request.state.user_id
     assistant_dao = AssistantDAO(session)
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    field_type_dao = FieldTypeDAO(session)
 
     # 1. Get assistant details to form the context name
     assistant = assistant_dao.get_assistant_by_id(
@@ -155,30 +150,11 @@ def message_assistant(
 
     try:
         # 2. Get the latest timestamp *before* sending the message
-        initial_timestamp = _get_logs_query(
-            request_fastapi=request,
+        initial_timestamp = unify.get_logs_latest_timestamp(
             project=project_name,
             context=context_name,
             filter_expr=filter_expression,
-            latest_timestamp=True,
-            project_dao=project_dao,
-            field_type_dao=field_type_dao,
-            context_dao=context_dao,
-            session=session,
-            column_context=None,
-            sorting=None,
-            from_ids=None,
-            exclude_ids=None,
-            from_fields=None,
-            exclude_fields=None,
-            limit=None,
-            offset=0,
-            randomize=False,
-            seed="42",
         )
-        if initial_timestamp is None:
-            initial_timestamp = 0.0
-
     except Exception as e:
         # This can happen if no logs exist yet. We can treat the initial timestamp as 0.
         logging.warning(
@@ -211,83 +187,28 @@ def message_assistant(
     start_time = time.time()
     while time.time() - start_time < timeout_seconds:
         try:
-            latest_timestamp = _get_logs_query(
-                request_fastapi=request,
+            latest_timestamp = unify.get_logs_latest_timestamp(
                 project=project_name,
                 context=context_name,
                 filter_expr=filter_expression,
-                latest_timestamp=True,
-                project_dao=project_dao,
-                field_type_dao=field_type_dao,
-                context_dao=context_dao,
-                session=session,
-                column_context=None,
-                sorting=None,
-                from_ids=None,
-                exclude_ids=None,
-                from_fields=None,
-                exclude_fields=None,
-                limit=None,
-                offset=0,
-                randomize=False,
-                seed="42",
             )
-            if latest_timestamp is None:
-                latest_timestamp = 0.0
-
             if latest_timestamp > initial_timestamp:
                 # 5. A new message has arrived, fetch it
-                all_rows, context_len, total_count = _get_logs_query(
-                    request_fastapi=request,
+                logs = unify.get_logs(
                     project=project_name,
                     context=context_name,
                     filter_expr=filter_expression,
                     limit=1,  # We only need the most recent one
-                    sorting=json.dumps({"ts": "descending"}),
-                    project_dao=project_dao,
-                    field_type_dao=field_type_dao,
-                    context_dao=context_dao,
-                    session=session,
-                    column_context=None,
-                    from_ids=None,
-                    exclude_ids=None,
-                    from_fields=None,
-                    exclude_fields=None,
-                    offset=0,
-                    randomize=False,
-                    seed="42",
                 )
-                if not all_rows:
+                if not logs:
                     # This is unlikely but possible in a race condition
                     raise HTTPException(
                         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                         detail="Detected new message but failed to retrieve it.",
                     )
 
-                project = project_dao.get_by_user_and_name(
-                    user_id=user_id,
-                    name=project_name,
-                )
-                context_id = context_dao.get_or_create(project.id, name=context_name)
-                field_order_map = field_type_dao.get_ordered_field_names(
-                    project.id,
-                    context_id=context_id,
-                )
-                logs_out, _ = _format_flat_logs(
-                    all_rows,
-                    context_len,
-                    value_limit=None,
-                    field_order_map=field_order_map,
-                )
-
-                if not logs_out:
-                    raise HTTPException(
-                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail="Detected new message but failed to retrieve it.",
-                    )
-
                 # 6. Extract and return the content
-                latest_log_json = logs_out[0]
+                latest_log_json = logs[0].to_json()
                 response_content = latest_log_json.get("entries", {}).get("content")
                 if response_content is None:
                     raise HTTPException(
