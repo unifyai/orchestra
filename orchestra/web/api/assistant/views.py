@@ -4,6 +4,7 @@ import time
 from decimal import Decimal
 from typing import List, Optional
 
+import unify
 from fastapi import (
     APIRouter,
     Depends,
@@ -24,7 +25,6 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
@@ -63,7 +63,6 @@ from orchestra.web.api.assistant.schema import (
     VoiceGenerateRequest,
     VoiceRead,
 )
-from orchestra.web.api.log.views import _format_flat_logs, _get_logs_query
 from orchestra.web.api.utils.assistant_infra import (
     assign_whatsapp_sender,
     create_email,
@@ -149,24 +148,12 @@ def message_assistant(
     context_name = f"{assistant.first_name}{assistant.surname}/Transcripts"
     filter_expression = "medium=unify_message&sender_id==0"
 
-    # Instantiate DAOs required by log helpers
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    field_type_dao = FieldTypeDAO(session)
-
     try:
         # 2. Get the latest timestamp *before* sending the message
-        initial_timestamp = _get_logs_query(
-            request,
+        initial_timestamp = unify.get_logs_latest_timestamp(
             project=project_name,
             context=context_name,
             filter_expr=filter_expression,
-            session=session,
-            project_dao=project_dao,
-            field_type_dao=field_type_dao,
-            context_dao=context_dao,
-            latest_timestamp=True,
         )
     except Exception as e:
         # This can happen if no logs exist yet. We can treat the initial timestamp as 0.
@@ -200,48 +187,29 @@ def message_assistant(
     start_time = time.time()
     while time.time() - start_time < timeout_seconds:
         try:
-            latest_timestamp = _get_logs_query(
-                request,
+            latest_timestamp = unify.get_logs_latest_timestamp(
                 project=project_name,
                 context=context_name,
                 filter_expr=filter_expression,
-                session=session,
-                project_dao=project_dao,
-                field_type_dao=field_type_dao,
-                context_dao=context_dao,
-                latest_timestamp=True,
             )
-
             if latest_timestamp > initial_timestamp:
                 # 5. A new message has arrived, fetch it
-                all_rows, context_len, _ = _get_logs_query(
-                    request,
+                logs = unify.get_logs(
                     project=project_name,
                     context=context_name,
                     filter_expr=filter_expression,
                     limit=1,  # We only need the most recent one
-                    session=session,
-                    project_dao=project_dao,
-                    field_type_dao=field_type_dao,
-                    context_dao=context_dao,
                 )
-
-                if not all_rows:
+                if not logs:
                     # This is unlikely but possible in a race condition
                     raise HTTPException(
                         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                         detail="Detected new message but failed to retrieve it.",
                     )
 
-                # 6. Format the raw rows and return the content
-                logs_out, _ = _format_flat_logs(
-                    all_rows,
-                    context_len,
-                    value_limit=None,
-                    field_order_map={},
-                )
-                response_content = logs_out[0].get("entries", {}).get("content")
-
+                # 6. Extract and return the content
+                latest_log_json = logs[0].to_json()
+                response_content = latest_log_json.get("entries", {}).get("content")
                 if response_content is None:
                     raise HTTPException(
                         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
