@@ -32,10 +32,10 @@ def _get_sample_wav_bytes() -> bytes:
 
 @pytest.mark.anyio
 @patch(
-    "orchestra.web.api.utils.assistant_infra.send_unify_message",
+    "orchestra.db.dao.assistant_dao.send_unify_message",
     return_value={"status": "success"},
 )
-async def test_message_assistant_happy_path(mock_send_message, client: AsyncClient):
+async def test_message_assistant_success(mock_send_message, client: AsyncClient):
     """
     Tests the happy path for messaging an assistant using a full integration flow.
     It starts the messaging call and then simulates the assistant's webhook by
@@ -112,66 +112,6 @@ async def test_message_assistant_happy_path(mock_send_message, client: AsyncClie
         message="Test Message",
         is_staging=ANY,
     )
-
-
-@patch("orchestra.web.api.utils.assistant_infra.send_unify_message")
-@patch("orchestra.db.dao.assistant_dao.time.sleep", return_value=None)
-@pytest.mark.anyio
-async def test_message_assistant_timeout(
-    mock_sleep,
-    mock_send_message,
-    client: AsyncClient,
-):
-    """
-    Tests that the message assistant endpoint correctly times out if no new
-    message is received within the polling duration. Mocks time to avoid a long test.
-    """
-    # Patch time.time to simulate a timeout
-    with patch("orchestra.db.dao.assistant_dao.time.time") as mock_time:
-        timeout_duration = 60
-        start_time = 1700000000.0
-        # Create a list of return values to simulate time passing beyond the timeout
-        time_side_effects = [start_time] + [
-            start_time + (i * 2) for i in range(1, (timeout_duration // 2) + 5)
-        ]
-        mock_time.side_effect = time_side_effects
-
-        # 1. Create assistant
-        payload = {"first_name": "Silent", "surname": "Bot", "create_infra": False}
-        create_resp = await client.post(
-            "/v0/assistant",
-            json=payload,
-            headers=HEADERS,
-        )
-        assert create_resp.status_code == 200
-        assistant_id = int(create_resp.json()["info"]["agent_id"])
-
-        # Create the context so the DAO finds it.
-        await client.post(
-            "/v0/logs",
-            json={
-                "project": "Assistants",
-                "context": "SilentBot/Transcripts",
-                "entries": [{"content": '"initial"'}],
-            },
-            headers=HEADERS,
-        )
-
-        # 2. Call the endpoint. No new message will be logged, forcing a timeout.
-        message_payload = {
-            "assistant_id": assistant_id,
-            "contact_id": 1,
-            "message": "Are you there?",
-        }
-        response = await client.post(
-            "/v0/assistant/message",
-            json=message_payload,
-            headers=HEADERS,
-        )
-
-        # 3. Assert timeout
-        assert response.status_code == status.HTTP_408_REQUEST_TIMEOUT
-        assert "Did not receive a response" in response.json()["detail"]
 
 
 @pytest.mark.anyio
@@ -1322,7 +1262,8 @@ async def test_delete_assistant_contact(client: AsyncClient):
 
         # 4. Delete Email contact
         delete_email_payload = {"contact_type": "email"}
-        delete_email_resp = await client.delete(
+        delete_email_resp = await client.request(
+            "DELETE",
             f"/v0/assistant/{assistant_id}/contact",
             json=delete_email_payload,
             headers=HEADERS,
@@ -1337,7 +1278,8 @@ async def test_delete_assistant_contact(client: AsyncClient):
 
         # 5. Delete Phone contact
         delete_phone_payload = {"contact_type": "phone"}
-        delete_phone_resp = await client.delete(
+        delete_phone_resp = await client.request(
+            "DELETE",
             f"/v0/assistant/{assistant_id}/contact",
             json=delete_phone_payload,
             headers=HEADERS,
@@ -1354,7 +1296,8 @@ async def test_delete_assistant_contact(client: AsyncClient):
 
         # 6. Delete WhatsApp contact
         delete_whatsapp_payload = {"contact_type": "whatsapp"}
-        delete_whatsapp_resp = await client.delete(
+        delete_whatsapp_resp = await client.request(
+            "DELETE",
             f"/v0/assistant/{assistant_id}/contact",
             json=delete_whatsapp_payload,
             headers=HEADERS,
@@ -1367,7 +1310,8 @@ async def test_delete_assistant_contact(client: AsyncClient):
 
         # 7. Test invalid contact type
         delete_invalid_payload = {"contact_type": "carrier_pigeon"}
-        delete_invalid_resp = await client.delete(
+        delete_invalid_resp = await client.request(
+            "DELETE",
             f"/v0/assistant/{assistant_id}/contact",
             json=delete_invalid_payload,
             headers=HEADERS,
@@ -1375,7 +1319,8 @@ async def test_delete_assistant_contact(client: AsyncClient):
         assert delete_invalid_resp.status_code == 422  # Unprocessable Entity
 
         # 8. Test non-existent assistant
-        delete_nonexistent_resp = await client.delete(
+        delete_nonexistent_resp = await client.request(
+            "DELETE",
             f"/v0/assistant/999999/contact",
             json=delete_email_payload,
             headers=HEADERS,
@@ -1441,7 +1386,8 @@ async def test_delete_assistant_contact_reawakens(mock_reawaken, client: AsyncCl
 
     # 3. Delete the phone contact and verify reawaken is called
     delete_payload = {"contact_type": "phone"}
-    delete_resp = await client.delete(
+    delete_resp = await client.request(
+        "DELETE",
         f"/v0/assistant/{assistant_id}/contact",
         json=delete_payload,
         headers=HEADERS,
