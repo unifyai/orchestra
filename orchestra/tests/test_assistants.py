@@ -109,7 +109,7 @@ async def test_message_assistant_success(mock_send_message, client: AsyncClient)
     # Increase the wait_for timeout to be more robust in CI environments.
     response = await asyncio.wait_for(
         message_task, timeout=10
-    )  # <-- FIX: Increased from 5 to 10
+    )
 
     assert response.status_code == 200, response.text
     assert response.json() == {"info": assistant_response_msg}
