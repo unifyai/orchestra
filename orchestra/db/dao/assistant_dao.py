@@ -389,16 +389,6 @@ class AssistantDAO:
             assistant.desktop_url = desktop_url
         if user_local_desktop is not None:
             assistant.user_local_desktop = user_local_desktop
-        if phone is not None:
-            assistant.phone = phone
-        if user_phone is not None:
-            assistant.user_phone = user_phone
-        if email is not None:
-            assistant.email = email
-        if user_whatsapp_number is not None:
-            assistant.user_whatsapp_number = user_whatsapp_number
-        if assistant_whatsapp_number is not None:
-            assistant.assistant_whatsapp_number = assistant_whatsapp_number
         if voice_id is not None:
             assistant.voice_id = voice_id
         if voice_provider is not None:
