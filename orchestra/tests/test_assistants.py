@@ -107,9 +107,7 @@ async def test_message_assistant_success(mock_send_message, client: AsyncClient)
 
     # 4. Assert: Await the background task and check the result
     # Increase the wait_for timeout to be more robust in CI environments.
-    response = await asyncio.wait_for(
-        message_task, timeout=10
-    )
+    response = await asyncio.wait_for(message_task, timeout=10)
 
     assert response.status_code == 200, response.text
     assert response.json() == {"info": assistant_response_msg}
