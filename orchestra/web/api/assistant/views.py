@@ -1096,6 +1096,7 @@ def delete_assistant(
             detail=final_error_detail,
         )
 
+
 @router.patch(
     "/assistant/{assistant_id}/config",
     response_model=InfoResponse[AssistantRead],
@@ -1207,7 +1208,7 @@ def update_assistant_config(
         # Handle infrastructure creation if requested
         if create_infra:
             # Handle Email Creation
-            if "email" in update_data and not existing_assistant.email:
+            if "email" in update_data and update.email and not existing_assistant.email:
                 try:
                     email_local = (
                         update.email.split("@")[0]
@@ -1221,7 +1222,7 @@ def update_assistant_config(
                     )
                     if "detail" in email_response:
                         raise Exception(
-                            f"Email creation failed: {email_response['detail']}"
+                            f"Email creation failed: {email_response['detail']}",
                         )
                     email_to_update = email_response.get("user").get("primaryEmail")
                     update_data["email"] = email_to_update
@@ -1234,15 +1235,20 @@ def update_assistant_config(
                     )
 
             # Handle Phone Creation
-            if "user_phone" in update_data and not existing_assistant.phone:
+            if (
+                "user_phone" in update_data
+                and update.user_phone
+                and not existing_assistant.phone
+            ):
                 try:
                     country = update.country or existing_assistant.country or "US"
                     phone_response = create_phone_number(
-                        country=country, is_staging=settings.is_staging
+                        country=country,
+                        is_staging=settings.is_staging,
                     )
                     if "detail" in phone_response:
                         raise Exception(
-                            f"Phone number creation failed: {phone_response['detail']}"
+                            f"Phone number creation failed: {phone_response['detail']}",
                         )
                     phone_to_update = phone_response.get("phoneNumber")
                     update_data["phone"] = phone_to_update
@@ -1255,14 +1261,46 @@ def update_assistant_config(
             # Handle WhatsApp Assignment
             if (
                 "user_whatsapp_number" in update_data
+                and update.user_whatsapp_number
                 and not existing_assistant.user_whatsapp_number
             ):
                 # Cost deduction logic for production
                 if not settings.is_staging:
-                    # ... (cost deduction logic as before) ...
+                    try:
+                        platforms_response = get_social_platforms_costs()
+                        platforms = platforms_response.get("platforms")
+
+                        if not isinstance(platforms, dict):
+                            raise HTTPException(
+                                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                detail=f"Could not parse social platform costs. Expected a dictionary, got: {platforms}",
+                            )
+                        cost = platforms.get("whatsapp")
+                        if cost is None:
+                            raise HTTPException(
+                                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                                detail="WhatsApp cost not found in social platform costs response.",
+                            )
+                        user = users_dao.get_user_with_id(user_id)
+                        decimal_cost = Decimal(cost)
+                        if user.credits < decimal_cost:
+                            raise HTTPException(
+                                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                                detail="Insufficient credits to add a WhatsApp number.",
+                            )
+                        users_dao.recharge_credit(
+                            user_id=user_id,
+                            quantity=-float(decimal_cost),
+                        )
+                    except Exception as e_costs:
+                        raise HTTPException(
+                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail=f"Failed to fetch or process social platform costs. Details: {str(e_costs)}",
+                        )
 
                 assigned_whatsapp = assign_whatsapp_sender(
-                    update.user_whatsapp_number, is_staging=settings.is_staging
+                    update.user_whatsapp_number,
+                    is_staging=settings.is_staging,
                 )["whatsapp_number"]
                 update_data["assistant_whatsapp_number"] = assigned_whatsapp
 
@@ -1278,14 +1316,24 @@ def update_assistant_config(
         )
 
         if not updated:
+            # This case should be rare since we check for existence at the start
             raise HTTPException(
-                status_code=404, detail="Assistant not found during update."
+                status_code=404,
+                detail="Assistant not found during update.",
             )
 
         # Cleanup old GCS files if they were changed
-        if "profile_photo" in update_data and old_photo_url and old_photo_url.startswith("gs://"):
+        if (
+            "profile_photo" in update_data
+            and old_photo_url
+            and old_photo_url.startswith("gs://")
+        ):
             bucket_service.delete_assistant_file(old_photo_url)
-        if "profile_video" in update_data and old_video_url and old_video_url.startswith("gs://"):
+        if (
+            "profile_video" in update_data
+            and old_video_url
+            and old_video_url.startswith("gs://")
+        ):
             bucket_service.delete_assistant_file(old_video_url)
 
         session.commit()
@@ -1293,16 +1341,17 @@ def update_assistant_config(
         # Reawaken assistant if contact info was updated
         if contact_info_updated and create_infra:
             try:
-                reawaken_assistant(str(updated.agent_id), is_staging=settings.is_staging)
+                reawaken_assistant(
+                    str(updated.agent_id), is_staging=settings.is_staging
+                )
             except Exception as e:
                 logging.warning(
-                    f"Failed to reawaken assistant {updated.agent_id} after config update: {e}"
+                    f"Failed to reawaken assistant {updated.agent_id} after config update: {e}",
                 )
 
-        # Construct and return the response
-        return InfoResponse(
-            info=AssistantRead.from_orm(updated)
-        )
+        # Construct and return the response using the updated model
+        # The AssistantRead model can be created directly from the ORM object
+        return InfoResponse(info=AssistantRead.from_orm(updated))
 
     except Exception as e:
         session.rollback()
@@ -1312,14 +1361,14 @@ def update_assistant_config(
                 delete_email(email_to_update)
             except Exception as cleanup_err:
                 logging.error(
-                    f"Failed to clean up created email '{email_to_update}' during rollback: {cleanup_err}"
+                    f"Failed to clean up created email '{email_to_update}' during rollback: {cleanup_err}",
                 )
         if phone_to_update:
             try:
                 delete_phone_number(phone_to_update)
             except Exception as cleanup_err:
                 logging.error(
-                    f"Failed to clean up created phone '{phone_to_update}' during rollback: {cleanup_err}"
+                    f"Failed to clean up created phone '{phone_to_update}' during rollback: {cleanup_err}",
                 )
 
         if isinstance(e, HTTPException):
@@ -1328,6 +1377,7 @@ def update_assistant_config(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error updating assistant config: {str(e)}",
         )
+
 
 @admin_router.post(
     "/assistant/recordings",
