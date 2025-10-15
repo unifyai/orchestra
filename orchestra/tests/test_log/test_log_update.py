@@ -499,3 +499,163 @@ async def test_update_logs_invalid_nested_path(client: AsyncClient):
 
     # Should fail with a 400 error
     assert response.status_code == 400, response.json()
+
+
+@pytest.mark.anyio
+async def test_update_log_with_explicit_nested_type(client: AsyncClient):
+    """Test updating a log with explicit nested types."""
+    project_name = "test-update-nested-type"
+    _ = await _create_project(client, project_name)
+
+    # Create initial log with nested type
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "scores": [80, 85, 90],
+                "explicit_types": {
+                    "scores": {"type": "List[int]", "mutable": True},
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    # Update the log
+    update_response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "project": project_name,
+            "entries": {
+                "scores": [95, 98, 100],
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert update_response.status_code == 200, update_response.json()
+
+    # Verify the update
+    logs_response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_response.status_code == 200
+    logs = logs_response.json()["logs"]
+    assert len(logs) == 1
+    assert logs[0]["entries"]["scores"] == [95, 98, 100]
+
+    # Verify type is still "List[int]"
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+    assert field_types["scores"]["data_type"] == "List[int]"
+
+
+@pytest.mark.anyio
+async def test_update_adds_field_with_explicit_type(client: AsyncClient):
+    """Test that updating a log can add a new field with explicit type."""
+    project_name = "test-update-add-field-explicit"
+    _ = await _create_project(client, project_name)
+
+    # Create initial log
+    response = await _create_log(client, project_name)
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    # Update to add a new field with explicit nested type
+    update_response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "project": project_name,
+            "entries": {
+                "new_scores": [1, 2, 3, 4, 5],
+                "explicit_types": {
+                    "new_scores": {"type": "List[int]", "mutable": True},
+                },
+            },
+            "overwrite": False,
+        },
+        headers=HEADERS,
+    )
+    assert update_response.status_code == 200, update_response.json()
+
+    # Verify the new field has the correct type
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+    assert "new_scores" in field_types
+    assert field_types["new_scores"]["data_type"] == "List[int]"
+
+
+@pytest.mark.anyio
+async def test_batch_update_with_nested_types(client: AsyncClient):
+    """Test batch updating multiple logs with nested explicit types."""
+    project_name = "test-batch-update-nested"
+    _ = await _create_project(client, project_name)
+
+    # Create two logs
+    response1 = await _create_log(
+        client,
+        project_name,
+        entries={
+            "data": [1, 2],
+            "explicit_types": {"data": {"type": "List[int]", "mutable": True}},
+        },
+    )
+    response2 = await _create_log(
+        client,
+        project_name,
+        entries={
+            "data": [3, 4],
+            "explicit_types": {"data": {"type": "List[int]", "mutable": True}},
+        },
+    )
+    assert response1.status_code == 200
+    assert response2.status_code == 200
+    log_id1 = response1.json()["log_event_ids"][0]
+    log_id2 = response2.json()["log_event_ids"][0]
+
+    # Batch update with different values
+    update_response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id1, log_id2],
+            "project": project_name,
+            "entries": [
+                {"data": [10, 20, 30]},
+                {"data": [40, 50, 60]},
+            ],
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert update_response.status_code == 200, update_response.json()
+
+    # Verify both logs were updated
+    logs_response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_response.status_code == 200
+    logs = logs_response.json()["logs"]
+    assert len(logs) == 2
+
+    # Find the logs by ID and verify their values
+    log1 = next((log for log in logs if log["id"] == log_id1), None)
+    log2 = next((log for log in logs if log["id"] == log_id2), None)
+    assert log1 is not None
+    assert log2 is not None
+    assert log1["entries"]["data"] == [10, 20, 30]
+    assert log2["entries"]["data"] == [40, 50, 60]

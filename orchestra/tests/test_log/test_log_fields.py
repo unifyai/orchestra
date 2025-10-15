@@ -423,7 +423,7 @@ async def test_rename_field_preserves_order(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_create_fields_happy_path(client: AsyncClient):
-    """Test creating fields with explicit and null types"""
+    """Test creating fields with explicit and untyped fields"""
     project_name = "test-create-fields"
     context_name = "fields-context"
 
@@ -439,13 +439,13 @@ async def test_create_fields_happy_path(client: AsyncClient):
         headers=HEADERS,
     )
 
-    # Create fields with explicit and null types
+    # Create fields with explicit and untyped fields
     fields_data = {
         "project": project_name,
         "context": context_name,
         "fields": {
             "accuracy": "float",  # Explicit type
-            "value": None,  # Null type (auto-detect)
+            "value": None,  # Untyped field (defaults to "Any")
         },
     }
     response = await client.post(
@@ -471,8 +471,8 @@ async def test_create_fields_happy_path(client: AsyncClient):
     # Check that the explicit type was set correctly
     assert fields["accuracy"]["data_type"] == "float"
 
-    # Check that the null type was set to NoneType
-    assert fields["value"]["data_type"] == "NoneType"
+    # Check that the untyped field defaults to "Any"
+    assert fields["value"]["data_type"] == "Any"
 
 
 @pytest.mark.anyio
@@ -1246,3 +1246,74 @@ async def test_field_description_crud(client: AsyncClient):
     assert "field_without_description" in fields
     assert fields["field_without_description"]["data_type"] == "int"
     assert fields["field_without_description"]["description"] is None
+
+
+@pytest.mark.anyio
+async def test_explicit_nested_type_in_get_fields(client: AsyncClient):
+    """Test that get_fields returns explicit nested types correctly."""
+    project_name = "test-get-fields-nested"
+    await _create_project(client, project_name)
+
+    # Create a log with nested explicit type
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "values": [1, 2, 3],
+                "metrics": {"acc": 0.9, "loss": 0.1},
+                "explicit_types": {
+                    "values": {"type": "List[int]", "mutable": True},
+                    "metrics": {"type": "Dict[str, float]", "mutable": True},
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Get fields and verify they return the explicit types
+    fields_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200
+    fields = fields_response.json()
+
+    # Should return the explicit nested types, not the base types
+    assert fields["values"]["data_type"] == "List[int]"
+    assert fields["metrics"]["data_type"] == "Dict[str, float]"
+
+
+@pytest.mark.anyio
+async def test_explicit_type_overrides_in_fields(client: AsyncClient):
+    """Test that explicit types override inferred types in get_fields."""
+    project_name = "test-explicit-override-fields"
+    await _create_project(client, project_name)
+
+    # Create a log with explicit type overriding inference
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "recording_url": "",
+                "explicit_types": {
+                    "recording_url": {"type": "str", "mutable": True},
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Get fields and verify explicit type is returned
+    fields_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200
+    fields = fields_response.json()
+
+    # Should return "str", not "audio" or "Any"
+    assert fields["recording_url"]["data_type"] == "str"

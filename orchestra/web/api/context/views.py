@@ -685,6 +685,8 @@ def add_logs_to_context(
             field_name = row[0].key
             value = row[0].value
             param_version = row[0].param_version
+            inferred_type = row[0].inferred_type
+            field_category = "param" if param_version is not None else "entry"
 
             # Skip if field already exists in this context
             if field_name not in existing_field_names:
@@ -694,7 +696,8 @@ def add_logs_to_context(
                     value=value,
                     context_id=context_id,
                     mutable=False,
-                    field_category="param" if param_version is not None else "entry",
+                    field_category=field_category,
+                    field_type=inferred_type,
                 )
                 # Add to set to prevent duplicate creation in this batch
                 existing_field_names.add(field_name)

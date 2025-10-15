@@ -239,34 +239,102 @@ class LogDAO:
             raise ValueError(f"Failed to retrieve audio from bucket: {str(e)}")
 
     @staticmethod
-    def possible_img(raw_k):
-        lower = raw_k.lower()
-        return (
-            "img" in lower
-            or "image" in lower
-            or "photo" in lower
-            or "diagram" in lower
-            or "pic" in lower
-            or "screenshot" in lower
-        ) and not "hash" in lower
+    def detect_media_type(raw_v: str) -> Optional[str]:
+        """
+        Detect if a string contains base64-encoded media (image or audio).
+
+        Args:
+            raw_v: The string value to check
+
+        Returns:
+            "image" if valid image data detected
+            "audio" if valid audio data detected
+            None if not valid base64 media
+        """
+        content_to_check = raw_v
+
+        # Handle data URI format: data:image/png;base64,<content>
+        if raw_v.startswith("data:") and "," in raw_v:
+            # Split at first comma to remove MIME header
+            content_to_check = raw_v.split(",", 1)[1]
+
+        try:
+            # Decode base64 safely
+            decoded = base64.b64decode(content_to_check, validate=True)
+        except Exception:
+            return None  # Not valid base64
+
+        # Check magic bytes for images
+        if decoded.startswith(b"\x89PNG"):
+            return "image"
+        elif decoded.startswith(b"\xff\xd8\xff"):
+            return "image"
+        elif decoded.startswith((b"GIF87a", b"GIF89a")):
+            return "image"
+        elif (
+            decoded.startswith(b"RIFF")
+            and len(decoded) >= 12
+            and decoded[8:12] == b"WEBP"
+        ):
+            return "image"
+        elif decoded.startswith(b"BM"):
+            return "image"
+        # Check magic bytes for audio
+        elif decoded.startswith(b"ID3") or decoded.startswith(b"\xff\xfb"):
+            return "audio"
+        elif (
+            decoded.startswith(b"RIFF")
+            and len(decoded) >= 12
+            and decoded[8:12] == b"WAVE"
+        ):
+            return "audio"
+        elif decoded.startswith(b"fLaC"):
+            return "audio"
+        elif decoded.startswith(b"OggS"):
+            return "audio"
+
+        return None  # Unknown or unsupported
 
     @staticmethod
-    def possible_audio(raw_k):
-        lower = raw_k.lower()
-        return (
-            "audio" in lower
-            or "sound" in lower
-            or "voice" in lower
-            or "speech" in lower
-            or "recording" in lower
-        )
+    def infer_type(raw_k, raw_v, explicit_type=None):
+        """
+        Infer the type of a field value.
 
-    @staticmethod
-    def infer_type(raw_k, raw_v):
-        maybe_img = LogDAO.possible_img(raw_k)
-        maybe_audio = LogDAO.possible_audio(raw_k)
+        Args:
+            raw_k: The field name/key
+            raw_v: The field value
+            explicit_type: Optional user-specified type string (e.g., "List[int]", "str", "enum")
+                          When provided, this overrides all heuristic type inference
+
+        Returns:
+            The inferred type as a string. If explicit_type is provided, returns the normalized
+            full type (e.g., "List[int]"). Otherwise, infers from the value (e.g., "list", "int").
+
+        Note:
+            Type inference priority (highest to lowest):
+            1. Explicit type (if provided) - returns normalized full type
+            2. Python type (list, dict, int, float, bool, NoneType)
+            3. Special string formats (datetime, date, time, timedelta)
+            4. Base64-encoded media (image, audio) - detected via magic bytes
+            5. Default to "str" for any string value
+
+            Field names are NO LONGER used for type inference to avoid brittle heuristics.
+            Users should use explicit types if they need specific types.
+        """
+        # If explicit_type is provided, return the normalized full type
+        if explicit_type is not None:
+            from orchestra.web.api.log.utils.type_utils import normalize_type_string
+
+            return normalize_type_string(explicit_type)
+
+        # Handle strings with special inference logic
         if isinstance(raw_v, str):
+            # Empty string defaults to str
+            if not raw_v:
+                return "str"
+
             try:
+                # Try parsing as datetime formats
                 if _is_time_string(raw_v):
                     return "time"
                 if _is_date_string(raw_v):
@@ -277,40 +345,18 @@ class LogDAO:
                 datetime.fromisoformat(raw_v)
                 return "datetime"
             except:
-                lower_v = raw_v.lower()
-                if lower_v.endswith((".mp3", ".wav")):
-                    return "audio"
-                if not maybe_img and not maybe_audio:
-                    return "str"
+                pass
 
-                # Remove data URI prefix if present
-                if "," in raw_v:
-                    raw_v = raw_v.split(",")[1]
-                binary = raw_v.encode("utf-8")
-                try:
-                    assert base64.b64encode(base64.b64decode(binary)) == binary
-                    if maybe_audio:
-                        return "audio"
-                    if maybe_img:
-                        return "image"
-                except:
-                    if (
-                        maybe_audio
-                        and lower_v.startswith("http")
-                        and (lower_v.endswith(".mp3") or lower_v.endswith(".wav"))
-                    ):
-                        return "audio"
-                    if (
-                        maybe_img
-                        and lower_v.startswith("http")
-                        and (
-                            lower_v.endswith(".png")
-                            or lower_v.endswith(".jpg")
-                            or lower_v.endswith(".jpeg")
-                        )
-                    ):
-                        return "image"
-                    return "str"
+            # Check if it's base64-encoded media using magic bytes
+            media_type = LogDAO.detect_media_type(raw_v)
+            if media_type:
+                return media_type
+
+            # Default to str for all other string values
+            # This includes URLs, file paths, and any other string content
+            return "str"
+
+        # For non-string values, use Python's type name
         return type(raw_v).__name__
 
     def get_ids_by_filter(
@@ -857,13 +903,13 @@ class LogDAO:
                 if not all([log_event_id, key]):
                     continue
 
-                # Handle enum type
+                # Determine inferred type for Log.inferred_type column
+                # Priority: explicit type > infer from value
                 if inferred_type == "enum" and project_id is not None:
-                    # Extract enum values and restrict flag
+                    # Handle enum field type
                     enum_values = key_explicit_type.get("values")
                     enum_restrict = key_explicit_type.get("restrict", False)
 
-                    # Handle enum field type
                     try:
                         self._handle_enum_field_type(
                             project_id=project_id,
@@ -873,26 +919,20 @@ class LogDAO:
                             enum_values=enum_values,
                             enum_restrict=enum_restrict,
                         )
-                        # If enum field type is created, infer type as str
+                        # Enum values are strings - use "str" for Log.inferred_type
                         inferred_type = "str"
                     except ValueError as e:
                         raise e
                 elif inferred_type is None:
+                    # No explicit type - infer from value using clean inference logic
                     inferred_type = self.infer_type(key, value)
 
-                # Handle image and audio uploads
-                if (
-                    inferred_type == "image"
-                    and isinstance(value, str)
-                    and not value.lower().startswith("http")
-                ):
+                # Handle media uploads
+                # If infer_type detected it as image/audio, it's valid base64 with magic bytes
+                # Just upload it - infer_type already validated it properly
+                if inferred_type == "image" and isinstance(value, str):
                     value = self.upload_image_to_bucket(value)
-                elif (
-                    inferred_type == "audio"
-                    and isinstance(value, str)
-                    and not value.lower().endswith((".mp3", ".wav"))
-                    and not value.lower().startswith("http")
-                ):
+                elif inferred_type == "audio" and isinstance(value, str):
                     value = self.upload_audio_to_bucket(value)
                 if inferred_type == "datetime" and isinstance(value, str):
                     value = normalize_timestamp(value)
@@ -1531,13 +1571,13 @@ class LogDAO:
                 )
                 project_id = log_event.project_id if log_event else None
 
-                # Handle enum type
+                # Determine inferred type for Log.inferred_type column
+                # Priority: explicit type > infer from value
                 if inferred_type == "enum" and project_id is not None:
-                    # Extract enum values and restrict flag
+                    # Handle enum field type
                     enum_values = key_explicit_type.get("values")
                     enum_restrict = key_explicit_type.get("restrict", False)
 
-                    # Handle enum field type
                     try:
                         self._handle_enum_field_type(
                             project_id=project_id,
@@ -1547,27 +1587,21 @@ class LogDAO:
                             enum_values=enum_values,
                             enum_restrict=enum_restrict,
                         )
-                        # If enum field type is created, infer type as str
+                        # Enum values are strings - use "str" for Log.inferred_type
                         inferred_type = "str"
                     except ValueError as e:
                         raise e
                 elif inferred_type is None:
+                    # No explicit type - infer from value using clean inference logic
                     inferred_type = self.infer_type(key, value)
 
-                # Handle image and audio uploads
+                # Handle media uploads
+                # If infer_type detected it as image/audio, it's valid base64 with magic bytes
+                # Just upload it - infer_type already validated it properly
                 json_value = value
-                if (
-                    inferred_type == "image"
-                    and isinstance(value, str)
-                    and not value.lower().startswith("http")
-                ):
+                if inferred_type == "image" and isinstance(value, str):
                     json_value = self.upload_image_to_bucket(value)
-                elif (
-                    inferred_type == "audio"
-                    and isinstance(value, str)
-                    and not value.lower().endswith((".mp3", ".wav"))
-                    and not value.lower().startswith("http")
-                ):
+                elif inferred_type == "audio" and isinstance(value, str):
                     json_value = self.upload_audio_to_bucket(value)
 
                 # Check if log exists

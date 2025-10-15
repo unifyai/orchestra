@@ -4,7 +4,6 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
-from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.models.orchestra_models import FieldType
 
 
@@ -50,8 +49,24 @@ class FieldTypeDAO:
         enum_restrict: bool = False,
         unique: bool = False,
         description: Optional[str] = None,
+        field_type: Optional[
+            str
+        ] = None,  # Full type like "List[int]", "str", "Any", "NoneType"
+        infer_type: bool = True,  # Whether to infer type from value if field_type not provided
     ) -> None:
-        """Upsert approach: insert or do nothing if it exists."""
+        """
+        Create a field type if it doesn't exist.
+
+        Args:
+            field_type: If provided, use this as the field type.
+            infer_type: If True and field_type is None, infer type from value.
+                       If False and field_type is None, default to "Any".
+
+        Type determination logic:
+            1. If field_type is provided → use it (explicit type)
+            2. If field_type is None and infer_type=True → infer from value
+            3. If field_type is None and infer_type=False → default to "Any"
+        """
         self._validate_description(description)
 
         # First check if a field with this name exists but with a different category
@@ -74,12 +89,28 @@ class FieldTypeDAO:
                 )
             return
 
-        inferred_type = LogDAO.infer_type(field_name, value)
+        # Determine the field type based on priority
+        from orchestra.db.dao.log_dao import LogDAO
+        from orchestra.web.api.log.utils.type_utils import (
+            DEFAULT_FIELD_TYPE,
+            normalize_type_string,
+        )
+
+        if field_type:
+            # Priority 1: Explicit type provided - normalize and use it
+            normalized_type = normalize_type_string(field_type)
+        elif infer_type and value is not None:
+            # Priority 2: No explicit type, but infer_type=True → infer from value
+            inferred = LogDAO.infer_type(field_name, value, explicit_type=None)
+            normalized_type = normalize_type_string(inferred)
+        else:
+            # Priority 3: No explicit type and infer_type=False → default to "Any"
+            normalized_type = DEFAULT_FIELD_TYPE
 
         stmt = pg_insert(FieldType).values(
             project_id=project_id,
             field_name=field_name,
-            field_type=inferred_type,
+            field_type=normalized_type,
             field_category=field_category,
             mutable=mutable,
             context_id=context_id,
@@ -156,8 +187,16 @@ class FieldTypeDAO:
         enum_restrict: bool = False,
         unique: bool = False,
         description: Optional[str] = None,
+        field_type: Optional[
+            str
+        ] = None,  # Full type like "List[int]", "str", "Any", "NoneType"
     ) -> None:
-        """Upsert approach: insert or overwrite the existing field_type."""
+        """
+        Upsert approach: insert or overwrite the existing field_type.
+
+        Args:
+            field_type: If provided, use this as the field type. If None, defaults to DEFAULT_FIELD_TYPE ("Any").
+        """
         self._validate_description(description)
 
         # First check if a field with this name exists but with a different category
@@ -176,12 +215,22 @@ class FieldTypeDAO:
                 f"Cannot update it to a {field_category}.",
             )
 
-        inferred_type = LogDAO.infer_type(field_name, value)
+        # Determine the field type
+        if field_type:
+            # User provided explicit type - normalize and use it
+            from orchestra.web.api.log.utils.type_utils import normalize_type_string
+
+            normalized_type = normalize_type_string(field_type)
+        else:
+            # No type provided - default to DEFAULT_FIELD_TYPE
+            from orchestra.web.api.log.utils.type_utils import DEFAULT_FIELD_TYPE
+
+            normalized_type = DEFAULT_FIELD_TYPE
 
         stmt = pg_insert(FieldType).values(
             project_id=project_id,
             field_name=field_name,
-            field_type=inferred_type,
+            field_type=normalized_type,
             field_category=field_category,
             mutable=mutable,
             context_id=context_id,
@@ -190,11 +239,12 @@ class FieldTypeDAO:
             unique=unique,
             description=description,
         )
+
         # "on_conflict_do_update" to update existing row if it already exists
         stmt = stmt.on_conflict_do_update(
             index_elements=["project_id", "field_name", "context_id"],
             set_={
-                "field_type": inferred_type,
+                "field_type": normalized_type,
                 "field_category": field_category,
                 "mutable": mutable,
                 "enum_values": enum_values,
@@ -359,7 +409,6 @@ class FieldTypeDAO:
             context_id: The context ID
             fields: Dictionary mapping fields names to their definitions.
         """
-        from orchestra.web.api.log.python2SQL.constants import STR_TO_SQL_TYPES
         from orchestra.web.api.log.schema import StandardFieldDefinition
 
         if not fields:
@@ -369,40 +418,63 @@ class FieldTypeDAO:
         self._validate_description(description)
 
         # Prepare values for bulk insertion
+        # Import EnumType for isinstance check
+        from orchestra.web.api.log.schema import EnumType
+        from orchestra.web.api.log.utils.type_utils import (
+            DEFAULT_FIELD_TYPE,
+            normalize_type_string,
+        )
+
         values_to_insert = []
         for field_name, field_info in fields.items():
-            field_type = "NoneType"
+            field_type = DEFAULT_FIELD_TYPE  # Default to DEFAULT_FIELD_TYPE ("Any")
             mutable = False
             unique = False
             enum_values = None
             enum_restrict = False
             field_description = None
 
-            if isinstance(field_info, StandardFieldDefinition):
+            if isinstance(field_info, EnumType):
+                # Handle EnumType separately
+                field_type = "enum"
+                mutable = True  # Enums need to be mutable to accept different values
+                unique = False
+                enum_values = field_info.values
+                enum_restrict = (
+                    field_info.restrict if field_info.restrict is not None else False
+                )
+                field_description = field_info.description
+                # Validate individual field description
+                self._validate_description(field_description)
+            elif isinstance(field_info, StandardFieldDefinition):
                 field_type = field_info.type
                 mutable = field_info.mutable
                 unique = field_info.unique
                 field_description = getattr(field_info, "description", None)
                 # Validate individual field description
                 self._validate_description(field_description)
-                if field_type == "enum":
-                    enum_values = field_info.values
-                    enum_restrict = field_info.restrict
+                if field_type.lower() == "enum":
+                    enum_values = getattr(field_info, "values", None)
+                    enum_restrict = getattr(field_info, "restrict", False)
             elif isinstance(field_info, str):
                 field_type = field_info
+            elif field_info is None:
+                # If None, use default DEFAULT_FIELD_TYPE
+                field_type = DEFAULT_FIELD_TYPE
 
-            if (
-                field_type
-                and field_type not in STR_TO_SQL_TYPES
-                and field_type not in ["enum", "NoneType"]
-            ):
+            # Normalize and validate the field type
+            from orchestra.web.api.log.utils.type_utils import is_valid_field_type
+
+            normalized_type = normalize_type_string(field_type)
+
+            if not is_valid_field_type(normalized_type):
                 raise ValueError(f"Invalid field type: {field_type}")
 
             values_to_insert.append(
                 {
                     "project_id": project_id,
                     "field_name": field_name,
-                    "field_type": field_type,
+                    "field_type": normalized_type,
                     "field_category": "entry",
                     "mutable": mutable,
                     "unique": unique,
@@ -441,16 +513,22 @@ class FieldTypeDAO:
             field_types_data: List of dictionaries, each containing:
                 - project_id: The project ID
                 - field_name: The name of the field
-                - value: The value to infer the type from
+                - value: The value (not used for type inference anymore)
                 - context_id: The context ID
                 - mutable: Optional, defaults to False
                 - field_category: Optional, defaults to "entry"
                 - unique: Optional, defaults to False
+                - field_type: Optional, the explicit type for this field
+                - enum_values: Optional, for enum types
+                - enum_restrict: Optional, for enum types
 
         Note:
-            This method uses PostgreSQL's insert with on_conflict_do_nothing to
-            avoid inserting duplicate field types (based on project_id, field_name,
-            and context_id).
+            This method is used for field creation from log operations.
+            - If field_type is provided (from explicit_types), use it → Strict typing
+            - If field_type is not provided → Use "Any" → Untyped field
+
+            Uses PostgreSQL's insert with on_conflict_do_nothing to avoid inserting
+            duplicate field types (based on project_id, field_name, and context_id).
         """
         if not field_types_data:
             return
@@ -458,12 +536,17 @@ class FieldTypeDAO:
         # Validate the global description parameter
         self._validate_description(description)
 
+        from orchestra.web.api.log.utils.type_utils import (
+            DEFAULT_FIELD_TYPE,
+            is_valid_field_type,
+            normalize_type_string,
+        )
+
         # Prepare values for bulk insertion
         values_to_insert = []
         for data in field_types_data:
             project_id = data["project_id"]
             field_name = data["field_name"]
-            value = data["value"]
             context_id = data["context_id"]
             mutable = data.get("mutable", False)
             field_category = data.get("field_category", "entry")
@@ -473,18 +556,39 @@ class FieldTypeDAO:
             # Validate individual field description
             self._validate_description(field_description)
 
-            # Infer type from the value
-            inferred_type = LogDAO.infer_type(field_name, value)
+            # Type precedence:
+            # 1. Explicit type (from explicit_types) → Use it (strict typing)
+            # 2. No explicit type → Use "Any" (untyped/mixed-type field)
+            # Note: 'value' is NOT used for type inference anymore per policy
+            # Explicit types always take precedence over any inference
+
+            field_type_raw = data.get("field_type")
+            enum_values = data.get("enum_values")
+            enum_restrict = data.get("enum_restrict", False)
+
+            if field_type_raw:
+                # Priority 1: Explicit type provided - normalize and validate
+                field_type = normalize_type_string(field_type_raw)
+                if not is_valid_field_type(field_type):
+                    # Invalid type - fallback to "Any"
+                    field_type = DEFAULT_FIELD_TYPE
+            else:
+                # Priority 2: No explicit type - default to "Any"
+                # The 'value' parameter is present but intentionally NOT used for inference
+                # per the policy that implicit field creation always results in "Any" type
+                field_type = DEFAULT_FIELD_TYPE
 
             values_to_insert.append(
                 {
                     "project_id": project_id,
                     "field_name": field_name,
-                    "field_type": inferred_type,
+                    "field_type": field_type,
                     "field_category": field_category,
                     "mutable": mutable,
                     "context_id": context_id,
                     "unique": unique,
+                    "enum_values": enum_values if enum_values else [],
+                    "enum_restrict": enum_restrict,
                     "description": field_description,
                 },
             )

@@ -848,3 +848,214 @@ async def test_create_logs_project_not_found(client: AsyncClient):
 
     assert response.status_code == 404, response.json()
     assert response.json() == {"detail": "Project not found."}
+
+
+@pytest.mark.anyio
+async def test_create_log_with_explicit_nested_list_type(client: AsyncClient):
+    """Test creating a log with List[int] explicit type."""
+    project_name = "test-nested-list-creation"
+    _ = await _create_project(client, project_name)
+
+    # Create a log with List[int] type
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "scores": [95, 87, 92, 88],
+                "explicit_types": {
+                    "scores": {"type": "List[int]", "mutable": True},
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    # Verify the field type is stored correctly
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+
+    assert "scores" in field_types
+    assert field_types["scores"]["data_type"] == "List[int]"
+    assert field_types["scores"]["field_type"] == "entry"
+    assert field_types["scores"]["mutable"] is True
+
+    # Verify the log was created with the correct value
+    logs_response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_response.status_code == 200
+    logs = logs_response.json()["logs"]
+    assert len(logs) == 1
+    assert logs[0]["id"] == log_id
+    assert logs[0]["entries"]["scores"] == [95, 87, 92, 88]
+
+
+@pytest.mark.anyio
+async def test_create_log_with_explicit_nested_dict_type(client: AsyncClient):
+    """Test creating a log with Dict[str, float] explicit type."""
+    project_name = "test-nested-dict-creation"
+    _ = await _create_project(client, project_name)
+
+    # Create a log with Dict[str, float] type
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "metrics": {"accuracy": 0.95, "f1_score": 0.89, "recall": 0.92},
+                "explicit_types": {
+                    "metrics": {"type": "Dict[str, float]", "mutable": True},
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify the field type
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+
+    assert "metrics" in field_types
+    assert field_types["metrics"]["data_type"] == "Dict[str, float]"
+
+
+@pytest.mark.anyio
+async def test_create_log_explicit_type_overrides_field_name_inference(
+    client: AsyncClient,
+):
+    """Test that explicit types override field name-based inference."""
+    project_name = "test-override-name-inference"
+    _ = await _create_project(client, project_name)
+
+    # Create fields with names that would trigger inference, but with explicit types
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "recording_url": "https://example.com/file.mp3",
+                "audio_file": "",
+                "image_path": "path/to/photo.jpg",
+                "explicit_types": {
+                    "recording_url": {"type": "str", "mutable": True},
+                    "audio_file": {"type": "str", "mutable": True},
+                    "image_path": {"type": "str", "mutable": True},
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify all are stored as str, not audio/image
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+
+    assert field_types["recording_url"]["data_type"] == "str"
+    assert field_types["audio_file"]["data_type"] == "str"
+    assert field_types["image_path"]["data_type"] == "str"
+
+
+@pytest.mark.anyio
+async def test_create_log_explicit_type_overrides_value_inference(
+    client: AsyncClient,
+):
+    """Test that explicit types override value-based inference."""
+    project_name = "test-override-value-inference"
+    _ = await _create_project(client, project_name)
+
+    # Create fields with values that would trigger inference
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "time_label": "12:30",  # Would be inferred as time
+                "date_label": "12-30",  # Might be inferred as date
+                "file_ext": ".mp3",  # Would be inferred as audio
+                "explicit_types": {
+                    "time_label": {"type": "str", "mutable": True},
+                    "date_label": {"type": "str", "mutable": True},
+                    "file_ext": {"type": "str", "mutable": True},
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify all are stored as str
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+
+    assert field_types["time_label"]["data_type"] == "str"
+    assert field_types["date_label"]["data_type"] == "str"
+    assert field_types["file_ext"]["data_type"] == "str"
+
+
+@pytest.mark.anyio
+async def test_batch_create_logs_with_nested_types(client: AsyncClient):
+    """Test batch creation with nested explicit types."""
+    project_name = "test-batch-nested-creation"
+    _ = await _create_project(client, project_name)
+
+    # Create multiple logs with nested types
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": [
+                {
+                    "scores": [85, 90, 88],
+                    "metrics": {"acc": 0.85, "prec": 0.90},
+                    "explicit_types": {
+                        "scores": {"type": "List[int]", "mutable": True},
+                        "metrics": {"type": "Dict[str, float]", "mutable": True},
+                    },
+                },
+                {
+                    "scores": [92, 88, 95],
+                    "metrics": {"acc": 0.92, "prec": 0.88},
+                    "explicit_types": {
+                        "scores": {"type": "List[int]", "mutable": True},
+                        "metrics": {"type": "Dict[str, float]", "mutable": True},
+                    },
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    assert len(response.json()["log_event_ids"]) == 2
+
+    # Verify field types
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+
+    assert field_types["scores"]["data_type"] == "List[int]"
+    assert field_types["metrics"]["data_type"] == "Dict[str, float]"
