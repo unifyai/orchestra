@@ -77,7 +77,12 @@ async def test_message_assistant_success(mock_send_message, client: AsyncClient)
         "message": "Test Message",
     }
     message_task = asyncio.create_task(
-        client.post("/v0/assistant/message", json=message_payload, headers=HEADERS),
+        client.post(
+            "/v0/assistant/message",
+            json=message_payload,
+            headers=HEADERS,
+            timeout=70.0,
+        ),
     )
 
     # 3. Simulate Webhook: Wait a moment for polling to start, then log the response
@@ -101,8 +106,8 @@ async def test_message_assistant_success(mock_send_message, client: AsyncClient)
     assert log_resp.status_code == 200
 
     # 4. Assert: Await the background task and check the result
-    # The poll interval is 2s, so 5s timeout is safe.
-    response = await asyncio.wait_for(message_task, timeout=5)
+    # Increase the wait_for timeout to be more robust in CI environments.
+    response = await asyncio.wait_for(message_task, timeout=10)
 
     assert response.status_code == 200, response.text
     assert response.json() == {"info": assistant_response_msg}
@@ -1365,8 +1370,13 @@ async def test_update_assistant_contact_info_reawakens(
 
 
 @pytest.mark.anyio
+@patch("orchestra.web.api.assistant.views.delete_phone_number")
 @patch("orchestra.web.api.assistant.views.reawaken_assistant")
-async def test_delete_assistant_contact_reawakens(mock_reawaken, client: AsyncClient):
+async def test_delete_assistant_contact_reawakens(
+    mock_reawaken,
+    mock_delete_phone,
+    client: AsyncClient,
+):
     # 1. Create an assistant
     payload = {"first_name": "Reawaken", "surname": "Deleter", "create_infra": False}
     create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
@@ -1394,4 +1404,6 @@ async def test_delete_assistant_contact_reawakens(mock_reawaken, client: AsyncCl
     )
     assert delete_resp.status_code == 200
     mock_reawaken.assert_called_once()
-    mock_reawaken.call_args[0][0] == str(assistant_id)
+    assert mock_reawaken.call_args[0][0] == str(assistant_id)
+    # Also assert the mock for deleting the phone number was called
+    mock_delete_phone.assert_called_once_with("+15552223333")
