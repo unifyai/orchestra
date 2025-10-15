@@ -630,24 +630,14 @@ def admin_update_assistant(
         )
     a = assistants[0]
 
-    # Build update data dictionary from provided query parameters
-    update_data = {}
-    if new_assistant_whatsapp_number is not None:
-        update_data["assistant_whatsapp_number"] = new_assistant_whatsapp_number
-    if new_user_whatsapp_number is not None:
-        update_data["user_whatsapp_number"] = new_user_whatsapp_number
-
-    # Update the assistant if there's anything to update
-    if update_data:
-        updated = dao.update_assistant(
-            user_id=a.user_id,
-            agent_id=a.agent_id,
-            **update_data,
-        )
-        session.commit()
-    else:
-        # If no new data is provided, just return the found assistant
-        updated = a
+    # Update only the assistant WhatsApp number
+    updated = dao.update_assistant(
+        user_id=a.user_id,
+        agent_id=a.agent_id,
+        assistant_whatsapp_number=new_assistant_whatsapp_number,
+        user_whatsapp_number=new_user_whatsapp_number,
+    )
+    session.commit()
 
     # Return updated assistant
     return InfoResponse(
