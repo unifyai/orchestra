@@ -44,9 +44,10 @@ def get_default_value_for_type(type_name: str) -> Any:
         "timedelta": timedelta(),
         "dict": {},
         "list": [],
+        "nonetype": None,
     }
 
     return default_values.get(
-        type_name,
+        type_name.lower(),
         "",
     )  # Default to empty string for unknown types

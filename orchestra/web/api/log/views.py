@@ -585,12 +585,14 @@ def create_from_logs(
                 log_dao.bulk_update(updates, overwrite=True, field_types=field_types)
 
                 # 6) Create or update field type record
+                # Use infer_type=True to infer type from value (no explicit_types here)
                 field_type_dao.create_field_type_if_absent(
                     project_id=project_obj.id,
                     field_name=body.key,
                     value=non_null_val,
                     field_category="entry",
                     context_id=context_id,
+                    infer_type=True,  # Infer type from value for static entries
                 )
 
                 session.commit()
@@ -801,12 +803,14 @@ def create_from_logs(
             session.commit()
 
             # Create or update field type record for derived entry
+            # Use infer_type=True to infer type from value (no explicit_types here)
             field_type_dao.create_field_type_if_absent(
                 project_id=project_obj.id,
                 field_name=body.key,
                 value=non_null_val,
                 field_category="derived_entry",
                 context_id=context_id,
+                infer_type=True,  # Infer type from value for derived entries
             )
 
         except Exception as e:
@@ -1132,6 +1136,7 @@ def update_derived_log(
         session.commit()
 
         # Update the field type record for the derived entry
+        # Use infer_type=True to infer type from value (no explicit_types here)
         field_type_dao.create_field_type_if_absent(
             project_id=project_id,
             context_id=context_id,
@@ -1139,6 +1144,7 @@ def update_derived_log(
             mutable=True,
             value=non_null_val,
             field_category="derived_entry",
+            infer_type=True,  # Infer type from value for derived entries
         )
 
         return {
@@ -1484,24 +1490,22 @@ def update_logs(
             # Process flat updates normally
             for k, v in flat_data.items():
                 if k in field_types:
+                    from orchestra.web.api.log.utils.type_utils import (
+                        is_untyped_field,
+                        types_match,
+                    )
+
                     expected_type = field_types[k]["field_type"]
                     original_type = LogDAO.infer_type(k, v)
-                    if expected_type == "NoneType":
-                        # undefined types are by-default mutable
-                        try:
-                            field_type_dao.upsert_field_type(
-                                project_id,
-                                k,
-                                v,
-                                mutable=True,
-                                context_id=ctx_id,
-                            )
-                        except Exception as e:
-                            raise HTTPException(
-                                status_code=400,
-                                detail=f"Error upserting field type for '{k}' in log id {log_id}: {e}",
-                            )
-                    elif original_type != expected_type and original_type != "NoneType":
+
+                    # Check if field is untyped (DEFAULT_FIELD_TYPE/"Any")
+                    if is_untyped_field(expected_type):
+                        # Untyped fields can accept any value
+                        # New policy: We CANNOT modify existing field types (no upsert)
+                        # The field exists with type "Any", just allow the value through
+                        pass
+                    elif not types_match(expected_type, original_type):
+                        # Strict type mismatch - use smart matching for nested types and enums
                         raise HTTPException(
                             status_code=400,
                             detail=(
@@ -1510,7 +1514,7 @@ def update_logs(
                             ),
                         )
                 else:
-                    # For new fields, record the field along with its mutability and uniqueness settings.
+                    # Field doesn't exist - create it
                     mutable = (
                         explicit_types.get(k, {}).get("mutable", False)
                         if explicit_types
@@ -1521,6 +1525,20 @@ def update_logs(
                         if explicit_types
                         else False
                     )
+
+                    # Check for explicit type
+                    field_type = None
+                    enum_values = None
+                    enum_restrict = False
+                    if explicit_types and k in explicit_types:
+                        field_spec = explicit_types[k]
+                        if isinstance(field_spec, dict):
+                            field_type = field_spec.get("type")
+                            enum_values = field_spec.get("values")
+                            enum_restrict = field_spec.get("restrict", False)
+                        elif isinstance(field_spec, str):
+                            field_type = field_spec
+
                     category = "entry" if data_type == "entries" else "param"
                     new_field_types.append(
                         {
@@ -1531,6 +1549,9 @@ def update_logs(
                             "unique": unique,
                             "field_category": category,
                             "context_id": ctx_id,
+                            "field_type": field_type,
+                            "enum_values": enum_values,
+                            "enum_restrict": enum_restrict,
                         },
                     )
 
@@ -3880,7 +3901,9 @@ def get_fields(
     # Build response
     return {
         key: {
-            "data_type": info["field_type"],
+            "data_type": info[
+                "field_type"
+            ],  # Full type: "List[int]", "str", "Any", etc.
             "field_type": info["field_category"],
             "mutable": info["mutable"],
             "unique": info.get("unique", False),
