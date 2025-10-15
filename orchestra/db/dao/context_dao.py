@@ -216,6 +216,7 @@ class ContextDAO:
                         mutable=False,  # Unique key fields should be immutable
                         unique=is_unique,  # Only set True for single unique keys
                         description=f"{'Unique' if is_unique else 'Composite unique'} key component ({col_type}).",
+                        field_type=col_type,
                     )
         self.session.commit()
         return context_id
