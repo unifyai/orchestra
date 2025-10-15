@@ -811,37 +811,25 @@ def delete_assistant_contact(
         )
 
     contact_type = removal_payload.contact_type
-    update_data = {}
 
     try:
         if contact_type == "phone":
             if assistant.phone:
                 delete_phone_number(assistant.phone)
-            update_data = {"phone": None, "user_phone": None}
+            assistant.phone = None
+            assistant.user_phone = None
         elif contact_type == "email":
             if assistant.email:
                 delete_email(assistant.email)
-            update_data = {"email": None}
+            assistant.email = None
         elif contact_type == "whatsapp":
             # No external infra deletion for WhatsApp based on existing delete_assistant logic
-            update_data = {
-                "user_whatsapp_number": None,
-                "assistant_whatsapp_number": None,
-            }
+            assistant.user_whatsapp_number = None
+            assistant.assistant_whatsapp_number = None
 
-        updated_assistant = assistant_dao.update_assistant(
-            user_id=user_id,
-            agent_id=assistant_id,
-            **update_data,
-        )
         session.commit()
-
-        if not updated_assistant:
-            # This should not happen if the initial get succeeded
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Assistant not found during update.",
-            )
+        session.refresh(assistant)
+        updated_assistant = assistant
 
         # After successfully updating, trigger a reawaken
         try:
