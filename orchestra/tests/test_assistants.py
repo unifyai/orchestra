@@ -1365,8 +1365,13 @@ async def test_update_assistant_contact_info_reawakens(
 
 
 @pytest.mark.anyio
+@patch("orchestra.web.api.assistant.views.delete_phone_number")
 @patch("orchestra.web.api.assistant.views.reawaken_assistant")
-async def test_delete_assistant_contact_reawakens(mock_reawaken, client: AsyncClient):
+async def test_delete_assistant_contact_reawakens(
+    mock_reawaken,
+    mock_delete_phone,
+    client: AsyncClient,
+):
     # 1. Create an assistant
     payload = {"first_name": "Reawaken", "surname": "Deleter", "create_infra": False}
     create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
@@ -1394,4 +1399,6 @@ async def test_delete_assistant_contact_reawakens(mock_reawaken, client: AsyncCl
     )
     assert delete_resp.status_code == 200
     mock_reawaken.assert_called_once()
-    mock_reawaken.call_args[0][0] == str(assistant_id)
+    assert mock_reawaken.call_args[0][0] == str(assistant_id)
+    # Also assert the mock for deleting the phone number was called
+    mock_delete_phone.assert_called_once_with("+15552223333")
