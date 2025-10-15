@@ -1175,22 +1175,12 @@ def update_assistant_config(
     assistant_dao = AssistantDAO(session)
     bucket_service = BucketService()
 
-    # Store the old photo URL before the update
-    old_photo_url = None
-    is_photo_changing = False
-    old_video_url = None
-    is_video_changing = False
-
-    # Variables to track newly created resources for potential rollback
-    email_to_update: Optional[str] = None
-    phone_to_update: Optional[str] = None
-    contact_info_updated = (
-        update.phone or update.email or update.user_whatsapp_number is not None
-    )
+    # Get the dictionary of fields that were actually provided in the request
+    update_data = update.dict(exclude_unset=True)
 
     # Check assistant existence before any updates
     existing_assistant = assistant_dao.get_assistant_by_id(
-        user_id=request.state.user_id,
+        user_id=user_id,
         agent_id=assistant_id,
     )
     if not existing_assistant:
@@ -1199,35 +1189,27 @@ def update_assistant_config(
             detail="Assistant not found.",
         )
 
-    # Determine if the photo is being updated before making changes
+    # Store old media URLs for potential cleanup
     old_photo_url = existing_assistant.profile_photo
-    is_photo_changing = (
-        update.profile_photo is not None and update.profile_photo != old_photo_url
-    )
     old_video_url = existing_assistant.profile_video
-    is_video_changing = (
-        update.profile_video is not None and update.profile_video != old_video_url
-    )
 
-    # Initialize variables with values from the update payload or existing record
-    assistant_email = update.email
-    assistant_phone = update.phone
-    assistant_whatsapp_number = (
-        existing_assistant.assistant_whatsapp_number
-        if existing_assistant.assistant_whatsapp_number
-        else None
+    # Variables to track newly created resources for potential rollback
+    email_to_update: Optional[str] = None
+    phone_to_update: Optional[str] = None
+    contact_info_updated = any(
+        k in update_data for k in ["phone", "email", "user_whatsapp_number"]
     )
 
     try:
-        weekly_limit: Optional[Decimal] = None
-        if update.weekly_limit is not None:
-            weekly_limit = Decimal(update.weekly_limit)
+        # Handle Decimal conversion if weekly_limit is provided
+        if "weekly_limit" in update_data and update_data["weekly_limit"] is not None:
+            update_data["weekly_limit"] = Decimal(update_data["weekly_limit"])
 
-        if update.create_infra:
-            # Create / update assistant email
-            # 1- Check if the assistant doesn't have an email address already and if an assistant email is provided
-            # 2- If so, create an assistant email
-            if update.email and not existing_assistant.email:
+        # Infrastructure-related logic
+        create_infra = update_data.pop("create_infra", True)
+        if create_infra:
+            # Create/update email if provided and not already set
+            if "email" in update_data and not existing_assistant.email:
                 try:
                     email_local = (
                         update.email.split("@")[0]
@@ -1241,221 +1223,128 @@ def update_assistant_config(
                     )
                     if "detail" in email_response:
                         raise Exception(
-                            f"Email creation failed on assistant update: {email_response['detail']}",
+                            f"Email creation failed: {email_response['detail']}"
                         )
                     email_to_update = email_response.get("user").get("primaryEmail")
-                    print(f"EMAIL CREATED ON ASSISTANT UPDATE: {email_to_update}")
-
+                    update_data["email"] = email_to_update
                     time.sleep(10)
-                    watch_response = watch_email(email_to_update)
-                    print(watch_response)
-                    if "detail" in watch_response:
-                        raise Exception(
-                            f"Email watch setup failed: {watch_response['detail']}",
-                        )
-                    print(f"EMAIL WATCHED ON ASSISTANT UPDATE: {email_to_update}")
-
-                    assistant_email = email_to_update
-
+                    watch_email(email_to_update)
                 except Exception as e:
                     raise HTTPException(
                         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail=f"Failed to create email during update: {str(e)}",
+                        detail=f"Failed to create/watch email: {e}",
                     )
 
-            # Create / update assistant phone
-            # 1- Check if the assistant doesn't have a phone number already and if a user phone is provided
-            # 2- If so, create an assistant phone number
-            if update.user_phone and not existing_assistant.phone:
+            # Create/update phone if user_phone is provided and phone not already set
+            if "user_phone" in update_data and not existing_assistant.phone:
                 try:
-                    country = update.country if update.country else "US"
+                    country = update_data.get(
+                        "country", existing_assistant.country or "US"
+                    )
                     phone_response = create_phone_number(
-                        country=country,
-                        is_staging=settings.is_staging,
+                        country=country, is_staging=settings.is_staging
                     )
                     if "detail" in phone_response:
                         raise Exception(
-                            f"Phone number creation failed: {phone_response['detail']}",
+                            f"Phone creation failed: {phone_response['detail']}"
                         )
                     phone_to_update = phone_response.get("phoneNumber")
-                    assistant_phone = phone_to_update
-                    print(f"PHONE CREATED ON UPDATE: {phone_to_update}")
+                    update_data["phone"] = phone_to_update
                 except Exception as e:
-                    # If phone creation fails, we should not proceed with the update
                     raise HTTPException(
                         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                        detail=f"Failed to create phone number during update: {str(e)}",
+                        detail=f"Failed to create phone number: {e}",
                     )
 
-            # Create / update social account:
-            # 1- Check if the assistant doesn't have a user account already and if a user account value is provided
-            # 2- If so and if user has enough credits (production), assign the whatsapp account to the assistant
+            # Assign WhatsApp sender if number is provided and not already set
             if (
-                update.user_whatsapp_number
+                "user_whatsapp_number" in update_data
                 and not existing_assistant.user_whatsapp_number
             ):
                 if not settings.is_staging:
-                    # Cost to create a social account
+                    # Deduct credits for adding WhatsApp
                     try:
                         platforms_response = get_social_platforms_costs()
-                        platforms = platforms_response.get("platforms")
-
-                        if not isinstance(platforms, dict):
-                            raise HTTPException(
-                                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                detail=f"Could not parse social platform costs. Expected a dictionary, got: {platforms}",
-                            )
-                        cost = platforms.get("whatsapp")
-                        if cost is None:
-                            raise HTTPException(
-                                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                                detail="WhatsApp cost not found in social platform costs response.",
-                            )
-                    except Exception as e_costs:
-                        raise HTTPException(
-                            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                            detail=f"Failed to fetch or process social platform costs. Details: {str(e_costs)}",
+                        whatsapp_cost = platforms_response.get("platforms", {}).get(
+                            "whatsapp"
                         )
-                    user = users_dao.get_user_with_id(user_id)
-                    decimal_cost = Decimal(cost)
-                    if user.credits < decimal_cost:
-                        raise HTTPException(
-                            status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                            detail="Insufficient credits to add a WhatsApp number.",
-                        )
-                    users_dao.recharge_credit(
-                        user_id=user_id,
-                        quantity=-float(decimal_cost),
-                    )
+                        if whatsapp_cost is None:
+                            raise ValueError("WhatsApp cost not found.")
 
-                assistant_whatsapp_number = assign_whatsapp_sender(
-                    update.user_whatsapp_number,
+                        user = users_dao.get_user_with_id(user_id)
+                        decimal_cost = Decimal(whatsapp_cost)
+                        if user.credits < decimal_cost:
+                            raise HTTPException(
+                                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                                detail="Insufficient credits to add a WhatsApp number.",
+                            )
+                        users_dao.recharge_credit(
+                            user_id=user_id, quantity=-float(decimal_cost)
+                        )
+                    except Exception as e:
+                        raise HTTPException(
+                            status_code=500, detail=f"Credit deduction failed: {e}"
+                        )
+
+                assigned_whatsapp = assign_whatsapp_sender(
+                    update_data["user_whatsapp_number"],
                     is_staging=settings.is_staging,
                 )["whatsapp_number"]
+                update_data["assistant_whatsapp_number"] = assigned_whatsapp
 
+        # Perform the database update with only the specified fields
         updated = assistant_dao.update_assistant(
-            user_id=request.state.user_id,
+            user_id=user_id,
             agent_id=assistant_id,
-            profile_photo=update.profile_photo,
-            profile_video=update.profile_video,
-            desktop_url=update.desktop_url,
-            user_local_desktop=update.user_local_desktop,
-            about=update.about,
-            phone=assistant_phone,
-            email=assistant_email,
-            user_phone=update.user_phone,
-            user_whatsapp_number=update.user_whatsapp_number,
-            assistant_whatsapp_number=assistant_whatsapp_number,
-            weekly_limit=weekly_limit,
-            max_parallel=update.max_parallel,
-            voice_id=update.voice_id,
-            voice_provider=update.voice_provider,
-            country=update.country,
+            **update_data,
         )
+
         if not updated:
+            # This should not happen if the initial get succeeded
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Assistant not found.",
+                detail="Assistant not found during update.",
             )
 
-        # If the photo was updated, delete the old one from GCS.
-        if is_photo_changing and old_photo_url and old_photo_url.startswith("gs://"):
-            try:
-                bucket_service.delete_assistant_file(old_photo_url)
-                logging.info(
-                    f"Successfully deleted old profile photo {old_photo_url} for assistant {assistant_id}.",
-                )
-            except Exception as e:
-                logging.error(
-                    f"Failed to delete old profile photo {old_photo_url} for assistant {assistant_id} during update. Error: {str(e)}",
-                )
-
-        # If the video was updated, delete the old one from GCS.
-        if is_video_changing and old_video_url and old_video_url.startswith("gs://"):
-            try:
-                bucket_service.delete_assistant_file(old_video_url)
-                logging.info(
-                    f"Successfully deleted old profile video {old_video_url} for assistant {assistant_id}.",
-                )
-            except Exception as e:
-                logging.error(
-                    f"Failed to delete old profile video {old_video_url} for assistant {assistant_id} during update. Error: {str(e)}",
-                )
+        # Cleanup old GCS files if they were changed
+        if (
+            "profile_photo" in update_data
+            and old_photo_url
+            and old_photo_url.startswith("gs://")
+        ):
+            bucket_service.delete_assistant_file(old_photo_url)
+        if (
+            "profile_video" in update_data
+            and old_video_url
+            and old_video_url.startswith("gs://")
+        ):
+            bucket_service.delete_assistant_file(old_video_url)
 
         session.commit()
 
-        # If contact info was updated and infra creation was enabled, reawaken the assistant
-        if contact_info_updated and update.create_infra:
+        # Reawaken assistant if contact info was updated with infra creation enabled
+        if contact_info_updated and create_infra:
             try:
                 reawaken_assistant(
-                    str(updated.agent_id),
-                    is_staging=settings.is_staging,
+                    str(updated.agent_id), is_staging=settings.is_staging
                 )
             except Exception as e:
-                # Log the error but don't fail the request, as the main action succeeded
-                logging.warning(
-                    f"Failed to reawaken assistant {updated.agent_id} after config update: {e}",
-                )
+                logging.warning(f"Failed to reawaken assistant {updated.agent_id}: {e}")
 
+        # Construct the response from the final state of the assistant
         return InfoResponse(
-            info=AssistantRead(
-                agent_id=str(updated.agent_id),
-                user_id=updated.user_id,
-                first_name=updated.first_name,
-                surname=updated.surname,
-                age=updated.age,
-                region=updated.region,
-                profile_photo=updated.profile_photo,
-                profile_video=updated.profile_video,
-                desktop_url=updated.desktop_url,
-                user_local_desktop=updated.user_local_desktop,
-                about=updated.about,
-                country=updated.country,
-                weekly_limit=(
-                    float(updated.weekly_limit)
-                    if updated.weekly_limit is not None
-                    else None
-                ),
-                max_parallel=updated.max_parallel,
-                created_at=updated.created_at,
-                updated_at=updated.updated_at,
-                phone=assistant_phone,
-                email=assistant_email,
-                user_whatsapp_number=updated.user_whatsapp_number,
-                assistant_whatsapp_number=assistant_whatsapp_number,
-                user_phone=updated.user_phone,
-                voice_id=updated.voice_id,
-                voice_provider=updated.voice_provider,
-            ),
+            info=AssistantRead.from_orm(updated),
         )
     except Exception as e:
         session.rollback()
-
+        # Rollback any created infrastructure
         if email_to_update:
-            logging.warning(
-                f"Update failed. Rolling back created email: {email_to_update}",
-            )
-            try:
-                delete_email(email_to_update)
-            except Exception as cleanup_err:
-                logging.error(
-                    f"Failed to clean up (delete) email '{email_to_update}' during rollback: {cleanup_err}",
-                )
-
+            delete_email(email_to_update)
         if phone_to_update:
-            logging.warning(
-                f"Update failed. Rolling back created phone number: {phone_to_update}",
-            )
-            try:
-                delete_phone_number(phone_to_update)
-            except Exception as cleanup_err:
-                logging.error(
-                    f"Failed to clean up (delete) phone number '{phone_to_update}' during rollback: {cleanup_err}",
-                )
+            delete_phone_number(phone_to_update)
 
         if isinstance(e, HTTPException):
             raise e
-
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error updating assistant config: {str(e)}",
