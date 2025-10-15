@@ -19,8 +19,6 @@ from orchestra.db.models.orchestra_models import (
 from orchestra.settings import settings
 from orchestra.web.api.utils.assistant_infra import send_unify_message
 
-_SENTINEL = object()
-
 
 class AssistantDAO:
     """
@@ -204,10 +202,6 @@ class AssistantDAO:
         poll_interval_seconds = 2
         start_time = time.time()
         while time.time() - start_time < timeout_seconds:
-            # Invalidate the session cache to ensure we get the latest data from the DB.
-            # This helps prevent race conditions in testing environments.
-            self.session.expire_all()
-
             # Re-fetch context in case it was created by the webhook now
             if context_id is None:
                 context = (
@@ -363,21 +357,21 @@ class AssistantDAO:
         self,
         user_id: str,
         agent_id: int,
-        weekly_limit: Optional[Decimal] = _SENTINEL,
-        max_parallel: Optional[int] = _SENTINEL,
-        about: Optional[str] = _SENTINEL,
-        desktop_url: Optional[str] = _SENTINEL,
-        user_local_desktop: Optional[str] = _SENTINEL,
-        phone: Optional[str] = _SENTINEL,
-        user_phone: Optional[str] = _SENTINEL,
-        email: Optional[str] = _SENTINEL,
-        user_whatsapp_number: Optional[str] = _SENTINEL,
-        assistant_whatsapp_number: Optional[str] = _SENTINEL,
-        voice_id: Optional[str] = _SENTINEL,
-        voice_provider: Optional[str] = _SENTINEL,
-        country: Optional[str] = _SENTINEL,
-        profile_photo: Optional[str] = _SENTINEL,
-        profile_video: Optional[str] = _SENTINEL,
+        weekly_limit: Optional[Decimal] = None,
+        max_parallel: Optional[int] = None,
+        about: Optional[str] = None,
+        desktop_url: Optional[str] = None,
+        user_local_desktop: Optional[str] = None,
+        phone: Optional[str] = None,
+        user_phone: Optional[str] = None,
+        email: Optional[str] = None,
+        user_whatsapp_number: Optional[str] = None,
+        assistant_whatsapp_number: Optional[str] = None,
+        voice_id: Optional[str] = None,
+        voice_provider: Optional[str] = None,
+        country: Optional[str] = None,
+        profile_photo: Optional[str] = None,
+        profile_video: Optional[str] = None,
     ) -> Optional[Assistant]:
         """
         Update configuration for an existing Assistant.
@@ -385,35 +379,35 @@ class AssistantDAO:
         assistant = self.get_assistant_by_id(user_id, agent_id)
         if not assistant:
             return None
-        if weekly_limit is not _SENTINEL:
+        if weekly_limit is not None:
             assistant.weekly_limit = weekly_limit
-        if max_parallel is not _SENTINEL:
+        if max_parallel is not None:
             assistant.max_parallel = max_parallel
-        if about is not _SENTINEL:
+        if about is not None:
             assistant.about = about
-        if desktop_url is not _SENTINEL:
+        if desktop_url is not None:
             assistant.desktop_url = desktop_url
-        if user_local_desktop is not _SENTINEL:
+        if user_local_desktop is not None:
             assistant.user_local_desktop = user_local_desktop
-        if phone is not _SENTINEL:
+        if phone is not None:
             assistant.phone = phone
-        if user_phone is not _SENTINEL:
+        if user_phone is not None:
             assistant.user_phone = user_phone
-        if email is not _SENTINEL:
+        if email is not None:
             assistant.email = email
-        if user_whatsapp_number is not _SENTINEL:
+        if user_whatsapp_number is not None:
             assistant.user_whatsapp_number = user_whatsapp_number
-        if assistant_whatsapp_number is not _SENTINEL:
+        if assistant_whatsapp_number is not None:
             assistant.assistant_whatsapp_number = assistant_whatsapp_number
-        if voice_id is not _SENTINEL:
+        if voice_id is not None:
             assistant.voice_id = voice_id
-        if voice_provider is not _SENTINEL:
+        if voice_provider is not None:
             assistant.voice_provider = voice_provider
-        if country is not _SENTINEL:
+        if country is not None:
             assistant.country = country
-        if profile_photo is not _SENTINEL:
+        if profile_photo is not None:
             assistant.profile_photo = profile_photo
-        if profile_video is not _SENTINEL:
+        if profile_video is not None:
             assistant.profile_video = profile_video
         self.session.add(assistant)
         return assistant
