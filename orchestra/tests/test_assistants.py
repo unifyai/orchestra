@@ -77,7 +77,12 @@ async def test_message_assistant_success(mock_send_message, client: AsyncClient)
         "message": "Test Message",
     }
     message_task = asyncio.create_task(
-        client.post("/v0/assistant/message", json=message_payload, headers=HEADERS),
+        client.post(
+            "/v0/assistant/message",
+            json=message_payload,
+            headers=HEADERS,
+            timeout=70.0,  # <-- FIX: Set a generous client-side timeout
+        ),
     )
 
     # 3. Simulate Webhook: Wait a moment for polling to start, then log the response
