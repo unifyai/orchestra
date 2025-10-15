@@ -54,6 +54,7 @@ from orchestra.web.api.assistant.schema import (
     RecordingCreate,
     RecordingInfo,
     ReplicatePredictionResponse,
+    UnifyMessage,
     VoiceCreate,
     VoiceDesignCreateFromPreviewRequest,
     VoiceDesignGeneratePreviewsAPIResponse,
@@ -71,6 +72,7 @@ from orchestra.web.api.utils.assistant_infra import (
     delete_pubsub_topic,
     get_running_jobs,
     get_social_platforms_costs,
+    log_pre_hire_chat,
     reawaken_assistant,
     stop_jobs,
     wake_up_assistant,
@@ -110,6 +112,46 @@ def check_assistant_hiring_approval(
 
 router = APIRouter()
 admin_router = APIRouter()
+
+
+@router.post(
+    "/assistant/message",
+    response_model=InfoResponse[str],
+    status_code=status.HTTP_200_OK,
+    summary="Send a message to an assistant and get a response",
+    description="Sends a message to a specified assistant and waits for the next reply from that assistant.",
+    tags=["Assistant Interaction"],
+)
+def message_assistant(
+    payload: UnifyMessage,
+    request: Request,
+    session: Session = Depends(get_db_session),
+    _: None = Depends(check_assistant_hiring_approval),
+) -> InfoResponse[str]:
+    user_id = request.state.user_id
+    assistant_dao = AssistantDAO(session)
+
+    try:
+        response_content = assistant_dao.message_assistant(
+            user_id=user_id,
+            assistant_id=payload.assistant_id,
+            contact_id=payload.contact_id,
+            message=payload.message,
+        )
+        return InfoResponse(info=response_content)
+    except HTTPException as e:
+        # Re-raise HTTPExceptions raised from the DAO layer
+        raise e
+    except Exception as e:
+        # Catch any other unexpected errors
+        logging.error(
+            f"Unexpected error in message_assistant endpoint: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while processing the message.",
+        )
 
 
 @router.post(
@@ -544,52 +586,18 @@ def create_assistant(
     # (Optional) Log pre-hire chat if provided
     if assistant_in.pre_hire_chat:
         try:
-            context_name = f"{assistant.first_name}{assistant.surname}/Transcripts"
-            chat_context_id = context_dao.get_or_create(
-                assistants_project.id,
-                name=context_name,
+            # Convert Pydantic models to dictionaries for the webhook payload
+            chat_messages = jsonable_encoder(assistant_in.pre_hire_chat)
+            log_pre_hire_chat(
+                assistant_id=str(assistant.agent_id),
+                messages=chat_messages,
+                is_staging=settings.is_staging,
             )
-            chat_context_obj = session.get(Context, chat_context_id)
-
-            # Prepare entries for logging using jsonable_encoder
-            chat_entries = jsonable_encoder(assistant_in.pre_hire_chat)
-            num_entries = len(chat_entries)
-
-            if num_entries > 0:
-                log_event_ids = log_event_dao.bulk_create(
-                    project_id=assistants_project.id,
-                    count=num_entries,
-                    context_id=chat_context_id,
-                )
-
-                # Prepare all log rows for bulk creation
-                log_rows_to_create = []
-                for i, entry_dict in enumerate(chat_entries):
-                    log_event_id = log_event_ids[i]
-                    for key, value in entry_dict.items():
-                        log_rows_to_create.append(
-                            {
-                                "project_id": assistants_project.id,
-                                "log_event_id": log_event_id,
-                                "key": key,
-                                "value": value,
-                                "context_id": chat_context_id,
-                            },
-                        )
-
-                # Bulk create the log rows (this will flush)
-                if log_rows_to_create:
-                    log_dao.bulk_create(
-                        log_rows_to_create,
-                        context_obj=chat_context_obj,
-                    )
-
-                session.commit()  # Commit the logs
-
         except Exception as e_log:
-            session.rollback()  # Rollback the log transaction
+            # We don't rollback the whole assistant creation for a logging failure,
+            # but we should log it as a warning.
             logging.warning(
-                f"Failed to log pre-hire chat for assistant {assistant.agent_id}. Error: {str(e_log)}",
+                f"Failed to log pre-hire chat for assistant {assistant.agent_id} via webhook. Error: {str(e_log)}",
             )
 
     # Phase 4: Prepare and return response
@@ -1380,7 +1388,8 @@ def update_assistant_config(
         if contact_info_updated and update.create_infra:
             try:
                 reawaken_assistant(
-                    str(updated.agent_id), is_staging=settings.is_staging
+                    str(updated.agent_id),
+                    is_staging=settings.is_staging,
                 )
             except Exception as e:
                 # Log the error but don't fail the request, as the main action succeeded
