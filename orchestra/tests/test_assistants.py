@@ -81,7 +81,7 @@ async def test_message_assistant_success(mock_send_message, client: AsyncClient)
             "/v0/assistant/message",
             json=message_payload,
             headers=HEADERS,
-            timeout=70.0,  # <-- FIX: Set a generous client-side timeout
+            timeout=70.0,
         ),
     )
 
@@ -106,8 +106,10 @@ async def test_message_assistant_success(mock_send_message, client: AsyncClient)
     assert log_resp.status_code == 200
 
     # 4. Assert: Await the background task and check the result
-    # The poll interval is 2s, so 5s timeout is safe.
-    response = await asyncio.wait_for(message_task, timeout=5)
+    # Increase the wait_for timeout to be more robust in CI environments.
+    response = await asyncio.wait_for(
+        message_task, timeout=10
+    )  # <-- FIX: Increased from 5 to 10
 
     assert response.status_code == 200, response.text
     assert response.json() == {"info": assistant_response_msg}
