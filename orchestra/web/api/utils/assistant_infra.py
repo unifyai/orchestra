@@ -208,7 +208,7 @@ def get_running_jobs(assistant_id: str):
     """
     # get running jobs for the assistant
     logs = unify.get_logs(
-        project="Debug",
+        project="AssistantJobs",
         context="startup_events",
         filter=f"assistant_id == {assistant_id} and running == True",
     )
