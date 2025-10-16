@@ -233,14 +233,14 @@ def stop_jobs(assistant_id: str):
     return {"success": True, "job_names": job_names}
 
 
-def wake_up_assistant(assistant_number: str, is_staging: bool = False):
+def wake_up_assistant(assistant_id: str, is_staging: bool = False):
     wake_up_url = (
         "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/"
         "assistant-wakeup-webhook" + ("-staging" if is_staging else "")
     )
     return requests.post(
         wake_up_url,
-        data={"assistant_number": assistant_number},
+        data={"assistant_id": assistant_id},
     )
 
 
