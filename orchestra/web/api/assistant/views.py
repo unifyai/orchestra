@@ -1379,6 +1379,7 @@ def update_assistant_config(
                     str(updated.agent_id),
                     is_staging=settings.is_staging,
                 )
+                print(f"ASSISTANT REAWAKENED: {updated.agent_id}")
             except Exception as e:
                 # Log the error but don't fail the request, as the main action succeeded
                 logging.warning(
