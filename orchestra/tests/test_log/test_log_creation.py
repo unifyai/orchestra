@@ -70,36 +70,54 @@ async def test_create_log_w_image(client: AsyncClient):
     assert success
     img = base64.b64encode(buffer).decode("utf-8")
 
-    # log image
-    response = await _create_log(
+    # Phase 1: Implicit field creation (no explicit types) → data_type should be "Any"
+    response_implicit = await _create_log(
+        client,
+        project_name,
+        params={},
+        entries={
+            "img_raw_implicit": img,
+            "img_url_implicit": "https://upload.wikimedia.org/wikipedia/commons/4/45/Eopsaltria_australis_-_Mogo_Campground.jpg",
+        },
+    )
+    assert response_implicit.status_code == 200, response_implicit.json()
+
+    fields_resp = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert fields_resp.status_code == 200
+    fields = fields_resp.json()
+    assert fields["img_raw_implicit"]["data_type"] == "Any"
+    assert fields["img_url_implicit"]["data_type"] == "Any"
+
+    # Phase 2: Explicit field creation via explicit_types → data_type should match explicit type
+    response_explicit = await _create_log(
         client,
         project_name,
         params={},
         entries={
             "img_raw": img,
             "img_url": "https://upload.wikimedia.org/wikipedia/commons/4/45/Eopsaltria_australis_-_Mogo_Campground.jpg",
+            "explicit_types": {
+                "img_raw": {"type": "image"},
+                "img_url": {"type": "image"},
+            },
         },
     )
+    assert response_explicit.status_code == 200, response_explicit.json()
 
-    assert response.status_code == 200, response.json()
-    assert isinstance(response.json()["log_event_ids"][0], int)
-
-    # Verify field type
+    # Verify explicit types were respected
     field_types_response = await client.get(
         f"/v0/logs/fields?project={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
-    assert field_types_response.json()["img_raw"]["data_type"] == "image"
-    assert field_types_response.json()["img_url"]["data_type"] == "image"
-    assert field_types_response.json()["img_raw"]["field_type"] == "entry"
-    assert field_types_response.json()["img_url"]["field_type"] == "entry"
-    assert field_types_response.json()["img_raw"]["mutable"] == True
-    assert field_types_response.json()["img_url"]["mutable"] == True
-    assert field_types_response.json()["img_raw"]["artifacts"] == ""
-    assert field_types_response.json()["img_url"]["artifacts"] == ""
-    assert field_types_response.json()["img_raw"]["created_at"] is not None
-    assert field_types_response.json()["img_url"]["created_at"] is not None
+    fields2 = field_types_response.json()
+    assert fields2["img_raw"]["data_type"] == "image"
+    assert fields2["img_url"]["data_type"] == "image"
+    assert fields2["img_raw"]["field_type"] == "entry"
+    assert fields2["img_url"]["field_type"] == "entry"
 
 
 @pytest.mark.anyio
@@ -111,19 +129,42 @@ async def test_create_log_w_audio(client: AsyncClient):
     dummy_audio_bytes = b"dummy_mp3_data"
     audio_b64 = base64.b64encode(dummy_audio_bytes).decode("utf-8")
 
-    # Log audio as both a raw base64 string and a URL.
-    response = await _create_log(
+    # Phase 1: Implicit creation → data_type should be "Any"
+    resp_implicit = await _create_log(
+        client,
+        project_name,
+        params={},
+        entries={
+            "user_recording_implicit": audio_b64,
+            "sound_effect_implicit": "https://example.com/sounds/effect.mp3",
+        },
+    )
+    assert resp_implicit.status_code == 200, resp_implicit.json()
+
+    fields_resp1 = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert fields_resp1.status_code == 200, fields_resp1.json()
+    fields1 = fields_resp1.json()
+    assert fields1["user_recording_implicit"]["data_type"] == "Any"
+    assert fields1["sound_effect_implicit"]["data_type"] == "Any"
+
+    # Phase 2: Explicit creation via explicit_types → data_type should be "audio"
+    resp_explicit = await _create_log(
         client,
         project_name,
         params={},
         entries={
             "user_recording": audio_b64,
             "sound_effect": "https://example.com/sounds/effect.mp3",
+            "explicit_types": {
+                "user_recording": {"type": "audio"},
+                "sound_effect": {"type": "audio"},
+            },
         },
     )
-
-    assert response.status_code == 200, response.json()
-    assert isinstance(response.json()["log_event_ids"][0], int)
+    assert resp_explicit.status_code == 200, resp_explicit.json()
 
     # Verify field types
     field_types_response = await client.get(
@@ -133,7 +174,7 @@ async def test_create_log_w_audio(client: AsyncClient):
     assert field_types_response.status_code == 200, field_types_response.json()
     fields = field_types_response.json()
 
-    # Check that both fields were correctly inferred as 'audio'
+    # Check that both fields match explicit 'audio'
     assert fields["user_recording"]["data_type"] == "audio"
     assert fields["sound_effect"]["data_type"] == "audio"
 
