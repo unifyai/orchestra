@@ -1173,6 +1173,20 @@ async def test_get_logs_metric_time_date_timedelta(client: AsyncClient):
 
     # Create all logs
     for entry in time_logs + date_logs + timedelta_logs:
+        entry = {
+            **entry,
+            "explicit_types": {
+                "time_value": {
+                    "type": "time",
+                },
+                "date_value": {
+                    "type": "date",
+                },
+                "timedelta_value": {
+                    "type": "timedelta",
+                },
+            },
+        }
         response = await _create_log(client, project_name, entries=entry)
         assert response.status_code == 200, response.json()
 
