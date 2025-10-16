@@ -93,6 +93,13 @@ log_data = {
             "_/state": "liquid->gas",
             "_/safe": False,
             "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+            "explicit_types": {
+                "_/description": {"type": "str"},
+                "_/temperature": {"type": "float"},
+                "_/state": {"type": "str"},
+                "_/safe": {"type": "bool"},
+                "_/timestamp": {"type": "datetime"},
+            },
         },
         {
             "_/description": "freezing water",
@@ -100,6 +107,13 @@ log_data = {
             "_/state": "liquid->solid",
             "_/safe": True,
             "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+            "explicit_types": {
+                "_/description": {"type": "str"},
+                "_/temperature": {"type": "float"},
+                "_/state": {"type": "str"},
+                "_/safe": {"type": "bool"},
+                "_/timestamp": {"type": "datetime"},
+            },
         },
         {
             "_/description": "surface of the sun",
@@ -107,6 +121,13 @@ log_data = {
             "_/state": "gas",
             "_/safe": False,
             "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+            "explicit_types": {
+                "_/description": {"type": "str"},
+                "_/temperature": {"type": "float"},
+                "_/state": {"type": "str"},
+                "_/safe": {"type": "bool"},
+                "_/timestamp": {"type": "datetime"},
+            },
         },
         {
             "_/description": "freezing nitrogen",
@@ -114,22 +135,45 @@ log_data = {
             "_/state": "liquid->solid",
             "_/safe": False,
             "_/timestamp": (datetime(1993, 3, 22, tzinfo=timezone.utc)).isoformat(),
+            "explicit_types": {
+                "_/description": {"type": "str"},
+                "_/temperature": {"type": "float"},
+                "_/state": {"type": "str"},
+                "_/safe": {"type": "bool"},
+                "_/timestamp": {"type": "datetime"},
+            },
         },
         {
             "_/description": "lava",
             "_/metadata": [1, 5, 6],
             "_/_data": {"a": 2, "b": 4},
             "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+            "explicit_types": {
+                "_/description": {"type": "str"},
+                "_/temperature": {"type": "float"},
+                "_/state": {"type": "str"},
+                "_/safe": {"type": "bool"},
+                "_/timestamp": {"type": "datetime"},
+            },
         },
         {
             "_/description": "air",
             "_/metadata": [3, 8, 5],
             "_/_data": {"a": 6, "b": 12, "c": 8, "d": 11},
             "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+            "explicit_types": {
+                "_/timestamp": {
+                    "type": "datetime",
+                },
+            },
         },
         {
             "_/_data": {"a": 8, "b": 10},
             "_/timestamp": (datetime(1993, 3, 24, tzinfo=timezone.utc)).isoformat(),
+            "explicit_types": {
+                "_/_data": {"type": "dict"},
+                "_/timestamp": {"type": "datetime"},
+            },
         },
     ],
 }
