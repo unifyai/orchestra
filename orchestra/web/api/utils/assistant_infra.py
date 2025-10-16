@@ -289,7 +289,7 @@ def log_pre_hire_chat(assistant_id: str, messages: list, is_staging: bool = Fals
         json=payload,
     )
     response.raise_for_status()
-    return response.json()
+    return {"status": "success"}
 
 
 def send_unify_message(
@@ -332,4 +332,4 @@ def send_unify_message(
         json=payload,
     )
     response.raise_for_status()
-    return response.json()
+    return {"status": "success"}
