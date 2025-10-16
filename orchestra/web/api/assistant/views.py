@@ -573,7 +573,7 @@ def create_assistant(
         )
 
     # Phase 3: Wake up assistant
-    response = wake_up_assistant(assistant.phone, is_staging=settings.is_staging)
+    response = wake_up_assistant(assistant.agent_id, is_staging=settings.is_staging)
     if response.status_code != 200:
         logging.error(f"Failed to wake up assistant: {response.text}")
         raise HTTPException(
@@ -581,7 +581,7 @@ def create_assistant(
             detail="Failed to wake up assistant.",
         )
     else:
-        print(f"ASSISTANT AWAKENED: {assistant.phone}")
+        print(f"ASSISTANT AWAKENED: {assistant.agent_id}")
 
     # (Optional) Log pre-hire chat if provided
     if assistant_in.pre_hire_chat:
