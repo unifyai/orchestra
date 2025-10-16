@@ -64,7 +64,7 @@ class AssistantDAO:
                     .where(
                         LogEventLog.log_event_id == LogEvent.id,
                         Log.key == "sender_id",
-                        Log.value == '"0"',
+                        Log.value == "0",
                     ),
                 ),
             )
@@ -112,7 +112,7 @@ class AssistantDAO:
                     .where(
                         LogEventLog.log_event_id == LogEvent.id,
                         Log.key == "sender_id",
-                        Log.value == '"0"',
+                        Log.value == "0",
                     ),
                 ),
             )
@@ -217,6 +217,7 @@ class AssistantDAO:
                     continue
 
             try:
+                self.session.commit()
                 latest_timestamp = self._get_latest_assistant_log_timestamp(
                     project_id=project.id,
                     context_id=context_id,
