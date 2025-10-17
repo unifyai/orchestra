@@ -122,6 +122,9 @@ _COLLECTION_CANON = {
     "mapping": "Mapping",
 }
 
+# Reverse map for leaf containers to keep bare container names lowercase
+_COLLECTION_CANON_REVERSE = {v: k for k, v in _COLLECTION_CANON.items()}
+
 
 def _canon_ident(name: str) -> str:
     """Canonicalize an identifier (outer/inner type name).
@@ -258,6 +261,10 @@ def _render(node: _TypeNode) -> str:
     if not node.args:
         if name in SPECIAL_FIELD_TYPES:
             return name
+        # Bare container types (List/Dict/Set/Tuple/Union/...) should remain lowercase
+        # e.g., "list", "dict", "set" (not Title-case) when no type args provided.
+        if name in _COLLECTION_CANON_REVERSE:
+            return _COLLECTION_CANON_REVERSE[name]
         # primitives and other lowercase identifiers
         return name if name and name[0].isupper() else name.lower()
 
