@@ -139,6 +139,19 @@ async def test_normalize_with_spaces():
 
 
 @pytest.mark.anyio
+async def test_normalize_bare_containers_remain_lowercase():
+    """Bare container names should remain lowercase when no type args are provided."""
+    assert normalize_type_string("list") == "list"
+    assert normalize_type_string("dict") == "dict"
+    assert normalize_type_string("set") == "set"
+    assert normalize_type_string("tuple") == "tuple"
+    assert normalize_type_string("List") == "list"
+    assert normalize_type_string("Dict") == "dict"
+    assert normalize_type_string("Set") == "set"
+    assert normalize_type_string("Tuple") == "tuple"
+
+
+@pytest.mark.anyio
 async def test_case_insensitivity_comprehensive():
     """Test comprehensive case insensitivity."""
     test_cases = [
