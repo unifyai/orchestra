@@ -23,7 +23,7 @@ SUPPORTED_BASE_TYPES = [
 # Special types that don't map to SQL but are valid field types
 SPECIAL_FIELD_TYPES = [
     "Any",  # Untyped/mixed-type fields
-    "NoneType",  # Strict None type
+    "NoneType",  # Weak None type (allowed with any strong type)
     "enum",  # Enum type with restricted values (Log.inferred_type will be "str")
 ]
 
@@ -275,6 +275,7 @@ def types_match(field_type: str, inferred_type: str) -> bool:
     - "Dict[str, float]" matches "dict" (base type match)
     - "int" matches "int" (exact match)
     - "enum" matches "str" (enum values are always strings)
+    - "NoneType" is a weak type and matches ANY field type (including strict types)
 
     Args:
         field_type: The field's declared type (normalized)
@@ -298,6 +299,10 @@ def types_match(field_type: str, inferred_type: str) -> bool:
     # Special case: enum field type always stores string values
     # So FieldType.field_type="enum" should match Log.inferred_type="str"
     if norm_field.lower() == "enum" and norm_inferred.lower() == "str":
+        return True
+
+    # Weak type: NoneType is allowed for any field type (including strict types)
+    if norm_inferred == "NoneType" or norm_field == "NoneType":
         return True
 
     # Check if field type is nested and inferred type matches the base

@@ -650,7 +650,7 @@ async def test_delete_fields_endpoint(client: AsyncClient):
         json={"project": project_name, "fields": ["col1", "col2"]},
         headers=HEADERS,
     )
-    assert delete_response.status_code == 200
+    assert delete_response.status_code == 200, delete_response.json()
     assert delete_response.json()["deleted_fields"] == ["col1", "col2"]
 
     # Verify the columns no longer exist

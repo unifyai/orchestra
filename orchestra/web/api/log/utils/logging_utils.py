@@ -1229,12 +1229,9 @@ def create_logs_internal(
         - Fields with type "Any": Accept any value (mixed types), infer type for Log.inferred_type
         - Fields with strict type: Require explicit_type (if provided) to match field type
         - New fields: Created with DEFAULT_FIELD_TYPE ("Any") for untyped/mixed-type fields
-        - "NoneType": A specific type for Python None values (not the same as "Any")
+        - "NoneType": Treated as a weak type – None is allowed for any field type
         """
-        from orchestra.web.api.log.utils.type_utils import (
-            is_untyped_field,
-            normalize_type_string,
-        )
+        from orchestra.web.api.log.utils.type_utils import is_untyped_field
 
         # Extract explicit_type if provided in explicit_types
         explicit_type_str = None
@@ -1275,26 +1272,7 @@ def create_logs_internal(
                 # We don't update the field_type (it stays "Any")
                 return
 
-            # Case 2: Handle None values for strictly typed fields
-            # None is ONLY allowed for fields with type "NoneType" or "Any"
-            if value is None or type(value).__name__ == "NoneType":
-                # Check if field type is "NoneType"
-                if normalize_type_string(field_type).lower() == "nonetype":
-                    # Field expects None - OK
-                    return
-                else:
-                    # Field has different strict type - reject None
-                    batch_info = (
-                        f" (in batch entry {batch_index})"
-                        if batch_index is not None
-                        else ""
-                    )
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Type mismatch for field '{field_name}'{batch_info}: field has strict type '{field_type}', but received None (NoneType).",
-                    )
-
-            # Case 3: Field has strict type (not "Any") - check value type
+            # Case 2: Field has strict type (not "Any") - check value type
             from orchestra.web.api.log.utils.type_utils import types_match
 
             if explicit_type_str:
@@ -2539,20 +2517,22 @@ def _create_logs_from_joined_rows(
 
             if existing_field_type:
                 # Validate type consistency
-                from orchestra.web.api.log.utils.type_utils import is_untyped_field
+                from orchestra.web.api.log.utils.type_utils import (
+                    is_untyped_field,
+                    types_match,
+                )
 
                 entered_type = LogDAO.infer_type(col, val)
 
                 # Only validate type if the field is strictly typed (not "Any")
-                # None values are always allowed
-                if (
-                    not is_untyped_field(existing_field_type.field_type)
-                    and entered_type != "nonetype"
-                ):
-                    if entered_type != existing_field_type.field_type:
+                if not is_untyped_field(existing_field_type.field_type):
+                    if not types_match(existing_field_type.field_type, entered_type):
                         raise HTTPException(
                             status_code=400,
-                            detail=f"Type mismatch for field '{col}' in joined result: expected {existing_field_type.field_type}, got {entered_type}",
+                            detail=(
+                                f"Type mismatch for field '{col}' in joined result: "
+                                f"expected {existing_field_type.field_type}, got {entered_type}"
+                            ),
                         )
             elif original_field_type:
                 # Copy the original field type to the new context
