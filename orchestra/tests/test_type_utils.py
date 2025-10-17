@@ -6,6 +6,7 @@ from orchestra.web.api.log.utils.type_utils import (
     get_base_storage_type,
     get_display_type,
     is_image_type,
+    is_valid_field_type,
     normalize_type_string,
     parse_nested_type,
 )
@@ -152,3 +153,77 @@ async def test_case_insensitivity_comprehensive():
 
     for input_type, expected_output in test_cases:
         assert normalize_type_string(input_type) == expected_output
+
+
+@pytest.mark.anyio
+async def test_nested_deep():
+    s = "List[Dict[str, List[int]]]"
+    assert normalize_type_string(s) == "List[Dict[str, List[int]]]"
+
+
+@pytest.mark.anyio
+async def test_optional_and_allowed_union_with_none():
+    # Optional[T] is allowed and normalizes to Union[T, NoneType]
+    assert normalize_type_string("Optional[int]") == "Union[int, NoneType]"
+    # Direct Union[T, NoneType] is allowed
+    assert normalize_type_string("Union[str, NoneType]") == "Union[str, NoneType]"
+    assert is_valid_field_type("Union[int, NoneType]") is True
+    # Union with more than NoneType is invalid
+    assert is_valid_field_type("Union[int, str]") is False
+    # The | operator is not supported; should be invalid overall
+    assert is_valid_field_type("int | str") is False
+
+
+@pytest.mark.anyio
+async def test_tuple_and_variadic_tuple():
+    assert normalize_type_string("Tuple[int, float]") == "Tuple[int, float]"
+    assert normalize_type_string("tuple[int, ...]") == "Tuple[int, ...]"
+
+
+@pytest.mark.anyio
+async def test_set_and_builtin_generics():
+    assert normalize_type_string("set[int]") == "Set[int]"
+    assert normalize_type_string("dict[str, list[int]]") == "Dict[str, List[int]]"
+
+
+@pytest.mark.anyio
+async def test_parse_nested_type_preserves_inner_commas():
+    base, inner = parse_nested_type("Dict[str, List[int]]")
+    assert base == "Dict"
+    assert inner == ["str", "List[int]"]
+
+
+@pytest.mark.anyio
+async def test_is_valid_field_type_recursive():
+    assert is_valid_field_type("List[Dict[str, int]]") is True
+    assert is_valid_field_type("Dict[str, List[image]]") is True
+    assert is_valid_field_type("Tuple[int, ...]") is True
+    # invalid: wrong arity for Dict
+    assert is_valid_field_type("Dict[int]") is False
+    # invalid: List with multiple args
+    assert is_valid_field_type("List[int, str]") is False
+    # invalid: Set with multiple args
+    assert is_valid_field_type("Set[int, str]") is False
+    # invalid: Union without NoneType
+    assert is_valid_field_type("Union[float, int]") is False
+    # invalid: nested Union on non-None side
+    assert is_valid_field_type("Union[Union[int, NoneType], NoneType]") is False
+
+
+@pytest.mark.anyio
+async def test_is_image_type_deep():
+    assert is_image_type("List[Dict[str, image]]") is True
+    assert is_image_type("Dict[str, List[int]]") is False
+
+
+@pytest.mark.anyio
+async def test_get_base_storage_type_union_with_none_only():
+    # base storage type for allowed union
+    assert get_base_storage_type("Union[int, NoneType]") == "union"
+
+
+@pytest.mark.anyio
+async def test_invalid_strings_remain_invalid():
+    # Ensure obviously invalid type strings fail validation
+    assert is_valid_field_type("int | str") is False
+    assert is_valid_field_type("WeirdType[foo, bar]") is False

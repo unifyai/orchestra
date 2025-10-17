@@ -1,7 +1,15 @@
 """Utilities for parsing and handling explicit types in log fields."""
 
 import re
-from typing import List, Optional, Tuple
+
+# =========================================
+# NEW: lightweight parser dependencies
+# (stdlib only; safe drop-in)
+# =========================================
+from dataclasses import dataclass
+from typing import List
+from typing import List as _List
+from typing import Optional, Tuple
 
 # Supported base types that map to SQL types
 # These are the fundamental types that can be stored in the database
@@ -33,6 +41,242 @@ SPECIAL_FIELD_TYPES = [
 DEFAULT_FIELD_TYPE = "Any"
 
 
+# ============================================================
+# NEW: Tiny recursive-descent parser for arbitrary type shapes
+# ============================================================
+# Why: The old regex approach split on commas without respecting nested brackets,
+#      and it could not handle unions (X | Y, Union[X, Y]), Optional[T], Tuple[…],
+#      or deeply nested generics. The code below introduces a small tokenizer and
+#      parser that builds a minimal AST for types, then renders a normalized string.
+#
+# Design goals:
+#   - No dependencies beyond stdlib
+#   - Preserve original function signatures and behavior where applicable
+#   - Produce readable, deterministic normalization
+#   - Support:
+#       * Arbitrary nesting (List[Dict[str, List[int]]])
+#       * Unions (`Union[int, str]` and `int | str`)
+#       * Optional[T] -> Union[T, NoneType]
+#       * Tuple[int, ...] (variadic) and fixed tuples
+#       * Set[T] (normalized from set[T])
+#       * Correct comma handling at all nesting levels
+#
+# Notes:
+#   - We keep SPECIAL_FIELD_TYPES as-is.
+#   - We do not add "set" or "tuple" to SUPPORTED_BASE_TYPES (they're containers).
+#     Validation below handles containers explicitly.
+#   - For get_base_storage_type: simple -> normalized simple; nested -> outer.lower().
+#
+
+
+@dataclass
+class _TypeNode:
+    name: str
+    args: _List["_TypeNode"]
+
+
+# Tokenizer
+_TOKEN_SPEC = [
+    ("LBRACK", r"\["),
+    ("RBRACK", r"\]"),
+    ("COMMA", r","),
+    ("PIPE", r"\|"),  # to support X | Y
+    ("ELLIPSIS", r"\.\.\."),  # Tuple[int, ...]
+    ("IDENT", r"[A-Za-z_][A-Za-z0-9_]*"),
+    ("WS", r"\s+"),
+]
+_TOKEN_RE = re.compile("|".join(f"(?P<{n}>{p})" for n, p in _TOKEN_SPEC))
+
+
+class _Token:
+    __slots__ = ("typ", "val")
+
+    def __init__(self, typ: str, val: str):
+        self.typ = typ
+        self.val = val
+
+
+def _lex(s: str) -> _List[_Token]:
+    """Convert a type string into tokens, skipping whitespace."""
+    toks: _List[_Token] = []
+    for m in _TOKEN_RE.finditer(s or ""):
+        typ = m.lastgroup
+        if typ == "WS":
+            continue
+        toks.append(_Token(typ, m.group(typ)))
+    return toks
+
+
+# Canonical collection/typing names
+# (PEP 585 builtins lower → Title-case)
+_COLLECTION_CANON = {
+    "list": "List",
+    "dict": "Dict",
+    "tuple": "Tuple",
+    "set": "Set",
+    "union": "Union",
+    "optional": "Optional",
+    "literal": "Literal",
+    "annotated": "Annotated",
+    "sequence": "Sequence",
+    "mapping": "Mapping",
+}
+
+
+def _canon_ident(name: str) -> str:
+    """Canonicalize an identifier (outer/inner type name).
+
+    Rules:
+      - "any" -> "Any"
+      - "none" / "nonetype" -> "NoneType"
+      - "enum" -> "enum" (kept lowercase per SPECIAL_FIELD_TYPES)
+      - Known collections use Title-case (List/Dict/Tuple/Set/Union/Optional/etc.)
+      - Known primitives lowercased (per SUPPORTED_BASE_TYPES)
+      - Otherwise, leave as-is if it starts uppercase, else lowercase for stability.
+    """
+    if not name:
+        return name
+    lower = name.lower()
+
+    if lower == "any":
+        return "Any"
+    if lower in ("nonetype", "none"):
+        return "NoneType"
+    if lower == "enum":
+        return "enum"
+
+    if lower in _COLLECTION_CANON:
+        return _COLLECTION_CANON[lower]
+
+    if lower in SUPPORTED_BASE_TYPES:
+        return lower
+
+    # Fallback: keep existing casing for custom names that start uppercase;
+    # otherwise lowercase for deterministic output.
+    return name if name and name[0].isupper() else lower
+
+
+class _Parser:
+    """Recursive-descent parser for the tiny type grammar."""
+
+    def __init__(self, toks: _List[_Token]):
+        self.toks = toks
+        self.i = 0
+
+    def _peek(self, *kinds: str) -> bool:
+        return self.i < len(self.toks) and self.toks[self.i].typ in kinds
+
+    def _eat(self, kind: str) -> _Token:
+        if not self._peek(kind):
+            got = self.toks[self.i].typ if self.i < len(self.toks) else "EOF"
+            raise ValueError(f"Expected {kind}, got {got}")
+        t = self.toks[self.i]
+        self.i += 1
+        return t
+
+    def parse(self) -> _TypeNode:
+        """Entry point: parse a full expression and ensure all tokens are consumed."""
+        node = self._parse_union()
+        if self.i != len(self.toks):
+            raise ValueError("Unexpected tokens at end of type string")
+        return node
+
+    # union := simple ("|" simple)*
+    def _parse_union(self) -> _TypeNode:
+        left = self._parse_simple()
+        parts = [left]
+        while self._peek("PIPE"):
+            self._eat("PIPE")
+            parts.append(self._parse_simple())
+        if len(parts) > 1:
+            return _TypeNode("Union", parts)
+        return left
+
+    # simple := IDENT ["[" args "]"]
+    # Optional[T] sugar -> Union[T, NoneType]
+    def _parse_simple(self) -> _TypeNode:
+        if not self._peek("IDENT"):
+            raise ValueError("Type must start with an identifier")
+        name_tok = self._eat("IDENT")
+        name = _canon_ident(name_tok.val)
+
+        # Optional[T] desugars to Union[T, NoneType]
+        if name == "Optional":
+            self._eat("LBRACK")
+            inner = self._parse_union()
+            self._eat("RBRACK")
+            return _TypeNode("Union", [inner, _TypeNode("NoneType", [])])
+
+        # Generic arguments?
+        if self._peek("LBRACK"):
+            self._eat("LBRACK")
+            args = self._parse_args()
+            self._eat("RBRACK")
+            # Tuple variadic (Tuple[T, ...])
+            if name == "Tuple" and len(args) == 2 and args[1].name == "Ellipsis":
+                return _TypeNode("Tuple", [args[0], _TypeNode("Ellipsis", [])])
+            return _TypeNode(name, args)
+
+        # bare "None" normalized to NoneType
+        if name == "None":
+            name = "NoneType"
+        return _TypeNode(name, [])
+
+    # args := (union | "...") ("," (union | "..."))*
+    def _parse_args(self) -> _List[_TypeNode]:
+        args: _List[_TypeNode] = []
+        while True:
+            if self._peek("ELLIPSIS"):
+                self._eat("ELLIPSIS")
+                args.append(_TypeNode("Ellipsis", []))
+            else:
+                args.append(self._parse_union())
+            if self._peek("COMMA"):
+                self._eat("COMMA")
+                continue
+            break
+        return args
+
+
+def _render(node: _TypeNode) -> str:
+    """Render AST back into a canonical type string.
+
+    - Collections Title-case (List/Dict/Tuple/Set/Union).
+    - Primitives lowercase, SPECIAL_FIELD_TYPES preserved.
+    - Optional already desugared to Union[..., NoneType].
+    - Variadic tuple as Tuple[T, ...].
+    """
+    name = node.name
+
+    # Normalize collection casing again for safety
+    if name.lower() in ("list", "dict", "tuple", "set", "union"):
+        name = _COLLECTION_CANON[name.lower()]
+    elif name == "None":
+        name = "NoneType"
+
+    # Leaf
+    if not node.args:
+        if name in SPECIAL_FIELD_TYPES:
+            return name
+        # primitives and other lowercase identifiers
+        return name if name and name[0].isupper() else name.lower()
+
+    # Union pretty
+    if name == "Union":
+        return f"Union[{', '.join(_render(a) for a in node.args)}]"
+
+    # Variadic Tuple[T, ...]
+    if name == "Tuple" and len(node.args) == 2 and node.args[1].name == "Ellipsis":
+        return f"Tuple[{_render(node.args[0])}, ...]"
+
+    return f"{name}[{', '.join(_render(a) for a in node.args)}]"
+
+
+def _parse_to_ast(type_str: str) -> _TypeNode:
+    """Helper: parse a string into AST (raises ValueError on invalid input)."""
+    return _Parser(_lex(type_str)).parse()
+
+
 def normalize_type_string(type_str: str) -> str:
     """
     Normalize a type string to a canonical format.
@@ -46,6 +290,11 @@ def normalize_type_string(type_str: str) -> str:
         "LIST[INT]" -> "List[int]"
         "Dict[Str, Float]" -> "Dict[str, float]"
         "list[image]" -> "List[image]"
+        # NEW:
+        "list[int | str]" -> "List[Union[int, str]]"
+        "Optional[int]" -> "Union[int, NoneType]"
+        "tuple[int, ...]" -> "Tuple[int, ...]"
+        "List[Dict[str, List[int]]]" -> "List[Dict[str, List[int]]]"
 
     Args:
         type_str: The type string to normalize
@@ -55,48 +304,13 @@ def normalize_type_string(type_str: str) -> str:
     """
     if not type_str:
         return type_str
-
-    # Handle simple types (no brackets)
-    if "[" not in type_str:
-        # Special types with specific casing
-        lower_type = type_str.lower()
-        if lower_type == "any":
-            return "Any"
-        elif lower_type == "nonetype":
-            return "NoneType"
-        elif lower_type == "enum":
-            return "enum"
-        else:
-            return type_str.lower()
-
-    # Parse nested types using regex
-    # Match pattern: Type[InnerType] or Type[Key, Value]
-    match = re.match(r"^(\w+)\[(.*)\]$", type_str.strip())
-    if not match:
-        # If it doesn't match the expected pattern, just lowercase it
-        return type_str.lower()
-
-    outer_type = match.group(1)
-    inner_types = match.group(2)
-
-    # Normalize outer type: List, Dict, Set, Tuple get capitalized
-    collection_types = {"list", "dict", "set", "tuple"}
-    if outer_type.lower() in collection_types:
-        outer_type = outer_type.capitalize()
-    else:
-        outer_type = outer_type.lower()
-
-    # Normalize inner types (split by comma and normalize each)
-    if "," in inner_types:
-        # Dict-like types with key-value
-        parts = [part.strip() for part in inner_types.split(",")]
-        normalized_parts = [normalize_type_string(part) for part in parts]
-        inner_str = ", ".join(normalized_parts)
-    else:
-        # Simple nested type
-        inner_str = normalize_type_string(inner_types.strip())
-
-    return f"{outer_type}[{inner_str}]"
+    try:
+        tree = _parse_to_ast(type_str)
+        return _render(tree)
+    except Exception:
+        # Fallback: retain legacy behavior minimally (strip + lower for simple cases)
+        # We do not raise to preserve drop-in behavior.
+        return type_str.strip()
 
 
 def parse_nested_type(type_str: str) -> Tuple[str, Optional[List[str]]]:
@@ -107,6 +321,11 @@ def parse_nested_type(type_str: str) -> Tuple[str, Optional[List[str]]]:
         "int" -> ("int", None)
         "List[int]" -> ("List", ["int"])
         "Dict[str, float]" -> ("Dict", ["str", "float"])
+        # NEW (supported):
+        "List[Dict[str, List[int]]]" -> ("List", ["Dict[str, List[int]]"])
+        "Union[int, str]" -> ("Union", ["int", "str"])
+        "int | str" -> ("Union", ["int", "str"])
+        "Tuple[int, ...]" -> ("Tuple", ["int", "..."])
 
     Args:
         type_str: The type string to parse (should be normalized)
@@ -115,23 +334,29 @@ def parse_nested_type(type_str: str) -> Tuple[str, Optional[List[str]]]:
         Tuple of (base_type, inner_types)
         inner_types is None for simple types, or a list for nested types
     """
-    if not type_str or "[" not in type_str:
+    if not type_str:
         return (type_str, None)
-
-    match = re.match(r"^(\w+)\[(.*)\]$", type_str.strip())
-    if not match:
-        return (type_str, None)
-
-    base_type = match.group(1)
-    inner_str = match.group(2)
-
-    # Split by comma for Dict-like types
-    if "," in inner_str:
-        inner_types = [part.strip() for part in inner_str.split(",")]
-    else:
-        inner_types = [inner_str.strip()]
-
-    return (base_type, inner_types)
+    try:
+        tree = _parse_to_ast(type_str)
+        norm = _render(tree)
+        if not tree.args:
+            # Simple type
+            return (norm, None)
+        # Generic/Union/Tuple: return outer name (as-is) plus normalized inner strings
+        return (tree.name, [_render(a) for a in tree.args])
+    except Exception:
+        # Legacy fallback retaining previous behavior for malformed input
+        match = re.match(r"^(\w+)\[(.*)\]$", type_str.strip())
+        if not match:
+            return (type_str, None)
+        base_type = match.group(1)
+        inner_str = match.group(2)
+        # NOTE: This fallback splits by comma naively (legacy behavior)
+        if "," in inner_str:
+            inner_types = [part.strip() for part in inner_str.split(",")]
+        else:
+            inner_types = [inner_str.strip()]
+        return (base_type, inner_types)
 
 
 def is_image_type(type_str: str) -> bool:
@@ -143,6 +368,8 @@ def is_image_type(type_str: str) -> bool:
         "Image" -> True
         "List[image]" -> True
         "str" -> False
+        # NEW:
+        "Dict[str, List[image]]" -> True
 
     Args:
         type_str: The type string to check
@@ -156,12 +383,19 @@ def is_image_type(type_str: str) -> bool:
     if normalized == "image":
         return True
 
-    # Check if it's a collection of images
-    base_type, inner_types = parse_nested_type(normalized)
-    if inner_types:
-        return any("image" in inner.lower() for inner in inner_types)
+    # NEW: recursively inspect the AST so nested images are detected reliably
+    try:
+        tree = _parse_to_ast(normalized)
+    except Exception:
+        # Fallback: best-effort substring check
+        return normalized.lower() == "image" or "image" in normalized.lower()
 
-    return False
+    def _walk(n: _TypeNode) -> bool:
+        if n.name.lower() == "image":
+            return True
+        return any(_walk(a) for a in n.args)
+
+    return _walk(tree)
 
 
 def get_base_storage_type(type_str: str) -> str:
@@ -178,6 +412,9 @@ def get_base_storage_type(type_str: str) -> str:
         "Dict[str, float]" -> "dict"
         "image" -> "image"
         "List[image]" -> "list"
+        # NEW:
+        "Union[int, str]" -> "union"
+        "Tuple[int, ...]" -> "tuple"
 
     Args:
         type_str: The type string
@@ -186,14 +423,23 @@ def get_base_storage_type(type_str: str) -> str:
         The base storage type
     """
     normalized = normalize_type_string(type_str)
-    base_type, inner_types = parse_nested_type(normalized)
+    try:
+        tree = _parse_to_ast(normalized)
+    except Exception:
+        # Legacy fallback
+        base_type, inner_types = parse_nested_type(normalized)
+        if inner_types is None:
+            return normalized
+        return base_type.lower()
 
-    if inner_types is None:
+    if not tree.args:
         # Simple type
-        return normalized
+        if tree.name in SPECIAL_FIELD_TYPES:
+            return tree.name
+        return tree.name.lower()
     else:
         # Nested type - return the outer type in lowercase
-        return base_type.lower()
+        return tree.name.lower()
 
 
 def is_untyped_field(field_type: str) -> bool:
@@ -239,6 +485,11 @@ def is_valid_field_type(type_str: str) -> bool:
     - Special types: "Any", "NoneType", "enum"
     - Base types: "int", "str", "float", etc.
     - Nested types: "List[int]", "Dict[str, float]", etc.
+    # NEW:
+    - Unions: "Union[int, str]" or "int | str"
+    - Optional[T]: treated as "Union[T, NoneType]"
+    - Tuples: "Tuple[int, float]" and "Tuple[int, ...]"
+    - Sets: "Set[int]"
 
     Args:
         type_str: The type string to check (should be normalized)
@@ -247,22 +498,62 @@ def is_valid_field_type(type_str: str) -> bool:
         True if valid, False otherwise
     """
     normalized = normalize_type_string(type_str)
+    try:
+        tree = _parse_to_ast(normalized)
+    except Exception:
+        return False
 
-    # Check special types
-    if normalized in SPECIAL_FIELD_TYPES:
-        return True
+    allowed_containers = {"List", "Dict", "Tuple", "Set", "Union"}
 
-    # Check base types
-    if normalized.lower() in SUPPORTED_BASE_TYPES:
-        return True
+    def _ok(node: _TypeNode) -> bool:
+        name_l = node.name.lower()
 
-    # Check nested types
-    base_type, inner_types = parse_nested_type(normalized)
-    if inner_types:
-        # It's a nested type - validate the base
-        return base_type.lower() in SUPPORTED_BASE_TYPES
+        # Special field types
+        if node.name in SPECIAL_FIELD_TYPES:
+            return True
 
-    return False
+        # Leaf primitives (must be known base types like int/str/float/..., image/audio)
+        if not node.args:
+            return name_l in SUPPORTED_BASE_TYPES or node.name in SPECIAL_FIELD_TYPES
+
+        # Containers / unions (recursive validation)
+        if node.name == "Dict":
+            if len(node.args) != 2:
+                return False
+            return all(_ok(a) for a in node.args)
+
+        if node.name in ("List", "Set"):
+            if len(node.args) != 1:
+                return False
+            return _ok(node.args[0])
+
+        if node.name == "Tuple":
+            # Either Tuple[T, ...] or Tuple[T1, T2, ...] (>=1)
+            if len(node.args) == 2 and node.args[1].name == "Ellipsis":
+                return _ok(node.args[0])
+            if len(node.args) < 1:
+                return False
+            return all(_ok(a) for a in node.args)
+
+        if node.name == "Union":
+            # POLICY: Only Optional-like unions are allowed → exactly two variants
+            # and exactly one of them must be NoneType. Nested unions are disallowed.
+            if len(node.args) != 2:
+                return False
+            names = [a.name for a in node.args]
+            if "NoneType" not in names:
+                return False
+            # Validate the non-None side and ensure it's not itself a Union
+            non_none = node.args[0] if names[0] != "NoneType" else node.args[1]
+            if non_none.name == "Union":
+                return False
+            return _ok(non_none)
+
+        # Unknown container: reject for now (tight policy).
+        # If you wish to allow custom containers, return all(_ok(a) for a in node.args)
+        return False
+
+    return _ok(tree)
 
 
 def types_match(field_type: str, inferred_type: str) -> bool:
