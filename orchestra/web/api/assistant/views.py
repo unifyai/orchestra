@@ -1173,7 +1173,7 @@ def update_assistant_config(
     email_to_update: Optional[str] = None
     phone_to_update: Optional[str] = None
     contact_info_updated = (
-        update.phone or update.email or update.user_whatsapp_number is not None
+        update.phone or update.user_phone or update.email or update.user_whatsapp_number
     )
 
     # Check assistant existence before any updates
