@@ -1373,8 +1373,6 @@ def update_assistant_config(
         session.commit()
 
         # If contact info was updated and infra creation was enabled, reawaken the assistant
-        print(f"CONTACT INFO UPDATED: {contact_info_updated}")
-        print(f"CREATE INFRA: {update.create_infra}")
         if contact_info_updated and update.create_infra:
             try:
                 reawaken_assistant(
