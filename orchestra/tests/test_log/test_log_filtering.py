@@ -2202,7 +2202,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
         json={"logs": [3, 4], "entries": {"_/description": None}, "overwrite": True},
         headers=HEADERS,
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     response = await client.get(
         f"/v0/logs?project={project_name}",
         params={"filter_expr": "_/description is None"},
