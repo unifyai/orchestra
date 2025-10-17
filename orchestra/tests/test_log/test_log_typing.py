@@ -91,8 +91,8 @@ async def test_create_log_type_mismatch(client: AsyncClient):
     )
     assert response.status_code == 200, response.json()
 
-    # Step 3: Try to log None value to strictly typed int field → should FAIL
-    # NoneType is now a strict type; int fields don't accept None
+    # Step 3: Try to log None value to strictly typed int field → should SUCCEED
+    # NoneType is a weak type; strict fields accept None values
     response = await client.post(
         "/v0/logs",
         json={
@@ -101,9 +101,7 @@ async def test_create_log_type_mismatch(client: AsyncClient):
         },
         headers=HEADERS,
     )
-    assert response.status_code == 400
-    assert "Type mismatch" in response.json()["detail"]
-    assert "NoneType" in response.json()["detail"]
+    assert response.status_code == 200, response.json()
 
     # Step 4: Verify field types are strict
     field_types_response = await client.get(
@@ -173,8 +171,8 @@ async def test_update_logs_strongly_typed(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_nonetype_is_strict_type(client: AsyncClient):
-    """Test that NoneType is a strict type that only accepts None values."""
+async def test_nonetype_is_weak_type(client: AsyncClient):
+    """Test that NoneType is a weak type allowed with any strong type and also standalone."""
     project_name = "test_nonetype"
     _ = await _create_project(client, project_name)
 
@@ -206,7 +204,7 @@ async def test_nonetype_is_strict_type(client: AsyncClient):
     )
     assert response.status_code == 200, response.json()
 
-    # Test 2: NoneType field rejects non-None values → should fail
+    # Test 2: NoneType field accepts non-None values → should succeed (weak type)
     response = await client.post(
         "/v0/logs",
         json={
@@ -217,10 +215,9 @@ async def test_nonetype_is_strict_type(client: AsyncClient):
         },
         headers=HEADERS,
     )
-    assert response.status_code == 400
-    assert "Type mismatch" in response.json()["detail"]
+    assert response.status_code == 200, response.json()
 
-    # Test 3: int field rejects None → should fail
+    # Test 3: int field accepts None → should succeed (None allowed for strict types)
     response = await client.post(
         "/v0/logs",
         json={
@@ -231,9 +228,7 @@ async def test_nonetype_is_strict_type(client: AsyncClient):
         },
         headers=HEADERS,
     )
-    assert response.status_code == 400
-    assert "Type mismatch" in response.json()["detail"]
-    assert "NoneType" in response.json()["detail"]
+    assert response.status_code == 200, response.json()
 
     # Test 4: int field accepts int → should succeed
     response = await client.post(
