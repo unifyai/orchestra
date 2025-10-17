@@ -118,6 +118,12 @@ async def test_create_log_w_image(client: AsyncClient):
     assert fields2["img_url"]["data_type"] == "image"
     assert fields2["img_raw"]["field_type"] == "entry"
     assert fields2["img_url"]["field_type"] == "entry"
+    assert fields2["img_raw"]["mutable"] == True
+    assert fields2["img_url"]["mutable"] == True
+    assert fields2["img_raw"]["artifacts"] == ""
+    assert fields2["img_url"]["artifacts"] == ""
+    assert fields2["img_raw"]["created_at"] is not None
+    assert fields2["img_url"]["created_at"] is not None
 
 
 @pytest.mark.anyio
