@@ -54,7 +54,11 @@ async def test_create_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
+@pytest.mark.xdist_group(name="gcs_serial")
 async def test_create_log_w_image(client: AsyncClient):
+    """
+    Note: Marked with xdist_group to run serially due to GCS eventual consistency issues.
+    """
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
 

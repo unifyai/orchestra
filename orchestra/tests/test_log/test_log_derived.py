@@ -1794,10 +1794,13 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
 
 
 @pytest.mark.anyio
+@pytest.mark.xdist_group(name="gcs_serial")
 async def test_visual_semantic_cache_e2e(client: AsyncClient):
     """
     Tests the Visual Semantic Cache by filtering for a subset of images
     and then sorting them by visual similarity to find the best match.
+
+    Note: Marked with xdist_group to run serially due to GCS eventual consistency issues.
     """
     project_name = "visual_cache_sorting_project"
     context_name = "visual_cache_sorting_context"
@@ -1888,9 +1891,12 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient):
 
 
 @pytest.mark.anyio
+@pytest.mark.xdist_group(name="gcs_serial")
 async def test_phash_distance_with_raw_image_literal(client: AsyncClient):
     """
     Tests that phash_distance can accept a raw base64 image string as an argument.
+
+    Note: Marked with xdist_group to run serially due to GCS eventual consistency issues.
     """
     project_name = "visual_cache_raw_image_project"
     context_name = "visual_cache_raw_image_context"

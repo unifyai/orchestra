@@ -115,11 +115,13 @@ env = [
     "ORCHESTRA_DB_BASE=orchestra_test",
     "ORCHESTRA_SENTRY_DSN=",
 ]
+addopts = "--dist=loadgroup"
 addopts = "--cov --cov-report=lcov:lcov.info --cov-report=term"
 asyncio_default_fixture_loop_scope = "function"
 markers = [
     "manual: marks tests as manual",
-    "performance: long-running performance tests"
+    "performance: long-running performance tests",
+    "serial: marks tests that must run serially (not in parallel)"
 ]
 
 [fastapi-template.options]
