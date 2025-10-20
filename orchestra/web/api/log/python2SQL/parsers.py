@@ -141,9 +141,7 @@ def _tokenize(s):
             value = (
                 None
                 if value == "None"
-                else float(value)
-                if "." in value
-                else int(value)
+                else float(value) if "." in value else int(value)
             )
             tokens.append(("NUMBER", value))
         elif kind == "STRING":
@@ -675,13 +673,22 @@ def _transform_ast(node: ast.AST, preserve_string_literals: bool = False) -> dic
             rhs_literal = _as_type_literal(rhs_arg)
             return {"lhs": type_expr, "operand": "==", "rhs": rhs_literal}
 
-        # Handle embed function
+        # Handle embed function (multi-arg: text, optional model, optional dimensions)
         elif func_name == "embed":
             return {
                 "operand": "embed",
                 "rhs": [
                     _transform_ast(arg, preserve_string_literals) for arg in node.args
                 ],
+            }
+        # Handle embed_image function (single-arg: base64 image)
+        elif func_name == "embed_image":
+            # Single argument function - rhs should be the direct argument, not a list
+            if len(node.args) != 1:
+                raise ValueError("embed_image() requires exactly 1 argument")
+            return {
+                "operand": "embed_image",
+                "rhs": _transform_ast(node.args[0], preserve_string_literals),
             }
         # Handle BASE function
         elif func_name == "BASE":
