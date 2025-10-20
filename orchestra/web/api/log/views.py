@@ -52,6 +52,7 @@ from orchestra.web.api.log.schema import (
     DeleteLogEntryRequest,
     GetLogsMetricRequest,
     JoinLogsRequest,
+    QueryLogsPostBody,
     RenameFieldRequest,
     UpdateDerivedEntriesConfig,
     UpdateLogRequest,
@@ -708,11 +709,24 @@ def create_from_logs(
 
                             # Create a derived entry for this log ID
                             if isinstance(value, np.ndarray):
+                                # Determine if this is an image embedding or text embedding
+                                # by checking if the equation contains embed_image()
+                                is_image_embedding = "embed_image(" in body.equation
+
+                                # Use appropriate model name based on embedding type
+                                if is_image_embedding:
+                                    from orchestra.web.api.log.python2SQL.helpers import (
+                                        DEFAULT_IMAGE_EMBEDDING_MODEL,
+                                    )
+                                    model_name = DEFAULT_IMAGE_EMBEDDING_MODEL
+                                else:
+                                    model_name = DEFAULT_EMBEDDING_MODEL
+
                                 # add the embedding to the vector index table
                                 embeddings = Embedding(
                                     ref_id=log_event_id,
                                     key=body.key,
-                                    model=DEFAULT_EMBEDDING_MODEL,
+                                    model=model_name,
                                     vector=value,
                                 )
                                 session.add(embeddings)
@@ -2700,6 +2714,202 @@ def get_logs(
     # Stage 5: Return the Final Result.
     # -----------------------------------------------------------
     return final_result
+
+
+@router.post(
+    "/logs/query",
+    responses={
+        200: {
+            "description": "Successful Response",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "params": {},
+                        "logs": [
+                            {
+                                "id": "0",
+                                "ts": "2024-10-30 12:20:03",
+                                "entries": {
+                                    "key1": "a",
+                                    "key2": 1.0,
+                                },
+                                "derived_entries": {},
+                                "params": {},
+                            },
+                        ],
+                        "count": 1,
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Project Not Found",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Project <project> not found.",
+                    },
+                },
+            },
+        },
+    },
+)
+def query_logs_post(
+    request_fastapi: Request,
+    body: QueryLogsPostBody = Body(...),
+    session=Depends(get_db_session),
+):
+    """
+    Query logs via POST request.
+
+    This endpoint accepts the exact same parameters as GET /logs, but via request body
+    instead of query parameters. This is useful for:
+    - Large filter expressions that would exceed URL length limits
+    - Filter expressions containing base64-encoded images (e.g., embed_image('data:image/png;base64,...'))
+    - Complex sorting expressions
+
+    Example with image embedding:
+    ```json
+    {
+        "project": "my-project",
+        "filter_expr": "cosine(image_embedding, embed_image('data:image/png;base64,iVBORw0KG...')) < 0.3",
+        "limit": 10
+    }
+    ```
+    """
+    # Instantiate DAOs with shared session
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    field_type_dao = FieldTypeDAO(session)
+
+    # Validate project
+    try:
+        project_id = project_dao.get_by_user_and_name(
+            name=body.project,
+            user_id=request_fastapi.state.user_id,
+        ).id
+    except Exception as e:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {body.project} not found.",
+        )
+
+    # Format logs into flat structure.
+    context_name = "" if not body.context else body.context
+    context_obj = context_dao.filter(name=context_name, project_id=project_id)
+    if context_obj:
+        context_id = context_obj[0][0].id
+    else:
+        context_id = None
+
+    # Handle non-grouped case (same as GET /logs)
+    if not body.group_by:
+        all_rows, context_len, total_count = _get_logs_query(
+            request_fastapi,
+            project=body.project,
+            column_context=body.column_context,
+            context=body.context,
+            filter_expr=body.filter_expr,
+            sorting=body.sorting,
+            from_ids=body.from_ids,
+            exclude_ids=body.exclude_ids,
+            from_fields=body.from_fields,
+            exclude_fields=body.exclude_fields,
+            limit=body.limit,
+            offset=body.offset,
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
+            session=session,
+            randomize=body.randomize,
+            seed=body.seed,
+        )
+
+        # Get field order
+        field_order_map = field_type_dao.get_ordered_field_names(
+            project_id=project_id,
+            context_id=context_id,
+        )
+
+        # Format logs
+        logs_out, params_out = _format_flat_logs(
+            all_rows,
+            context_len,
+            body.value_limit,
+            field_order_map,
+        )
+
+        # Apply group threshold if needed
+        if body.group_threshold:
+            logs_out = apply_group_threshold(logs_out, body.group_threshold)
+
+        response = {
+            "params": params_out,
+            "logs": logs_out,
+            "count": total_count,
+        }
+
+        # Return IDs only if requested
+        if body.return_ids_only:
+            response["logs"] = [log["id"] for log in logs_out]
+
+        return response
+    else:
+        # Handle grouped case - similar to GET /logs grouped logic
+        all_rows, context_len, total_count = _get_all_filtered_log_event_ids(
+            request_fastapi=request_fastapi,
+            project=body.project,
+            column_context=body.column_context,
+            context=body.context,
+            filter_expr=body.filter_expr,
+            sorting=body.sorting,
+            from_ids=body.from_ids,
+            exclude_ids=body.exclude_ids,
+            from_fields=body.from_fields,
+            exclude_fields=body.exclude_fields,
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
+            session=session,
+            randomize=body.randomize,
+            seed=body.seed,
+        )
+
+        # Build grouped structure
+        grouped_result = _build_grouped_data(
+            group_by=body.group_by,
+            all_log_event_ids=all_rows,
+            request_fastapi=request_fastapi,
+            project=body.project,
+            column_context=body.column_context,
+            context=body.context,
+            filter_expr=body.filter_expr,
+            sorting=body.sorting,
+            group_sorting=body.group_sorting,
+            from_ids=body.from_ids,
+            exclude_ids=body.exclude_ids,
+            from_fields=body.from_fields,
+            exclude_fields=body.exclude_fields,
+            limit=body.limit,
+            offset=body.offset,
+            group_limit=body.group_limit,
+            group_offset=body.group_offset,
+            group_depth=body.group_depth,
+            nested_groups=body.nested_groups,
+            groups_only=body.groups_only,
+            return_timestamps=body.return_timestamps,
+            return_ids_only=body.return_ids_only,
+            value_limit=body.value_limit,
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
+            session=session,
+            project_id=project_id,
+            context_id=context_id,
+        )
+
+        return grouped_result
 
 
 @router.get(
