@@ -1,13 +1,19 @@
+import base64
 import copy
 import functools
+import io
 import json
+import logging
 import math
 import os
 import re
+import threading
 from typing import Optional, Union
 
 import unify
+from dotenv import load_dotenv
 from openai import OpenAI
+from PIL import Image
 from sqlalchemy import (
     TIMESTAMP,
     BindParameter,
@@ -29,6 +35,8 @@ from sqlalchemy import (
     or_,
     select,
 )
+
+load_dotenv()
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
@@ -61,7 +69,10 @@ __all__ = [
     "_ensure_vectors_exist",
     "_get_embedding",
     "_get_embeddings_batch",
+    "_get_image_embedding_batch",
+    "_get_image_embedding_from_url",
     "DEFAULT_EMBEDDING_MODEL",
+    "DEFAULT_IMAGE_EMBEDDING_MODEL",
 ]
 
 # Initialize OpenAI client if API key is available
@@ -72,9 +83,63 @@ except Exception as e:
     raise ValueError(f"Failed to initialize OpenAI client: {str(e)}")
 
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
+DEFAULT_IMAGE_EMBEDDING_MODEL = "multimodalembedding@001"
 MAX_EMBEDDING_DIMS = 1536
 MAX_TOKENS_PER_REQUEST = 2970000
 MAX_TOKENS_PER_INPUT = 8000
+
+# Vertex AI configuration
+VERTEXAI_PROJECT = os.getenv("ORCHESTRA_VERTEXAI_PROJECT")
+VERTEXAI_LOCATION = os.getenv("ORCHESTRA_VERTEXAI_LOCATION", "us-central1")
+
+# Load image embedding model globally (lazy loaded on first use)
+_image_embedding_model = None
+_vertexai_initialized = False
+_image_embedding_lock = threading.Lock()
+
+
+def _get_image_embedding_model():
+    """
+    Lazy load the Vertex AI multimodal embedding model.
+    Uses Google Cloud's Vertex AI which requires GCP credentials.
+    Returns the loaded model.
+
+    Thread-safe: Uses a lock to prevent race conditions during initialization.
+    """
+    global _image_embedding_model, _vertexai_initialized
+
+    # Double-checked locking pattern for thread safety
+    if _image_embedding_model is None:
+        with _image_embedding_lock:
+            # Check again inside the lock in case another thread initialized it
+            if _image_embedding_model is None:
+                try:
+                    import vertexai
+                    from vertexai.vision_models import MultiModalEmbeddingModel
+
+                    # Initialize Vertex AI once
+                    if not _vertexai_initialized:
+                        if not VERTEXAI_PROJECT:
+                            raise RuntimeError(
+                                "ORCHESTRA_VERTEXAI_PROJECT environment variable must be set to use image embeddings",
+                            )
+
+                        vertexai.init(
+                            project=VERTEXAI_PROJECT,
+                            location=VERTEXAI_LOCATION,
+                        )
+                        _vertexai_initialized = True
+
+                    # Load the multimodal embedding model
+                    _image_embedding_model = MultiModalEmbeddingModel.from_pretrained(
+                        DEFAULT_IMAGE_EMBEDDING_MODEL,
+                    )
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Failed to load Vertex AI multimodal embedding model '{DEFAULT_IMAGE_EMBEDDING_MODEL}'. "
+                        f"Ensure vertexai library is installed and GCP credentials are configured. Error: {e}",
+                    )
+    return _image_embedding_model
 
 
 def count_tokens_per_utf_byte(document: str) -> int:
@@ -203,6 +268,122 @@ def _get_embeddings_batch(
     for batch in batches:
         out.extend(_embed_or_split(batch))
     return out
+
+
+def _get_image_embedding_from_url(
+    image_url: str,
+    bucket_service=None,
+) -> list[float] | None:
+    """
+    Get embedding vector for a single image from a GCS URL or base64 string.
+
+    Args:
+        image_url: Either a GCS URL (https://storage.googleapis.com/...) or
+                   a base64 encoded image string (with or without data URI prefix)
+        bucket_service: Optional BucketService instance for fetching GCS images.
+                       If not provided, a new instance will be created (not recommended for batch operations).
+
+    Returns:
+        Embedding vector as a list of floats, or None if embedding fails
+    """
+    try:
+        from vertexai.vision_models import Image as VertexImage
+
+        # Get the Vertex AI model (lazy loaded, thread-safe)
+        model = _get_image_embedding_model()
+
+        # Check if this is a GCS URL or base64 string
+        if image_url and isinstance(image_url, str):
+            if image_url.startswith("http://") or image_url.startswith("https://"):
+                # This is a GCS URL - download the image first
+                if bucket_service is None:
+                    from orchestra.services.bucket_service import BucketService
+
+                    bucket_service = BucketService()
+
+                # Extract filename from URL (last part after /)
+                filename = image_url.split("/")[-1]
+                base64_image = bucket_service.get_media(filename)
+
+                if not base64_image:
+                    logging.warning(f"Failed to fetch image from GCS: {filename}")
+                    return None
+
+                # Decode the base64 image
+                image_data = base64.b64decode(base64_image)
+            else:
+                # This is a base64 string - use directly
+                b64_string = image_url
+
+                # Remove data URI prefix if present
+                if "," in b64_string and b64_string.startswith("data:"):
+                    b64_string = b64_string.split(",", 1)[1]
+
+                # Decode base64 string
+                image_data = base64.b64decode(b64_string)
+
+            # Create a PIL Image and ensure RGB format
+            pil_image = Image.open(io.BytesIO(image_data)).convert("RGB")
+
+            # Save to temporary bytes buffer (Vertex AI Image needs bytes)
+            img_byte_arr = io.BytesIO()
+            pil_image.save(img_byte_arr, format="PNG")
+            img_byte_arr.seek(0)
+
+            # Load image using Vertex AI's Image wrapper
+            vertex_image = VertexImage(img_byte_arr.read())
+
+            # Get embeddings from Vertex AI
+            embeddings = model.get_embeddings(
+                image=vertex_image,
+                # dimension=1408  # Optional: specify dimension (default is 1408)
+            )
+
+            # Extract the image embedding vector and convert to list of floats
+            return [float(val) for val in embeddings.image_embedding]
+
+        return None
+
+    except Exception as e:
+        logging.error(f"Failed to compute image embedding for {image_url}: {e}")
+        return None
+
+
+def _get_image_embedding_batch(image_urls: list[str]) -> list[list[float]]:
+    """
+    Get embedding vectors for a batch of images (GCS URLs or base64 strings) using
+    Vertex AI's multimodal embedding model with parallel processing.
+
+    Args:
+        image_urls: List of image URLs (GCS) or base64 encoded image strings
+
+    Returns:
+        List of embedding vectors (each a list of floats)
+
+    Raises:
+        RuntimeError: If the image embedding model cannot be loaded
+        ValueError: If image decoding fails
+    """
+    if not image_urls:
+        return []
+
+    # Use parallel processing to compute embeddings for all images
+    def compute_single_embedding(image_url):
+        """Helper function to compute embedding for a single image."""
+        return _get_image_embedding_from_url(image_url)
+
+    # Format arguments for unify.map
+    formatted_args = [((url,), {}) for url in image_urls]
+
+    # Use parallel processing with threading
+    embeddings = unify.map(
+        compute_single_embedding,
+        formatted_args,
+        mode="threading",
+        name="compute_image_embeddings",
+    )
+
+    return embeddings
 
 
 def _extract_placeholders(equation: str) -> list:
