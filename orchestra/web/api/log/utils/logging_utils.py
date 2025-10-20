@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import Depends, HTTPException, Request
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
     Integer,
@@ -327,7 +328,7 @@ def _build_sort_clauses(
                 and isinstance(expr_dict.get("lhs"), dict)
                 and expr_dict["lhs"].get("type") == "identifier"
                 and isinstance(expr_dict.get("rhs"), dict)
-                and expr_dict["rhs"].get("operand") == "embed"
+                and expr_dict["rhs"].get("operand") in ("embed", "embed_image")  # Support both text and image embeddings
             ):
                 is_vector_sort = True
                 vector_sort_details = {
@@ -903,13 +904,40 @@ def _get_logs_query(
             )
             rhs_vec, _ = _select_value(rhs_sql, session, is_vector=True)
 
-            # 3) Choose the correct distance operator
+            # 3) Detect the model and dimension for this key
+            # Query to get the model used for this embedding key
+            embedding_model_query = session.execute(
+                select(Embedding.model)
+                .where(Embedding.key == lhs_key)
+                .limit(1),
+            ).scalar()
+
+            # Map model to dimension for proper casting
+            model_to_dim = {
+                "text-embedding-3-small": 1536,
+                "multimodalembedding@001": 1408,
+            }
+            embedding_dim = model_to_dim.get(embedding_model_query, None)
+
+            # 4) Choose the correct distance operator and cast vector
             op = {"cosine": "<=>", "l2": "<->", "ip": "<#>"}[operand]
-            dist = Embedding.vector.op(op)(rhs_vec)
+
+            # Cast the vector to the correct dimension to use the HNSW index
+            # This is critical for pgvector to use the model-specific partial indexes
+            if embedding_dim and embedding_model_query:
+                # Use casted vector to match the expression index
+                casted_vector = func.cast(Embedding.vector, Vector(embedding_dim))
+                dist = casted_vector.op(op)(rhs_vec)
+                # Add model filter for the partial index
+                model_filter = Embedding.model == embedding_model_query
+            else:
+                # Fallback: no cast (will be slower without index)
+                dist = Embedding.vector.op(op)(rhs_vec)
+                model_filter = literal(True)
 
             asc_sort = mode == "ascending"
 
-            # 4) ANN top-K on Embedding first (pushdown LIMIT)
+            # 5) ANN top-K on Embedding first (pushdown LIMIT)
             top_k = (offset or 0) + (limit or 100)
             ann_topk = (
                 select(
@@ -918,6 +946,7 @@ def _get_logs_query(
                 )
                 .where(
                     Embedding.key == lhs_key,
+                    model_filter,  # Filter by model for partial index
                     Embedding.vector.isnot(None),
                     Embedding.ref_id.in_(select(event_ids.c.id)),
                 )
