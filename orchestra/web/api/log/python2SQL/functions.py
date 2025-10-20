@@ -44,6 +44,7 @@ from .helpers import (
     _embeddable,
     _ensure_vectors_exist,
     _get_embedding,
+    _get_image_embedding_from_url,
     _get_parent_idx,
     _select_value,
     cast_expr,
@@ -1029,6 +1030,130 @@ def _handle_functions(
 
             return vector_expr
 
+    elif operand == "embed_image":
+        # embed_image(image_url_or_base64) - Converts image (from GCS URL or base64) to vector embedding
+        # Note: rhs_expr is already the built SQL query (single expression, not a list)
+        image_expr = rhs_expr
+
+        # Case 1: Handle Subquery (field references like {log:screenshot})
+        if isinstance(image_expr, Subquery):
+            # 1. Execute the subquery to get log_event_ids and their corresponding image URLs/base64
+            rows = session.execute(
+                select(image_expr.c.log_event_id, image_expr.c.value),
+            ).fetchall()
+            if not rows:
+                return None  # No images to process
+
+            # 2. Create BucketService once before parallel processing to avoid repeated instantiation
+            bucket_service = BucketService()
+
+            # 3. Compute embeddings for each image using parallel processing (like phash)
+            def compute_image_embedding(log_event_id, image_url, bucket_svc):
+                """Helper function to compute embedding for a single image."""
+                embedding_vector = None
+                error_msg = None
+                if image_url and isinstance(image_url, str):
+                    embedding_vector = _get_image_embedding_from_url(
+                        image_url,
+                        bucket_svc,
+                    )
+                    if embedding_vector is None:
+                        error_msg = f"Failed to compute embedding for log_event_id={log_event_id}, image_url={image_url}"
+                return {
+                    "log_event_id": log_event_id,
+                    "value": embedding_vector,
+                    "error": error_msg,
+                }
+
+            # Use parallel processing to compute embeddings for all images
+            formatted_args = [
+                ((log_event_id, image_url, bucket_service), {})
+                for log_event_id, image_url in rows
+            ]
+            results = unify.map(
+                compute_image_embedding,
+                formatted_args,
+                mode="threading",
+                name="compute_image_embeddings",
+            )
+
+            # 4. Log any failures and track success/failure counts
+            if not results:
+                return None
+
+            failed_count = 0
+            success_count = 0
+            for r in results:
+                if r["value"] is None:
+                    failed_count += 1
+                    if r.get("error"):
+                        import logging
+
+                        logging.warning(r["error"])
+                else:
+                    success_count += 1
+
+            if failed_count > 0:
+                import logging
+
+                logging.warning(
+                    f"embed_image: {failed_count}/{len(results)} images failed to generate embeddings. "
+                    f"Successfully processed {success_count}/{len(results)} images.",
+                )
+
+            # 5. Construct a new subquery from the computed values
+            selects = [
+                select(
+                    literal(r["log_event_id"]).label("log_event_id"),
+                    literal(
+                        r["value"],
+                        type_=Vector(len(r["value"])) if r["value"] else None,
+                    ).label("value"),
+                    literal("vector").label("inferred_type"),
+                )
+                for r in results
+                if r["value"] is not None  # Only include successful embeddings
+            ]
+
+            if not selects:
+                import logging
+
+                logging.error(
+                    f"embed_image: All {len(results)} image embeddings failed!",
+                )
+                return None  # All embeddings failed
+
+            unioned_query = union_all(*selects)
+            return alias_utils.subquery_with_unique_alias(
+                unioned_query.select(),
+                prefix="embed_image_result",
+            )
+
+        # Case 2: Handle BindParameter (literal base64 strings or GCS URLs)
+        elif isinstance(image_expr, BindParameter):
+            image_string = image_expr.value
+            if (
+                not isinstance(image_string, dict)
+                and image_string.get("type") != "image"
+            ):
+                raise ValueError("embed_image() requires a raw base64 image.")
+
+            # Get the embedding vector (handles both GCS URLs and base64)
+            try:
+                embedding = _get_image_embedding_from_url(image_string["value"])
+                if embedding is None:
+                    raise RuntimeError("Failed to generate image embedding")
+            except Exception as e:
+                raise RuntimeError(f"Failed to generate image embedding: {e}")
+
+            # Create a vector literal using pgvector
+            vector_expr = literal(embedding, type_=Vector(len(embedding)))
+            return vector_expr
+        else:
+            raise ValueError(
+                "embed_image() expects a GCS URL, base64 string, or a subquery returning image URLs/base64.",
+            )
+
     elif operand == "phash":
         # phash(image_url) - Converts image URL to a perceptual hash integer
         if isinstance(rhs_expr, Subquery):
@@ -1039,15 +1164,18 @@ def _handle_functions(
             if not rows:
                 return None  # No images to process
 
-            # 2. Compute pHash for each image URL using parallel processing
-            def compute_image_hash(log_event_id, image_url):
+            # 2. Create BucketService once before parallel processing to avoid repeated instantiation
+            bucket_service = BucketService()
+
+            # 3. Compute pHash for each image URL using parallel processing
+            def compute_image_hash(log_event_id, image_url, bucket_svc):
                 """Helper function to compute perceptual hash for a single image."""
-                bucket_service = BucketService()
                 phash_hex = None
+                error_msg = None
                 if image_url and isinstance(image_url, str):
                     try:
                         # The get_media function returns a base64 string, so we need to decode it
-                        base64_image = bucket_service.get_media(
+                        base64_image = bucket_svc.get_media(
                             image_url.split("/")[-1],
                         )
                         if base64_image:
@@ -1056,14 +1184,20 @@ def _handle_functions(
                             hash_value = imagehash.phash(image)
                             # Compute the perceptual hash and convert to an integer
                             phash_hex = format(int(str(hash_value), 16), "016x")
-                    except Exception:
-                        # If any error occurs, the hash remains None
-                        pass
-                return {"log_event_id": log_event_id, "value": phash_hex}
+                        else:
+                            error_msg = f"Failed to fetch image from GCS for log_event_id={log_event_id}, image_url={image_url}"
+                    except Exception as e:
+                        error_msg = f"Failed to compute phash for log_event_id={log_event_id}, image_url={image_url}: {e}"
+                return {
+                    "log_event_id": log_event_id,
+                    "value": phash_hex,
+                    "error": error_msg,
+                }
 
             # Use parallel processing to compute hashes for all images
             formatted_args = [
-                ((log_event_id, image_url), {}) for log_event_id, image_url in rows
+                ((log_event_id, image_url, bucket_service), {})
+                for log_event_id, image_url in rows
             ]
             results = unify.map(
                 compute_image_hash,
@@ -1072,10 +1206,31 @@ def _handle_functions(
                 name="compute_image_hashes",
             )
 
-            # 3. Construct a new subquery from the computed values
+            # 4. Log any failures and track success/failure counts
             if not results:
                 return None
 
+            failed_count = 0
+            success_count = 0
+            for r in results:
+                if r["value"] is None:
+                    failed_count += 1
+                    if r.get("error"):
+                        import logging
+
+                        logging.warning(r["error"])
+                else:
+                    success_count += 1
+
+            if failed_count > 0:
+                import logging
+
+                logging.warning(
+                    f"phash: {failed_count}/{len(results)} images failed to generate hashes. "
+                    f"Successfully processed {success_count}/{len(results)} images.",
+                )
+
+            # 5. Construct a new subquery from the computed values
             selects = [
                 select(
                     literal(r["log_event_id"]).label("log_event_id"),
@@ -1083,7 +1238,14 @@ def _handle_functions(
                     literal("int").label("inferred_type"),
                 )
                 for r in results
+                if r["value"] is not None  # Only include successful hashes
             ]
+
+            if not selects:
+                import logging
+
+                logging.error(f"phash: All {len(results)} image hashes failed!")
+                return None  # All hashes failed
 
             unioned_query = union_all(*selects)
             return alias_utils.subquery_with_unique_alias(
