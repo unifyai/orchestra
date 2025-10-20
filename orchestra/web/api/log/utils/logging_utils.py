@@ -328,7 +328,8 @@ def _build_sort_clauses(
                 and isinstance(expr_dict.get("lhs"), dict)
                 and expr_dict["lhs"].get("type") == "identifier"
                 and isinstance(expr_dict.get("rhs"), dict)
-                and expr_dict["rhs"].get("operand") in ("embed", "embed_image")  # Support both text and image embeddings
+                and expr_dict["rhs"].get("operand")
+                in ("embed", "embed_image")  # Support both text and image embeddings
             ):
                 is_vector_sort = True
                 vector_sort_details = {
@@ -907,9 +908,7 @@ def _get_logs_query(
             # 3) Detect the model and dimension for this key
             # Query to get the model used for this embedding key
             embedding_model_query = session.execute(
-                select(Embedding.model)
-                .where(Embedding.key == lhs_key)
-                .limit(1),
+                select(Embedding.model).where(Embedding.key == lhs_key).limit(1),
             ).scalar()
 
             # Map model to dimension for proper casting

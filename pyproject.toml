@@ -115,8 +115,7 @@ env = [
     "ORCHESTRA_DB_BASE=orchestra_test",
     "ORCHESTRA_SENTRY_DSN=",
 ]
-addopts = "--dist=loadgroup"
-addopts = "--cov --cov-report=lcov:lcov.info --cov-report=term"
+addopts = "--dist=loadgroup --cov --cov-report=lcov:lcov.info --cov-report=term"
 asyncio_default_fixture_loop_scope = "function"
 markers = [
     "manual: marks tests as manual",
