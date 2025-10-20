@@ -1404,6 +1404,162 @@ async def test_derived_embedding_and_filtering(client: AsyncClient):
 
 
 @pytest.mark.anyio
+@pytest.mark.xdist_group(name="gcs_serial")
+async def test_derived_image_embedding_and_filtering(client: AsyncClient):
+    """
+    Test image embedding functionality:
+    1. Create base logs with different images (cat, dog, car)
+    2. Create derived column with embed_image() to generate embeddings
+    3. Query using POST /logs/query with a query image
+    4. Verify similarity-based filtering works correctly
+
+    Note: Marked with xdist_group to run serially due to GCS eventual consistency issues.
+    """
+    project = "derived_image_embed_demo"
+    context = "image_test"
+    await _create_project(client, project)
+
+    # 1) Create base logs with different images
+    # Create log with cat image
+    response_cat = await _create_image_log(
+        client,
+        project,
+        context,
+        "cat.png",
+        additional_entries={"label": "cat"},
+        image_col_name="screenshot",
+    )
+    assert response_cat.status_code == 200, response_cat.text
+    cat_log_id = response_cat.json()["log_event_ids"][0]
+
+    # Create log with dog image
+    response_dog = await _create_image_log(
+        client,
+        project,
+        context,
+        "dog.png",
+        additional_entries={"label": "dog"},
+        image_col_name="screenshot",
+    )
+    assert response_dog.status_code == 200, response_dog.text
+    dog_log_id = response_dog.json()["log_event_ids"][0]
+
+    # Create log with car image
+    response_car = await _create_image_log(
+        client,
+        project,
+        context,
+        "car.png",
+        additional_entries={"label": "car"},
+        image_col_name="screenshot",
+    )
+    assert response_car.status_code == 200, response_car.text
+    car_log_id = response_car.json()["log_event_ids"][0]
+
+    log_ids = [cat_log_id, dog_log_id, car_log_id]
+
+    # 2) Create derived column with embed_image() to generate embeddings
+    key = "screenshot_embedding"
+    equation = "embed_image({log:screenshot})"
+    referenced_logs = {"log": log_ids}
+
+    response = await _create_derived_entry(
+        client,
+        project,
+        key,
+        equation,
+        referenced_logs,
+        context=context,
+    )
+    assert response.status_code == 200, response.text
+    response_data = response.json()
+    assert "Created" in response_data["info"]
+    assert "3 derived logs" in response_data["info"]
+
+    # 3) Verify the embeddings were created by fetching logs
+    fetch_response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project,
+            "context": context,
+            "from_fields": "screenshot_embedding",
+        },
+        headers=HEADERS,
+    )
+    assert fetch_response.status_code == 200
+    logs = fetch_response.json()["logs"]
+    assert len(logs) == 3, "Should have 3 logs with embeddings"
+
+    # Verify that embeddings exist (they should be stored in the Embedding table)
+    # Each log should have the derived entry
+    for log in logs:
+        assert "screenshot_embedding" in log["derived_entries"]
+
+    # 4) Test POST /logs/query with image similarity
+    # Read the cat image again to use as query
+    import os
+
+    full_img_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
+        "sample_datasets",
+        "cat_2.png",  # Use a different cat image for similarity test
+    )
+
+    import cv2
+
+    success, buffer = cv2.imencode(".png", cv2.imread(full_img_path))
+    assert success, f"Failed to encode query image at {full_img_path}"
+    query_img_b64 = base64.b64encode(buffer).decode("utf-8")
+
+    # Construct filter and sorting expressions with embed_image()
+    # The same expression is used for both filtering and sorting
+    similarity_expr = f"cosine(screenshot_embedding, embed_image('data:image/png;base64,{query_img_b64}'))"
+    filter_expr = f"{similarity_expr} < 0.35"
+
+    # Sort by cosine distance (ascending = most similar first)
+    sorting = json.dumps({similarity_expr: "ascending"})
+
+    # Query using POST /logs/query (simplified - just pass filter_expr and sorting like GET)
+    # POST allows large base64 strings that would exceed URL limits in GET
+    query_response = await client.post(
+        "/v0/logs/query",
+        json={
+            "project": project,
+            "context": context,
+            "filter_expr": filter_expr,
+            "sorting": sorting,  # Sort by similarity
+            "limit": 10,
+        },
+        headers=HEADERS,
+    )
+    assert query_response.status_code == 200, query_response.text
+    query_logs = query_response.json()["logs"]
+
+    # 5) Verify results - cat images should be more similar than car
+    assert len(query_logs) > 0, "Expected at least one log to match the image query"
+
+    # The first result should be a cat (highest similarity)
+    first_result = query_logs[0]
+    assert (
+        first_result["entries"]["label"] == "cat"
+    ), f"Expected first result to be 'cat', got '{first_result['entries']['label']}'"
+
+    # Verify that car is less similar (might not be in results at all with threshold)
+    car_found = False
+    for log in query_logs:
+        if log["entries"]["label"] == "car":
+            car_found = True
+            break
+
+    # Car should either not be found or be last in the results
+    if car_found:
+        # If car is found, it should not be the first result
+        assert (
+            query_logs[0]["entries"]["label"] != "car"
+        ), "Car should not be the most similar image to a cat query"
+
+
+@pytest.mark.anyio
 async def test_create_derived_entry_with_partial_null_values(client: AsyncClient):
     """
     Test creating derived entries where some logs have null/non-existent values

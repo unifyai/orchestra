@@ -718,6 +718,7 @@ def create_from_logs(
                                     from orchestra.web.api.log.python2SQL.helpers import (
                                         DEFAULT_IMAGE_EMBEDDING_MODEL,
                                     )
+
                                     model_name = DEFAULT_IMAGE_EMBEDDING_MODEL
                                 else:
                                     model_name = DEFAULT_EMBEDDING_MODEL
