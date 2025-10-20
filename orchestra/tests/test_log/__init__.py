@@ -1,8 +1,9 @@
 import base64
 import json
 import os
-from datetime import datetime, timezone
 import time
+from datetime import datetime, timezone
+
 import cv2
 from httpx import AsyncClient, Request
 
@@ -266,13 +267,13 @@ async def _create_image_log(
     if additional_entries:
         entries.update(additional_entries)
 
-    result =  await _create_log(
+    result = await _create_log(
         client,
         project_name,
         entries=entries,
         context=context_name,
     )
-    time.sleep(2) # wait for GCS to upload the image
+    time.sleep(2)  # wait for GCS to upload the image
     return result
 
 

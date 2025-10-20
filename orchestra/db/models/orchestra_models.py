@@ -1752,11 +1752,12 @@ class Embedding(Base):
         # Model-specific HNSW expression indexes with dimension casts
         # The cast is critical - queries must also cast to use these indexes
         # Pattern: (vector::vector(N)) vector_cosine_ops for expression index + WHERE model = '...' for partial index
-
         # OpenAI text-embedding-3-small (1536 dimensions) - Cosine similarity
         Index(
             "embedding_hnsw_cosine_openai_1536_idx",
-            sa.text("(vector::vector(1536)) vector_cosine_ops"),  # Include operator class in expression
+            sa.text(
+                "(vector::vector(1536)) vector_cosine_ops",
+            ),  # Include operator class in expression
             postgresql_using="hnsw",
             postgresql_with={"m": 16, "ef_construction": 64},
             postgresql_where=sa.text("model = 'text-embedding-3-small'"),
@@ -1764,7 +1765,9 @@ class Embedding(Base):
         # Vertex AI multimodalembedding@001 (1408 dimensions) - Cosine similarity
         Index(
             "embedding_hnsw_cosine_vertexai_1408_idx",
-            sa.text("(vector::vector(1408)) vector_cosine_ops"),  # Include operator class in expression
+            sa.text(
+                "(vector::vector(1408)) vector_cosine_ops",
+            ),  # Include operator class in expression
             postgresql_using="hnsw",
             postgresql_with={"m": 16, "ef_construction": 64},
             postgresql_where=sa.text("model = 'multimodalembedding@001'"),

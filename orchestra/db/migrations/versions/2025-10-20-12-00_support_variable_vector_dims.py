@@ -4,9 +4,7 @@ Revision ID: support_variable_vector_dims
 Revises: ddaac731f82d
 Create Date: 2025-10-20 12:00:00.000000
 """
-import sqlalchemy as sa
 from alembic import op
-from pgvector.sqlalchemy import Vector
 
 # revision identifiers, used by Alembic.
 revision = "support_variable_vector_dims"
@@ -113,12 +111,20 @@ def downgrade() -> None:
 
     # Step 1: Drop model-specific indexes
     with ctx.autocommit_block():
-        op.execute("DROP INDEX CONCURRENTLY IF EXISTS embedding_hnsw_cosine_openai_1536_idx;")
-        op.execute("DROP INDEX CONCURRENTLY IF EXISTS embedding_hnsw_cosine_vertexai_1408_idx;")
+        op.execute(
+            "DROP INDEX CONCURRENTLY IF EXISTS embedding_hnsw_cosine_openai_1536_idx;",
+        )
+        op.execute(
+            "DROP INDEX CONCURRENTLY IF EXISTS embedding_hnsw_cosine_vertexai_1408_idx;",
+        )
 
     # Step 2: Drop CHECK constraints
-    op.execute("ALTER TABLE embedding DROP CONSTRAINT IF EXISTS embedding_dims_text_openai_chk;")
-    op.execute("ALTER TABLE embedding DROP CONSTRAINT IF EXISTS embedding_dims_vertexai_chk;")
+    op.execute(
+        "ALTER TABLE embedding DROP CONSTRAINT IF EXISTS embedding_dims_text_openai_chk;",
+    )
+    op.execute(
+        "ALTER TABLE embedding DROP CONSTRAINT IF EXISTS embedding_dims_vertexai_chk;",
+    )
 
     # Step 3: Revert to fixed 1536 dimensions
     # This will fail if there are non-1536 dimensional vectors
