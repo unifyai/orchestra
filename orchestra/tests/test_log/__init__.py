@@ -154,6 +154,8 @@ log_data = {
                 "_/state": {"type": "str"},
                 "_/safe": {"type": "bool"},
                 "_/timestamp": {"type": "datetime"},
+                "_/_data": {"type": "dict"},
+                "_/metadata": {"type": "list"},
             },
         },
         {
@@ -165,6 +167,8 @@ log_data = {
                 "_/timestamp": {
                     "type": "datetime",
                 },
+                "_/_data": {"type": "dict"},
+                "_/metadata": {"type": "list"},
             },
         },
         {
@@ -173,6 +177,7 @@ log_data = {
             "explicit_types": {
                 "_/_data": {"type": "dict"},
                 "_/timestamp": {"type": "datetime"},
+                "_/_data": {"type": "dict"},
             },
         },
     ],

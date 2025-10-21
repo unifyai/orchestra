@@ -43,6 +43,39 @@ async def test_create_derived_entry_with_list(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_derived_over_nested_containers(client: AsyncClient):
+    project = "test_nested_containers"
+    await _create_project(client, project, user=1)
+
+    # lod = list of dicts
+    entries = {"lod": [{"a": 1, "b": 3}, {"a": 2, "c": 6}, {"a": 3, "d": 1}]}
+    resp = await _create_log(client, project, entries=entries)
+    assert resp.status_code == 200
+    log_id = resp.json()["log_event_ids"][0]
+
+    # Derived: sum of a's
+    # use list comp projection via python2SQL: [d['a'] for d in lod]
+    eq = "sum([d['a'] for d in {log:lod}])"
+    resp = await _create_derived_entry(
+        client,
+        project,
+        key="sum_a",
+        equation=eq,
+        referenced_logs={"log": [log_id]},
+    )
+    assert resp.status_code == 200, resp.text
+
+    resp = await client.get(
+        "/v0/logs",
+        params={"project": project, "from_ids": str(log_id)},
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200
+    log = resp.json()["logs"][0]
+    assert log["derived_entries"].get("sum_a") == 6
+
+
+@pytest.mark.anyio
 async def test_derived_creation_batched_counts_not_cumulative(client: AsyncClient):
     """
     Create logs in batches and immediately create derived logs for each batch's IDs.
@@ -1073,7 +1106,7 @@ async def test_advanced_comprehensions_and_conditionals(client: AsyncClient, tes
         f"/v0/logs?project={project}&filter_expr={field} is not None",
         headers=HEADERS,
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     result = response.json()
     assert result["logs"][0]["derived_entries"][field] == test_case["expected"]
 
@@ -1762,7 +1795,7 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
         project,
         entries={"desc": "a cute little cat", "category": "animal"},
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     log_ids.append(response.json()["log_event_ids"][0])
 
     # Log 1: Valid description
@@ -1771,7 +1804,7 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
         project,
         entries={"desc": "a friendly dog", "category": "animal"},
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     log_ids.append(response.json()["log_event_ids"][0])
 
     # Log 2: Empty string description
@@ -1780,7 +1813,7 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
         project,
         entries={"desc": "", "category": "empty"},
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     log_ids.append(response.json()["log_event_ids"][0])
 
     # Log 3: Null description
@@ -1789,7 +1822,7 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
         project,
         entries={"desc": None, "category": "null"},
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     log_ids.append(response.json()["log_event_ids"][0])
 
     # Log 4: Missing description field entirely
@@ -1803,7 +1836,7 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
         project,
         entries={"desc": "a wooden chair", "category": "furniture"},
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     log_ids.append(response.json()["log_event_ids"][0])
 
     # Log 6: Whitespace-only description
@@ -1812,7 +1845,7 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
         project,
         entries={"desc": "   ", "category": "whitespace"},
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     log_ids.append(response.json()["log_event_ids"][0])
 
     # Log 7: Valid description
@@ -1846,11 +1879,11 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
         f"/v0/logs/fields?project={project}",
         headers=HEADERS,
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     fields = response.json()
     assert key in fields
     # Embedding fields should be of type 'list' (vector)
-    assert fields[key]["data_type"] in ["list", "array", "vector"]
+    assert fields[key]["data_type"] in ["list", "array", "vector", "List[float]"]
 
     # Test filtering by similarity to 'little kitty'
     # This should match logs with valid cat-related descriptions
@@ -1863,7 +1896,7 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
         },
         headers=HEADERS,
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
 
     # Verify filtering results
     logs = response.json()["logs"]
@@ -1894,7 +1927,7 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
         },
         headers=HEADERS,
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
 
     furniture_logs = response.json()["logs"]
     assert len(furniture_logs) == 1, "Expected 1 log to match the filter"
@@ -1925,7 +1958,7 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
         f"/v0/logs?project={project}",
         headers=HEADERS,
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     all_logs = response.json()["logs"]
 
     # Verify we have all 8 logs
@@ -1969,7 +2002,7 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient):
         json={"name": context_name},
         headers=HEADERS,
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
 
     # 1. Log several images, including two very similar "cat" images
     image_files = {
@@ -1991,7 +2024,7 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient):
             {"name": name, "type": image_type},
             image_col_name="img",
         )
-        assert response.status_code == 200
+        assert response.status_code == 200, response.json()
         log_ids_map[name] = response.json()["log_event_ids"][0]
 
     # 2. Manually create the pHash derived log for each image
@@ -2012,7 +2045,7 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient):
         f"/v0/logs?project={project_name}&context={context_name}&filter_expr=name == 'cat_v2'",
         headers=HEADERS,
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     cat_v2_log = response.json()["logs"][0]
     cat_v2_phash = cat_v2_log["derived_entries"]["image_phash"]
 
