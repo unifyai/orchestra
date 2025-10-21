@@ -118,6 +118,11 @@ supported_models = {
         "context_window": 131072,
         "cost": {"prompt": 0.18, "completion": 0.72},
     },
+    "claude-4.5-haiku": {
+        "endpoint": "replicate/anthropic/claude-4.5-haiku",
+        "context_window": 200000,
+        "cost": {"prompt": 1, "completion": 5},
+    },
     "claude-4.5-sonnet": {
         "endpoint": "replicate/anthropic/claude-4.5-sonnet",
         "context_window": 200000,
