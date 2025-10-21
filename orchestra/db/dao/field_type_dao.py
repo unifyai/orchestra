@@ -49,9 +49,7 @@ class FieldTypeDAO:
         enum_restrict: bool = False,
         unique: bool = False,
         description: Optional[str] = None,
-        field_type: Optional[
-            str
-        ] = None,  # Full type like "List[int]", "str", "Any", "NoneType"
+        field_type: Optional[Union[str, dict]] = None,  # str or JSON schema
         infer_type: bool = True,  # Whether to infer type from value if field_type not provided
     ) -> None:
         """
@@ -93,12 +91,20 @@ class FieldTypeDAO:
         from orchestra.db.dao.log_dao import LogDAO
         from orchestra.web.api.log.utils.type_utils import (
             DEFAULT_FIELD_TYPE,
+            is_pydantic_schema,
+            normalize_pydantic_schema,
             normalize_type_string,
+            pydantic_schema_to_string,
         )
 
-        if field_type:
-            # Priority 1: Explicit type provided - normalize and use it
-            normalized_type = normalize_type_string(field_type)
+        if infer_type and field_type is not None:
+            # Priority 1: Explicit type provided - support str or JSON schema
+            if is_pydantic_schema(field_type):
+                schema = normalize_pydantic_schema(field_type)
+                # Store full schema JSON string
+                normalized_type = pydantic_schema_to_string(schema)
+            else:
+                normalized_type = normalize_type_string(str(field_type))
         elif infer_type and value is not None:
             # Priority 2: No explicit type, but infer_type=True → infer from value
             inferred = LogDAO.infer_type(field_name, value, explicit_type=None)
@@ -151,10 +157,13 @@ class FieldTypeDAO:
             query = query.where(FieldType.context_id == context_id)
 
         field_types = self.session.execute(query).scalars().all()
+        from orchestra.web.api.log.utils.type_utils import get_display_type
+
         if return_mutable:
             return {
                 field_type.field_name: {
-                    "field_type": field_type.field_type,
+                    # Present user-facing simple display type
+                    "field_type": get_display_type(None, field_type.field_type),
                     "field_category": field_type.field_category,
                     "mutable": field_type.mutable,
                     "unique": field_type.unique,
@@ -171,7 +180,7 @@ class FieldTypeDAO:
             }
         else:
             return {
-                field_type.field_name: field_type.field_type
+                field_type.field_name: get_display_type(None, field_type.field_type)
                 for field_type in field_types
             }
 
@@ -187,9 +196,7 @@ class FieldTypeDAO:
         enum_restrict: bool = False,
         unique: bool = False,
         description: Optional[str] = None,
-        field_type: Optional[
-            str
-        ] = None,  # Full type like "List[int]", "str", "Any", "NoneType"
+        field_type: Optional[Union[str, dict]] = None,  # str or JSON schema
     ) -> None:
         """
         Upsert approach: insert or overwrite the existing field_type.
@@ -216,11 +223,20 @@ class FieldTypeDAO:
             )
 
         # Determine the field type
-        if field_type:
+        if field_type is not None:
             # User provided explicit type - normalize and use it
-            from orchestra.web.api.log.utils.type_utils import normalize_type_string
+            from orchestra.web.api.log.utils.type_utils import (
+                is_pydantic_schema,
+                normalize_pydantic_schema,
+                normalize_type_string,
+                pydantic_schema_to_string,
+            )
 
-            normalized_type = normalize_type_string(field_type)
+            if is_pydantic_schema(field_type):
+                schema = normalize_pydantic_schema(field_type)
+                normalized_type = pydantic_schema_to_string(schema)
+            else:
+                normalized_type = normalize_type_string(str(field_type))
         else:
             # No type provided - default to DEFAULT_FIELD_TYPE
             from orchestra.web.api.log.utils.type_utils import DEFAULT_FIELD_TYPE
@@ -422,7 +438,10 @@ class FieldTypeDAO:
         from orchestra.web.api.log.schema import EnumType
         from orchestra.web.api.log.utils.type_utils import (
             DEFAULT_FIELD_TYPE,
+            is_pydantic_schema,
+            normalize_pydantic_schema,
             normalize_type_string,
+            pydantic_schema_to_string,
         )
 
         values_to_insert = []
@@ -447,7 +466,12 @@ class FieldTypeDAO:
                 # Validate individual field description
                 self._validate_description(field_description)
             elif isinstance(field_info, StandardFieldDefinition):
-                field_type = field_info.type
+                # field_info.type may be str or JSON schema (dict/JSON string)
+                if is_pydantic_schema(field_info.type):
+                    schema = normalize_pydantic_schema(field_info.type)
+                    field_type = pydantic_schema_to_string(schema)
+                else:
+                    field_type = field_info.type
                 mutable = field_info.mutable
                 unique = field_info.unique
                 field_description = getattr(field_info, "description", None)
@@ -458,6 +482,9 @@ class FieldTypeDAO:
                     enum_restrict = getattr(field_info, "restrict", False)
             elif isinstance(field_info, str):
                 field_type = field_info
+            elif isinstance(field_info, dict) and is_pydantic_schema(field_info):
+                schema = normalize_pydantic_schema(field_info)
+                field_type = pydantic_schema_to_string(schema)
             elif field_info is None:
                 # If None, use default DEFAULT_FIELD_TYPE
                 field_type = DEFAULT_FIELD_TYPE
@@ -465,7 +492,11 @@ class FieldTypeDAO:
             # Normalize and validate the field type
             from orchestra.web.api.log.utils.type_utils import is_valid_field_type
 
-            normalized_type = normalize_type_string(field_type)
+            normalized_type = (
+                pydantic_schema_to_string(normalize_pydantic_schema(field_type))
+                if is_pydantic_schema(field_type)
+                else normalize_type_string(str(field_type))
+            )
 
             if not is_valid_field_type(normalized_type):
                 raise ValueError(f"Invalid field type: {field_type}")
@@ -538,8 +569,11 @@ class FieldTypeDAO:
 
         from orchestra.web.api.log.utils.type_utils import (
             DEFAULT_FIELD_TYPE,
+            is_pydantic_schema,
             is_valid_field_type,
+            normalize_pydantic_schema,
             normalize_type_string,
+            pydantic_schema_to_string,
         )
 
         # Prepare values for bulk insertion
@@ -566,11 +600,14 @@ class FieldTypeDAO:
             enum_values = data.get("enum_values")
             enum_restrict = data.get("enum_restrict", False)
 
-            if field_type_raw:
-                # Priority 1: Explicit type provided - normalize and validate
-                field_type = normalize_type_string(field_type_raw)
+            if field_type_raw is not None:
+                # Priority 1: Explicit type provided - support str or JSON schema
+                if is_pydantic_schema(field_type_raw):
+                    schema = normalize_pydantic_schema(field_type_raw)
+                    field_type = pydantic_schema_to_string(schema)
+                else:
+                    field_type = normalize_type_string(str(field_type_raw))
                 if not is_valid_field_type(field_type):
-                    # Invalid type - fallback to "Any"
                     field_type = DEFAULT_FIELD_TYPE
             else:
                 # Priority 2: No explicit type - default to "Any"

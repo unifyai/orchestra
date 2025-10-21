@@ -76,6 +76,185 @@ __all__ = [
 ]
 
 
+def enforce_types(
+    field_name,
+    value,
+    *,
+    field_types,
+    field_type_dao: FieldTypeDAO,
+    context_dao: ContextDAO,
+    project_id: int,
+    batch_index=None,
+    explicit_types=None,
+    context_id=None,
+    is_param: bool = False,
+):
+    """
+    Module-level type enforcement function (extracted from create_logs_internal).
+
+    - Fields with type "Any": Accept any value (mixed types)
+    - Fields with strict type: Require explicit_type (if provided) to match field type
+    - New fields: Created with DEFAULT_FIELD_TYPE ("Any") unless explicit type provided
+    - "NoneType": Treated as a weak type – None is allowed for any field type
+    """
+    from orchestra.web.api.log.utils.type_utils import is_untyped_field
+
+    # Extract explicit_type if provided in explicit_types (can be str or JSON schema)
+    explicit_type_spec = None
+    enum_values = None
+    enum_restrict = False
+
+    if explicit_types and field_name in explicit_types:
+        field_spec = explicit_types[field_name]
+        if isinstance(field_spec, dict):
+            explicit_type_spec = field_spec.get("type")
+            enum_values = field_spec.get("values")
+            enum_restrict = field_spec.get("restrict", False)
+        elif isinstance(field_spec, str):
+            explicit_type_spec = field_spec
+
+    # Get field info if it exists
+    field_info = field_types.get(field_name)
+
+    if field_info:
+        # Field exists - check category first
+        existing_category = field_info["field_category"]
+        new_category = "param" if is_param else "entry"
+        if existing_category != new_category:
+            new_article = "an" if new_category == "entry" else "a"
+            existing_article = "an" if existing_category == "entry" else "a"
+            raise HTTPException(
+                status_code=400,
+                detail=f"Field '{field_name}' already exists as {existing_article} {existing_category}. Cannot create it as {new_article} {new_category}.",
+            )
+
+        # Check field type
+        field_type = field_info["field_type"]
+
+        # Case 1: Field is untyped (DEFAULT_FIELD_TYPE/"Any") - accept any value (mixed types)
+        if is_untyped_field(field_type):
+            # Field is untyped/accepts mixed types (including None)
+            # We don't update the field_type (it stays "Any")
+            return
+
+        # Case 2: Field has strict type (not "Any") - check value type
+        from orchestra.web.api.log.utils.type_utils import (
+            is_pydantic_schema,
+            normalize_pydantic_schema,
+            types_match,
+            validate_value_against_pydantic_schema,
+        )
+
+        # Always try to validate against FIELD TYPE if it's a valid Pydantic schema
+        tried_field_schema = False
+        if is_pydantic_schema(field_type):
+            tried_field_schema = True
+            try:
+                field_schema = normalize_pydantic_schema(field_type)
+                ok_field, err_field = validate_value_against_pydantic_schema(
+                    value,
+                    field_schema,
+                )
+            except Exception as e:
+                ok_field, err_field = (False, str(e))
+            if not ok_field:
+                batch_info = (
+                    f" (in batch entry {batch_index})"
+                    if batch_index is not None
+                    else ""
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Type validation against field schema failed for '{field_name}'{batch_info}: {err_field}",
+                )
+
+        # If explicit_type provided, also validate against EXPLICIT schema when it's Pydantic
+        if explicit_type_spec is not None and is_pydantic_schema(explicit_type_spec):
+            schema = normalize_pydantic_schema(explicit_type_spec)
+            ok_explicit, err_explicit = validate_value_against_pydantic_schema(
+                value,
+                schema,
+            )
+            if not ok_explicit:
+                batch_info = (
+                    f" (in batch entry {batch_index})"
+                    if batch_index is not None
+                    else ""
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Type validation against explicit schema failed for '{field_name}'{batch_info}: {err_explicit}",
+                )
+
+        # If neither field nor explicit were Pydantic schemas, fall back to string typing logic
+        if not tried_field_schema and not (
+            explicit_type_spec is not None and is_pydantic_schema(explicit_type_spec)
+        ):
+            if explicit_type_spec is not None:
+                comparable_type = str(explicit_type_spec)
+                if not types_match(field_type, comparable_type):
+                    batch_info = (
+                        f" (in batch entry {batch_index})"
+                        if batch_index is not None
+                        else ""
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Type mismatch for field '{field_name}'{batch_info}: field has strict type '{field_type}', but explicit_type '{comparable_type}' was provided.",
+                    )
+            else:
+                inferred_type = LogDAO.infer_type(field_name, value, explicit_type=None)
+                if not types_match(field_type, inferred_type):
+                    batch_info = (
+                        f" (in batch entry {batch_index})"
+                        if batch_index is not None
+                        else ""
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Type mismatch for field '{field_name}'{batch_info}: field has strict type '{field_type}', but value has inferred type '{inferred_type}'. Value: {str(value)[:100]}",
+                    )
+    else:
+        # Field doesn't exist - create it
+        # New policy: We CAN create new fields, but we CANNOT modify existing fields
+        field_spec = explicit_types.get(field_name, {}) if explicit_types else {}
+        mutable = (
+            field_spec.get("mutable", False) if isinstance(field_spec, dict) else False
+        )
+        unique = (
+            field_spec.get("unique", False) if isinstance(field_spec, dict) else False
+        )
+
+        # Extract explicit type if provided
+        explicit_field_type = None
+        if isinstance(field_spec, dict):
+            explicit_field_type = field_spec.get("type")  # str or JSON schema
+        elif isinstance(field_spec, str):
+            explicit_field_type = field_spec
+
+        # If in a versioned context, force mutable=True
+        if context_id and context_dao.is_versioned(context_id):
+            mutable = True
+
+        # Create field - type precedence:
+        # 1. Explicit type (from explicit_types) → strict typing
+        # 2. No explicit type → "Any" (untyped)
+        # Note: infer_type=False because we're in create_logs_internal with explicit_types support
+        field_type_dao.create_field_type_if_absent(
+            project_id,
+            field_name,
+            value,
+            mutable=mutable,
+            unique=unique,
+            field_category="param" if is_param else "entry",
+            context_id=context_id,
+            field_type=explicit_field_type,  # Pass explicit type if provided
+            enum_values=enum_values,
+            enum_restrict=enum_restrict,
+            infer_type=False,  # Don't infer - default to "Any" if no explicit type
+        )
+
+
 def _paginate_events(
     session,
     base_event_q,
@@ -1215,136 +1394,6 @@ def create_logs_internal(
         context_id=context_id,
     )
 
-    def enforce_types(
-        field_name,
-        value,
-        batch_index=None,
-        explicit_types=None,
-        context_id=None,
-        is_param=False,
-    ):
-        """
-        Enforce type checking based on the new strict typing policy:
-
-        - Fields with type "Any": Accept any value (mixed types), infer type for Log.inferred_type
-        - Fields with strict type: Require explicit_type (if provided) to match field type
-        - New fields: Created with DEFAULT_FIELD_TYPE ("Any") for untyped/mixed-type fields
-        - "NoneType": Treated as a weak type – None is allowed for any field type
-        """
-        from orchestra.web.api.log.utils.type_utils import is_untyped_field
-
-        # Extract explicit_type if provided in explicit_types
-        explicit_type_str = None
-        enum_values = None
-        enum_restrict = False
-
-        if explicit_types and field_name in explicit_types:
-            field_spec = explicit_types[field_name]
-            if isinstance(field_spec, dict):
-                explicit_type_str = field_spec.get("type")
-                enum_values = field_spec.get("values")
-                enum_restrict = field_spec.get("restrict", False)
-            elif isinstance(field_spec, str):
-                explicit_type_str = field_spec
-
-        # Get field info if it exists
-        field_info = field_types.get(field_name)
-
-        if field_info:
-            # Field exists - check category first
-            existing_category = field_info["field_category"]
-            new_category = "param" if is_param else "entry"
-            if existing_category != new_category:
-                new_article = "an" if new_category == "entry" else "a"
-                existing_article = "an" if existing_category == "entry" else "a"
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Field '{field_name}' already exists as {existing_article} {existing_category}. Cannot create it as {new_article} {new_category}.",
-                )
-
-            # Check field type
-            field_type = field_info["field_type"]
-
-            # Case 1: Field is untyped (DEFAULT_FIELD_TYPE/"Any") - accept any value (mixed types)
-            if is_untyped_field(field_type):
-                # Field is untyped/accepts mixed types (including None)
-                # Infer type from value or use explicit type for Log.inferred_type
-                # We don't update the field_type (it stays "Any")
-                return
-
-            # Case 2: Field has strict type (not "Any") - check value type
-            from orchestra.web.api.log.utils.type_utils import types_match
-
-            if explicit_type_str:
-                # User provided explicit_type - must match field_type
-                if not types_match(field_type, explicit_type_str):
-                    batch_info = (
-                        f" (in batch entry {batch_index})"
-                        if batch_index is not None
-                        else ""
-                    )
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Type mismatch for field '{field_name}'{batch_info}: field has strict type '{field_type}', but explicit_type '{explicit_type_str}' was provided.",
-                    )
-            else:
-                # No explicit_type - infer from value and check against field_type
-                inferred_type = LogDAO.infer_type(field_name, value, explicit_type=None)
-
-                if not types_match(field_type, inferred_type):
-                    batch_info = (
-                        f" (in batch entry {batch_index})"
-                        if batch_index is not None
-                        else ""
-                    )
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Type mismatch for field '{field_name}'{batch_info}: field has strict type '{field_type}', but value has inferred type '{inferred_type}'. Value: {str(value)[:100]}",
-                    )
-        else:
-            # Field doesn't exist - create it
-            # New policy: We CAN create new fields, but we CANNOT modify existing fields
-            field_spec = explicit_types.get(field_name, {}) if explicit_types else {}
-            mutable = (
-                field_spec.get("mutable", False)
-                if isinstance(field_spec, dict)
-                else False
-            )
-            unique = (
-                field_spec.get("unique", False)
-                if isinstance(field_spec, dict)
-                else False
-            )
-
-            # Extract explicit type if provided
-            explicit_field_type = None
-            if isinstance(field_spec, dict):
-                explicit_field_type = field_spec.get("type")
-            elif isinstance(field_spec, str):
-                explicit_field_type = field_spec
-
-            # If in a versioned context, force mutable=True
-            if context_id and context_dao.is_versioned(context_id):
-                mutable = True
-
-            # Create field - type precedence:
-            # 1. Explicit type (from explicit_types) → strict typing
-            # 2. No explicit type → "Any" (untyped)
-            # Note: infer_type=False because we're in create_logs_internal with explicit_types support
-            field_type_dao.create_field_type_if_absent(
-                project_id,
-                field_name,
-                value,
-                mutable=mutable,
-                unique=unique,
-                field_category="param" if is_param else "entry",
-                context_id=context_id,
-                field_type=explicit_field_type,  # Pass explicit type if provided
-                enum_values=enum_values,
-                enum_restrict=enum_restrict,
-                infer_type=False,  # Don't infer - default to "Any" if no explicit type
-            )
-
     # Bulk create all log events at once
     entries_len = len(entries_list)
     params_len = len(params_list)
@@ -1528,7 +1577,18 @@ def create_logs_internal(
                 )
             else:
                 # Field exists - enforce types (cannot modify existing field types)
-                enforce_types(k, v, i, params_explicit_types, context_id, is_param=True)
+                enforce_types(
+                    k,
+                    v,
+                    field_types=field_types,
+                    field_type_dao=field_type_dao,
+                    context_dao=context_dao,
+                    project_id=project_id,
+                    batch_index=i,
+                    explicit_types=params_explicit_types,
+                    context_id=context_id,
+                    is_param=True,
+                )
 
             # Determine version for parameter
             existing_param = log_dao.filter(
@@ -1604,9 +1664,13 @@ def create_logs_internal(
                 enforce_types(
                     k,
                     v,
-                    i,
-                    entries_explicit_types,
-                    context_id,
+                    field_types=field_types,
+                    field_type_dao=field_type_dao,
+                    context_dao=context_dao,
+                    project_id=project_id,
+                    batch_index=i,
+                    explicit_types=entries_explicit_types,
+                    context_id=context_id,
                     is_param=False,
                 )
 
