@@ -1,6 +1,7 @@
 import base64
 import io
 import json
+from typing import Iterable, Optional, Tuple
 
 import imagehash
 from fastapi import HTTPException
@@ -27,7 +28,8 @@ from sqlalchemy import (
     or_,
     select,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy.sql.elements import ClauseElement
 from sqlalchemy.sql.expression import Exists, UnaryExpression
 from sqlalchemy.sql.selectable import Subquery
 
@@ -853,11 +855,33 @@ def _handle_index_operator(
             inferred_type = literal("NoneType").label("inferred_type")
         elif isinstance(rhs_expr, Subquery):
             rhs_valcol, rhs_type = _select_value(rhs_expr, session)
-            extracted = func.jsonb_extract_path(
-                lhs_valcol,
-                func.cast(rhs_valcol, String),
-            )
-            inferred_type = literal(rhs_type).label("inferred_type")
+            # JSONB indexing using PostgreSQL operators:
+            #  - arrays: jsonb -> int
+            #  - objects: jsonb -> text
+            if lhs_type == "list":
+                # Prefer integer index; non-integer indexes will yield NULL
+                extracted = lhs_valcol.op("->")(cast(rhs_valcol, Integer))
+            elif lhs_type == "dict":
+                extracted = lhs_valcol.op("->")(cast(rhs_valcol, String))
+            else:
+                extracted = literal(None)
+            # Infer result type from jsonb value at runtime
+            json_type = func.jsonb_typeof(extracted)
+            inferred_type = case(
+                (
+                    json_type == "number",
+                    case(
+                        (cast(extracted, Text).like("%.%"), literal("float")),
+                        else_=literal("int"),
+                    ),
+                ),
+                (json_type == "string", literal("str")),
+                (json_type == "boolean", literal("bool")),
+                (json_type == "null", literal("NoneType")),
+                (json_type == "array", literal("list")),
+                (json_type == "object", literal("dict")),
+                else_=literal("NoneType"),
+            ).label("inferred_type")
             select_cols = [lhs_expr.c.log_event_id.label("log_event_id")]
             if "__comp_idx__" in lhs_expr.c.keys():
                 select_cols.append(lhs_expr.c.__comp_idx__.label("__comp_idx__"))
@@ -892,8 +916,11 @@ def _handle_index_operator(
                     )
                 inferred_type = literal("str").label("inferred_type")
             else:
-                # Indexing a JSONB list/dict, so use jsonb_typeof
-                extracted = lhs_valcol[rhs_expr_val]
+                # Indexing a JSONB list/dict using PostgreSQL operators
+                if isinstance(rhs_expr_val, int):
+                    extracted = lhs_valcol.op("->")(literal(rhs_expr_val))
+                else:
+                    extracted = lhs_valcol.op("->")(cast(rhs_expr_val, String))
                 json_type = func.jsonb_typeof(extracted)
                 inferred_type = case(
                     (
@@ -1062,6 +1089,111 @@ def _handle_slice_operator(
             )
 
 
+# Helper functions for vector binary ops
+def _ensure_numeric_iterable(name: str, val: Iterable) -> Tuple[list, int]:
+    try:
+        seq = list(val)
+    except Exception:
+        raise TypeError(
+            f"{name}: expected a numeric iterable, got {type(val).__name__}.",
+        )
+    if not seq:
+        raise ValueError(f"{name}: empty vector is not allowed.")
+    try:
+        vec = [float(x) for x in seq]
+    except Exception:
+        raise ValueError(f"{name}: vector must contain only numeric values.")
+    return vec, len(vec)
+
+
+def _literal_vector(vec: Iterable[float], dim: int) -> ClauseElement:
+    return cast(literal(list(vec), type_=ARRAY(Float())), Vector(dim))
+
+
+def _coerce_to_vector_sql(
+    expr: object,
+    inferred_type: Optional[str],
+    side_label: str,
+) -> ClauseElement:
+    if hasattr(expr, "op"):
+        if inferred_type == "list":
+            return cast(expr.op("#>>")("{}"), Vector())
+        return expr
+    if inferred_type == "list" and isinstance(expr, (list, tuple)):
+        vec, dim = _ensure_numeric_iterable(side_label, expr)
+        return _literal_vector(vec, dim)
+    if isinstance(expr, (list, tuple)):
+        vec, dim = _ensure_numeric_iterable(side_label, expr)
+        return _literal_vector(vec, dim)
+    raise TypeError(
+        f"Cosine/Distance operand {side_label}: expected a vector-compatible value "
+        f"(numeric list/tuple or SQL expression), got {type(expr).__name__}.",
+    )
+
+
+def _vector_binary_op(
+    lhs_src: ClauseElement | Subquery | object,
+    rhs_src: ClauseElement | Subquery | object,
+    session,
+    operator_symbol: str,
+    result_type_label: str,
+    subquery_prefix: str,
+) -> ClauseElement | Subquery:
+    lhs_is_sub = isinstance(lhs_src, Subquery)
+    rhs_is_sub = isinstance(rhs_src, Subquery)
+
+    def _value_from_source(src, side_name: str):
+        # Always delegate to _select_value to get (value, inferred_type)
+        val, val_type = _select_value(src, session, is_vector=True)
+        return (
+            _coerce_to_vector_sql(val, val_type, side_name),
+            val_type,
+            (src if isinstance(src, Subquery) else None),
+        )
+
+    lval, _, lsub = _value_from_source(lhs_src, "lhs")
+    rval, _, rsub = _value_from_source(rhs_src, "rhs")
+
+    expr = lval.op(operator_symbol)(rval).cast(Float)
+
+    # Both sides subqueries
+    if lsub is not None and rsub is not None:
+        return _join_subqueries(lsub, rsub, expr, result_type_label, session=session)
+
+    # Only LHS is subquery
+    if lsub is not None:
+        select_cols = [lsub.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in lsub.c.keys():
+            select_cols.append(lsub.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in lsub.c.keys():
+            select_cols.append(lsub.c.__parent_idx__.label("__parent_idx__"))
+        select_cols.extend(
+            [expr.label("value"), literal(result_type_label).label("inferred_type")],
+        )
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(lsub),
+            prefix=subquery_prefix,
+        )
+
+    # Only RHS is subquery
+    if rsub is not None:
+        select_cols = [rsub.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in rsub.c.keys():
+            select_cols.append(rsub.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in rsub.c.keys():
+            select_cols.append(rsub.c.__parent_idx__.label("__parent_idx__"))
+        select_cols.extend(
+            [expr.label("value"), literal(result_type_label).label("inferred_type")],
+        )
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(rsub),
+            prefix=subquery_prefix,
+        )
+
+    # Neither side subquery
+    return expr
+
+
 def _handle_l2(
     filter_dict,
     log_event_alias,
@@ -1080,7 +1212,7 @@ def _handle_l2(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
-        is_vector=True,  # Explicitly request vector type
+        is_vector=True,
     )
     rhs = build_sql_query(
         filter_dict.get("rhs"),
@@ -1089,57 +1221,9 @@ def _handle_l2(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
-        is_vector=True,  # Explicitly request vector type
+        is_vector=True,
     )
-
-    lhs_is_sub = isinstance(lhs, Subquery)
-    rhs_is_sub = isinstance(rhs, Subquery)
-
-    # Both sides subqueries
-    if lhs_is_sub and rhs_is_sub:
-        lval, _ = _select_value(lhs, session, is_vector=True)
-        rval, _ = _select_value(rhs, session, is_vector=True)
-        expr = lval.op("<->")(rval).cast(Float)
-        return _join_subqueries(lhs, rhs, expr, "float", session=session)
-
-    # Only LHS is subquery
-    if lhs_is_sub:
-        lval, _ = _select_value(lhs, session, is_vector=True)
-        rval, _ = _select_value(rhs, session, is_vector=True)
-        expr = lval.op("<->")(rval).cast(Float)
-        select_cols = [lhs.c.log_event_id.label("log_event_id")]
-        if "__comp_idx__" in lhs.c.keys():
-            select_cols.append(lhs.c.__comp_idx__.label("__comp_idx__"))
-        if "__parent_idx__" in lhs.c.keys():
-            select_cols.append(lhs.c.__parent_idx__.label("__parent_idx__"))
-        select_cols.extend(
-            [expr.label("value"), literal("float").label("inferred_type")],
-        )
-        return alias_utils.subquery_with_unique_alias(
-            select(*select_cols).select_from(lhs),
-            prefix="l2_distance",
-        )
-
-    # Only RHS is subquery
-    if rhs_is_sub:
-        rval, _ = _select_value(rhs, session, is_vector=True)
-        lval, _ = _select_value(lhs, session, is_vector=True)
-        expr = lval.op("<->")(rval).cast(Float)
-        select_cols = [rhs.c.log_event_id.label("log_event_id")]
-        if "__comp_idx__" in rhs.c.keys():
-            select_cols.append(rhs.c.__comp_idx__.label("__comp_idx__"))
-        if "__parent_idx__" in rhs.c.keys():
-            select_cols.append(rhs.c.__parent_idx__.label("__parent_idx__"))
-        select_cols.extend(
-            [expr.label("value"), literal("float").label("inferred_type")],
-        )
-        return alias_utils.subquery_with_unique_alias(
-            select(*select_cols).select_from(rhs),
-            prefix="l2_distance",
-        )
-
-    # Neither side subquery
-    return lhs.op("<->")(rhs).cast(Float)
+    return _vector_binary_op(lhs, rhs, session, "<->", "float", "l2_distance")
 
 
 def _handle_cosine(
@@ -1160,7 +1244,7 @@ def _handle_cosine(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
-        is_vector=True,  # Explicitly request vector type
+        is_vector=True,
     )
     rhs = build_sql_query(
         filter_dict.get("rhs"),
@@ -1169,90 +1253,9 @@ def _handle_cosine(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
-        is_vector=True,  # Explicitly request vector type
+        is_vector=True,
     )
-
-    lhs_is_sub = isinstance(lhs, Subquery)
-    rhs_is_sub = isinstance(rhs, Subquery)
-
-    if lhs_is_sub and rhs_is_sub:
-        lval, lval_type = _select_value(lhs, session, is_vector=True)
-        rval, rval_type = _select_value(rhs, session, is_vector=True)
-
-        # Special handling for when vector operations receive JSONB values
-        # This happens with copy=False joins where new log_event_ids
-        # are generated but the logs/derived logs are original ones
-        if lval_type == "list" and hasattr(lval, "op"):
-            # Use PostgreSQL's ability to cast JSONB arrays to vector type
-            lval = func.cast(lval.op("#>>")("{}"), Vector(len(lval)))
-
-        if rval_type == "list" and hasattr(rval, "op"):
-            # Use PostgreSQL's ability to cast JSONB arrays to vector type
-            rval = func.cast(rval.op("#>>")("{}"), Vector(len(rval)))
-
-        dist = lval.op("<=>")(rval).cast(Float)
-        return _join_subqueries(lhs, rhs, dist, "float", session=session)
-
-    if lhs_is_sub:
-        lval, lval_type = _select_value(lhs, session, is_vector=True)
-        rval, rval_type = _select_value(rhs, session, is_vector=True)
-
-        # Special handling for when vector operations receive JSONB values
-        # This happens with copy=False joins where new log_event_ids
-        # are generated but the logs/derived logs are original ones
-        if lval_type == "list" and hasattr(lval, "op"):
-            # Use PostgreSQL's ability to cast JSONB arrays to vector type
-            lval = func.cast(lval.op("#>>")("{}"), Vector(len(lval)))
-
-        if rval_type == "list" and hasattr(rval, "op"):
-            # Use PostgreSQL's ability to cast JSONB arrays to vector type
-            rval = func.cast(rval.op("#>>")("{}"), Vector(len(rval)))
-
-        dist = lval.op("<=>")(rval).cast(Float)
-        select_cols = [lhs.c.log_event_id.label("log_event_id")]
-        if "__comp_idx__" in lhs.c.keys():
-            select_cols.append(lhs.c.__comp_idx__.label("__comp_idx__"))
-        if "__parent_idx__" in lhs.c.keys():
-            select_cols.append(lhs.c.__parent_idx__.label("__parent_idx__"))
-        select_cols.extend(
-            [dist.label("value"), literal("float").label("inferred_type")],
-        )
-        return alias_utils.subquery_with_unique_alias(
-            select(*select_cols).select_from(lhs),
-            prefix="vector_op",
-        )
-
-    if rhs_is_sub:
-        rval, rval_type = _select_value(rhs, session, is_vector=True)
-        lval, lval_type = _select_value(lhs, session, is_vector=True)
-
-        # Special handling for when vector operations receive JSONB values
-        # This happens with copy=False joins where new log_event_ids
-        # are generated but the logs/derived logs are original ones
-        if lval_type == "list" and hasattr(lval, "op"):
-            # Use PostgreSQL's ability to cast JSONB arrays to vector type
-            lval = func.cast(lval.op("#>>")("{}"), Vector(len(lval)))
-
-        if rval_type == "list" and hasattr(rval, "op"):
-            # Use PostgreSQL's ability to cast JSONB arrays to vector type
-            rval = func.cast(rval.op("#>>")("{}"), Vector(len(rval)))
-
-        dist = lval.op("<=>")(rval).cast(Float)
-        select_cols = [rhs.c.log_event_id.label("log_event_id")]
-        if "__comp_idx__" in rhs.c.keys():
-            select_cols.append(rhs.c.__comp_idx__.label("__comp_idx__"))
-        if "__parent_idx__" in rhs.c.keys():
-            select_cols.append(rhs.c.__parent_idx__.label("__parent_idx__"))
-        select_cols.extend(
-            [dist.label("value"), literal("float").label("inferred_type")],
-        )
-        return alias_utils.subquery_with_unique_alias(
-            select(*select_cols).select_from(rhs),
-            prefix="vector_op",
-        )
-
-    dist = lhs.op("<=>")(rhs).cast(Float)
-    return dist
+    return _vector_binary_op(lhs, rhs, session, "<=>", "float", "cosine_similarity")
 
 
 def _handle_ip(
@@ -1273,7 +1276,7 @@ def _handle_ip(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
-        is_vector=True,  # Explicitly request vector type
+        is_vector=True,
     )
     rhs = build_sql_query(
         filter_dict.get("rhs"),
@@ -1282,53 +1285,9 @@ def _handle_ip(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
-        is_vector=True,  # Explicitly request vector type
+        is_vector=True,
     )
-
-    lhs_is_sub = isinstance(lhs, Subquery)
-    rhs_is_sub = isinstance(rhs, Subquery)
-
-    if lhs_is_sub and rhs_is_sub:
-        lval, lval_type = _select_value(lhs, session, is_vector=True)
-        rval, rval_type = _select_value(rhs, session, is_vector=True)
-        expr = lval.op("<#>")(rval).cast(Float)
-        return _join_subqueries(lhs, rhs, expr, "float", session=session)
-
-    if lhs_is_sub:
-        lval, lval_type = _select_value(lhs, session, is_vector=True)
-        rval, rval_type = _select_value(rhs, session, is_vector=True)
-        expr = lval.op("<#>")(rval).cast(Float)
-        select_cols = [lhs.c.log_event_id.label("log_event_id")]
-        if "__comp_idx__" in lhs.c.keys():
-            select_cols.append(lhs.c.__comp_idx__.label("__comp_idx__"))
-        if "__parent_idx__" in lhs.c.keys():
-            select_cols.append(lhs.c.__parent_idx__.label("__parent_idx__"))
-        select_cols.extend(
-            [expr.label("value"), literal("float").label("inferred_type")],
-        )
-        return alias_utils.subquery_with_unique_alias(
-            select(*select_cols).select_from(lhs),
-            prefix="vector_op",
-        )
-
-    if rhs_is_sub:
-        rval, rval_type = _select_value(rhs, session, is_vector=True)
-        lval, lval_type = _select_value(lhs, session, is_vector=True)
-        expr = lval.op("<#>")(rval).cast(Float)
-        select_cols = [rhs.c.log_event_id.label("log_event_id")]
-        if "__comp_idx__" in rhs.c.keys():
-            select_cols.append(rhs.c.__comp_idx__.label("__comp_idx__"))
-        if "__parent_idx__" in rhs.c.keys():
-            select_cols.append(rhs.c.__parent_idx__.label("__parent_idx__"))
-        select_cols.extend(
-            [expr.label("value"), literal("float").label("inferred_type")],
-        )
-        return alias_utils.subquery_with_unique_alias(
-            select(*select_cols).select_from(rhs),
-            prefix="vector_op",
-        )
-
-    return lhs.op("<#>")(rhs).cast(Float)
+    return _vector_binary_op(lhs, rhs, session, "<#>", "float", "inner_product")
 
 
 def _handle_l1(
@@ -1349,7 +1308,7 @@ def _handle_l1(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
-        is_vector=True,  # Explicitly request vector type
+        is_vector=True,
     )
     rhs = build_sql_query(
         filter_dict.get("rhs"),
@@ -1358,53 +1317,9 @@ def _handle_l1(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
-        is_vector=True,  # Explicitly request vector type
+        is_vector=True,
     )
-
-    lhs_is_sub = isinstance(lhs, Subquery)
-    rhs_is_sub = isinstance(rhs, Subquery)
-
-    if lhs_is_sub and rhs_is_sub:
-        lval, lval_type = _select_value(lhs, session, is_vector=True)
-        rval, rval_type = _select_value(rhs, session, is_vector=True)
-        expr = lval.op("<+>")(rval).cast(Float)
-        return _join_subqueries(lhs, rhs, expr, "float", session=session)
-
-    if lhs_is_sub:
-        lval, lval_type = _select_value(lhs, session, is_vector=True)
-        rval, rval_type = _select_value(rhs, session, is_vector=True)
-        expr = lval.op("<+>")(rval).cast(Float)
-        select_cols = [lhs.c.log_event_id.label("log_event_id")]
-        if "__comp_idx__" in lhs.c.keys():
-            select_cols.append(lhs.c.__comp_idx__.label("__comp_idx__"))
-        if "__parent_idx__" in lhs.c.keys():
-            select_cols.append(lhs.c.__parent_idx__.label("__parent_idx__"))
-        select_cols.extend(
-            [expr.label("value"), literal("float").label("inferred_type")],
-        )
-        return alias_utils.subquery_with_unique_alias(
-            select(*select_cols).select_from(lhs),
-            prefix="vector_op",
-        )
-
-    if rhs_is_sub:
-        rval, rval_type = _select_value(rhs, session, is_vector=True)
-        lval, lval_type = _select_value(lhs, session, is_vector=True)
-        expr = lval.op("<+>")(rval).cast(Float)
-        select_cols = [rhs.c.log_event_id.label("log_event_id")]
-        if "__comp_idx__" in rhs.c.keys():
-            select_cols.append(rhs.c.__comp_idx__.label("__comp_idx__"))
-        if "__parent_idx__" in rhs.c.keys():
-            select_cols.append(rhs.c.__parent_idx__.label("__parent_idx__"))
-        select_cols.extend(
-            [expr.label("value"), literal("float").label("inferred_type")],
-        )
-        return alias_utils.subquery_with_unique_alias(
-            select(*select_cols).select_from(rhs),
-            prefix="vector_op",
-        )
-
-    return lhs.op("<+>")(rhs).cast(Float)
+    return _vector_binary_op(lhs, rhs, session, "<+>", "float", "l1_distance")
 
 
 def _handle_hamming(
@@ -1425,7 +1340,7 @@ def _handle_hamming(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
-        is_vector=True,  # Explicitly request vector type
+        is_vector=True,
     )
     rhs = build_sql_query(
         filter_dict.get("rhs"),
@@ -1434,53 +1349,9 @@ def _handle_hamming(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
-        is_vector=True,  # Explicitly request vector type
+        is_vector=True,
     )
-
-    lhs_is_sub = isinstance(lhs, Subquery)
-    rhs_is_sub = isinstance(rhs, Subquery)
-
-    if lhs_is_sub and rhs_is_sub:
-        lval, lval_type = _select_value(lhs, session, is_vector=True)
-        rval, rval_type = _select_value(rhs, session, is_vector=True)
-        expr = lval.op("<~>")(rval).cast(Float)
-        return _join_subqueries(lhs, rhs, expr, "float", session=session)
-
-    if lhs_is_sub:
-        lval, lval_type = _select_value(lhs, session, is_vector=True)
-        rval, rval_type = _select_value(rhs, session, is_vector=True)
-        expr = lval.op("<~>")(rval).cast(Float)
-        select_cols = [lhs.c.log_event_id.label("log_event_id")]
-        if "__comp_idx__" in lhs.c.keys():
-            select_cols.append(lhs.c.__comp_idx__.label("__comp_idx__"))
-        if "__parent_idx__" in lhs.c.keys():
-            select_cols.append(lhs.c.__parent_idx__.label("__parent_idx__"))
-        select_cols.extend(
-            [expr.label("value"), literal("float").label("inferred_type")],
-        )
-        return alias_utils.subquery_with_unique_alias(
-            select(*select_cols).select_from(lhs),
-            prefix="vector_op",
-        )
-
-    if rhs_is_sub:
-        rval, rval_type = _select_value(rhs, session, is_vector=True)
-        lval, lval_type = _select_value(lhs, session, is_vector=True)
-        expr = lval.op("<~>")(rval).cast(Float)
-        select_cols = [rhs.c.log_event_id.label("log_event_id")]
-        if "__comp_idx__" in rhs.c.keys():
-            select_cols.append(rhs.c.__comp_idx__.label("__comp_idx__"))
-        if "__parent_idx__" in rhs.c.keys():
-            select_cols.append(rhs.c.__parent_idx__.label("__parent_idx__"))
-        select_cols.extend(
-            [expr.label("value"), literal("float").label("inferred_type")],
-        )
-        return alias_utils.subquery_with_unique_alias(
-            select(*select_cols).select_from(rhs),
-            prefix="vector_op",
-        )
-
-    return lhs.op("<~>")(rhs).cast(Float)
+    return _vector_binary_op(lhs, rhs, session, "<~>", "float", "hamming_distance")
 
 
 def _handle_jaccard(
@@ -1501,7 +1372,7 @@ def _handle_jaccard(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
-        is_vector=True,  # Explicitly request vector type
+        is_vector=True,
     )
     rhs = build_sql_query(
         filter_dict.get("rhs"),
@@ -1510,53 +1381,9 @@ def _handle_jaccard(
         log_event_ids=log_event_ids,
         is_derived=is_derived,
         local_scope=local_scope,
-        is_vector=True,  # Explicitly request vector type
+        is_vector=True,
     )
-
-    lhs_is_sub = isinstance(lhs, Subquery)
-    rhs_is_sub = isinstance(rhs, Subquery)
-
-    if lhs_is_sub and rhs_is_sub:
-        lval, lval_type = _select_value(lhs, session, is_vector=True)
-        rval, rval_type = _select_value(rhs, session, is_vector=True)
-        expr = lval.op("<%>")(rval).cast(Float)
-        return _join_subqueries(lhs, rhs, expr, "float", session=session)
-
-    if lhs_is_sub:
-        lval, lval_type = _select_value(lhs, session, is_vector=True)
-        rval, rval_type = _select_value(rhs, session, is_vector=True)
-        expr = lval.op("<%>")(rval).cast(Float)
-        select_cols = [lhs.c.log_event_id.label("log_event_id")]
-        if "__comp_idx__" in lhs.c.keys():
-            select_cols.append(lhs.c.__comp_idx__.label("__comp_idx__"))
-        if "__parent_idx__" in lhs.c.keys():
-            select_cols.append(lhs.c.__parent_idx__.label("__parent_idx__"))
-        select_cols.extend(
-            [expr.label("value"), literal("float").label("inferred_type")],
-        )
-        return alias_utils.subquery_with_unique_alias(
-            select(*select_cols).select_from(lhs),
-            prefix="vector_op",
-        )
-
-    if rhs_is_sub:
-        rval, rval_type = _select_value(rhs, session, is_vector=True)
-        lval, lval_type = _select_value(lhs, session, is_vector=True)
-        expr = lval.op("<%>")(rval).cast(Float)
-        select_cols = [rhs.c.log_event_id.label("log_event_id")]
-        if "__comp_idx__" in rhs.c.keys():
-            select_cols.append(rhs.c.__comp_idx__.label("__comp_idx__"))
-        if "__parent_idx__" in rhs.c.keys():
-            select_cols.append(rhs.c.__parent_idx__.label("__parent_idx__"))
-        select_cols.extend(
-            [expr.label("value"), literal("float").label("inferred_type")],
-        )
-        return alias_utils.subquery_with_unique_alias(
-            select(*select_cols).select_from(rhs),
-            prefix="vector_op",
-        )
-
-    return lhs.op("<%>")(rhs).cast(Float)
+    return _vector_binary_op(lhs, rhs, session, "<%>", "float", "jaccard_distance")
 
 
 def _handle_phash_distance(

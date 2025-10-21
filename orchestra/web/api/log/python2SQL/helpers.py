@@ -256,8 +256,6 @@ def _get_embeddings_batch(
                     # Cannot split further; surface error
                     raise ValueError(f"Failed to get embeddings: {str(e)}")
                 mid = len(batch_texts) // 2
-                print(f"left: {batch_texts[:mid]}")
-                print(f"right: {batch_texts[mid:]}")
                 left = _embed_or_split(batch_texts[:mid])
                 right = _embed_or_split(batch_texts[mid:])
                 return left + right
@@ -436,8 +434,11 @@ def _select_value(subq, session, is_collection=False, is_vector=False):
     Helper function to select the appropriate value column from a subquery.
     This version is deterministic, unifying all possible types in a subquery.
     """
+    from orchestra.web.api.log.utils.type_utils import get_base_storage_type
+
     if isinstance(subq, BindParameter):
-        return subq.value, LogDAO.infer_type("", subq.value)
+        inferred = LogDAO.infer_type("", subq.value)
+        return subq.value, (get_base_storage_type(inferred) or inferred)
     if hasattr(subq, "element") and subq.name == "reduction_metric":
         return subq.element, "float"
 
@@ -446,7 +447,8 @@ def _select_value(subq, session, is_collection=False, is_vector=False):
         # we should have a better way to do this.
         dt = session.execute(select(subq).limit(1)).first()
         dt = dt[-1]
-        return subq, LogDAO.infer_type("", dt)
+        inferred = LogDAO.infer_type("", dt)
+        return subq, (get_base_storage_type(inferred) or inferred)
 
     if isinstance(subq, Subquery):
         dt = None
@@ -455,10 +457,14 @@ def _select_value(subq, session, is_collection=False, is_vector=False):
             distinct_types_rows = session.execute(
                 select(subq.c.inferred_type).distinct(),
             ).fetchall()
-            distinct_types = [
+            distinct_types_raw = [
                 row[0]
                 for row in distinct_types_rows
                 if row[0] not in (None, "NoneType")
+            ]
+            # Normalize nested/spec types (e.g., List[int], Dict[str, Any]) to storage family
+            distinct_types = [
+                (get_base_storage_type(t) or t) for t in distinct_types_raw
             ]
 
             if not distinct_types:
@@ -478,19 +484,24 @@ def _select_value(subq, session, is_collection=False, is_vector=False):
                 distinct_types_rows = session.execute(
                     select(subq.c.inferred_type).distinct(),
                 ).fetchall()
-                distinct_types = [
+                distinct_types_raw = [
                     row[0]
                     for row in distinct_types_rows
                     if row[0] not in (None, "NoneType")
                 ]
 
-                if not distinct_types:
+                if not distinct_types_raw:
                     dt = "NoneType"
-                elif len(distinct_types) == 1:
-                    dt = distinct_types[0]
                 else:
-                    dt = functools.reduce(unify_inferred_types, distinct_types)
+                    normalized = [
+                        (get_base_storage_type(t) or t) for t in distinct_types_raw
+                    ]
+                    if len(normalized) == 1:
+                        dt = normalized[0]
+                    else:
+                        dt = functools.reduce(unify_inferred_types, normalized)
 
+            # Choose column based on normalized storage family
             type_to_col_map = {
                 "int": subq.c.int_value,
                 "float": subq.c.float_value,
@@ -502,14 +513,22 @@ def _select_value(subq, session, is_collection=False, is_vector=False):
                 "timedelta": subq.c.timedelta_value,
                 "list": subq.c.jsonb_value,
                 "dict": subq.c.jsonb_value,
+                "tuple": subq.c.jsonb_value,
+                "set": subq.c.jsonb_value,
+                "union": subq.c.jsonb_value,
+                "Any": subq.c.jsonb_value,
                 "vector": subq.c.vector_value,
                 "image": subq.c.str_value,
+                "audio": subq.c.str_value,
                 "NoneType": subq.c.int_value,  # Fallback, value will be NULL
             }
-            return type_to_col_map.get(dt), dt
+            col = type_to_col_map.get(dt)
+            # Return normalized storage family so callers can rely on base families
+            return col, dt
 
     if not isinstance(subq, Subquery):
-        return subq, LogDAO.infer_type("", subq)
+        inferred = LogDAO.infer_type("", subq)
+        return subq, (get_base_storage_type(inferred) or inferred)
 
     return None, None
 
@@ -535,7 +554,11 @@ def unify_inferred_types(t1: str, t2: str) -> str:
         "list",
         "dict",
         "tuple",
+        "set",
+        "union",
         "image",
+        "audio",
+        "Any",
     ]
 
     # If either side is "none", we skip it or treat it as the other side
@@ -709,8 +732,25 @@ def _build_subquery_for_identifier(
             log_event_log_alias.log_event_id.label("log_event_id"),
             literal(None).label("vector_value"),
             case(
-                (log_alias.inferred_type == "list", cast(log_alias.value, JSONB)),
-                (log_alias.inferred_type == "dict", cast(log_alias.value, JSONB)),
+                (
+                    or_(
+                        log_alias.inferred_type == "list",
+                        log_alias.inferred_type == "dict",
+                        log_alias.inferred_type == "tuple",
+                        log_alias.inferred_type == "set",
+                        log_alias.inferred_type == "union",
+                        log_alias.inferred_type == "Any",
+                        log_alias.inferred_type.ilike("List%"),
+                        log_alias.inferred_type.ilike("Dict%"),
+                        log_alias.inferred_type.ilike("Tuple%"),
+                        log_alias.inferred_type.ilike("Set%"),
+                        log_alias.inferred_type.ilike("Union%"),
+                        # NEW: when inferred_type stores a JSON schema string, it will typically
+                        # start with '{' and end with '}'. Treat it as JSON-family for casting.
+                        log_alias.inferred_type.like("{%"),
+                    ),
+                    cast(log_alias.value, JSONB),
+                ),
                 else_=None,
             ).label("jsonb_value"),
             case(
@@ -733,6 +773,10 @@ def _build_subquery_for_identifier(
                 (log_alias.inferred_type == "str", extract_json_text(log_alias.value)),
                 (
                     log_alias.inferred_type == "image",
+                    extract_json_text(log_alias.value),
+                ),
+                (
+                    log_alias.inferred_type == "audio",
                     extract_json_text(log_alias.value),
                 ),
                 else_=None,
@@ -766,11 +810,20 @@ def _build_subquery_for_identifier(
             literal(None).label("vector_value"),
             case(
                 (
-                    derived_log_alias.inferred_type == "list",
-                    cast(derived_log_alias.value, JSONB),
-                ),
-                (
-                    derived_log_alias.inferred_type == "dict",
+                    or_(
+                        derived_log_alias.inferred_type == "list",
+                        derived_log_alias.inferred_type == "dict",
+                        derived_log_alias.inferred_type == "tuple",
+                        derived_log_alias.inferred_type == "set",
+                        derived_log_alias.inferred_type == "union",
+                        derived_log_alias.inferred_type == "Any",
+                        derived_log_alias.inferred_type.ilike("List[%"),
+                        derived_log_alias.inferred_type.ilike("Dict[%"),
+                        derived_log_alias.inferred_type.ilike("Tuple[%"),
+                        derived_log_alias.inferred_type.ilike("Set[%"),
+                        derived_log_alias.inferred_type.ilike("Union[%"),
+                        derived_log_alias.inferred_type.like("{%"),
+                    ),
                     cast(derived_log_alias.value, JSONB),
                 ),
                 else_=None,
@@ -806,6 +859,14 @@ def _build_subquery_for_identifier(
             case(
                 (
                     derived_log_alias.inferred_type == "str",
+                    extract_json_text(derived_log_alias.value),
+                ),
+                (
+                    derived_log_alias.inferred_type == "image",
+                    extract_json_text(derived_log_alias.value),
+                ),
+                (
+                    derived_log_alias.inferred_type == "audio",
                     extract_json_text(derived_log_alias.value),
                 ),
                 else_=None,

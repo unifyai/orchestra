@@ -32,7 +32,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, aggregate_order_by
 from sqlalchemy.sql.selectable import ColumnClause, Subquery
 
-from orchestra.db.dao.log_dao import LogDAO, _is_date_string, _is_time_string
+from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.models.orchestra_models import Log, LogEventLog
 from orchestra.services.bucket_service import BucketService
 
@@ -122,6 +122,8 @@ def _handle_date_function(rhs_expr, session):
                     return literal(dt.date().isoformat(), type_=Date)
                 except ValueError:
                     # If it's already a date string, just pass it as is
+                    from orchestra.web.api.log.utils.type_utils import _is_date_string
+
                     if _is_date_string(val):
                         clean_val = val.strip("\"'")
                         return literal(clean_val, type_=Date)
@@ -834,6 +836,8 @@ def _handle_functions(
                 prefix="func_result",
             )
         else:
+            from orchestra.web.api.log.utils.type_utils import _is_time_string
+
             if isinstance(rhs_expr, BindParameter):
                 val = rhs_expr.value
                 if isinstance(val, datetime):
@@ -997,7 +1001,7 @@ def _handle_functions(
                 select_cols.append(vector_subq.c.__parent_idx__.label("__parent_idx__"))
 
             # Add the vector value and type columns
-            val_col, _ = _select_value(vector_subq, session)
+            val_col, val_type = _select_value(vector_subq, session)
             select_cols.extend(
                 [
                     val_col.label("value"),
@@ -1302,10 +1306,15 @@ def _handle_functions(
                 select_cols.append(rhs_expr.c.__comp_idx__.label("__comp_idx__"))
             if "__parent_idx__" in rhs_expr.c.keys():
                 select_cols.append(rhs_expr.c.__parent_idx__.label("__parent_idx__"))
+            # Build group by columns robustly for all sources of rhs_expr
+            group_by_cols = [rhs_expr.c.log_event_id]
             if val_type in ("list", "dict"):
-                group_by_cols = [rhs_expr.c.log_event_id, rhs_expr.c.jsonb_value]
-            else:
-                group_by_cols = [rhs_expr.c.log_event_id]
+                # Prefer explicit jsonb_value if present (identifier subqueries)
+                if "jsonb_value" in rhs_expr.c.keys():
+                    group_by_cols.append(rhs_expr.c.jsonb_value)
+                # Fallback to grouping by the selected value column if exposed
+                elif "value" in rhs_expr.c.keys():
+                    group_by_cols.append(rhs_expr.c.value)
             if "__comp_idx__" in rhs_expr.c.keys():
                 group_by_cols.append(rhs_expr.c.__comp_idx__)
             if "__parent_idx__" in rhs_expr.c.keys():
@@ -2890,7 +2899,10 @@ def _handle_dict_get(
 
             # Get default type
             if isinstance(default_val, BindParameter):
-                default_type = LogDAO.infer_type("", default_val.value)
+                from orchestra.web.api.log.utils.type_utils import get_base_storage_type
+
+                inferred = LogDAO.infer_type("", default_val.value)
+                default_type = get_base_storage_type(inferred) or inferred
             elif isinstance(default_val, Subquery):
                 _, default_type = _select_value(default_val, session)
             else:
