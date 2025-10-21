@@ -1,9 +1,8 @@
 import base64
 import copy
 import logging
-import re
 from collections import defaultdict
-from datetime import date, datetime, timezone
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from sqlalchemy import alias, and_, cast, func, literal, or_, select, text, update
@@ -33,162 +32,6 @@ class OverwriteError(Exception):
 
 class ImmutableFieldError(Exception):
     pass
-
-
-def _is_date_string(value: str) -> bool:
-    """
-    Check if a string can be parsed as a date in various formats including:
-    - YYYY-MM-DD (ISO 8601)
-    - MM/DD/YYYY
-    - DD/MM/YYYY
-    - DD-MM-YYYY
-    - Month DD, YYYY
-
-    Args:
-        value (str): The string to check
-
-    Returns:
-        bool: True if the string can be parsed as a date, False otherwise
-    """
-    try:
-        if isinstance(value, str):
-            # Remove quotes if present
-            clean_value = value.strip("\"'")
-
-            # Try different date formats
-            for fmt in (
-                "%Y-%m-%d",  # ISO 8601: 2023-01-31
-                "%m/%d/%Y",  # US format: 01/31/2023
-                "%d/%m/%Y",  # UK format: 31/01/2023
-                "%d-%m-%Y",  # European format: 31-01-2023
-                "%B %d, %Y",  # Month name: January 31, 2023
-                "%b %d, %Y",  # Abbreviated month: Jan 31, 2023
-            ):
-                try:
-                    parsed_date = datetime.strptime(clean_value, fmt).date()
-                    # Ensure it's just a date (no time component)
-                    if isinstance(parsed_date, date):
-                        return True
-                except ValueError:
-                    continue
-
-            # Check for ISO format with regex
-            if re.match(r"^\d{4}-\d{2}-\d{2}$", clean_value):
-                try:
-                    date.fromisoformat(clean_value)
-                    return True
-                except ValueError:
-                    pass
-        return False
-    except Exception:
-        return False
-
-
-def _is_timedelta_string(value: str) -> bool:
-    """
-    Check if a string represents a timedelta in ISO 8601 duration format.
-
-    ISO 8601 duration format: P[n]Y[n]M[n]DT[n]H[n]M[n]S
-    Examples:
-    - P1Y2M3DT4H5M6S (1 year, 2 months, 3 days, 4 hours, 5 minutes, 6 seconds)
-    - P1D (1 day)
-    - PT1H (1 hour)
-
-    Also checks for simple duration formats like:
-    - HH:MM:SS
-    - MM:SS
-    - [n] days, [n] hours, etc.
-
-    Args:
-        value (str): The string to check
-
-    Returns:
-        bool: True if the string represents a timedelta, False otherwise
-    """
-    try:
-        if isinstance(value, str):
-            clean_value = value.strip("\"'")
-
-            # Check ISO 8601 duration format
-            iso_duration_pattern = r"^P(?=\d|T\d)(?:\d+Y)?(?:\d+M)?(?:\d+D)?(?:T(?=\d)(?:\d+H)?(?:\d+M)?(?:\d+(?:\.\d+)?S)?)?$"
-            if re.match(iso_duration_pattern, clean_value):
-                return True
-
-            # Check for PostgreSQL interval format: 1 day 2 hours 3 minutes 4 seconds
-            pg_interval_pattern = r"^(\d+\s+(?:day|days|hour|hours|minute|minutes|second|seconds)(?:\s+|$))+$"
-            if re.match(pg_interval_pattern, clean_value, re.IGNORECASE):
-                return True
-
-            # Check for simple time duration format: HH:MM:SS
-            if re.match(r"^\d+:\d{2}(:\d{2})?$", clean_value):
-                # Make sure it's not a valid time (which would be caught by _is_time_string)
-                if not _is_time_string(clean_value):
-                    return True
-        return False
-    except Exception:
-        return False
-
-
-def _is_time_string(value: str) -> bool:
-    """
-    Check if a string can be parsed as a time in various formats including:
-    - HH:MM:SS[.ffffff]
-    - HH:MM
-    - H:MM AM/PM
-    - HH:MM:SS AM/PM
-
-    Args:
-        value (str): The string to check
-
-    Returns:
-        bool: True if the string can be parsed as a time, False otherwise
-    """
-    try:
-        # Try to parse the string as a time
-        if isinstance(value, str):
-            # Remove quotes if present
-            clean_value = value.strip("\"'")
-            # Try different time formats
-            for fmt in (
-                "%H:%M:%S",  # 24-hour with seconds: 14:30:45
-                "%H:%M:%S.%f",  # 24-hour with seconds and microseconds: 14:30:45.123
-                "%H:%M",  # 24-hour without seconds: 14:30
-                "%I:%M %p",  # 12-hour without seconds: 2:30 PM
-                "%I:%M:%S %p",  # 12-hour with seconds: 02:30:45 PM
-                "%I:%M:%S.%f %p",  # 12-hour with seconds and microseconds: 02:30:45.123 PM
-            ):
-                try:
-                    datetime.strptime(clean_value, fmt)
-                    return True
-                except ValueError:
-                    continue
-        return False
-    except Exception:
-        return False
-
-
-def normalize_timestamp(ts_str: str) -> str:
-    """
-    Attempts to parse the provided timestamp string and return an ISO formatted string.
-
-    This function tries to convert various timestamp formats to the ISO 8601 format
-    with the 'T' separator, which is the standard format used in the database.
-    """
-    try:
-        # First try direct ISO format; if it fails, try common alternative formats
-        dt = datetime.fromisoformat(ts_str)
-    except ValueError:
-        # Try alternative formats without 'T', e.g. '%Y-%m-%d %H:%M:%S.%f' or '%Y-%m-%d %H:%M:%S'
-        for fmt in ("%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d %H:%M:%S"):
-            try:
-                dt = datetime.strptime(ts_str, fmt)
-                break
-            except ValueError:
-                continue
-        else:
-            # If no format matches, return the original string
-            return ts_str
-    return dt.isoformat()
 
 
 # noinspection PyBroadException
@@ -303,61 +146,68 @@ class LogDAO:
         Args:
             raw_k: The field name/key
             raw_v: The field value
-            explicit_type: Optional user-specified type string (e.g., "List[int]", "str", "enum")
-                          When provided, this overrides all heuristic type inference
+            explicit_type: Optional user-specified type (string, dict, or Pydantic JSON schema)
+                           - String types: "List[int]", "str", "enum", etc.
+                           - Pydantic schemas: dict with JSON Schema structure
+                           When provided, this overrides all heuristic type inference
 
         Returns:
-            The inferred type as a string. If explicit_type is provided, returns the normalized
-            full type (e.g., "List[int]"). Otherwise, infers from the value (e.g., "list", "int").
+            The inferred type as a string. If explicit_type is provided:
+            - For Pydantic schemas: returns a simple inferred type (e.g., "list", "dict")
+            - For string types: returns the normalized type string (e.g., "List[int]")
+            Otherwise, infers a normalized possibly-nested type from the value.
 
         Note:
-            Type inference priority (highest to lowest):
-            1. Explicit type (if provided) - returns normalized full type
-            2. Python type (list, dict, int, float, bool, NoneType)
-            3. Special string formats (datetime, date, time, timedelta)
-            4. Base64-encoded media (image, audio) - detected via magic bytes
-            5. Default to "str" for any string value
-
-            Field names are NO LONGER used for type inference to avoid brittle heuristics.
-            Users should use explicit types if they need specific types.
+            Priority (highest to lowest):
+            1. Explicit type (if provided) - with Pydantic validation if it's a schema
+            2. Recursive value-based inference (containers allowed heterogeneous element types)
+            3. String special forms (datetime/date/time/timedelta) and media via magic bytes
         """
-        # If explicit_type is provided, return the normalized full type
-        if explicit_type is not None:
-            from orchestra.web.api.log.utils.type_utils import normalize_type_string
+        from orchestra.web.api.log.utils.type_utils import (
+            infer_type_from_value,
+            is_pydantic_schema,
+            normalize_pydantic_schema,
+            normalize_type_string,
+            pydantic_schema_to_string,
+            validate_value_against_pydantic_schema,
+        )
 
+        if explicit_type is not None:
+            # Check if it's a Pydantic JSON schema (dict or JSON string)
+            if is_pydantic_schema(explicit_type):
+                try:
+                    # Validate the value against the JSON schema using jsonschema library
+                    is_valid, error_msg = validate_value_against_pydantic_schema(
+                        raw_v,
+                        explicit_type,
+                    )
+                    if not is_valid:
+                        raise ValueError(
+                            f"Value does not match Pydantic schema for field '{raw_k}': {error_msg}",
+                        )
+
+                    # Normalize to schema dict (if it's a JSON string, parse it)
+                    schema = normalize_pydantic_schema(explicit_type)
+                    # Store the full schema JSON string in inferred_type
+                    return pydantic_schema_to_string(schema)
+
+                except ValueError as e:
+                    # Re-raise validation errors
+                    raise e
+                except Exception as e:
+                    # Handle other errors gracefully
+                    raise ValueError(
+                        f"Error processing Pydantic schema for field '{raw_k}': {str(e)}",
+                    )
+
+            # Regular string type
             return normalize_type_string(explicit_type)
 
-        # Handle strings with special inference logic
-        if isinstance(raw_v, str):
-            # Empty string defaults to str
-            if not raw_v:
-                return "str"
-
-            try:
-                # Try parsing as datetime formats
-                if _is_time_string(raw_v):
-                    return "time"
-                if _is_date_string(raw_v):
-                    return "date"
-                if _is_timedelta_string(raw_v):
-                    return "timedelta"
-
-                datetime.fromisoformat(raw_v)
-                return "datetime"
-            except:
-                pass
-
-            # Check if it's base64-encoded media using magic bytes
-            media_type = LogDAO.detect_media_type(raw_v)
-            if media_type:
-                return media_type
-
-            # Default to str for all other string values
-            # This includes URLs, file paths, and any other string content
-            return "str"
-
-        # For non-string values, use Python's type name
-        return type(raw_v).__name__
+        # Delegate to type_utils and pass media detector hook
+        return infer_type_from_value(
+            raw_v,
+            media_detector=getattr(LogDAO, "detect_media_type", None),
+        )
 
     def get_ids_by_filter(
         self,
@@ -905,6 +755,37 @@ class LogDAO:
 
                 # Determine inferred type for Log.inferred_type column
                 # Priority: explicit type > infer from value
+                # If explicit type is a Pydantic JSON schema, validate using jsonschema path
+                if inferred_type is not None:
+                    try:
+                        from orchestra.web.api.log.utils.type_utils import (
+                            is_pydantic_schema,
+                            normalize_pydantic_schema,
+                            pydantic_schema_to_string,
+                            validate_value_against_pydantic_schema,
+                        )
+
+                        if is_pydantic_schema(inferred_type):
+                            (
+                                is_valid,
+                                error_msg,
+                            ) = validate_value_against_pydantic_schema(
+                                value,
+                                inferred_type,
+                            )
+                            if not is_valid:
+                                raise ValueError(
+                                    f"Value does not match Pydantic schema for field '{key}': {error_msg}",
+                                )
+                            # Store the full schema JSON string as the inferred_type
+                            schema = normalize_pydantic_schema(inferred_type)
+                            inferred_type = pydantic_schema_to_string(schema)
+                        else:
+                            # ensure string type
+                            inferred_type = str(inferred_type)
+                    except Exception as e:
+                        raise e
+
                 if inferred_type == "enum" and project_id is not None:
                     # Handle enum field type
                     enum_values = key_explicit_type.get("values")
@@ -935,6 +816,10 @@ class LogDAO:
                 elif inferred_type == "audio" and isinstance(value, str):
                     value = self.upload_audio_to_bucket(value)
                 if inferred_type == "datetime" and isinstance(value, str):
+                    from orchestra.web.api.log.utils.type_utils import (
+                        normalize_timestamp,
+                    )
+
                     value = normalize_timestamp(value)
 
                 # Collect JSON-typed entries so we can insert them in one statement after the loop
@@ -1573,6 +1458,34 @@ class LogDAO:
 
                 # Determine inferred type for Log.inferred_type column
                 # Priority: explicit type > infer from value
+                if inferred_type is not None:
+                    try:
+                        from orchestra.web.api.log.utils.type_utils import (
+                            is_pydantic_schema,
+                            normalize_pydantic_schema,
+                            pydantic_schema_to_string,
+                            validate_value_against_pydantic_schema,
+                        )
+
+                        if is_pydantic_schema(inferred_type):
+                            (
+                                is_valid,
+                                error_msg,
+                            ) = validate_value_against_pydantic_schema(
+                                value,
+                                inferred_type,
+                            )
+                            if not is_valid:
+                                raise ValueError(
+                                    f"Value does not match Pydantic schema for field '{key}': {error_msg}",
+                                )
+                            schema = normalize_pydantic_schema(inferred_type)
+                            inferred_type = pydantic_schema_to_string(schema)
+                        else:
+                            inferred_type = str(inferred_type)
+                    except Exception as e:
+                        raise e
+
                 if inferred_type == "enum" and project_id is not None:
                     # Handle enum field type
                     enum_values = key_explicit_type.get("values")
