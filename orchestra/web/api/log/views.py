@@ -174,7 +174,7 @@ def create_logs(
 
     This method returns the ids of the new stored logs along with any auto-counting values.
     """
-    # Instantiate DAOs with shared session
+    # Instantiate DAOs with shared session (types may be strings or JSON schemas)
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
@@ -1490,29 +1490,21 @@ def update_logs(
             # Process flat updates normally
             for k, v in flat_data.items():
                 if k in field_types:
-                    from orchestra.web.api.log.utils.type_utils import (
-                        is_untyped_field,
-                        types_match,
+                    # Reuse the module-level type enforcement policy
+                    from orchestra.web.api.log.utils.logging_utils import enforce_types
+
+                    enforce_types(
+                        k,
+                        v,
+                        field_types=field_types,
+                        field_type_dao=field_type_dao,
+                        context_dao=context_dao,
+                        project_id=project_id,
+                        batch_index=i,
+                        explicit_types=explicit_types,
+                        context_id=ctx_id,
+                        is_param=(data_type == "params"),
                     )
-
-                    expected_type = field_types[k]["field_type"]
-                    original_type = LogDAO.infer_type(k, v)
-
-                    # Check if field is untyped (DEFAULT_FIELD_TYPE/"Any")
-                    if is_untyped_field(expected_type):
-                        # Untyped fields can accept any value
-                        # New policy: We CANNOT modify existing field types (no upsert)
-                        # The field exists with type "Any", just allow the value through
-                        pass
-                    elif not types_match(expected_type, original_type):
-                        # Strict type mismatch - use smart matching for nested types and enums
-                        raise HTTPException(
-                            status_code=400,
-                            detail=(
-                                f"Type mismatch for field '{k}' in log id {log_id}: "
-                                f"expected {expected_type}, got {original_type}"
-                            ),
-                        )
                 else:
                     # Field doesn't exist - create it
                     mutable = (
