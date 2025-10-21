@@ -101,7 +101,7 @@ async def test_create_log_w_image(client: AsyncClient):
             "img_url": "https://upload.wikimedia.org/wikipedia/commons/4/45/Eopsaltria_australis_-_Mogo_Campground.jpg",
             "explicit_types": {
                 "img_raw": {"type": "image"},
-                "img_url": {"type": "image"},
+                "img_url": {"type": "str"},
             },
         },
     )
@@ -166,7 +166,7 @@ async def test_create_log_w_audio(client: AsyncClient):
             "sound_effect": "https://example.com/sounds/effect.mp3",
             "explicit_types": {
                 "user_recording": {"type": "audio"},
-                "sound_effect": {"type": "audio"},
+                "sound_effect": {"type": "str"},
             },
         },
     )
@@ -1106,3 +1106,462 @@ async def test_batch_create_logs_with_nested_types(client: AsyncClient):
 
     assert field_types["scores"]["data_type"] == "List[int]"
     assert field_types["metrics"]["data_type"] == "Dict[str, float]"
+
+
+# ================================================================================
+# Comprehensive Type Tests - Base and Nested Types
+# ================================================================================
+
+
+@pytest.mark.anyio
+async def test_create_field_then_log_with_matching_base_types(client: AsyncClient):
+    """Test creating fields first, then logs with matching base types."""
+    project_name = "test-field-first-base-types"
+    _ = await _create_project(client, project_name)
+
+    # Step 1: Create fields via POST /logs/fields
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project": project_name,
+            "fields": {
+                "name": {"type": "str", "mutable": True},
+                "age": {"type": "int", "mutable": True},
+                "score": {"type": "float", "mutable": True},
+                "active": {"type": "bool", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 2: Create log with matching types (implicit - no explicit_types)
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "name": "Alice",
+                "age": 30,
+                "score": 95.5,
+                "active": True,
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 3: Verify log was created successfully
+    logs_response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_response.status_code == 200
+    logs = logs_response.json()["logs"]
+    assert len(logs) == 1
+    assert logs[0]["entries"]["name"] == "Alice"
+    assert logs[0]["entries"]["age"] == 30
+
+
+@pytest.mark.anyio
+async def test_create_field_then_log_with_mismatching_base_types(client: AsyncClient):
+    """Test creating fields first, then logs with mismatching base types - should fail."""
+    project_name = "test-field-mismatch-base"
+    _ = await _create_project(client, project_name)
+
+    # Step 1: Create fields
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project": project_name,
+            "fields": {
+                "age": {"type": "int", "mutable": True},
+                "score": {"type": "float", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 2: Try to create log with wrong types
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "age": "thirty",  # Wrong: should be int
+                "score": "high",  # Wrong: should be float
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 400, response.json()  # Should fail
+
+
+@pytest.mark.anyio
+async def test_create_field_then_log_with_matching_nested_types(client: AsyncClient):
+    """Test creating fields with nested types first, then logs with matching nested types."""
+    project_name = "test-field-first-nested"
+    _ = await _create_project(client, project_name)
+
+    # Step 1: Create fields with nested types
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project": project_name,
+            "fields": {
+                "scores": {"type": "List[int]", "mutable": True},
+                "metrics": {"type": "Dict[str, float]", "mutable": True},
+                "tags": {"type": "List[str]", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 2: Create log with matching nested types
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "scores": [95, 87, 92],
+                "metrics": {"accuracy": 0.95, "precision": 0.89},
+                "tags": ["ml", "experiment", "v1"],
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify
+    logs_response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_response.status_code == 200, logs_response.json()
+    logs = logs_response.json()["logs"]
+    assert len(logs) == 1
+    assert logs[0]["entries"]["scores"] == [95, 87, 92]
+    assert logs[0]["entries"]["metrics"]["accuracy"] == 0.95
+
+
+@pytest.mark.anyio
+async def test_create_field_then_log_with_mismatching_nested_types(client: AsyncClient):
+    """Test nested type mismatch - should fail."""
+    project_name = "test-nested-mismatch"
+    _ = await _create_project(client, project_name)
+
+    # Step 1: Create field with List[int]
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project": project_name,
+            "fields": {
+                "scores": {"type": "List[int]", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Step 2: Try to create log with List[str] - should fail
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "scores": ["high", "medium", "low"],  # Wrong: should be ints
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 400, response.json()
+
+
+@pytest.mark.anyio
+async def test_implicit_then_explicit_nested_type_creation(client: AsyncClient):
+    """Test creating log implicitly, then with explicit nested type."""
+    project_name = "test-implicit-explicit-nested"
+    _ = await _create_project(client, project_name)
+
+    # Step 1: Create log implicitly (no explicit types) - gets type "Any"
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "data": [1, 2, 3],
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify it got type "Any"
+    fields_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200
+    fields = fields_response.json()
+    assert fields["data"]["data_type"] == "Any"
+
+    # Step 2: Create another field with explicit nested type
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "scores": [95, 87, 92],
+                "explicit_types": {
+                    "scores": {"type": "List[int]", "mutable": True},
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify explicit type was set
+    fields_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200
+    fields = fields_response.json()
+    assert fields["scores"]["data_type"] == "List[int]"
+
+
+@pytest.mark.anyio
+async def test_heterogeneous_list_types(client: AsyncClient):
+    """Test creating fields with heterogeneous list types."""
+    project_name = "test-hetero-lists"
+    _ = await _create_project(client, project_name)
+
+    # Create field with heterogeneous list
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "mixed_data": [1, "text", 3.14, True],
+                "explicit_types": {
+                    "mixed_data": {
+                        "type": "List[int, str, float, bool]",
+                        "mutable": True,
+                    },
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify field type
+    fields_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200, fields_response.json()
+    fields = fields_response.json()
+    assert "mixed_data" in fields
+    # Type should be stored as provided
+    assert fields["mixed_data"]["data_type"] == "List[int, str, float, bool]"
+
+
+@pytest.mark.anyio
+async def test_deeply_nested_types(client: AsyncClient):
+    """Test creating fields with deeply nested types."""
+    project_name = "test-deep-nested"
+    _ = await _create_project(client, project_name)
+
+    # Create field with deeply nested type
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "complex_data": {
+                    "level1": {
+                        "level2": [
+                            {"name": "item1", "values": [1, 2, 3]},
+                            {"name": "item2", "values": [4, 5, 6]},
+                        ],
+                    },
+                },
+                "explicit_types": {
+                    "complex_data": {
+                        "type": "Dict[str, Dict[str, List[dict]]]",
+                        "mutable": True,
+                    },
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify
+    logs_response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_response.status_code == 200, logs_response.json()
+    logs = logs_response.json()["logs"]
+    assert len(logs) == 1
+    assert "level1" in logs[0]["entries"]["complex_data"]
+
+
+@pytest.mark.anyio
+async def test_create_with_pydantic_schema(client: AsyncClient):
+    """Test creating field with Pydantic JSON schema."""
+    pytest.importorskip("pydantic")
+    from pydantic import BaseModel
+
+    class Person(BaseModel):
+        name: str
+        age: int
+
+    project_name = "test-pydantic-schema"
+    _ = await _create_project(client, project_name)
+
+    # Get Pydantic schema
+    person_schema = Person.model_json_schema()
+
+    # Create log with Pydantic schema
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "person": {"name": "Alice", "age": 30},
+                "explicit_types": {
+                    "person": {"type": person_schema, "mutable": True},
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify field was created with correct normalized type
+    fields_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200, fields_response.json()
+    fields = fields_response.json()
+    assert "person" in fields
+    import json
+
+    assert fields["person"]["data_type"] == json.dumps(person_schema)
+
+    # Verify the stored log inferred type is a dict-like simple type
+    logs_response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_response.status_code == 200, logs_response.json()
+    logs = logs_response.json()["logs"]
+    assert len(logs) == 1
+    # entries.person exists and is a dict
+    assert isinstance(logs[0]["entries"]["person"], dict)
+
+
+@pytest.mark.anyio
+async def test_create_with_pydantic_schema_validation_failure(client: AsyncClient):
+    """Test that invalid data against Pydantic schema fails."""
+    pytest.importorskip("pydantic")
+    from pydantic import BaseModel
+
+    class Person(BaseModel):
+        name: str
+        age: int
+
+    project_name = "test-pydantic-validation-fail"
+    _ = await _create_project(client, project_name)
+
+    person_schema = Person.model_json_schema()
+
+    # Try to create log with invalid data
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "person": {"name": "Bob"},  # Missing required 'age'
+                "explicit_types": {
+                    "person": {"type": person_schema, "mutable": True},
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 400, response.json()  # Should fail validation
+
+
+@pytest.mark.anyio
+async def test_create_with_nested_pydantic_schema(client: AsyncClient):
+    """Test creating field with nested Pydantic schema."""
+    pytest.importorskip("pydantic")
+    from typing import List as TypingList
+
+    from pydantic import BaseModel
+
+    class Item(BaseModel):
+        name: str
+        price: float
+
+    class Order(BaseModel):
+        order_id: str
+        items: TypingList[Item]
+
+    project_name = "test-nested-pydantic"
+    _ = await _create_project(client, project_name)
+
+    order_schema = Order.model_json_schema()
+
+    # Create log with nested Pydantic schema
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "order": {
+                    "order_id": "ORD-001",
+                    "items": [
+                        {"name": "Widget", "price": 9.99},
+                        {"name": "Gadget", "price": 19.99},
+                    ],
+                },
+                "explicit_types": {
+                    "order": {"type": order_schema, "mutable": True},
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify
+    logs_response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_response.status_code == 200, logs_response.json()
+    logs = logs_response.json()["logs"]
+    assert len(logs) == 1
+    assert logs[0]["entries"]["order"]["order_id"] == "ORD-001"
+    assert len(logs[0]["entries"]["order"]["items"]) == 2
+
+    # Verify field type normalization for nested schema
+    fields_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200, fields_response.json()
+    fields = fields_response.json()
+    import json
+
+    assert fields["order"]["data_type"] == json.dumps(order_schema)
