@@ -1160,7 +1160,7 @@ async def test_explicit_type_with_params(client: AsyncClient):
                 "model": "gpt-4",  # Implicit param with type "Any"
             },
             "entries": {
-                "config": {"lr": 0.001, "epochs": 100},
+                "config": {"lr": 0.001, "epochs": 100.0},
                 "result": [0.9, 0.95, 0.98],
             },
         },
