@@ -136,7 +136,7 @@ supported_models = {
     "qwen-3-235b-a22b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen3-235B-A22B-Instruct-2507",
         "context_window": 256000,
-        "cost": {"prompt": 0.09, "completion": 0.6},
+        "cost": {"prompt": 0.09, "completion": 0.57},
     },
     "qwen-3-30b-a3b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen3-30B-A3B",

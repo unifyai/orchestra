@@ -67,4 +67,9 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 3, "completion": 15},
     },
+    "claude-4.5-haiku": {
+        "endpoint": "anthropic/claude-haiku-4-5-20251001",
+        "context_window": 200000,
+        "cost": {"prompt": 1, "completion": 5},
+    },
 }

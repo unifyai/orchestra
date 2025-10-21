@@ -51,11 +51,11 @@ supported_models = {
     "gpt-oss-20b": {
         "endpoint": "groq/openai/gpt-oss-20b",
         "context_window": 128000,
-        "cost": {"prompt": 0.1, "completion": 0.5},
+        "cost": {"prompt": 0.075, "completion": 0.3},
     },
     "gpt-oss-120b": {
         "endpoint": "groq/openai/gpt-oss-120b",
         "context_window": 128000,
-        "cost": {"prompt": 0.15, "completion": 0.75},
+        "cost": {"prompt": 0.15, "completion": 0.6},
     },
 }
