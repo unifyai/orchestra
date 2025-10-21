@@ -4,13 +4,6 @@ import textwrap
 
 from fastapi import HTTPException
 
-from orchestra.db.dao.log_dao import (
-    _is_date_string,
-    _is_time_string,
-    _is_timedelta_string,
-    normalize_timestamp,
-)
-
 SIMILARITY_FUNCS = {"l2", "cosine", "ip", "l1", "hamming", "jaccard", "phash_distance"}
 
 __all__ = ["str_filter_exp_to_dict", "str_filter_exp_to_dict_using_ast"]
@@ -147,6 +140,13 @@ def _tokenize(s):
             )
             tokens.append(("NUMBER", value))
         elif kind == "STRING":
+            from orchestra.web.api.log.utils.type_utils import (
+                _is_date_string,
+                _is_time_string,
+                _is_timedelta_string,
+                normalize_timestamp,
+            )
+
             # Remove the surrounding quotes and unescape
             unquoted_value = value[1:-1]
             # If you want to allow embedded quotes or backslashes:
@@ -513,6 +513,8 @@ def _transform_ast(node: ast.AST, preserve_string_literals: bool = False) -> dic
     Returns:
         A dictionary representation of the node in the format expected by build_sql_query
     """
+    from orchestra.web.api.log.utils.type_utils import normalize_timestamp
+
     # Handle literals (constants)
     if isinstance(node, ast.Constant):
         # Check for raw base64 image data URI first
