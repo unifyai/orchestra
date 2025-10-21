@@ -136,6 +136,12 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 3, "completion": 15},
     },
+    "claude-4.5-haiku": {
+        "endpoint": "vertex_ai/claude-haiku-4-5@20251001",
+        "region": "us-east5",
+        "context_window": 200000,
+        "cost": {"prompt": 1, "completion": 5},
+    },
     "llama-3.1-405b-chat": {
         "endpoint": "vertex_ai/meta/llama3-405b-instruct-maas",
         "region": "us-central1",
@@ -159,6 +165,12 @@ supported_models = {
         "region": "us-east5",
         "context_window": 1048576,
         "cost": {"prompt": 0.25, "completion": 0.7},
+    },
+    "mistral-medium": {
+        "endpoint": "vertex_ai/mistral-medium-3",
+        "region": "europe-west4",
+        "context_window": 128000,
+        "cost": {"prompt": 0.4, "completion": 2},
     },
     "mistral-large": {
         "endpoint": "vertex_ai/mistral-large",
