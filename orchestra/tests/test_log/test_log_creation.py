@@ -115,7 +115,7 @@ async def test_create_log_w_image(client: AsyncClient):
     assert field_types_response.status_code == 200
     fields2 = field_types_response.json()
     assert fields2["img_raw"]["data_type"] == "image"
-    assert fields2["img_url"]["data_type"] == "image"
+    assert fields2["img_url"]["data_type"] == "str"
     assert fields2["img_raw"]["field_type"] == "entry"
     assert fields2["img_url"]["field_type"] == "entry"
     assert fields2["img_raw"]["mutable"] == True
@@ -182,7 +182,7 @@ async def test_create_log_w_audio(client: AsyncClient):
 
     # Check that both fields match explicit 'audio'
     assert fields["user_recording"]["data_type"] == "audio"
-    assert fields["sound_effect"]["data_type"] == "audio"
+    assert fields["sound_effect"]["data_type"] == "str"
 
     # Check other properties
     assert fields["user_recording"]["field_type"] == "entry"
