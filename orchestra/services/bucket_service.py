@@ -58,6 +58,18 @@ class BucketService:
             self.assistant_images_bucket_name,
         )
 
+        # Assistant call recordings bucket
+        self.assistant_recordings_bucket_name = os.getenv(
+            "ORCHESTRA_GCP_ASSISTANT_RECORDINGS_BUCKET_NAME",
+        )
+        if not self.assistant_recordings_bucket_name:
+            raise ValueError(
+                "Missing required GCP assistant recordings bucket name configuration (ORCHESTRA_GCP_ASSISTANT_RECORDINGS_BUCKET_NAME)",
+            )
+        self.assistant_recordings_bucket = self.storage_client.bucket(
+            self.assistant_recordings_bucket_name,
+        )
+
     def _generate_unique_filename(self, content: bytes, extension: str = "") -> str:
         """Generate a unique filename using content hash, UUID, and an optional extension."""
         content_hash = hashlib.md5(content).hexdigest()
@@ -70,6 +82,7 @@ class BucketService:
         self,
         content: bytes,
         content_type: str,
+        file_path: str,
         is_staging: bool = False,
     ) -> Tuple[str, str]:
         """
@@ -86,21 +99,20 @@ class BucketService:
             Exception: If upload fails
         """
         try:
-            # Generate unique filename
-            unique_filename = self._generate_unique_filename(content)
+            # Generate file path
             if is_staging:
-                filename = "assistant_call_recording_staging/" + unique_filename
+                file_path = "staging/" + file_path
             else:
-                filename = "assistant_call_recording/" + unique_filename
+                file_path = "production/" + file_path
 
             # Upload to GCS
-            blob = self.bucket.blob(filename)
+            blob = self.assistant_recordings_bucket.blob(file_path)
             blob.upload_from_string(content, content_type=content_type)
 
             # Generate URL
             url = blob.public_url
 
-            return url, filename
+            return url, file_path
 
         except exceptions.GoogleAPIError as e:
             raise Exception(f"Failed to upload recording: {str(e)}")

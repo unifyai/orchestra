@@ -13,6 +13,112 @@ from . import (
 
 
 @pytest.mark.anyio
+async def test_update_logs_partial_success_flat_and_nested(client: AsyncClient):
+    project_name = "update-partial-success"
+    _ = await _create_project(client, project_name)
+
+    # Create two logs
+    r1 = await _create_log(
+        client,
+        project_name,
+        entries={
+            "name": "ok1",
+            "profile": {"age": 20, "tags": ["a", "b"]},
+            "explicit_types": {
+                "name": {"type": "str", "mutable": True},
+                "profile": {"type": "dict", "mutable": True},
+            },
+        },
+    )
+    r2 = await _create_log(
+        client,
+        project_name,
+        entries={
+            "name": "ok2",
+            "profile": {"age": 21, "tags": ["x", "y"]},
+            "explicit_types": {
+                "name": {"type": "str", "mutable": True},
+                "profile": {"type": "dict", "mutable": True},
+            },
+        },
+    )
+    assert r1.status_code == 200 and r2.status_code == 200
+    id1 = r1.json()["log_event_ids"][0]
+    id2 = r2.json()["log_event_ids"][0]
+
+    # Pre-create strict type for 'status' as str to cause a flat update error when non-str is used
+    resp_ft = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project": project_name,
+            "fields": {"status": {"type": "str", "mutable": True}},
+        },
+        headers=HEADERS,
+    )
+    assert resp_ft.status_code == 200, resp_ft.json()
+
+    # Flat updates: good for id1, bad for id2 (status should be str, send dict)
+    flat_entries = [
+        {
+            "status": "active",
+            "explicit_types": {"status": {"type": "str", "mutable": True}},
+        },
+        {
+            "status": {"bad": True},
+            "explicit_types": {"status": {"type": "dict", "mutable": True}},
+        },
+    ]
+
+    # Nested updates: good for id1 (profile.age), bad for id2 (out-of-range index on tags)
+    nested_entries = [
+        {"profile.age": 30},
+        {"profile.tags[5]": "oops"},
+    ]
+
+    # Apply both flat and nested in one call
+    resp = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [id1, id2],
+            "entries": flat_entries,
+            "context": "",
+            "project": project_name,
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.json()
+
+    # Now nested patch in a separate call (since nested is parsed differently)
+    resp_nested = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [id1, id2],
+            "entries": nested_entries,
+            "context": "",
+            "project": project_name,
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert resp_nested.status_code == 200, resp_nested.json()
+
+    # Verify id1 updated; id2 remained unchanged where it failed
+    g1 = await _get_log(client, project_name, id1)
+    g2 = await _get_log(client, project_name, id2)
+    assert g1.status_code == 200 and g2.status_code == 200
+    e1 = g1.json()["logs"][0]["entries"]
+    e2 = g2.json()["logs"][0]["entries"]
+
+    assert e1.get("status") == "active"
+    assert e1.get("profile")["age"] == 30
+
+    # id2: flat status update should have failed, nested out-of-range should have failed
+    assert e2.get("status") is None or isinstance(e2.get("status"), str) is False
+    assert e2.get("profile")["age"] == 21
+
+
+@pytest.mark.anyio
 async def test_update_logs_overwrites(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
@@ -36,12 +142,58 @@ async def test_update_logs_overwrites(client: AsyncClient):
 
     log_ids = [log_id, log_id_2]
 
-    response = await _update_multiple_logs_w_overwrite(client, log_ids, overwrite=False)
+    # Will fail with the first log_id because of overwrite=False
+    response = await _update_multiple_logs_w_overwrite(
+        client,
+        [log_id],
+        overwrite=False,
+    )
     assert response.status_code == 400, response.json()
 
+    response = await _get_log(client, project_name, log_id)
+    assert response.status_code == 200, response.json()
+    new_entries = response.json()["logs"][0]["entries"]
+    # Confirm that the log was not updated
+    assert len(new_entries) == 3
+    assert new_entries["a/b/c/input"] == orig_entries["a/b/c/input"]
+    assert new_entries["a/b/c/boolean_input"] == orig_entries["a/b/c/boolean_input"]
+    assert new_entries["a/b/c/numeric_input"] == orig_entries["a/b/c/numeric_input"]
+
+    # Will pass partially with both [log_id, log_id_2] because of overwrite=False
+    # since first log_id contains matching keys resulting in failure of overwriting
+    # but second log_id_2 will be updated successfully
+    response = await _update_multiple_logs_w_overwrite(client, log_ids, overwrite=False)
+    assert response.status_code == 200, response.json()
+    assert len(response.json()["failed"]) == 1
+    assert response.json()["failed"][0]["log_event_id"] == log_id
+    assert (
+        "Existing value cannot be overwritten because overwrite is set to False"
+        in response.json()["failed"][0]["error"]
+    )
+
+    response = await _get_log(client, project_name, log_id)
+    assert response.status_code == 200, response.json()
+    new_entries = response.json()["logs"][0]["entries"]
+    # Confirm that the log was not updated
+    assert len(new_entries) == 3
+    assert new_entries["a/b/c/input"] == orig_entries["a/b/c/input"]
+    assert new_entries["a/b/c/boolean_input"] == orig_entries["a/b/c/boolean_input"]
+    assert new_entries["a/b/c/numeric_input"] == orig_entries["a/b/c/numeric_input"]
+
+    response = await _get_log(client, project_name, log_id_2)
+    assert response.status_code == 200, response.json()
+    new_entries = response.json()["logs"][0]["entries"]
+    # Confirm that the log was updated
+    assert len(new_entries) == 4
+    assert new_entries["a/b/c/boolean_input"] != orig_entries["a/b/c/boolean_input"]
+    assert new_entries["a/b/c/numeric_input"] != orig_entries["a/b/c/numeric_input"]
+
+    # Will pass with both [log_id, log_id_2] because of overwrite=True
+    # since both logs will be updated successfully
     response = await _update_multiple_logs_w_overwrite(client, log_ids, overwrite=True)
     assert response.status_code == 200, response.json()
 
+    # Confirm that the logs were updated
     response = await _get_log(client, project_name, log_id)
     assert response.status_code == 200, response.json()
     new_entries = response.json()["logs"][0]["entries"]
@@ -54,6 +206,8 @@ async def test_update_logs_overwrites(client: AsyncClient):
     assert response.status_code == 200, response.json()
     new_entries = response.json()["logs"][0]["entries"]
     assert len(new_entries) == 4
+    assert new_entries["a/b/c/boolean_input"] != orig_entries["a/b/c/boolean_input"]
+    assert new_entries["a/b/c/numeric_input"] != orig_entries["a/b/c/numeric_input"]
 
 
 @pytest.mark.anyio
@@ -498,4 +652,849 @@ async def test_update_logs_invalid_nested_path(client: AsyncClient):
     )
 
     # Should fail with a 400 error
+    assert response.status_code == 400, response.json()
+
+
+@pytest.mark.anyio
+async def test_update_log_with_explicit_nested_type(client: AsyncClient):
+    """Test updating a log with explicit nested types."""
+    project_name = "test-update-nested-type"
+    _ = await _create_project(client, project_name)
+
+    # Create initial log with nested type
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "scores": [80, 85, 90],
+                "explicit_types": {
+                    "scores": {"type": "List[int]", "mutable": True},
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    # Update the log
+    update_response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "project": project_name,
+            "entries": {
+                "scores": [95, 98, 100],
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert update_response.status_code == 200, update_response.json()
+
+    # Verify the update
+    logs_response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_response.status_code == 200
+    logs = logs_response.json()["logs"]
+    assert len(logs) == 1
+    assert logs[0]["entries"]["scores"] == [95, 98, 100]
+
+    # Verify type is still "List[int]"
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+    assert field_types["scores"]["data_type"] == "List[int]"
+
+
+@pytest.mark.anyio
+async def test_update_adds_field_with_explicit_type(client: AsyncClient):
+    """Test that updating a log can add a new field with explicit type."""
+    project_name = "test-update-add-field-explicit"
+    _ = await _create_project(client, project_name)
+
+    # Create initial log
+    response = await _create_log(client, project_name)
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    # Update to add a new field with explicit nested type
+    update_response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "project": project_name,
+            "entries": {
+                "new_scores": [1, 2, 3, 4, 5],
+                "explicit_types": {
+                    "new_scores": {"type": "List[int]", "mutable": True},
+                },
+            },
+            "overwrite": False,
+        },
+        headers=HEADERS,
+    )
+    assert update_response.status_code == 200, update_response.json()
+
+    # Verify the new field has the correct type
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    field_types = field_types_response.json()
+    assert "new_scores" in field_types
+    assert field_types["new_scores"]["data_type"] == "List[int]"
+
+
+@pytest.mark.anyio
+async def test_batch_update_with_nested_types(client: AsyncClient):
+    """Test batch updating multiple logs with nested explicit types."""
+    project_name = "test-batch-update-nested"
+    _ = await _create_project(client, project_name)
+
+    # Create two logs
+    response1 = await _create_log(
+        client,
+        project_name,
+        entries={
+            "data": [1, 2],
+            "explicit_types": {"data": {"type": "List[int]", "mutable": True}},
+        },
+    )
+    response2 = await _create_log(
+        client,
+        project_name,
+        entries={
+            "data": [3, 4],
+            "explicit_types": {"data": {"type": "List[int]", "mutable": True}},
+        },
+    )
+    assert response1.status_code == 200
+    assert response2.status_code == 200
+    log_id1 = response1.json()["log_event_ids"][0]
+    log_id2 = response2.json()["log_event_ids"][0]
+
+    # Batch update with different values
+    update_response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id1, log_id2],
+            "project": project_name,
+            "entries": [
+                {"data": [10, 20, 30]},
+                {"data": [40, 50, 60]},
+            ],
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert update_response.status_code == 200, update_response.json()
+
+    # Verify both logs were updated
+    logs_response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_response.status_code == 200
+    logs = logs_response.json()["logs"]
+    assert len(logs) == 2
+
+    # Find the logs by ID and verify their values
+    log1 = next((log for log in logs if log["id"] == log_id1), None)
+    log2 = next((log for log in logs if log["id"] == log_id2), None)
+    assert log1 is not None
+    assert log2 is not None
+    assert log1["entries"]["data"] == [10, 20, 30]
+    assert log2["entries"]["data"] == [40, 50, 60]
+
+
+# ================================================================================
+# Comprehensive Update Tests - Base and Nested Types
+# ================================================================================
+
+
+@pytest.mark.anyio
+async def test_update_log_matching_base_types(client: AsyncClient):
+    """Test updating log with matching base types."""
+    project_name = "test-update-match-base"
+    _ = await _create_project(client, project_name)
+
+    # Create field with base types
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project": project_name,
+            "fields": {
+                "name": {"type": "str", "mutable": True},
+                "age": {"type": "int", "mutable": True},
+                "score": {"type": "float", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create log
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "name": "Alice",
+                "age": 30,
+                "score": 85.5,
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    log_id = response.json()["log_event_ids"][0]
+
+    # Update with matching types - should succeed
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "project": project_name,
+            "entries": {
+                "name": "Bob",
+                "age": 35,
+                "score": 92.0,
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Verify update
+    logs_response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    logs = logs_response.json()["logs"]
+    assert logs[0]["entries"]["name"] == "Bob"
+    assert logs[0]["entries"]["age"] == 35
+
+
+@pytest.mark.anyio
+async def test_update_log_mismatching_base_types(client: AsyncClient):
+    """Test updating log with mismatching base types - should fail."""
+    project_name = "test-update-mismatch-base"
+    _ = await _create_project(client, project_name)
+
+    # Create field with base types
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project": project_name,
+            "fields": {
+                "age": {"type": "int", "mutable": True},
+                "score": {"type": "float", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create log
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "age": 30,
+                "score": 85.5,
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    log_id = response.json()["log_event_ids"][0]
+
+    # Try to update with wrong types - should fail
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "project": project_name,
+            "entries": {
+                "age": "thirty-five",  # Wrong: should be int
+                "score": "high",  # Wrong: should be float
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_update_log_matching_nested_types(client: AsyncClient):
+    """Test updating log with matching nested types."""
+    project_name = "test-update-match-nested"
+    _ = await _create_project(client, project_name)
+
+    # Create fields with nested types
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project": project_name,
+            "fields": {
+                "scores": {"type": "List[int]", "mutable": True},
+                "metrics": {"type": "Dict[str, float]", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create log
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "scores": [85, 90, 88],
+                "metrics": {"accuracy": 0.85, "precision": 0.90},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    log_id = response.json()["log_event_ids"][0]
+
+    # Update with matching nested types - should succeed
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "project": project_name,
+            "entries": {
+                "scores": [95, 92, 98],
+                "metrics": {"accuracy": 0.95, "precision": 0.92},
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Verify update
+    logs_response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    logs = logs_response.json()["logs"]
+    assert logs[0]["entries"]["scores"] == [95, 92, 98]
+    assert logs[0]["entries"]["metrics"]["accuracy"] == 0.95
+
+
+@pytest.mark.anyio
+async def test_update_log_mismatching_nested_types(client: AsyncClient):
+    """Test updating log with mismatching nested types - should fail."""
+    project_name = "test-update-mismatch-nested"
+    _ = await _create_project(client, project_name)
+
+    # Create field with List[int]
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project": project_name,
+            "fields": {
+                "scores": {"type": "List[int]", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create log
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "scores": [85, 90, 88],
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    log_id = response.json()["log_event_ids"][0]
+
+    # Try to update with List[str] - should fail
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "project": project_name,
+            "entries": {
+                "scores": ["high", "medium", "low"],  # Wrong: should be ints
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_update_with_pydantic_schema_matching(client: AsyncClient):
+    """Test updating log with Pydantic schema - matching data."""
+    pytest.importorskip("pydantic")
+    from pydantic import BaseModel
+
+    class Person(BaseModel):
+        name: str
+        age: int
+
+    project_name = "test-update-pydantic-match"
+    _ = await _create_project(client, project_name)
+
+    person_schema = Person.model_json_schema()
+
+    # Create log with Pydantic schema
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "person": {"name": "Alice", "age": 30},
+                "explicit_types": {
+                    "person": {"type": person_schema, "mutable": True},
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    # Update with matching schema data - should succeed
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "project": project_name,
+            "entries": {
+                "person": {"name": "Bob", "age": 35},
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify update
+    logs_response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    logs = logs_response.json()["logs"]
+    assert logs[0]["entries"]["person"]["name"] == "Bob"
+    assert logs[0]["entries"]["person"]["age"] == 35
+
+    # Field type should be normalized to Dict[str, Any] or dict
+    fields_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200, fields_response.json()
+    fields = fields_response.json()
+    import json
+
+    assert fields["person"]["data_type"] == json.dumps(person_schema)
+
+
+@pytest.mark.anyio
+async def test_update_with_pydantic_schema_mismatching(client: AsyncClient):
+    """Test updating log with Pydantic schema - mismatching data should fail."""
+    pytest.importorskip("pydantic")
+    from pydantic import BaseModel
+
+    class Person(BaseModel):
+        name: str
+        age: int
+
+    project_name = "test-update-pydantic-mismatch"
+    _ = await _create_project(client, project_name)
+
+    person_schema = Person.model_json_schema()
+
+    # Create log with Pydantic schema
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "person": {"name": "Alice", "age": 30},
+                "explicit_types": {
+                    "person": {"type": person_schema, "mutable": True},
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    # Get fields
+    # Field type should remain a dict-like simple type
+    fields_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200, fields_response.json()
+    fields = fields_response.json()
+    import json
+
+    assert fields["person"]["data_type"] == json.dumps(person_schema)
+
+    # Try to update with valid data - should pass
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "project": project_name,
+            "entries": {
+                "person": {"name": "Charlie", "age": 25},
+                "explicit_types": {
+                    "person": {"type": person_schema, "mutable": True},
+                },
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Try to update with invalid data - should fail
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "project": project_name,
+            "entries": {
+                "person": {"name": "Charlie"},  # age required
+                "explicit_types": {
+                    "person": {"type": person_schema, "mutable": True},
+                },
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 400, response.json()
+    print(response.json())
+
+    # Try to update with valid data but no explicit type
+    # should still pass if the data matches the schema
+    # but fail if the data does not match the schema
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "project": project_name,
+            "entries": {
+                "person": {"name": "Charlie", "age": 30},  # no explicit types
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    print(response.json())
+
+    # Try to update with invalid data but no explicit type
+    # should fail now cause inferred type won't match the schema
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "project": project_name,
+            "entries": {
+                "person": {
+                    "name": "Charlie",
+                    "age": [30],
+                },  # list age, inferred type will be list
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 400, response.json()
+    assert "Type validation against field" in response.text
+
+
+@pytest.mark.anyio
+async def test_update_nested_pydantic_schema(client: AsyncClient):
+    """Test updating log with nested Pydantic schema."""
+    pytest.importorskip("pydantic")
+    from typing import List as TypingList
+
+    from pydantic import BaseModel
+
+    class Item(BaseModel):
+        name: str
+        price: float
+
+    class Order(BaseModel):
+        order_id: str
+        items: TypingList[Item]
+
+    project_name = "test-update-nested-pydantic"
+    _ = await _create_project(client, project_name)
+
+    order_schema = Order.model_json_schema()
+
+    # Create log
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "order": {
+                    "order_id": "ORD-001",
+                    "items": [{"name": "Widget", "price": 9.99}],
+                },
+                "explicit_types": {
+                    "order": {"type": order_schema, "mutable": True},
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    # Update with valid nested data
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "project": project_name,
+            "entries": {
+                "order": {
+                    "order_id": "ORD-002",
+                    "items": [
+                        {"name": "Gadget", "price": 19.99},
+                        {"name": "Tool", "price": 29.99},
+                    ],
+                },
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify update
+    logs_response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    logs = logs_response.json()["logs"]
+    assert logs[0]["entries"]["order"]["order_id"] == "ORD-002"
+    assert len(logs[0]["entries"]["order"]["items"]) == 2
+
+    # Field type should remain a dict-like simple type
+    fields_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200, fields_response.json()
+    fields = fields_response.json()
+    import json
+
+    assert fields["order"]["data_type"] == json.dumps(order_schema)
+
+
+@pytest.mark.anyio
+async def test_update_complex_nested_dict_types(client: AsyncClient):
+    """Test updating log with complex nested dict types."""
+    project_name = "test-update-complex-nested"
+    _ = await _create_project(client, project_name)
+
+    # Create field with nested dict type
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project": project_name,
+            "fields": {
+                "config": {"type": "Dict[str, Dict[str, float]]", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Create log
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "config": {
+                    "model_a": {"lr": 0.001, "dropout": 0.2},
+                    "model_b": {"lr": 0.01, "dropout": 0.3},
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    # Update with matching type
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "project": project_name,
+            "entries": {
+                "config": {
+                    "model_c": {"lr": 0.005, "dropout": 0.25},
+                },
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+
+@pytest.mark.anyio
+async def test_update_list_of_dicts(client: AsyncClient):
+    """Test updating log with List[dict] type."""
+    project_name = "test-update-list-dicts"
+    _ = await _create_project(client, project_name)
+
+    # Create field
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project": project_name,
+            "fields": {
+                "items": {"type": "List[dict]", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Create log
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "items": [
+                    {"id": 1, "name": "item1"},
+                    {"id": 2, "name": "item2"},
+                ],
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    # Update
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "project": project_name,
+            "entries": {
+                "items": [
+                    {"id": 3, "name": "item3"},
+                    {"id": 4, "name": "item4"},
+                    {"id": 5, "name": "item5"},
+                ],
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify
+    logs_response = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    logs = logs_response.json()["logs"]
+    assert len(logs[0]["entries"]["items"]) == 3
+    assert logs[0]["entries"]["items"][0]["id"] == 3
+
+
+@pytest.mark.anyio
+async def test_update_with_heterogeneous_list(client: AsyncClient):
+    """Test updating log with heterogeneous list type."""
+    project_name = "test-update-hetero-list"
+    _ = await _create_project(client, project_name)
+
+    # Create field with heterogeneous list
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project": project_name,
+            "fields": {
+                "mixed": {"type": "List[int, str, float]", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Create log
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "mixed": [1, "text", 3.14],
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    # Update with matching heterogeneous type
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "project": project_name,
+            "entries": {
+                "mixed": [42, "updated", 2.71],
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Update with mismatched heterogeneous type
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [log_id],
+            "project": project_name,
+            "entries": {
+                "mixed": [45, "updated_again", False],
+            },
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
     assert response.status_code == 400, response.json()

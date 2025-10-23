@@ -4,13 +4,6 @@ import textwrap
 
 from fastapi import HTTPException
 
-from orchestra.db.dao.log_dao import (
-    _is_date_string,
-    _is_time_string,
-    _is_timedelta_string,
-    normalize_timestamp,
-)
-
 SIMILARITY_FUNCS = {"l2", "cosine", "ip", "l1", "hamming", "jaccard", "phash_distance"}
 
 __all__ = ["str_filter_exp_to_dict", "str_filter_exp_to_dict_using_ast"]
@@ -147,6 +140,13 @@ def _tokenize(s):
             )
             tokens.append(("NUMBER", value))
         elif kind == "STRING":
+            from orchestra.web.api.log.utils.type_utils import (
+                _is_date_string,
+                _is_time_string,
+                _is_timedelta_string,
+                normalize_timestamp,
+            )
+
             # Remove the surrounding quotes and unescape
             unquoted_value = value[1:-1]
             # If you want to allow embedded quotes or backslashes:
@@ -513,6 +513,8 @@ def _transform_ast(node: ast.AST, preserve_string_literals: bool = False) -> dic
     Returns:
         A dictionary representation of the node in the format expected by build_sql_query
     """
+    from orchestra.web.api.log.utils.type_utils import normalize_timestamp
+
     # Handle literals (constants)
     if isinstance(node, ast.Constant):
         # Check for raw base64 image data URI first
@@ -643,13 +645,54 @@ def _transform_ast(node: ast.AST, preserve_string_literals: bool = False) -> dic
                         for arg in node.args
                     ],
                 }
-        # Handle embed function
+        # Handle isinstance(x, "type") by lowering to: type(x) == "type"
+        elif func_name == "isinstance":
+            # Support isinstance(x, "type") and isinstance(x, ("type1", "type2", ...))
+            if len(node.args) != 2:
+                raise HTTPException(
+                    status_code=400,
+                    detail="isinstance() requires exactly 2 arguments",
+                )
+            value_expr = _transform_ast(node.args[0], preserve_string_literals)
+
+            def _as_type_literal(arg_node):
+                if isinstance(arg_node, ast.Constant) and isinstance(
+                    arg_node.value,
+                    str,
+                ):
+                    return {"type": "type_literal", "value": arg_node.value}
+                raise HTTPException(
+                    status_code=400,
+                    detail="isinstance() second argument must be a string literal or tuple/list of string literals",
+                )
+
+            rhs_arg = node.args[1]
+            type_expr = {"operand": "type", "rhs": value_expr}
+
+            # Tuple/List of string literals -> use membership: type(x) in [..]
+            if isinstance(rhs_arg, (ast.Tuple, ast.List)):
+                type_list = [_as_type_literal(elt) for elt in rhs_arg.elts]
+                return {"lhs": type_expr, "operand": "in", "rhs": type_list}
+            # Single string literal
+            rhs_literal = _as_type_literal(rhs_arg)
+            return {"lhs": type_expr, "operand": "==", "rhs": rhs_literal}
+
+        # Handle embed function (multi-arg: text, optional model, optional dimensions)
         elif func_name == "embed":
             return {
                 "operand": "embed",
                 "rhs": [
                     _transform_ast(arg, preserve_string_literals) for arg in node.args
                 ],
+            }
+        # Handle embed_image function (single-arg: base64 image)
+        elif func_name == "embed_image":
+            # Single argument function - rhs should be the direct argument, not a list
+            if len(node.args) != 1:
+                raise ValueError("embed_image() requires exactly 1 argument")
+            return {
+                "operand": "embed_image",
+                "rhs": _transform_ast(node.args[0], preserve_string_literals),
             }
         # Handle BASE function
         elif func_name == "BASE":
@@ -741,24 +784,25 @@ def _transform_ast(node: ast.AST, preserve_string_literals: bool = False) -> dic
                     for a in node.args
                 ],
             }
-        # Handle dict methods (keys, values, items, get)
+        # Handle dict methods (keys, values, items, get, setdefault)
         elif isinstance(node.func, ast.Attribute) and node.func.attr in (
             "keys",
             "values",
             "items",
             "get",
+            "setdefault",
         ):
-            if node.func.attr == "get":
+            if node.func.attr in ("get", "setdefault"):
                 # Handle dict.get(key, default) method
                 if len(node.args) == 0:
                     raise HTTPException(
                         status_code=400,
-                        detail="dict.get() requires at least one argument",
+                        detail=f"dict.{node.func.attr}() requires at least one argument",
                     )
                 if len(node.args) > 2:
                     raise HTTPException(
                         status_code=400,
-                        detail="dict.get() accepts at most two arguments",
+                        detail=f"dict.{node.func.attr}() accepts at most two arguments",
                     )
 
                 container = _transform_ast(node.func.value, preserve_string_literals)
@@ -770,9 +814,12 @@ def _transform_ast(node: ast.AST, preserve_string_literals: bool = False) -> dic
                         preserve_string_literals,
                     )
 
+                method = "get" if node.func.attr == "get" else "setdefault"
+
                 filter_dict = {
                     "operand": "dict_method",
-                    "method": "get",
+                    # Route setdefault through the same executor branch as get()
+                    "method": method,
                     "rhs": container,
                     "key": key_expr,
                     "default": default_expr,

@@ -4,7 +4,6 @@ import time
 from decimal import Decimal
 from typing import List, Optional
 
-import requests
 from fastapi import (
     APIRouter,
     Depends,
@@ -43,6 +42,7 @@ from orchestra.services.openai_service import OpenAIAPIError, OpenAIService
 from orchestra.services.replicate_service import ReplicateAPIError, ReplicateService
 from orchestra.settings import settings
 from orchestra.web.api.assistant.schema import (
+    AssistantContactRemoval,
     AssistantCreate,
     AssistantPhotoUploadResponse,
     AssistantRead,
@@ -54,6 +54,7 @@ from orchestra.web.api.assistant.schema import (
     RecordingCreate,
     RecordingInfo,
     ReplicatePredictionResponse,
+    UnifyMessage,
     VoiceCreate,
     VoiceDesignCreateFromPreviewRequest,
     VoiceDesignGeneratePreviewsAPIResponse,
@@ -69,7 +70,10 @@ from orchestra.web.api.utils.assistant_infra import (
     delete_email,
     delete_phone_number,
     delete_pubsub_topic,
+    get_running_jobs,
     get_social_platforms_costs,
+    log_pre_hire_chat,
+    reawaken_assistant,
     stop_jobs,
     wake_up_assistant,
     watch_email,
@@ -108,6 +112,46 @@ def check_assistant_hiring_approval(
 
 router = APIRouter()
 admin_router = APIRouter()
+
+
+@router.post(
+    "/assistant/message",
+    response_model=InfoResponse[str],
+    status_code=status.HTTP_200_OK,
+    summary="Send a message to an assistant and get a response",
+    description="Sends a message to a specified assistant and waits for the next reply from that assistant.",
+    tags=["Assistant Interaction"],
+)
+def message_assistant(
+    payload: UnifyMessage,
+    request: Request,
+    session: Session = Depends(get_db_session),
+    _: None = Depends(check_assistant_hiring_approval),
+) -> InfoResponse[str]:
+    user_id = request.state.user_id
+    assistant_dao = AssistantDAO(session)
+
+    try:
+        response_content = assistant_dao.message_assistant(
+            user_id=user_id,
+            assistant_id=payload.assistant_id,
+            contact_id=payload.contact_id,
+            message=payload.message,
+        )
+        return InfoResponse(info=response_content)
+    except HTTPException as e:
+        # Re-raise HTTPExceptions raised from the DAO layer
+        raise e
+    except Exception as e:
+        # Catch any other unexpected errors
+        logging.error(
+            f"Unexpected error in message_assistant endpoint: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An unexpected error occurred while processing the message.",
+        )
 
 
 @router.post(
@@ -529,7 +573,7 @@ def create_assistant(
         )
 
     # Phase 3: Wake up assistant
-    response = wake_up_assistant(assistant.phone, is_staging=settings.is_staging)
+    response = wake_up_assistant(assistant.agent_id, is_staging=settings.is_staging)
     if response.status_code != 200:
         logging.error(f"Failed to wake up assistant: {response.text}")
         raise HTTPException(
@@ -537,57 +581,23 @@ def create_assistant(
             detail="Failed to wake up assistant.",
         )
     else:
-        print(f"ASSISTANT AWAKENED: {assistant.phone}")
+        print(f"ASSISTANT AWAKENED: {assistant.agent_id}")
 
     # (Optional) Log pre-hire chat if provided
     if assistant_in.pre_hire_chat:
         try:
-            context_name = f"{assistant.first_name}{assistant.surname}/Transcripts"
-            chat_context_id = context_dao.get_or_create(
-                assistants_project.id,
-                name=context_name,
+            # Convert Pydantic models to dictionaries for the webhook payload
+            chat_messages = jsonable_encoder(assistant_in.pre_hire_chat)
+            log_pre_hire_chat(
+                assistant_id=str(assistant.agent_id),
+                messages=chat_messages,
+                is_staging=settings.is_staging,
             )
-            chat_context_obj = session.get(Context, chat_context_id)
-
-            # Prepare entries for logging using jsonable_encoder
-            chat_entries = jsonable_encoder(assistant_in.pre_hire_chat)
-            num_entries = len(chat_entries)
-
-            if num_entries > 0:
-                log_event_ids = log_event_dao.bulk_create(
-                    project_id=assistants_project.id,
-                    count=num_entries,
-                    context_id=chat_context_id,
-                )
-
-                # Prepare all log rows for bulk creation
-                log_rows_to_create = []
-                for i, entry_dict in enumerate(chat_entries):
-                    log_event_id = log_event_ids[i]
-                    for key, value in entry_dict.items():
-                        log_rows_to_create.append(
-                            {
-                                "project_id": assistants_project.id,
-                                "log_event_id": log_event_id,
-                                "key": key,
-                                "value": value,
-                                "context_id": chat_context_id,
-                            },
-                        )
-
-                # Bulk create the log rows (this will flush)
-                if log_rows_to_create:
-                    log_dao.bulk_create(
-                        log_rows_to_create,
-                        context_obj=chat_context_obj,
-                    )
-
-                session.commit()  # Commit the logs
-
         except Exception as e_log:
-            session.rollback()  # Rollback the log transaction
+            # We don't rollback the whole assistant creation for a logging failure,
+            # but we should log it as a warning.
             logging.warning(
-                f"Failed to log pre-hire chat for assistant {assistant.agent_id}. Error: {str(e_log)}",
+                f"Failed to log pre-hire chat for assistant {assistant.agent_id} via webhook. Error: {str(e_log)}",
             )
 
     # Phase 4: Prepare and return response
@@ -754,6 +764,129 @@ def list_assistants(
 
 
 @router.delete(
+    "/assistant/{assistant_id}/contact",
+    response_model=InfoResponse[AssistantRead],
+    status_code=status.HTTP_200_OK,
+    summary="Remove a contact method from an assistant",
+    description="Removes a contact method (phone, email, or WhatsApp) from an assistant and deprovisions the associated infrastructure.",
+    tags=["Assistant Management"],
+    responses={
+        200: {
+            "description": "Contact method removed successfully.",
+        },
+        404: {
+            "description": "Assistant not found.",
+        },
+        400: {
+            "description": "Invalid contact type or other error.",
+        },
+    },
+)
+def delete_assistant_contact(
+    assistant_id: int,
+    removal_payload: AssistantContactRemoval,
+    request: Request,
+    session: Session = Depends(get_db_session),
+    _: None = Depends(check_assistant_hiring_approval),
+) -> InfoResponse[AssistantRead]:
+    """
+    Remove a contact method from an assistant.
+
+    This endpoint deprovisions the infrastructure for a specific contact method
+    (e.g., deletes the Twilio phone number) and removes the information from the
+    assistant's record.
+    """
+    user_id = request.state.user_id
+    assistant_dao = AssistantDAO(session)
+
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+    )
+
+    if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+
+    contact_type = removal_payload.contact_type
+
+    try:
+        if contact_type == "phone":
+            if assistant.phone:
+                delete_phone_number(assistant.phone)
+            assistant.phone = None
+            assistant.user_phone = None
+        elif contact_type == "email":
+            if assistant.email:
+                delete_email(assistant.email)
+            assistant.email = None
+        elif contact_type == "whatsapp":
+            # No external infra deletion for WhatsApp based on existing delete_assistant logic
+            assistant.user_whatsapp_number = None
+            assistant.assistant_whatsapp_number = None
+
+        session.commit()
+        session.refresh(assistant)
+        updated_assistant = assistant
+
+        # After successfully updating, trigger a reawaken
+        try:
+            reawaken_assistant(
+                str(updated_assistant.agent_id),
+                is_staging=settings.is_staging,
+            )
+        except Exception as e:
+            # Log the error but don't fail the request, as the main action succeeded
+            logging.warning(
+                f"Failed to reawaken assistant {updated_assistant.agent_id} after contact deletion: {e}",
+            )
+
+        return InfoResponse(
+            info=AssistantRead(
+                agent_id=str(updated_assistant.agent_id),
+                user_id=updated_assistant.user_id,
+                first_name=updated_assistant.first_name,
+                surname=updated_assistant.surname,
+                age=updated_assistant.age,
+                region=updated_assistant.region,
+                profile_photo=updated_assistant.profile_photo,
+                profile_video=updated_assistant.profile_video,
+                desktop_url=updated_assistant.desktop_url,
+                user_local_desktop=updated_assistant.user_local_desktop,
+                about=updated_assistant.about,
+                country=updated_assistant.country,
+                weekly_limit=(
+                    float(updated_assistant.weekly_limit)
+                    if updated_assistant.weekly_limit is not None
+                    else None
+                ),
+                max_parallel=updated_assistant.max_parallel,
+                created_at=updated_assistant.created_at,
+                updated_at=updated_assistant.updated_at,
+                phone=updated_assistant.phone,
+                user_phone=updated_assistant.user_phone,
+                user_whatsapp_number=updated_assistant.user_whatsapp_number,
+                assistant_whatsapp_number=updated_assistant.assistant_whatsapp_number,
+                email=updated_assistant.email,
+                voice_id=updated_assistant.voice_id,
+                voice_provider=updated_assistant.voice_provider,
+            ),
+        )
+
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Failed to delete contact for assistant {assistant_id}: {e}")
+        if isinstance(e, HTTPException):
+            raise
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to remove contact: {str(e)}",
+        )
+
+
+@router.delete(
     "/assistant/{assistant_id}",
     status_code=status.HTTP_200_OK,
     summary="Delete an assistant",
@@ -811,7 +944,7 @@ def delete_assistant(
 
         # Suspend any jobs that might be currently running with that assistant
         try:
-            response = stop_jobs(assistant_id, staging=settings.is_staging)
+            response = stop_jobs(assistant_id)
             print(f"JOB STOPPED: {response['job_names']}")
         except Exception as e:
             logging.error(f"Failed to stop job: {str(e)}")
@@ -1039,6 +1172,9 @@ def update_assistant_config(
     # Variables to track newly created resources for potential rollback
     email_to_update: Optional[str] = None
     phone_to_update: Optional[str] = None
+    contact_info_updated = (
+        update.phone or update.user_phone or update.email or update.user_whatsapp_number
+    )
 
     # Check assistant existence before any updates
     existing_assistant = assistant_dao.get_assistant_by_id(
@@ -1236,6 +1372,20 @@ def update_assistant_config(
 
         session.commit()
 
+        # If contact info was updated and infra creation was enabled, reawaken the assistant
+        if contact_info_updated and update.create_infra:
+            try:
+                reawaken_assistant(
+                    str(updated.agent_id),
+                    is_staging=settings.is_staging,
+                )
+                print(f"ASSISTANT REAWAKENED: {updated.agent_id}")
+            except Exception as e:
+                # Log the error but don't fail the request, as the main action succeeded
+                logging.warning(
+                    f"Failed to reawaken assistant {updated.agent_id} after config update: {e}",
+                )
+
         return InfoResponse(
             info=AssistantRead(
                 agent_id=str(updated.agent_id),
@@ -1359,9 +1509,10 @@ async def create_recording(
     )
     try:
         mime = recording.content_type or "application/octet-stream"
-        recording_model = await recording_service.record_call_from_raw(
+        recording_model = await recording_service.record_call(
             user_id=recording.user_id,
             agent_id=recording.assistant_id,
+            conference_name=recording.conference_name,
             recording_raw=recording.recording_raw,
             content_type=mime,
             is_staging=settings.is_staging,
@@ -3051,48 +3202,16 @@ def admin_get_assistant_status(
     """
     Get the live status of an assistant's dedicated service.
     """
-
-    # Prioritize the key from settings if unity admin key
-    # needs to be different from the orchestra admin key.
-    # Otherwise use the key provided in the auth header.
-    auth_header = None
-    if settings.UNITY_ADMIN_KEY:
-        auth_header = f"Bearer {settings.UNITY_ADMIN_KEY}"
-    else:
-        incoming_auth_header = request.headers.get("Authorization")
-        if incoming_auth_header:
-            auth_header = incoming_auth_header
-    if not auth_header:
+    try:
+        job_names = get_running_jobs(assistant_id)
+        if len(job_names) > 0:
+            return InfoResponse(
+                info=AssistantStatus(running=True, job_name=job_names[0]),
+            )
+        else:
+            return InfoResponse(info=AssistantStatus(running=False, job_name=None))
+    except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Admin key is not configured.",
-        )
-
-    service_url = (
-        f"https://unity-{assistant_id}-262420637606.us-central1.run.app/status"
-    )
-    headers = {"Authorization": auth_header}
-
-    try:
-        response = requests.get(service_url, headers=headers, timeout=10)
-        response.raise_for_status()
-        return InfoResponse(info=response.json())
-    except requests.exceptions.HTTPError as e:
-        if e.response.status_code == 404:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Assistant service for ID '{assistant_id}' not found or failed to respond.",
-            )
-        try:
-            detail = e.response.json().get("detail", str(e))
-        except requests.exceptions.JSONDecodeError:
-            detail = str(e)
-        raise HTTPException(
-            status_code=e.response.status_code,
-            detail=f"Assistant service returned an error: {detail}",
-        )
-    except requests.exceptions.RequestException as e:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Connection to assistant service failed: {str(e)}",
+            detail=f"Failed to get assistant status: {str(e)}",
         )

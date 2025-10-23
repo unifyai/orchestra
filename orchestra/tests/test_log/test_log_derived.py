@@ -43,6 +43,39 @@ async def test_create_derived_entry_with_list(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_derived_over_nested_containers(client: AsyncClient):
+    project = "test_nested_containers"
+    await _create_project(client, project, user=1)
+
+    # lod = list of dicts
+    entries = {"lod": [{"a": 1, "b": 3}, {"a": 2, "c": 6}, {"a": 3, "d": 1}]}
+    resp = await _create_log(client, project, entries=entries)
+    assert resp.status_code == 200
+    log_id = resp.json()["log_event_ids"][0]
+
+    # Derived: sum of a's
+    # use list comp projection via python2SQL: [d['a'] for d in lod]
+    eq = "sum([d['a'] for d in {log:lod}])"
+    resp = await _create_derived_entry(
+        client,
+        project,
+        key="sum_a",
+        equation=eq,
+        referenced_logs={"log": [log_id]},
+    )
+    assert resp.status_code == 200, resp.text
+
+    resp = await client.get(
+        "/v0/logs",
+        params={"project": project, "from_ids": str(log_id)},
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200
+    log = resp.json()["logs"][0]
+    assert log["derived_entries"].get("sum_a") == 6
+
+
+@pytest.mark.anyio
 async def test_derived_creation_batched_counts_not_cumulative(client: AsyncClient):
     """
     Create logs in batches and immediately create derived logs for each batch's IDs.
@@ -1073,7 +1106,7 @@ async def test_advanced_comprehensions_and_conditionals(client: AsyncClient, tes
         f"/v0/logs?project={project}&filter_expr={field} is not None",
         headers=HEADERS,
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     result = response.json()
     assert result["logs"][0]["derived_entries"][field] == test_case["expected"]
 
@@ -1404,6 +1437,162 @@ async def test_derived_embedding_and_filtering(client: AsyncClient):
 
 
 @pytest.mark.anyio
+@pytest.mark.xdist_group(name="gcs_serial")
+async def test_derived_image_embedding_and_filtering(client: AsyncClient):
+    """
+    Test image embedding functionality:
+    1. Create base logs with different images (cat, dog, car)
+    2. Create derived column with embed_image() to generate embeddings
+    3. Query using POST /logs/query with a query image
+    4. Verify similarity-based filtering works correctly
+
+    Note: Marked with xdist_group to run serially due to GCS eventual consistency issues.
+    """
+    project = "derived_image_embed_demo"
+    context = "image_test"
+    await _create_project(client, project)
+
+    # 1) Create base logs with different images
+    # Create log with cat image
+    response_cat = await _create_image_log(
+        client,
+        project,
+        context,
+        "cat.png",
+        additional_entries={"label": "cat"},
+        image_col_name="screenshot",
+    )
+    assert response_cat.status_code == 200, response_cat.text
+    cat_log_id = response_cat.json()["log_event_ids"][0]
+
+    # Create log with dog image
+    response_dog = await _create_image_log(
+        client,
+        project,
+        context,
+        "dog.png",
+        additional_entries={"label": "dog"},
+        image_col_name="screenshot",
+    )
+    assert response_dog.status_code == 200, response_dog.text
+    dog_log_id = response_dog.json()["log_event_ids"][0]
+
+    # Create log with car image
+    response_car = await _create_image_log(
+        client,
+        project,
+        context,
+        "car.png",
+        additional_entries={"label": "car"},
+        image_col_name="screenshot",
+    )
+    assert response_car.status_code == 200, response_car.text
+    car_log_id = response_car.json()["log_event_ids"][0]
+
+    log_ids = [cat_log_id, dog_log_id, car_log_id]
+
+    # 2) Create derived column with embed_image() to generate embeddings
+    key = "screenshot_embedding"
+    equation = "embed_image({log:screenshot})"
+    referenced_logs = {"log": log_ids}
+
+    response = await _create_derived_entry(
+        client,
+        project,
+        key,
+        equation,
+        referenced_logs,
+        context=context,
+    )
+    assert response.status_code == 200, response.text
+    response_data = response.json()
+    assert "Created" in response_data["info"]
+    assert "3 derived logs" in response_data["info"]
+
+    # 3) Verify the embeddings were created by fetching logs
+    fetch_response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project,
+            "context": context,
+            "from_fields": "screenshot_embedding",
+        },
+        headers=HEADERS,
+    )
+    assert fetch_response.status_code == 200
+    logs = fetch_response.json()["logs"]
+    assert len(logs) == 3, "Should have 3 logs with embeddings"
+
+    # Verify that embeddings exist (they should be stored in the Embedding table)
+    # Each log should have the derived entry
+    for log in logs:
+        assert "screenshot_embedding" in log["derived_entries"]
+
+    # 4) Test POST /logs/query with image similarity
+    # Read the cat image again to use as query
+    import os
+
+    full_img_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.realpath(__file__))),
+        "sample_datasets",
+        "cat_2.png",  # Use a different cat image for similarity test
+    )
+
+    import cv2
+
+    success, buffer = cv2.imencode(".png", cv2.imread(full_img_path))
+    assert success, f"Failed to encode query image at {full_img_path}"
+    query_img_b64 = base64.b64encode(buffer).decode("utf-8")
+
+    # Construct filter and sorting expressions with embed_image()
+    # The same expression is used for both filtering and sorting
+    similarity_expr = f"cosine(screenshot_embedding, embed_image('data:image/png;base64,{query_img_b64}'))"
+    filter_expr = f"{similarity_expr} < 0.35"
+
+    # Sort by cosine distance (ascending = most similar first)
+    sorting = json.dumps({similarity_expr: "ascending"})
+
+    # Query using POST /logs/query (simplified - just pass filter_expr and sorting like GET)
+    # POST allows large base64 strings that would exceed URL limits in GET
+    query_response = await client.post(
+        "/v0/logs/query",
+        json={
+            "project": project,
+            "context": context,
+            "filter_expr": filter_expr,
+            "sorting": sorting,  # Sort by similarity
+            "limit": 10,
+        },
+        headers=HEADERS,
+    )
+    assert query_response.status_code == 200, query_response.text
+    query_logs = query_response.json()["logs"]
+
+    # 5) Verify results - cat images should be more similar than car
+    assert len(query_logs) > 0, "Expected at least one log to match the image query"
+
+    # The first result should be a cat (highest similarity)
+    first_result = query_logs[0]
+    assert (
+        first_result["entries"]["label"] == "cat"
+    ), f"Expected first result to be 'cat', got '{first_result['entries']['label']}'"
+
+    # Verify that car is less similar (might not be in results at all with threshold)
+    car_found = False
+    for log in query_logs:
+        if log["entries"]["label"] == "car":
+            car_found = True
+            break
+
+    # Car should either not be found or be last in the results
+    if car_found:
+        # If car is found, it should not be the first result
+        assert (
+            query_logs[0]["entries"]["label"] != "car"
+        ), "Car should not be the most similar image to a cat query"
+
+
+@pytest.mark.anyio
 async def test_create_derived_entry_with_partial_null_values(client: AsyncClient):
     """
     Test creating derived entries where some logs have null/non-existent values
@@ -1606,7 +1795,7 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
         project,
         entries={"desc": "a cute little cat", "category": "animal"},
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     log_ids.append(response.json()["log_event_ids"][0])
 
     # Log 1: Valid description
@@ -1615,7 +1804,7 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
         project,
         entries={"desc": "a friendly dog", "category": "animal"},
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     log_ids.append(response.json()["log_event_ids"][0])
 
     # Log 2: Empty string description
@@ -1624,7 +1813,7 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
         project,
         entries={"desc": "", "category": "empty"},
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     log_ids.append(response.json()["log_event_ids"][0])
 
     # Log 3: Null description
@@ -1633,7 +1822,7 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
         project,
         entries={"desc": None, "category": "null"},
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     log_ids.append(response.json()["log_event_ids"][0])
 
     # Log 4: Missing description field entirely
@@ -1647,7 +1836,7 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
         project,
         entries={"desc": "a wooden chair", "category": "furniture"},
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     log_ids.append(response.json()["log_event_ids"][0])
 
     # Log 6: Whitespace-only description
@@ -1656,7 +1845,7 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
         project,
         entries={"desc": "   ", "category": "whitespace"},
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     log_ids.append(response.json()["log_event_ids"][0])
 
     # Log 7: Valid description
@@ -1690,11 +1879,11 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
         f"/v0/logs/fields?project={project}",
         headers=HEADERS,
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     fields = response.json()
     assert key in fields
     # Embedding fields should be of type 'list' (vector)
-    assert fields[key]["data_type"] in ["list", "array", "vector"]
+    assert fields[key]["data_type"] in ["list", "array", "vector", "List[float]"]
 
     # Test filtering by similarity to 'little kitty'
     # This should match logs with valid cat-related descriptions
@@ -1707,7 +1896,7 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
         },
         headers=HEADERS,
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
 
     # Verify filtering results
     logs = response.json()["logs"]
@@ -1738,7 +1927,7 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
         },
         headers=HEADERS,
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
 
     furniture_logs = response.json()["logs"]
     assert len(furniture_logs) == 1, "Expected 1 log to match the filter"
@@ -1769,7 +1958,7 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
         f"/v0/logs?project={project}",
         headers=HEADERS,
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     all_logs = response.json()["logs"]
 
     # Verify we have all 8 logs
@@ -1794,10 +1983,13 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
 
 
 @pytest.mark.anyio
+@pytest.mark.xdist_group(name="gcs_serial")
 async def test_visual_semantic_cache_e2e(client: AsyncClient):
     """
     Tests the Visual Semantic Cache by filtering for a subset of images
     and then sorting them by visual similarity to find the best match.
+
+    Note: Marked with xdist_group to run serially due to GCS eventual consistency issues.
     """
     project_name = "visual_cache_sorting_project"
     context_name = "visual_cache_sorting_context"
@@ -1810,7 +2002,7 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient):
         json={"name": context_name},
         headers=HEADERS,
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
 
     # 1. Log several images, including two very similar "cat" images
     image_files = {
@@ -1832,7 +2024,7 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient):
             {"name": name, "type": image_type},
             image_col_name="img",
         )
-        assert response.status_code == 200
+        assert response.status_code == 200, response.json()
         log_ids_map[name] = response.json()["log_event_ids"][0]
 
     # 2. Manually create the pHash derived log for each image
@@ -1853,7 +2045,7 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient):
         f"/v0/logs?project={project_name}&context={context_name}&filter_expr=name == 'cat_v2'",
         headers=HEADERS,
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     cat_v2_log = response.json()["logs"][0]
     cat_v2_phash = cat_v2_log["derived_entries"]["image_phash"]
 
@@ -1888,9 +2080,12 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient):
 
 
 @pytest.mark.anyio
+@pytest.mark.xdist_group(name="gcs_serial")
 async def test_phash_distance_with_raw_image_literal(client: AsyncClient):
     """
     Tests that phash_distance can accept a raw base64 image string as an argument.
+
+    Note: Marked with xdist_group to run serially due to GCS eventual consistency issues.
     """
     project_name = "visual_cache_raw_image_project"
     context_name = "visual_cache_raw_image_context"

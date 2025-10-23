@@ -205,6 +205,7 @@ def build_sql_query(
         "median",
         "mode",
         "embed",
+        "embed_image",
         "phash",
     ):
         return _handle_functions(

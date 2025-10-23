@@ -26,6 +26,11 @@ class CreateLogsResponse(BaseModel):
         description="Object containing the names of the unique ID columns and the corresponding nested row IDs.",
         example={"names": ["row_id"], "ids": [[0], [1], [2]]},
     )
+    auto_counting: Dict[str, List[Any]] = Field(
+        description="Dictionary mapping auto-counting column names to their generated/provided values for each created log. "
+        "Empty dict when no auto-counting columns are configured.",
+        example={"message_id": [0, 1, 2], "exchange_id": [0, 1, 2]},
+    )
 
 
 class EnumType(BaseModel):
@@ -566,4 +571,124 @@ class JoinLogsRequest(BaseModel):
     copy: bool = Field(
         default=True,
         description="If True, a copy of each log is created and then added to the context. If False, the existing log associations are simply used. If omitted, defaults to True.",
+    )
+
+
+class QueryLogsPostBody(BaseModel):
+    """
+    Request body for POST /logs/query endpoint.
+
+    Accepts the same parameters as GET /logs, but via request body instead of query parameters.
+    This is useful for queries with large filter expressions or base64-encoded images that
+    would exceed URL length limits.
+
+    Example with image embedding:
+    ```json
+    {
+        "project": "my-project",
+        "filter_expr": "cosine(image_embedding, embed_image('data:image/png;base64,iVBORw0KG...')) < 0.3"
+    }
+    ```
+    """
+
+    project: str = Field(description="Project name", example="eval-project")
+    context: Optional[str] = Field(None, description="Context name", example="training")
+    column_context: Optional[str] = Field(
+        None,
+        description="The context (prepending '/' seperated field names) from which to retrieve the logs.",
+        example="subjects/science/physics",
+    )
+    filter_expr: Optional[str] = Field(
+        None,
+        description="Boolean string to filter entries. Supports embed_image() for image similarity queries.",
+        example="len(output) > 200 and temperature == 0.5",
+    )
+    sorting: Optional[str] = Field(
+        None,
+        description='JSON-encoded dict mapping either static column names (e.g. `timestamp`) or full Python2SQL expressions (e.g. `cosine(embed(\'search text\'), embedding_vector)`) to sort directions (`"ascending"` or `"descending"`). The first key is the primary sort field; subsequent keys break ties.',
+        example='{"timestamp": "descending", "round(score, 2)": "ascending"}',
+    )
+    group_sorting: Optional[str] = Field(
+        None,
+        description="Sorting configuration for groups when using group_by",
+        example={
+            "entries/student": {
+                "field": "score",
+                "direction": "descending",
+                "metric": "mean",
+            },
+        },
+    )
+    from_ids: Optional[Any] = Field(
+        None,
+        description="Log IDs to include",
+        example="0&1&2",
+    )
+    exclude_ids: Optional[Any] = Field(
+        None,
+        description="Log IDs to exclude",
+        example="0&1&2",
+    )
+    from_fields: Optional[str] = Field(
+        None,
+        description="Fields to include",
+        example="score&response",
+    )
+    exclude_fields: Optional[str] = Field(
+        None,
+        description="Fields to exclude",
+        example="score&response",
+    )
+    limit: Optional[int] = Field(None, ge=1, le=1000)
+    offset: int = Field(0, ge=0)
+    group_by: Optional[List[str]] = Field(
+        None,
+        description="Fields to group by",
+        example=["model", "temperature"],
+    )
+    group_limit: Optional[int] = Field(
+        None,
+        description="Maximum number of groups to return at each level",
+        ge=1,
+    )
+    group_offset: int = Field(
+        0,
+        description="Number of groups to skip at each level",
+        ge=0,
+    )
+    group_depth: Optional[int] = Field(
+        None,
+        description="Maximum depth of nested groups to return",
+    )
+    nested_groups: bool = Field(
+        True,
+        description="If True, groups are returned as a nested structure",
+    )
+    groups_only: bool = Field(
+        False,
+        description="If True, only return groups without full logs list",
+    )
+    return_timestamps: bool = Field(
+        False,
+        description="When groups_only is True, return timestamps with log IDs",
+    )
+    return_ids_only: bool = Field(
+        False,
+        description="If True, return only log IDs instead of full entries",
+    )
+    randomize: bool = Field(
+        False,
+        description="If true, return logs in a deterministic random order",
+    )
+    seed: Optional[str] = Field(
+        "42",
+        description="Seed for deterministic random ordering",
+    )
+    value_limit: Optional[int] = Field(
+        None,
+        description="Maximum number of characters to return for string values",
+    )
+    group_threshold: Optional[int] = Field(
+        None,
+        description="When set, entries that appear in at least this many logs will be grouped together",
     )

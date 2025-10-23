@@ -1728,7 +1728,7 @@ class Embedding(Base):
     )
     model = Column(String, nullable=False)
     key = Column(String, nullable=False)
-    vector = Column(Vector(1536), nullable=False)
+    vector = Column(Vector(), nullable=False)  # Support variable dimensions
     created_at = Column(TIMESTAMP, server_default=func.now())
 
     __table_args__ = (
@@ -1739,25 +1739,37 @@ class Embedding(Base):
             "model",
             "key",
         ),
-        Index(
-            "embedding_hnsw_cosine_idx",
-            "vector",
-            postgresql_using="hnsw",
-            postgresql_with={"m": 16, "ef_construction": 64},
-            postgresql_ops={"vector": "vector_cosine_ops"},
+        # CHECK constraints to ensure dimension integrity per model
+        # Prevents dimension mismatches from corrupting the HNSW indexes
+        sa.CheckConstraint(
+            "model <> 'text-embedding-3-small' OR vector_dims(vector) = 1536",
+            name="embedding_dims_text_openai_chk",
         ),
-        Index(
-            "embedding_hnsw_l2_idx",
-            "vector",
-            postgresql_using="hnsw",
-            postgresql_with={"m": 16, "ef_construction": 64},
-            postgresql_ops={"vector": "vector_l2_ops"},
+        sa.CheckConstraint(
+            "model <> 'multimodalembedding@001' OR vector_dims(vector) = 1408",
+            name="embedding_dims_vertexai_chk",
         ),
+        # Model-specific HNSW expression indexes with dimension casts
+        # The cast is critical - queries must also cast to use these indexes
+        # Pattern: (vector::vector(N)) vector_cosine_ops for expression index + WHERE model = '...' for partial index
+        # OpenAI text-embedding-3-small (1536 dimensions) - Cosine similarity
         Index(
-            "embedding_hnsw_ip_idx",
-            "vector",
+            "embedding_hnsw_cosine_openai_1536_idx",
+            sa.text(
+                "(vector::vector(1536)) vector_cosine_ops",
+            ),  # Include operator class in expression
             postgresql_using="hnsw",
             postgresql_with={"m": 16, "ef_construction": 64},
-            postgresql_ops={"vector": "vector_ip_ops"},
+            postgresql_where=sa.text("model = 'text-embedding-3-small'"),
+        ),
+        # Vertex AI multimodalembedding@001 (1408 dimensions) - Cosine similarity
+        Index(
+            "embedding_hnsw_cosine_vertexai_1408_idx",
+            sa.text(
+                "(vector::vector(1408)) vector_cosine_ops",
+            ),  # Include operator class in expression
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_where=sa.text("model = 'multimodalembedding@001'"),
         ),
     )

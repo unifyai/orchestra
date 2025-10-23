@@ -202,18 +202,25 @@ def get_social_platforms_costs():
     ).json()
 
 
-def stop_jobs(assistant_id: str, staging: bool = False):
+def get_running_jobs(assistant_id: str):
     """
-    Stop a job by making a POST request to the comms endpoint.
+    Get running jobs for the assistant.
     """
     # get running jobs for the assistant
     logs = unify.get_logs(
-        project="Debug",
+        project="AssistantJobs",
         context="startup_events",
         filter=f"assistant_id == {assistant_id} and running == True",
     )
     job_names = [log.to_json()["entries"]["job_name"] for log in logs]
+    return job_names
 
+
+def stop_jobs(assistant_id: str):
+    """
+    Stop a job by making a POST request to the comms endpoint.
+    """
+    job_names = get_running_jobs(assistant_id)
     # if running job found, stop it
     if len(job_names) > 0:
         response = requests.post(
@@ -226,12 +233,103 @@ def stop_jobs(assistant_id: str, staging: bool = False):
     return {"success": True, "job_names": job_names}
 
 
-def wake_up_assistant(assistant_number: str, is_staging: bool = False):
+def wake_up_assistant(assistant_id: str, is_staging: bool = False):
     wake_up_url = (
         "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/"
         "assistant-wakeup-webhook" + ("-staging" if is_staging else "")
     )
     return requests.post(
         wake_up_url,
-        data={"assistant_number": assistant_number},
+        data={"assistant_id": assistant_id},
     )
+
+
+def reawaken_assistant(assistant_id: str, is_staging: bool = False):
+    """
+    Triggers the assistant update webhook to reawaken or sync the assistant.
+    Args:
+        assistant_id (str): The ID of the assistant to reawaken.
+        is_staging (bool): Whether to use the staging or production webhook.
+    Returns:
+        The JSON response from the webhook.
+    """
+    reawaken_url = (
+        "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/"
+        "assistant-update-webhook" + ("-staging" if is_staging else "")
+    )
+    response = requests.post(
+        reawaken_url,
+        data={"assistant_id": assistant_id},
+    )
+    response.raise_for_status()  # Raise an exception for bad status codes
+    return response.json()
+
+
+def log_pre_hire_chat(assistant_id: str, messages: list, is_staging: bool = False):
+    """
+    Logs pre-hire chat messages for an assistant using the webhook.
+    Args:
+        assistant_id (str): The ID of the assistant.
+        messages (list): A list of chat message dictionaries.
+        is_staging (bool): Whether to use the staging or production webhook.
+    Returns:
+        The JSON response from the webhook.
+    """
+    webhook_url = (
+        "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/log-pre-hire-chats-webhook"
+        + ("-staging" if is_staging else "")
+    )
+    payload = {"assistant_id": assistant_id, "body": messages}
+    response = requests.post(
+        webhook_url,
+        headers={
+            "Authorization": f"Bearer {ADMIN_KEY}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+    )
+    response.raise_for_status()
+    return {"status": "success"}
+
+
+def send_unify_message(
+    assistant_id: str,
+    contact_id: int,
+    message: str,
+    is_staging: bool = False,
+):
+    """
+    Sends a message to an assistant via the unify-message webhook.
+
+    Args:
+        assistant_id (str): The ID of the assistant.
+        contact_id (int): The ID of the contact sending the message.
+        message (str): The message content.
+        is_staging (bool): Whether to use the staging or production webhook.
+
+    Returns:
+        The JSON response from the webhook.
+    """
+    if contact_id != 1:
+        # TODO: The unify-message-webhook currently only supports sending messages
+        # from the user themselves (contact_id=1). This needs to be expanded
+        # to support a `contact_id` argument to allow sending on behalf of any contact.
+        raise ValueError(
+            "Invalid contact_id. Currently, only the user (contact_id=1) can send messages.",
+        )
+
+    webhook_url = (
+        "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/unify-message-webhook"
+        + ("-staging" if is_staging else "")
+    )
+    payload = {"assistant_id": assistant_id, "body": message}
+    response = requests.post(
+        webhook_url,
+        headers={
+            "Authorization": f"Bearer {ADMIN_KEY}",
+            "Content-Type": "application/json",
+        },
+        json=payload,
+    )
+    response.raise_for_status()
+    return {"status": "success"}
