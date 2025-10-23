@@ -13,6 +13,112 @@ from . import (
 
 
 @pytest.mark.anyio
+async def test_update_logs_partial_success_flat_and_nested(client: AsyncClient):
+    project_name = "update-partial-success"
+    _ = await _create_project(client, project_name)
+
+    # Create two logs
+    r1 = await _create_log(
+        client,
+        project_name,
+        entries={
+            "name": "ok1",
+            "profile": {"age": 20, "tags": ["a", "b"]},
+            "explicit_types": {
+                "name": {"type": "str", "mutable": True},
+                "profile": {"type": "dict", "mutable": True},
+            },
+        },
+    )
+    r2 = await _create_log(
+        client,
+        project_name,
+        entries={
+            "name": "ok2",
+            "profile": {"age": 21, "tags": ["x", "y"]},
+            "explicit_types": {
+                "name": {"type": "str", "mutable": True},
+                "profile": {"type": "dict", "mutable": True},
+            },
+        },
+    )
+    assert r1.status_code == 200 and r2.status_code == 200
+    id1 = r1.json()["log_event_ids"][0]
+    id2 = r2.json()["log_event_ids"][0]
+
+    # Pre-create strict type for 'status' as str to cause a flat update error when non-str is used
+    resp_ft = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project": project_name,
+            "fields": {"status": {"type": "str", "mutable": True}},
+        },
+        headers=HEADERS,
+    )
+    assert resp_ft.status_code == 200, resp_ft.json()
+
+    # Flat updates: good for id1, bad for id2 (status should be str, send dict)
+    flat_entries = [
+        {
+            "status": "active",
+            "explicit_types": {"status": {"type": "str", "mutable": True}},
+        },
+        {
+            "status": {"bad": True},
+            "explicit_types": {"status": {"type": "dict", "mutable": True}},
+        },
+    ]
+
+    # Nested updates: good for id1 (profile.age), bad for id2 (out-of-range index on tags)
+    nested_entries = [
+        {"profile.age": 30},
+        {"profile.tags[5]": "oops"},
+    ]
+
+    # Apply both flat and nested in one call
+    resp = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [id1, id2],
+            "entries": flat_entries,
+            "context": "",
+            "project": project_name,
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.json()
+
+    # Now nested patch in a separate call (since nested is parsed differently)
+    resp_nested = await client.put(
+        "/v0/logs",
+        json={
+            "logs": [id1, id2],
+            "entries": nested_entries,
+            "context": "",
+            "project": project_name,
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert resp_nested.status_code == 200, resp_nested.json()
+
+    # Verify id1 updated; id2 remained unchanged where it failed
+    g1 = await _get_log(client, project_name, id1)
+    g2 = await _get_log(client, project_name, id2)
+    assert g1.status_code == 200 and g2.status_code == 200
+    e1 = g1.json()["logs"][0]["entries"]
+    e2 = g2.json()["logs"][0]["entries"]
+
+    assert e1.get("status") == "active"
+    assert e1.get("profile")["age"] == 30
+
+    # id2: flat status update should have failed, nested out-of-range should have failed
+    assert e2.get("status") is None or isinstance(e2.get("status"), str) is False
+    assert e2.get("profile")["age"] == 21
+
+
+@pytest.mark.anyio
 async def test_update_logs_overwrites(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)

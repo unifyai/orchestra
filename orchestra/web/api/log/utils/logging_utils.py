@@ -1488,203 +1488,238 @@ def create_logs_internal(
     # Prepare collections for bulk operations
     new_field_types = []
     log_records_to_create = []
+    failed_logs = []
+    successful_indices = []
 
     # Process all logs in the batch
     for i in range(total_logs):
         log_event_id = log_event_ids[i]
 
-        # Get current entries and params
-        # If i exceeds list length, use the last item in the list
-        current_entries = entries_list[min(i, entries_len - 1)]
-        current_params = params_list[min(i, params_len - 1)]
+        # Per-log staging to isolate failures
+        perlog_field_types = []
+        perlog_records = []
 
-        # Add auto-incremented values from row_ids that are not in unique_keys back to entries
-        if context_obj and context_obj.auto_counting and row_ids and i < len(row_ids):
-            row_id_dict = row_ids[i] if isinstance(row_ids[i], dict) else {}
-            unique_keys = context_obj.unique_keys or {}
+        # Get current entries and params (clone to avoid in-place mutations leaking)
+        current_entries = dict(entries_list[min(i, entries_len - 1)] or {})
+        current_params = dict(params_list[min(i, params_len - 1)] or {})
+        try:
+            # Add auto-incremented values from row_ids that are not in unique_keys back to entries
+            if (
+                context_obj
+                and context_obj.auto_counting
+                and row_ids
+                and i < len(row_ids)
+            ):
+                row_id_dict = row_ids[i] if isinstance(row_ids[i], dict) else {}
+                unique_keys = context_obj.unique_keys or {}
 
-            for col_name, col_value in row_id_dict.items():
-                # Only add if it's an auto-counting field that's NOT in unique_keys
-                # (unique_key fields are already handled by log_event_dao.bulk_create)
-                if (
-                    col_name in context_obj.auto_counting
-                    and col_name not in unique_keys
-                ):
+                for col_name, col_value in row_id_dict.items():
+                    # Only add if it's an auto-counting field that's NOT in unique_keys
+                    # (unique_key fields are already handled by log_event_dao.bulk_create)
                     if (
-                        col_name not in current_entries
-                        and col_name not in current_params
+                        col_name in context_obj.auto_counting
+                        and col_name not in unique_keys
                     ):
-                        # Add to entries
-                        current_entries[col_name] = col_value
+                        if (
+                            col_name not in current_entries
+                            and col_name not in current_params
+                        ):
+                            # Add to entries
+                            current_entries[col_name] = col_value
 
-        # Extract explicit types - NOTE: This mutates entries/params dicts in-place
-        # Callers should pass fresh copies if they need to reuse the original dicts
-        entries_explicit_types = (
-            current_entries.pop("explicit_types", {})
-            if isinstance(current_entries, dict)
-            else None
-        )
-        params_explicit_types = (
-            current_params.pop("explicit_types", {})
-            if isinstance(current_params, dict)
-            else None
-        )
+            # Extract explicit types - NOTE: This mutates entries/params dicts in-place
+            # Callers should pass fresh copies if they need to reuse the original dicts
+            entries_explicit_types = (
+                current_entries.pop("explicit_types", {})
+                if isinstance(current_entries, dict)
+                else None
+            )
+            params_explicit_types = (
+                current_params.pop("explicit_types", {})
+                if isinstance(current_params, dict)
+                else None
+            )
 
-        # Process params - create new fields if they don't exist
-        for k, v in current_params.items():
-            # Check if field needs to be created
-            if k not in field_types:
-                mutable = (
-                    params_explicit_types.get(k, {}).get("mutable", False)
-                    if params_explicit_types
-                    else False
+            # Process params - create new fields if they don't exist
+            for k, v in current_params.items():
+                # Check if field needs to be created
+                if k not in field_types:
+                    mutable = (
+                        params_explicit_types.get(k, {}).get("mutable", False)
+                        if params_explicit_types
+                        else False
+                    )
+                    unique = (
+                        params_explicit_types.get(k, {}).get("unique", False)
+                        if params_explicit_types
+                        else False
+                    )
+                    # If in a versioned context, force mutable=True
+                    if context_obj and context_obj.is_versioned:
+                        mutable = True
+
+                    # Check for explicit type
+                    field_type = None
+                    enum_values = None
+                    enum_restrict = False
+                    if params_explicit_types and k in params_explicit_types:
+                        field_spec = params_explicit_types[k]
+                        if isinstance(field_spec, dict):
+                            field_type = field_spec.get("type")
+                            enum_values = field_spec.get("values")
+                            enum_restrict = field_spec.get("restrict", False)
+                        elif isinstance(field_spec, str):
+                            field_type = field_spec
+
+                    perlog_field_types.append(
+                        {
+                            "project_id": project_id,
+                            "field_name": k,
+                            "value": v,
+                            "mutable": mutable,
+                            "unique": unique,
+                            "field_category": "param",
+                            "context_id": context_id,
+                            "field_type": field_type,
+                            "enum_values": enum_values,
+                            "enum_restrict": enum_restrict,
+                        },
+                    )
+                else:
+                    # Field exists - enforce types (cannot modify existing field types)
+                    enforce_types(
+                        k,
+                        v,
+                        field_types=field_types,
+                        field_type_dao=field_type_dao,
+                        context_dao=context_dao,
+                        project_id=project_id,
+                        batch_index=i,
+                        explicit_types=params_explicit_types,
+                        context_id=context_id,
+                        is_param=True,
+                    )
+
+                # Determine version for parameter
+                existing_param = log_dao.filter(
+                    key=k,
+                    value=json.dumps(v),
+                    project_id=project_id,
                 )
-                unique = (
-                    params_explicit_types.get(k, {}).get("unique", False)
-                    if params_explicit_types
-                    else False
-                )
-                # If in a versioned context, force mutable=True
-                if context_obj and context_obj.is_versioned:
-                    mutable = True
+                if existing_param:
+                    version = existing_param[0][0].param_version
+                else:
+                    version = log_dao.get_next_param_version(project_id, context_id, k)
 
-                # Check for explicit type
-                field_type = None
-                enum_values = None
-                enum_restrict = False
-                if params_explicit_types and k in params_explicit_types:
-                    field_spec = params_explicit_types[k]
-                    if isinstance(field_spec, dict):
-                        field_type = field_spec.get("type")
-                        enum_values = field_spec.get("values")
-                        enum_restrict = field_spec.get("restrict", False)
-                    elif isinstance(field_spec, str):
-                        field_type = field_spec
-
-                new_field_types.append(
+                # Add to records for bulk creation
+                perlog_records.append(
                     {
                         "project_id": project_id,
-                        "field_name": k,
+                        "log_event_id": log_event_id,
+                        "key": k,
                         "value": v,
-                        "mutable": mutable,
-                        "unique": unique,
-                        "field_category": "param",
+                        "param_version": version,
+                        "explicit_types": params_explicit_types,
                         "context_id": context_id,
-                        "field_type": field_type,
-                        "enum_values": enum_values,
-                        "enum_restrict": enum_restrict,
                     },
                 )
-            else:
-                # Field exists - enforce types (cannot modify existing field types)
-                enforce_types(
-                    k,
-                    v,
-                    field_types=field_types,
-                    field_type_dao=field_type_dao,
-                    context_dao=context_dao,
-                    project_id=project_id,
-                    batch_index=i,
-                    explicit_types=params_explicit_types,
-                    context_id=context_id,
-                    is_param=True,
-                )
 
-            # Determine version for parameter
-            existing_param = log_dao.filter(
-                key=k,
-                value=json.dumps(v),
-                project_id=project_id,
-            )
-            if existing_param:
-                version = existing_param[0][0].param_version
-            else:
-                version = log_dao.get_next_param_version(project_id, context_id, k)
+            # Process entries - create new fields if they don't exist
+            for k, v in current_entries.items():
+                # Check if field needs to be created
+                if k not in field_types:
+                    mutable = (
+                        entries_explicit_types.get(k, {}).get("mutable", False)
+                        if entries_explicit_types
+                        else False
+                    )
+                    unique = (
+                        entries_explicit_types.get(k, {}).get("unique", False)
+                        if entries_explicit_types
+                        else False
+                    )
+                    # If in a versioned context, force mutable=True
+                    if context_obj and context_obj.is_versioned:
+                        mutable = True
 
-            # Add to records for bulk creation
-            log_records_to_create.append(
-                {
-                    "project_id": project_id,
-                    "log_event_id": log_event_id,
-                    "key": k,
-                    "value": v,
-                    "param_version": version,
-                    "explicit_types": params_explicit_types,
-                    "context_id": context_id,
-                },
-            )
+                    # Check for explicit type
+                    field_type = None
+                    enum_values = None
+                    enum_restrict = False
+                    if entries_explicit_types and k in entries_explicit_types:
+                        field_spec = entries_explicit_types[k]
+                        if isinstance(field_spec, dict):
+                            field_type = field_spec.get("type")
+                            enum_values = field_spec.get("values")
+                            enum_restrict = field_spec.get("restrict", False)
+                        elif isinstance(field_spec, str):
+                            field_type = field_spec
 
-        # Process entries - create new fields if they don't exist
-        for k, v in current_entries.items():
-            # Check if field needs to be created
-            if k not in field_types:
-                mutable = (
-                    entries_explicit_types.get(k, {}).get("mutable", False)
-                    if entries_explicit_types
-                    else False
-                )
-                unique = (
-                    entries_explicit_types.get(k, {}).get("unique", False)
-                    if entries_explicit_types
-                    else False
-                )
-                # If in a versioned context, force mutable=True
-                if context_obj and context_obj.is_versioned:
-                    mutable = True
+                    perlog_field_types.append(
+                        {
+                            "project_id": project_id,
+                            "field_name": k,
+                            "value": v,
+                            "mutable": mutable,
+                            "unique": unique,
+                            "field_category": "entry",
+                            "context_id": context_id,
+                            "field_type": field_type,
+                            "enum_values": enum_values,
+                            "enum_restrict": enum_restrict,
+                        },
+                    )
+                else:
+                    # Field exists - enforce types (cannot modify existing field types)
+                    enforce_types(
+                        k,
+                        v,
+                        field_types=field_types,
+                        field_type_dao=field_type_dao,
+                        context_dao=context_dao,
+                        project_id=project_id,
+                        batch_index=i,
+                        explicit_types=entries_explicit_types,
+                        context_id=context_id,
+                        is_param=False,
+                    )
 
-                # Check for explicit type
-                field_type = None
-                enum_values = None
-                enum_restrict = False
-                if entries_explicit_types and k in entries_explicit_types:
-                    field_spec = entries_explicit_types[k]
-                    if isinstance(field_spec, dict):
-                        field_type = field_spec.get("type")
-                        enum_values = field_spec.get("values")
-                        enum_restrict = field_spec.get("restrict", False)
-                    elif isinstance(field_spec, str):
-                        field_type = field_spec
-
-                new_field_types.append(
+                # Add to records for bulk creation (entries don't have version)
+                perlog_records.append(
                     {
                         "project_id": project_id,
-                        "field_name": k,
+                        "log_event_id": log_event_id,
+                        "key": k,
                         "value": v,
-                        "mutable": mutable,
-                        "unique": unique,
-                        "field_category": "entry",
+                        "explicit_types": entries_explicit_types,
                         "context_id": context_id,
-                        "field_type": field_type,
-                        "enum_values": enum_values,
-                        "enum_restrict": enum_restrict,
                     },
                 )
-            else:
-                # Field exists - enforce types (cannot modify existing field types)
-                enforce_types(
-                    k,
-                    v,
-                    field_types=field_types,
-                    field_type_dao=field_type_dao,
-                    context_dao=context_dao,
-                    project_id=project_id,
-                    batch_index=i,
-                    explicit_types=entries_explicit_types,
-                    context_id=context_id,
-                    is_param=False,
-                )
 
-            # Add to records for bulk creation (entries don't have version)
-            log_records_to_create.append(
+            # If we made it here, this log is valid; stage its artifacts
+            new_field_types.extend(perlog_field_types)
+            log_records_to_create.extend(perlog_records)
+            successful_indices.append(i)
+
+        except HTTPException as http_err:
+            try:
+                log_event_dao.delete(log_event_id)
+            except Exception:
+                pass
+            failed_logs.append(
                 {
-                    "project_id": project_id,
-                    "log_event_id": log_event_id,
-                    "key": k,
-                    "value": v,
-                    "explicit_types": entries_explicit_types,
-                    "context_id": context_id,
+                    "index": i,
+                    "error": getattr(http_err, "detail", str(http_err)),
                 },
             )
+            continue
+        except Exception as e:  # Broad catch to avoid aborting the batch
+            try:
+                log_event_dao.delete(log_event_id)
+            except Exception:
+                pass
+            failed_logs.append({"index": i, "error": str(e)})
+            continue
 
     # Bulk create new field types if any
     # Note: We CAN create new fields, but we CANNOT modify existing fields
@@ -1695,14 +1730,37 @@ def create_logs_internal(
         raise HTTPException(status_code=400, detail=str(e))
 
     # Bulk create all log records
+    created_event_ids = [log_event_ids[i] for i in successful_indices]
     try:
-        log_dao.bulk_create(log_records_to_create, context_obj=context_obj)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        if log_records_to_create:
+            log_dao.bulk_create(log_records_to_create, context_obj=context_obj)
+    except Exception:
+        # Fallback to per-log insertion to salvage successes
+        # Build per-log buckets
+        by_event = {}
+        for rec in log_records_to_create:
+            eid = rec.get("log_event_id")
+            by_event.setdefault(eid, []).append(rec)
+        # Reset created list and attempt per-log
+        created_event_ids = []
+        for i in successful_indices:
+            eid = log_event_ids[i]
+            recs = by_event.get(eid, [])
+            if not recs:
+                continue
+            try:
+                log_dao.bulk_create(recs, context_obj=context_obj)
+                created_event_ids.append(eid)
+            except Exception as e:
+                try:
+                    log_event_dao.delete(eid)
+                except Exception:
+                    pass
+                failed_logs.append({"index": i, "error": str(e)})
 
     # Check for duplicates if context doesn't allow duplicates
     if context_obj and not context_obj.allow_duplicates:
-        for log_event_id in log_event_ids:
+        for log_event_id in created_event_ids:
             # Check for duplicates
             duplicate = context_dao.check_for_duplicates(context_obj.id, log_event_id)
             if duplicate:
@@ -1722,17 +1780,20 @@ def create_logs_internal(
     ids_list = []
 
     # Transform row_ids into the list format
-    if row_ids and unique_keys:
+    # Filter row_ids to only successful ones (preserve order)
+    row_ids_filtered = [row_ids[i] for i in successful_indices] if row_ids else []
+
+    if row_ids_filtered and unique_keys:
         # Use the preserved order from context
         names = context_obj.unique_key_names or list(unique_keys.keys())
 
-        if isinstance(row_ids[0], dict):
+        if isinstance(row_ids_filtered[0], dict):
             # Dictionary format - convert to list of lists using the correct order
-            for row_id in row_ids:
+            for row_id in row_ids_filtered:
                 ids_list.append([row_id.get(name) for name in names])
         else:
             # Legacy single ID case - wrap each ID in a list
-            ids_list = [[row_id] for row_id in row_ids]
+            ids_list = [[row_id] for row_id in row_ids_filtered]
 
     row_ids_payload = {
         "names": names,
@@ -1744,17 +1805,18 @@ def create_logs_internal(
     # Always return a dict, empty if no auto-counting configured
     auto_counting_payload = {}
     auto_counting_cfg = context_obj.auto_counting or {}
-    if row_ids and auto_counting_cfg and isinstance(row_ids[0], dict):
+    if row_ids_filtered and auto_counting_cfg and isinstance(row_ids_filtered[0], dict):
         # Extract auto-counting values as a dict mapping column name to list of values
         for col_name in auto_counting_cfg.keys():
             auto_counting_payload[col_name] = [
-                row_id.get(col_name) for row_id in row_ids
+                row_id.get(col_name) for row_id in row_ids_filtered
             ]
 
     return {
-        "log_event_ids": log_event_ids,
+        "log_event_ids": created_event_ids,
         "row_ids": row_ids_payload,
         "auto_counting": auto_counting_payload,
+        "failed": failed_logs,
     }
 
 

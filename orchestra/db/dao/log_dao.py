@@ -45,6 +45,99 @@ class LogDAO:
         self.bucket_service = BucketService()
         self.context_dao = context_dao
 
+    def check_field_update(
+        self,
+        field_key: str,
+        field_types: Dict[str, Any],
+        explicit_types_dict: Dict[str, Any],
+        is_nested: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Validate a field update for type compatibility and return field metadata.
+
+        Args:
+            field_key: The field name (base key for nested updates)
+            field_types: Dictionary of existing field type definitions
+            explicit_types_dict: User-provided explicit type overrides
+            is_nested: Whether this is a nested path update (e.g., profile.age)
+
+        Returns:
+            None if validation fails (caller should skip this update)
+            Dict with field metadata if validation passes:
+                - exists: bool - whether field already exists
+                - mutable: bool - mutability setting (for new fields)
+                - unique: bool - uniqueness setting (for new fields)
+                - field_type: str - explicit type (for new fields)
+                - enum_values: list - enum values (for new fields)
+                - enum_restrict: bool - enum restriction (for new fields)
+        """
+        # For nested updates, validate the base key is a container type
+        if is_nested:
+            container_types = {"dict", "list", "tuple", "set"}
+            ft_info = field_types.get(field_key)
+            expected_type = None
+            if isinstance(ft_info, dict):
+                expected_type = (
+                    ft_info.get("field_type") or ft_info.get("type") or "Any"
+                )
+
+            # explicit_types override if provided
+            if explicit_types_dict and field_key in explicit_types_dict:
+                spec = explicit_types_dict[field_key]
+                if isinstance(spec, dict):
+                    expected_type = spec.get("type") or expected_type
+                elif isinstance(spec, str):
+                    expected_type = spec
+
+            from orchestra.web.api.log.utils.type_utils import types_match
+
+            if expected_type and not any(
+                types_match(x, expected_type) for x in container_types
+            ):
+                raise ValueError(
+                    f"Type mismatch for field '{field_key}': "
+                    f"field has strict type '{expected_type}', but nested path was provided. Expected type: {expected_type}, Field type: {ft_info.get('field_type', 'Any')}",
+                )
+
+        # Check if field exists
+        if field_key in field_types:
+            # Field exists - caller should enforce types separately
+            return {"exists": True}
+        else:
+            # Field doesn't exist - prepare metadata for creation
+            mutable = (
+                explicit_types_dict.get(field_key, {}).get("mutable", False)
+                if explicit_types_dict
+                else False
+            )
+            unique = (
+                explicit_types_dict.get(field_key, {}).get("unique", False)
+                if explicit_types_dict
+                else False
+            )
+
+            # Check for explicit type
+            field_type = None
+            enum_values = None
+            enum_restrict = False
+            if explicit_types_dict and field_key in explicit_types_dict:
+                field_spec = explicit_types_dict[field_key]
+                if isinstance(field_spec, dict):
+                    field_type = field_spec.get("type")
+                    enum_values = field_spec.get("values")
+                    enum_restrict = field_spec.get("restrict", False)
+                elif isinstance(field_spec, str):
+                    field_type = field_spec
+
+            return {
+                "exists": False,
+                "mutable": mutable,
+                "unique": unique,
+                "field_type": field_type,
+                "enum_values": enum_values,
+                "enum_restrict": enum_restrict,
+            }
+
     def upload_image_to_bucket(self, image_base64: str) -> str:
         """Upload image to bucket and return the URL."""
         try:
