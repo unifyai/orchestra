@@ -184,6 +184,71 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
         # We'll assume the API handled it correctly
 
 
+@pytest.mark.anyio
+async def test_full_name_filter_expression(client: AsyncClient):
+    project_name = "test_full_name_filter"
+    await _create_project(client, project_name)
+
+    # Create logs covering various edge cases
+    logs = [
+        {
+            "first_name": "John",
+            "surname": "Doe",
+            "note": "should match via left branch",
+        },
+        {
+            "first_name": "JOHN",
+            "surname": None,
+            "note": "should match via left branch (case)",
+        },
+        {
+            "first_name": None,
+            "surname": "Johnson",
+            "note": "should match via right branch ('john' in full name)",
+        },
+        {"first_name": "Alice", "surname": "Smith", "note": "should NOT match"},
+        {"first_name": "Jo", "surname": "Hnson", "note": "should NOT"},
+        {
+            "first_name": "",
+            "surname": "Johnny",
+            "note": "should match via right branch 'john' substring",
+        },
+    ]
+
+    created_ids = []
+    for entry in logs:
+        resp = await _create_log(client, project_name, entries=entry)
+        assert resp.status_code == 200, resp.json()
+        created_ids.append(resp.json()["log_event_ids"][0])
+
+    expr = "((first_name is not None and first_name.lower() == 'john') or ('john' in (((first_name or '' ) + ' ' + (surname or '')).lower())))"
+
+    r = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": expr},
+        headers=HEADERS,
+    )
+    assert r.status_code == 200, r.text
+    result = r.json()["logs"]
+
+    # Determine expected matches according to Python semantics used by the parser
+    expected = []
+    for i, e in enumerate(logs):
+        fn = e.get("first_name")
+        sn = e.get("surname")
+        left = (fn is not None) and (str(fn).lower() == "john")
+        full = f"{(fn or '')} {(sn or '')}".lower()
+        right = "john" in full
+        if left or right:
+            expected.append(created_ids[i])
+
+    got_ids = sorted([log["id"] for log in result])
+    exp_ids = sorted(expected)
+    assert (
+        got_ids == exp_ids
+    ), f"Mismatched result ids. Got {got_ids}, expected {exp_ids}"
+
+
 # Tests for the new AST-based parser implementation
 @pytest.mark.parametrize(
     "expression, expected_dict",
@@ -450,6 +515,18 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
                 "default_supplied": True,
             },
         ),
+        # setdefault mirrors get with default, but keeps method for routing
+        (
+            "my_dict.setdefault('c', 42)",
+            {
+                "operand": "dict_method",
+                "method": "setdefault",
+                "rhs": {"type": "identifier", "value": "my_dict"},
+                "key": "c",
+                "default": 42,
+                "default_supplied": True,
+            },
+        ),
         # if‑expr
         (
             "a if cond else b",
@@ -681,6 +758,59 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
                 "rhs": "test",
             },
         ),
+        (
+            "((first_name is not None and first_name.lower() == 'john') or ('john' in (((first_name or '' ) + ' ' + (surname or '')).lower())))",
+            {
+                "lhs": {
+                    "lhs": {
+                        "lhs": {"type": "identifier", "value": "first_name"},
+                        "operand": "is not",
+                        "rhs": None,
+                    },
+                    "operand": "and",
+                    "rhs": {
+                        "lhs": {
+                            "operand": "str_method",
+                            "method": "lower",
+                            "rhs": {"type": "identifier", "value": "first_name"},
+                            "args": [],
+                        },
+                        "operand": "==",
+                        "rhs": "john",
+                    },
+                },
+                "operand": "or",
+                "rhs": {
+                    "lhs": "john",
+                    "operand": "in",
+                    "rhs": {
+                        "operand": "str_method",
+                        "method": "lower",
+                        "rhs": {
+                            "lhs": {
+                                "lhs": {
+                                    "lhs": {
+                                        "type": "identifier",
+                                        "value": "first_name",
+                                    },
+                                    "operand": "or",
+                                    "rhs": "",
+                                },
+                                "operand": "+",
+                                "rhs": " ",
+                            },
+                            "operand": "+",
+                            "rhs": {
+                                "lhs": {"type": "identifier", "value": "surname"},
+                                "operand": "or",
+                                "rhs": "",
+                            },
+                        },
+                        "args": [],
+                    },
+                },
+            },
+        ),
     ],
 )
 def test_ast_parser(expression, expected_dict):
@@ -692,6 +822,110 @@ def test_ast_parser(expression, expected_dict):
     assert (
         result_dict == expected_dict
     ), f"AST mismatch.\nGot: {result_dict}\nExpected: {expected_dict}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "key,value,types_expr,should_match",
+    [
+        ("s", "hello", "'str'", True),
+        ("n", 123, "'int'", True),
+        ("n", 123, "('int','float')", True),
+        ("f", 3.14, "('int','bool')", False),
+        ("b", True, "('int','bool')", True),
+        ("lst", [1, 2], "('list','dict')", True),
+        ("obj", {"a": 1}, "'dict'", True),
+    ],
+)
+async def test_isinstance_function_in_filter_expressions(
+    client: AsyncClient,
+    key,
+    value,
+    types_expr,
+    should_match,
+):
+    project_name = f"test_isinstance_function_{key}"
+    await _create_project(client, project_name)
+
+    # Create a log with the specific key/value under test
+    response = await _create_log(client, project_name, entries={key: value})
+    assert response.status_code == 200, response.text
+    log_id = response.json()["log_event_ids"][0]
+
+    # Verify that isinstance(key, types) matches expected
+    filter_expr = f"isinstance({key}, {types_expr})"
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": filter_expr},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    if should_match:
+        assert len(data["logs"]) == 1, f"Expected 1 log for expression: {filter_expr}"
+        assert data["logs"][0]["id"] == log_id
+    else:
+        assert len(data["logs"]) == 0, f"Expected 0 logs for expression: {filter_expr}"
+
+
+@pytest.mark.anyio
+async def test_dict_get_and_setdefault_behavior(client: AsyncClient):
+    project_name = "test_dict_get_setdefault"
+    await _create_project(client, project_name)
+
+    # Create logs with dict values
+    entries = {
+        "d1": {"a": 1},
+        "d2": {},
+    }
+    response = await _create_log(client, project_name, entries=entries)
+    assert response.status_code == 200
+    log_id = response.json()["log_event_ids"][0]
+
+    # get existing key
+    r = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": "d1.get('a') == 1"},
+        headers=HEADERS,
+    )
+    assert r.status_code == 200
+    assert len(r.json()["logs"]) == 1 and r.json()["logs"][0]["id"] == log_id
+
+    # get missing key -> None
+    r = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": "d1.get('b') is None"},
+        headers=HEADERS,
+    )
+    assert r.status_code == 200
+    assert len(r.json()["logs"]) == 1 and r.json()["logs"][0]["id"] == log_id
+
+    # get with default for missing -> default
+    r = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": "d2.get('b', 5) == 5"},
+        headers=HEADERS,
+    )
+    assert r.status_code == 200
+    assert len(r.json()["logs"]) == 1 and r.json()["logs"][0]["id"] == log_id
+
+    # setdefault existing key -> original value
+    r = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": "d1.setdefault('a', 9) == 1"},
+        headers=HEADERS,
+    )
+    assert r.status_code == 200
+    assert len(r.json()["logs"]) == 1 and r.json()["logs"][0]["id"] == log_id
+
+    # setdefault missing key -> default returned
+    r = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": "d2.setdefault('c', 7) == 7"},
+        headers=HEADERS,
+    )
+    assert r.status_code == 200
+    assert len(r.json()["logs"]) == 1 and r.json()["logs"][0]["id"] == log_id
 
 
 @pytest.mark.parametrize(
@@ -2086,7 +2320,7 @@ async def test_get_logs_w_filtering(client: AsyncClient):
         json={"logs": [3, 4], "entries": {"_/description": None}, "overwrite": True},
         headers=HEADERS,
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     response = await client.get(
         f"/v0/logs?project={project_name}",
         params={"filter_expr": "_/description is None"},
@@ -3415,3 +3649,48 @@ async def test_filter_on_field_with_existing_embedding(client: AsyncClient):
     assert (
         result["logs"][0]["id"] == log_id
     ), "The vector search returned the wrong log."
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "key,value,expected_type",
+    [
+        ("s", "hello", "str"),
+        ("n", 123, "int"),
+        ("f", 3.14, "float"),
+        ("b", True, "bool"),
+        ("dt", datetime(2023, 1, 1, tzinfo=timezone.utc).isoformat(), "datetime"),
+        ("d", "2023-01-01", "date"),
+        ("t", "14:30:00", "time"),
+        ("td", "P1D", "timedelta"),
+        ("lst", [1, 2], "list"),
+        ("obj", {"a": 1}, "dict"),
+        ("none", None, "NoneType"),
+        ("zh", "世界", "str"),
+    ],
+)
+async def test_type_function_in_filter_expressions(
+    client: AsyncClient,
+    key,
+    value,
+    expected_type,
+):
+    project_name = f"test_type_function_{key}"
+    await _create_project(client, project_name)
+
+    # Create a log with the specific key/value under test
+    response = await _create_log(client, project_name, entries={key: value})
+    assert response.status_code == 200, response.text
+    log_id = response.json()["log_event_ids"][0]
+
+    # Verify that type(key) matches the expected inferred type
+    filter_expr = f"type({key}) == '{expected_type}'"
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": filter_expr},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert len(data["logs"]) == 1, f"Expected 1 log for expression: {filter_expr}"
+    assert data["logs"][0]["id"] == log_id

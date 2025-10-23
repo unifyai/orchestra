@@ -1,13 +1,19 @@
+import base64
 import copy
 import functools
+import io
 import json
+import logging
 import math
 import os
 import re
+import threading
 from typing import Optional, Union
 
 import unify
+from dotenv import load_dotenv
 from openai import OpenAI
+from PIL import Image
 from sqlalchemy import (
     TIMESTAMP,
     BindParameter,
@@ -29,6 +35,8 @@ from sqlalchemy import (
     or_,
     select,
 )
+
+load_dotenv()
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
@@ -61,7 +69,10 @@ __all__ = [
     "_ensure_vectors_exist",
     "_get_embedding",
     "_get_embeddings_batch",
+    "_get_image_embedding_batch",
+    "_get_image_embedding_from_url",
     "DEFAULT_EMBEDDING_MODEL",
+    "DEFAULT_IMAGE_EMBEDDING_MODEL",
 ]
 
 # Initialize OpenAI client if API key is available
@@ -72,9 +83,63 @@ except Exception as e:
     raise ValueError(f"Failed to initialize OpenAI client: {str(e)}")
 
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
+DEFAULT_IMAGE_EMBEDDING_MODEL = "multimodalembedding@001"
 MAX_EMBEDDING_DIMS = 1536
 MAX_TOKENS_PER_REQUEST = 2970000
 MAX_TOKENS_PER_INPUT = 8000
+
+# Vertex AI configuration
+VERTEXAI_PROJECT = os.getenv("ORCHESTRA_VERTEXAI_PROJECT")
+VERTEXAI_LOCATION = os.getenv("ORCHESTRA_VERTEXAI_LOCATION", "us-central1")
+
+# Load image embedding model globally (lazy loaded on first use)
+_image_embedding_model = None
+_vertexai_initialized = False
+_image_embedding_lock = threading.Lock()
+
+
+def _get_image_embedding_model():
+    """
+    Lazy load the Vertex AI multimodal embedding model.
+    Uses Google Cloud's Vertex AI which requires GCP credentials.
+    Returns the loaded model.
+
+    Thread-safe: Uses a lock to prevent race conditions during initialization.
+    """
+    global _image_embedding_model, _vertexai_initialized
+
+    # Double-checked locking pattern for thread safety
+    if _image_embedding_model is None:
+        with _image_embedding_lock:
+            # Check again inside the lock in case another thread initialized it
+            if _image_embedding_model is None:
+                try:
+                    import vertexai
+                    from vertexai.vision_models import MultiModalEmbeddingModel
+
+                    # Initialize Vertex AI once
+                    if not _vertexai_initialized:
+                        if not VERTEXAI_PROJECT:
+                            raise RuntimeError(
+                                "ORCHESTRA_VERTEXAI_PROJECT environment variable must be set to use image embeddings",
+                            )
+
+                        vertexai.init(
+                            project=VERTEXAI_PROJECT,
+                            location=VERTEXAI_LOCATION,
+                        )
+                        _vertexai_initialized = True
+
+                    # Load the multimodal embedding model
+                    _image_embedding_model = MultiModalEmbeddingModel.from_pretrained(
+                        DEFAULT_IMAGE_EMBEDDING_MODEL,
+                    )
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Failed to load Vertex AI multimodal embedding model '{DEFAULT_IMAGE_EMBEDDING_MODEL}'. "
+                        f"Ensure vertexai library is installed and GCP credentials are configured. Error: {e}",
+                    )
+    return _image_embedding_model
 
 
 def count_tokens_per_utf_byte(document: str) -> int:
@@ -191,8 +256,6 @@ def _get_embeddings_batch(
                     # Cannot split further; surface error
                     raise ValueError(f"Failed to get embeddings: {str(e)}")
                 mid = len(batch_texts) // 2
-                print(f"left: {batch_texts[:mid]}")
-                print(f"right: {batch_texts[mid:]}")
                 left = _embed_or_split(batch_texts[:mid])
                 right = _embed_or_split(batch_texts[mid:])
                 return left + right
@@ -203,6 +266,122 @@ def _get_embeddings_batch(
     for batch in batches:
         out.extend(_embed_or_split(batch))
     return out
+
+
+def _get_image_embedding_from_url(
+    image_url: str,
+    bucket_service=None,
+) -> list[float] | None:
+    """
+    Get embedding vector for a single image from a GCS URL or base64 string.
+
+    Args:
+        image_url: Either a GCS URL (https://storage.googleapis.com/...) or
+                   a base64 encoded image string (with or without data URI prefix)
+        bucket_service: Optional BucketService instance for fetching GCS images.
+                       If not provided, a new instance will be created (not recommended for batch operations).
+
+    Returns:
+        Embedding vector as a list of floats, or None if embedding fails
+    """
+    try:
+        from vertexai.vision_models import Image as VertexImage
+
+        # Get the Vertex AI model (lazy loaded, thread-safe)
+        model = _get_image_embedding_model()
+
+        # Check if this is a GCS URL or base64 string
+        if image_url and isinstance(image_url, str):
+            if image_url.startswith("http://") or image_url.startswith("https://"):
+                # This is a GCS URL - download the image first
+                if bucket_service is None:
+                    from orchestra.services.bucket_service import BucketService
+
+                    bucket_service = BucketService()
+
+                # Extract filename from URL (last part after /)
+                filename = image_url.split("/")[-1]
+                base64_image = bucket_service.get_media(filename)
+
+                if not base64_image:
+                    logging.warning(f"Failed to fetch image from GCS: {filename}")
+                    return None
+
+                # Decode the base64 image
+                image_data = base64.b64decode(base64_image)
+            else:
+                # This is a base64 string - use directly
+                b64_string = image_url
+
+                # Remove data URI prefix if present
+                if "," in b64_string and b64_string.startswith("data:"):
+                    b64_string = b64_string.split(",", 1)[1]
+
+                # Decode base64 string
+                image_data = base64.b64decode(b64_string)
+
+            # Create a PIL Image and ensure RGB format
+            pil_image = Image.open(io.BytesIO(image_data)).convert("RGB")
+
+            # Save to temporary bytes buffer (Vertex AI Image needs bytes)
+            img_byte_arr = io.BytesIO()
+            pil_image.save(img_byte_arr, format="PNG")
+            img_byte_arr.seek(0)
+
+            # Load image using Vertex AI's Image wrapper
+            vertex_image = VertexImage(img_byte_arr.read())
+
+            # Get embeddings from Vertex AI
+            embeddings = model.get_embeddings(
+                image=vertex_image,
+                # dimension=1408  # Optional: specify dimension (default is 1408)
+            )
+
+            # Extract the image embedding vector and convert to list of floats
+            return [float(val) for val in embeddings.image_embedding]
+
+        return None
+
+    except Exception as e:
+        logging.error(f"Failed to compute image embedding for {image_url}: {e}")
+        return None
+
+
+def _get_image_embedding_batch(image_urls: list[str]) -> list[list[float]]:
+    """
+    Get embedding vectors for a batch of images (GCS URLs or base64 strings) using
+    Vertex AI's multimodal embedding model with parallel processing.
+
+    Args:
+        image_urls: List of image URLs (GCS) or base64 encoded image strings
+
+    Returns:
+        List of embedding vectors (each a list of floats)
+
+    Raises:
+        RuntimeError: If the image embedding model cannot be loaded
+        ValueError: If image decoding fails
+    """
+    if not image_urls:
+        return []
+
+    # Use parallel processing to compute embeddings for all images
+    def compute_single_embedding(image_url):
+        """Helper function to compute embedding for a single image."""
+        return _get_image_embedding_from_url(image_url)
+
+    # Format arguments for unify.map
+    formatted_args = [((url,), {}) for url in image_urls]
+
+    # Use parallel processing with threading
+    embeddings = unify.map(
+        compute_single_embedding,
+        formatted_args,
+        mode="threading",
+        name="compute_image_embeddings",
+    )
+
+    return embeddings
 
 
 def _extract_placeholders(equation: str) -> list:
@@ -255,8 +434,11 @@ def _select_value(subq, session, is_collection=False, is_vector=False):
     Helper function to select the appropriate value column from a subquery.
     This version is deterministic, unifying all possible types in a subquery.
     """
+    from orchestra.web.api.log.utils.type_utils import get_base_storage_type
+
     if isinstance(subq, BindParameter):
-        return subq.value, LogDAO.infer_type("", subq.value)
+        inferred = LogDAO.infer_type("", subq.value)
+        return subq.value, (get_base_storage_type(inferred) or inferred)
     if hasattr(subq, "element") and subq.name == "reduction_metric":
         return subq.element, "float"
 
@@ -265,7 +447,8 @@ def _select_value(subq, session, is_collection=False, is_vector=False):
         # we should have a better way to do this.
         dt = session.execute(select(subq).limit(1)).first()
         dt = dt[-1]
-        return subq, LogDAO.infer_type("", dt)
+        inferred = LogDAO.infer_type("", dt)
+        return subq, (get_base_storage_type(inferred) or inferred)
 
     if isinstance(subq, Subquery):
         dt = None
@@ -274,10 +457,14 @@ def _select_value(subq, session, is_collection=False, is_vector=False):
             distinct_types_rows = session.execute(
                 select(subq.c.inferred_type).distinct(),
             ).fetchall()
-            distinct_types = [
+            distinct_types_raw = [
                 row[0]
                 for row in distinct_types_rows
                 if row[0] not in (None, "NoneType")
+            ]
+            # Normalize nested/spec types (e.g., List[int], Dict[str, Any]) to storage family
+            distinct_types = [
+                (get_base_storage_type(t) or t) for t in distinct_types_raw
             ]
 
             if not distinct_types:
@@ -297,19 +484,24 @@ def _select_value(subq, session, is_collection=False, is_vector=False):
                 distinct_types_rows = session.execute(
                     select(subq.c.inferred_type).distinct(),
                 ).fetchall()
-                distinct_types = [
+                distinct_types_raw = [
                     row[0]
                     for row in distinct_types_rows
                     if row[0] not in (None, "NoneType")
                 ]
 
-                if not distinct_types:
+                if not distinct_types_raw:
                     dt = "NoneType"
-                elif len(distinct_types) == 1:
-                    dt = distinct_types[0]
                 else:
-                    dt = functools.reduce(unify_inferred_types, distinct_types)
+                    normalized = [
+                        (get_base_storage_type(t) or t) for t in distinct_types_raw
+                    ]
+                    if len(normalized) == 1:
+                        dt = normalized[0]
+                    else:
+                        dt = functools.reduce(unify_inferred_types, normalized)
 
+            # Choose column based on normalized storage family
             type_to_col_map = {
                 "int": subq.c.int_value,
                 "float": subq.c.float_value,
@@ -321,14 +513,22 @@ def _select_value(subq, session, is_collection=False, is_vector=False):
                 "timedelta": subq.c.timedelta_value,
                 "list": subq.c.jsonb_value,
                 "dict": subq.c.jsonb_value,
+                "tuple": subq.c.jsonb_value,
+                "set": subq.c.jsonb_value,
+                "union": subq.c.jsonb_value,
+                "Any": subq.c.jsonb_value,
                 "vector": subq.c.vector_value,
                 "image": subq.c.str_value,
+                "audio": subq.c.str_value,
                 "NoneType": subq.c.int_value,  # Fallback, value will be NULL
             }
-            return type_to_col_map.get(dt), dt
+            col = type_to_col_map.get(dt)
+            # Return normalized storage family so callers can rely on base families
+            return col, dt
 
     if not isinstance(subq, Subquery):
-        return subq, LogDAO.infer_type("", subq)
+        inferred = LogDAO.infer_type("", subq)
+        return subq, (get_base_storage_type(inferred) or inferred)
 
     return None, None
 
@@ -354,7 +554,11 @@ def unify_inferred_types(t1: str, t2: str) -> str:
         "list",
         "dict",
         "tuple",
+        "set",
+        "union",
         "image",
+        "audio",
+        "Any",
     ]
 
     # If either side is "none", we skip it or treat it as the other side
@@ -528,8 +732,25 @@ def _build_subquery_for_identifier(
             log_event_log_alias.log_event_id.label("log_event_id"),
             literal(None).label("vector_value"),
             case(
-                (log_alias.inferred_type == "list", cast(log_alias.value, JSONB)),
-                (log_alias.inferred_type == "dict", cast(log_alias.value, JSONB)),
+                (
+                    or_(
+                        log_alias.inferred_type == "list",
+                        log_alias.inferred_type == "dict",
+                        log_alias.inferred_type == "tuple",
+                        log_alias.inferred_type == "set",
+                        log_alias.inferred_type == "union",
+                        log_alias.inferred_type == "Any",
+                        log_alias.inferred_type.ilike("List%"),
+                        log_alias.inferred_type.ilike("Dict%"),
+                        log_alias.inferred_type.ilike("Tuple%"),
+                        log_alias.inferred_type.ilike("Set%"),
+                        log_alias.inferred_type.ilike("Union%"),
+                        # NEW: when inferred_type stores a JSON schema string, it will typically
+                        # start with '{' and end with '}'. Treat it as JSON-family for casting.
+                        log_alias.inferred_type.like("{%"),
+                    ),
+                    cast(log_alias.value, JSONB),
+                ),
                 else_=None,
             ).label("jsonb_value"),
             case(
@@ -552,6 +773,10 @@ def _build_subquery_for_identifier(
                 (log_alias.inferred_type == "str", extract_json_text(log_alias.value)),
                 (
                     log_alias.inferred_type == "image",
+                    extract_json_text(log_alias.value),
+                ),
+                (
+                    log_alias.inferred_type == "audio",
                     extract_json_text(log_alias.value),
                 ),
                 else_=None,
@@ -585,11 +810,20 @@ def _build_subquery_for_identifier(
             literal(None).label("vector_value"),
             case(
                 (
-                    derived_log_alias.inferred_type == "list",
-                    cast(derived_log_alias.value, JSONB),
-                ),
-                (
-                    derived_log_alias.inferred_type == "dict",
+                    or_(
+                        derived_log_alias.inferred_type == "list",
+                        derived_log_alias.inferred_type == "dict",
+                        derived_log_alias.inferred_type == "tuple",
+                        derived_log_alias.inferred_type == "set",
+                        derived_log_alias.inferred_type == "union",
+                        derived_log_alias.inferred_type == "Any",
+                        derived_log_alias.inferred_type.ilike("List[%"),
+                        derived_log_alias.inferred_type.ilike("Dict[%"),
+                        derived_log_alias.inferred_type.ilike("Tuple[%"),
+                        derived_log_alias.inferred_type.ilike("Set[%"),
+                        derived_log_alias.inferred_type.ilike("Union[%"),
+                        derived_log_alias.inferred_type.like("{%"),
+                    ),
                     cast(derived_log_alias.value, JSONB),
                 ),
                 else_=None,
@@ -625,6 +859,14 @@ def _build_subquery_for_identifier(
             case(
                 (
                     derived_log_alias.inferred_type == "str",
+                    extract_json_text(derived_log_alias.value),
+                ),
+                (
+                    derived_log_alias.inferred_type == "image",
+                    extract_json_text(derived_log_alias.value),
+                ),
+                (
+                    derived_log_alias.inferred_type == "audio",
                     extract_json_text(derived_log_alias.value),
                 ),
                 else_=None,
@@ -828,7 +1070,18 @@ def _parse_rhs_list_or_dict_if_needed(rhs_dict, rhs_val):
         except Exception:
             pass
 
-    if isinstance(val, (list, dict)):
+    if isinstance(val, dict):
+        # Unwrap type literal dicts from parser into their raw values
+        if val.get("type") == "type_literal":
+            return val.get("value")
+        return val
+
+    if isinstance(val, list):
+        # If this is a list of type literal dicts, unwrap to their values
+        if val and all(
+            isinstance(it, dict) and it.get("type") == "type_literal" for it in val
+        ):
+            return [it.get("value") for it in val]
         return val
 
     return None

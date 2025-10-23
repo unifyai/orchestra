@@ -1134,7 +1134,16 @@ async def test_nested_group_sorting_with_separate_metrics(client: AsyncClient):
             "/v0/logs",
             json={
                 "project": project_name,
-                "entries": {"country": country, "student": student, "score": score},
+                "entries": {
+                    "country": country,
+                    "student": student,
+                    "score": score,
+                    "explicit_types": {
+                        "country": {"type": "str"},
+                        "student": {"type": "str"},
+                        "score": {"type": "int"},
+                    },
+                },
             },
             headers=HEADERS,
         )
@@ -1262,7 +1271,16 @@ async def test_nested_group_sorting_leaf_only(client: AsyncClient):
             "/v0/logs",
             json={
                 "project": project_name,
-                "entries": {"country": country, "student": student, "score": score},
+                "entries": {
+                    "country": country,
+                    "student": student,
+                    "score": score,
+                    "explicit_types": {
+                        "country": {"type": "str"},
+                        "student": {"type": "str"},
+                        "score": {"type": "int"},
+                    },
+                },
             },
             headers=HEADERS,
         )

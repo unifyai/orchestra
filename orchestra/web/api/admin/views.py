@@ -489,6 +489,10 @@ def admin_list_assistants(
         None,
         description="Only return assistants whose assistant WhatsApp number matches this value.",
     ),
+    agent_id: Optional[int] = Query(
+        None,
+        description="Only return assistants whose agent_id matches this value.",
+    ),
     session=Depends(get_db_session),
 ) -> InfoResponse[List[AssistantRead]]:
     """
@@ -510,6 +514,7 @@ def admin_list_assistants(
             email=email,
             user_whatsapp_number=user_whatsapp_number,
             assistant_whatsapp_number=assistant_whatsapp_number,
+            agent_id=agent_id,
         )
 
         api_keys = [api_key_dao.filter(user_id=a.user_id)[0][0].key for a in assistants]

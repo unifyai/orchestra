@@ -71,26 +71,35 @@ VSCode will load the .env file by default, but take into account that you might 
 
 ## Running the tests
 
-To run the orchestra test suite, you will need the poetry environment and a PSQL server running. Both in codespaces and locally, the easiest way to do this is by creating a PSQL image from the official container. You **don't** need to create a database or populate with data, the tests procedures will do it.
+To run the orchestra test suite, you will need the poetry environment and a PostgreSQL server running with the `pgvector` extension installed. The tests and vector functions require `pgvector`.
+
+Recommended (pgvector-enabled Postgres container):
 
 ```bash
-docker run -p "5432:5432" -e "POSTGRES_PASSWORD=orchestra" -e "POSTGRES_USER=orchestra" -e "POSTGRES_DB=orchestra" postgres:15.2-bullseye
+docker run --name orchestra-db -p 5432:5432 \
+  -e POSTGRES_PASSWORD=orchestra -e POSTGRES_USER=orchestra -e POSTGRES_DB=orchestra \
+  pgvector/pgvector:pg15
 ```
 
-Once the database server is running, you can run the tests using the poetry environment. Take into account that some tests will require **secrets and environment variables**.
+Once the database server is running, install dependencies (including dev) and run the tests using the poetry environment. Take into account that some tests will require **secrets and environment variables**.
 
 ```bash
-pytest -vv .
+poetry install --with dev
+poetry run pytest -vv .
 ```
+
+If you see an error like `extension "vector" is not available`, your Postgres instance lacks pgvector. Use the image above or install pgvector in your local Postgres and run `CREATE EXTENSION IF NOT EXISTS vector;` in the target database.
 
 ## Running orchestra
 
 To run the orchestra service locally, you will need a database with valid data, the corresponding secrets/environment variables, and the poetry environment.
 
-If you already have a docker container running PSQL you won't need to create a new image. Otherwise:
+If you already have a docker container running Postgres with pgvector you won't need to create a new image. Otherwise:
 
 ```bash
-docker run -p "5432:5432" -e "POSTGRES_PASSWORD=orchestra" -e "POSTGRES_USER=orchestra" -e "POSTGRES_DB=orchestra" postgres:15.2-bullseye
+docker run --name orchestra-db -p 5432:5432 \
+  -e POSTGRES_PASSWORD=orchestra -e POSTGRES_USER=orchestra -e POSTGRES_DB=orchestra \
+  pgvector/pgvector:pg15
 ```
 
 Everytime you create a new container, you should run migrations:
@@ -156,7 +165,7 @@ Orchestra uses a comprehensive observability stack for monitoring, logging, and 
 For local development, you can run the observability stack using Docker Compose:
 
 ```bash
-docker-compose -f docker-compose.observability.yml up -d
+docker-compose -f orchestra/observability/docker-compose.observability.yml up -d
 ```
 
 This will start Prometheus, Loki, Tempo, and Grafana containers locally. You can access Grafana at http://localhost:3000.
@@ -198,6 +207,10 @@ ORCHESTRA_ENVIRONMENT="dev"
 ```
 
 You can read more about BaseSettings class here: https://pydantic-docs.helpmanual.io/usage/settings/
+
+## Pytest async configuration
+
+We use pytest-asyncio in STRICT mode. The default fixture loop scope is already set to `function` in `pyproject.toml`, so you should not see related deprecation warnings.
 
 ## OpenTelemetry
 

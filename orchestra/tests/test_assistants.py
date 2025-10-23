@@ -1,6 +1,7 @@
+import asyncio
 import base64
-import datetime
 from pathlib import Path
+from unittest.mock import ANY, patch
 
 import pytest
 from fastapi import status
@@ -27,6 +28,95 @@ async def approve_default_user(client: AsyncClient):
 def _get_sample_wav_bytes() -> bytes:
     sample_path = Path(__file__).parent / "sample_datasets" / "sample_recording.wav"
     return sample_path.read_bytes()
+
+
+@pytest.mark.anyio
+@patch(
+    "orchestra.db.dao.assistant_dao.send_unify_message",
+    return_value={"status": "success"},
+)
+async def test_message_assistant_success(mock_send_message, client: AsyncClient):
+    """
+    Tests the happy path for messaging an assistant using a full integration flow.
+    It starts the messaging call and then simulates the assistant's webhook by
+    logging the response, which the polling mechanism should then pick up.
+    """
+    # 1. Arrange: Create assistant and initial context
+    assistant_payload = {
+        "first_name": "AsyncResponder",
+        "surname": "Bot",
+        "create_infra": False,
+    }
+    create_resp = await client.post(
+        "/v0/assistant",
+        json=assistant_payload,
+        headers=HEADERS,
+    )
+    assert create_resp.status_code == 200
+    assistant_info = create_resp.json()["info"]
+    assistant_id = int(assistant_info["agent_id"])
+    context_name = (
+        f"{assistant_info['first_name']}{assistant_info['surname']}/Transcripts"
+    )
+
+    # Log an initial message to create the context and set a baseline timestamp
+    await client.post(
+        "/v0/logs",
+        json={
+            "project": "Assistants",
+            "context": context_name,
+            "entries": [{"content": "'hello'"}],
+        },
+        headers=HEADERS,
+    )
+
+    # 2. Act: Start the message call in a background task
+    message_payload = {
+        "assistant_id": assistant_id,
+        "contact_id": 1,
+        "message": "Test Message",
+    }
+    message_task = asyncio.create_task(
+        client.post(
+            "/v0/assistant/message",
+            json=message_payload,
+            headers=HEADERS,
+            timeout=70.0,
+        ),
+    )
+
+    # 3. Simulate Webhook: Wait a moment for polling to start, then log the response
+    await asyncio.sleep(
+        0.5,
+    )  # Give the poller time to get the initial timestamp before we log the new one.
+
+    assistant_response_msg = "This is the response from the assistant."
+    log_payload = {
+        "project": "Assistants",
+        "context": context_name,
+        "entries": [
+            {
+                "sender_id": '"0"',
+                "medium": '"unify_message"',
+                "content": f'"{assistant_response_msg}"',
+            },
+        ],
+    }
+    log_resp = await client.post("/v0/logs", json=log_payload, headers=HEADERS)
+    assert log_resp.status_code == 200
+
+    # 4. Assert: Await the background task and check the result
+    # Increase the wait_for timeout to be more robust in CI environments.
+    response = await asyncio.wait_for(message_task, timeout=10)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"info": assistant_response_msg}
+    mock_send_message.assert_called_once_with(
+        assistant_id=str(assistant_id),
+        contact_id=1,
+        message="Test Message",
+        is_staging=ANY,
+    )
 
 
 @pytest.mark.anyio
@@ -91,7 +181,7 @@ async def test_create_assistant_success(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_create_assistant_missing_field(client: AsyncClient):
-    # `POST /v0/assistant` missing surname -> 422 Unprocessable Entity
+    # `POST /v0/assistant` missing surname -> 200 OK (as it's optional)
     payload = {
         "first_name": "Bob",
         # surname omitted
@@ -784,6 +874,52 @@ async def test_admin_list_assistants_filter_email(client: AsyncClient):
 
 
 @pytest.mark.anyio
+async def test_admin_list_assistants_filter_agent_id(client: AsyncClient):
+    # Create two assistants, filter by agent_id to return exactly one
+    payload1 = {
+        "first_name": "Agent",
+        "surname": "One",
+        "age": 21,
+        "weekly_limit": 10.0,
+        "max_parallel": 1,
+        "region": "Test",
+        "profile_photo": "https://example.com/a1.jpg",
+        "about": "Assistant One",
+        "create_infra": False,
+    }
+    payload2 = {
+        "first_name": "Agent",
+        "surname": "Two",
+        "age": 22,
+        "weekly_limit": 11.0,
+        "max_parallel": 2,
+        "region": "Test",
+        "profile_photo": "https://example.com/a2.jpg",
+        "about": "Assistant Two",
+        "create_infra": False,
+    }
+
+    resp1 = await client.post("/v0/assistant", json=payload1, headers=HEADERS)
+    resp2 = await client.post("/v0/assistant", json=payload2, headers=HEADERS)
+    assert resp1.status_code == 200 and resp2.status_code == 200
+
+    aid1 = resp1.json()["info"]["agent_id"]
+
+    # Filter by the first agent's id
+    admin_resp = await client.get(
+        f"/v0/admin/assistant?agent_id={aid1}",
+        headers=ADMIN_HEADERS,
+    )
+    assert admin_resp.status_code == 200
+    body = admin_resp.json()
+    assert "info" in body
+    results = body["info"]
+    assert isinstance(results, list)
+    assert len(results) == 1
+    assert results[0]["agent_id"] == aid1
+
+
+@pytest.mark.anyio
 async def test_admin_list_assistants_for_user(client: AsyncClient):
     # Create a second test user via create_test_user
     # (default HEADERS user will serve as user1)
@@ -952,31 +1088,11 @@ async def test_create_assistant_duplicate_name_fails(client: AsyncClient):
 # --- Assistant project creation and logging ---
 @pytest.fixture
 def pre_hire_chat_payload():
-    """Provides a sample pre_hire_chat payload."""
+    """Provides a sample pre_hire_chat payload with the new simplified schema."""
     return {
         "pre_hire_chat": [
-            {
-                "message_id": 1,
-                "medium": "unify_chat",
-                "sender_id": 1,
-                "receiver_ids": [0],
-                "timestamp": datetime.datetime.now(
-                    datetime.timezone.utc,
-                ).isoformat(),
-                "content": "Hello, are you available for an interview?",
-                "exchange_id": 101,
-            },
-            {
-                "message_id": 2,
-                "medium": "unify_chat",
-                "sender_id": 0,
-                "receiver_ids": [1],
-                "timestamp": datetime.datetime.now(
-                    datetime.timezone.utc,
-                ).isoformat(),
-                "content": "Yes, I am. When would be a good time?",
-                "exchange_id": 101,
-            },
+            {"role": "user", "msg": "Hello, are you available for an interview?"},
+            {"role": "assistant", "msg": "Yes, I am. When would be a good time?"},
         ],
     }
 
@@ -1002,21 +1118,19 @@ async def test_create_assistant_creates_assistants_project(
 
 
 @pytest.mark.anyio
+@patch("orchestra.web.api.assistant.views.log_pre_hire_chat")
 async def test_create_assistant_with_pre_hire_chat_logs_correctly(
+    mock_log_pre_hire_chat,
     client: AsyncClient,
     pre_hire_chat_payload,
 ):
     payload = {
         "first_name": "Chatty",
         "surname": "Cathy",
-        "age": 30,
-        "weekly_limit": 10,
-        "max_parallel": 1,
         "create_infra": False,
         **pre_hire_chat_payload,
     }
 
-    # Create the assistant
     create_resp = await client.post(
         "/v0/assistant",
         json=payload,
@@ -1026,83 +1140,54 @@ async def test_create_assistant_with_pre_hire_chat_logs_correctly(
         create_resp.status_code == 200
     ), f"Assistant creation failed: {create_resp.text}"
 
-    # Verify the logs were created
-    context_name = "ChattyCathy/Transcripts"
-    logs_resp = await client.get(
-        f"/v0/logs?project=Assistants&context={context_name}",
-        headers=HEADERS,
-    )
-    assert logs_resp.status_code == 200, f"Failed to get logs: {logs_resp.text}"
-    logs_data = logs_resp.json()
+    assistant_id = create_resp.json()["info"]["agent_id"]
 
-    assert logs_data["count"] == 2, f"Expected 2 logs, but found {logs_data['count']}."
-    assert (
-        len(logs_data["logs"]) == 2
-    ), f"Expected 2 log objects, but found {len(logs_data['logs'])}."
-
-    returned_logs = logs_data["logs"]
-    original_messages = pre_hire_chat_payload["pre_hire_chat"]
-
-    # Create a dictionary of returned logs keyed by their content for easy lookup
-    returned_logs_map = {
-        log["entries"]["content"]: log["entries"] for log in returned_logs
-    }
-
-    # Loop through the original messages and check if each one exists in the returned logs
-    for original_msg in original_messages:
-        content = original_msg["content"]
-
-        assert (
-            content in returned_logs_map
-        ), f"Message content '{content}' not found in returned logs."
-
-        returned_entry = returned_logs_map[content]
-
-        # Assert that all fields match
-        assert (
-            returned_entry["message_id"] == original_msg["message_id"]
-        ), f"Message ID mismatch for content '{content}'. Expected {original_msg['message_id']}, got {returned_entry['message_id']}"
-        assert (
-            returned_entry["sender_id"] == original_msg["sender_id"]
-        ), f"Sender ID mismatch for content '{content}'. Expected {original_msg['sender_id']}, got {returned_entry['sender_id']}"
-        assert (
-            returned_entry["receiver_ids"] == original_msg["receiver_ids"]
-        ), f"Receiver IDs mismatch for content '{content}'. Expected {original_msg['receiver_ids']}, got {returned_entry['receiver_ids']}"
-        assert (
-            returned_entry["exchange_id"] == original_msg["exchange_id"]
-        ), f"Exchange ID mismatch for content '{content}'. Expected {original_msg['exchange_id']}, got {returned_entry['exchange_id']}"
+    # Verify that the webhook function was called with the correct arguments
+    mock_log_pre_hire_chat.assert_called_once()
+    call_args, call_kwargs = mock_log_pre_hire_chat.call_args
+    assert call_kwargs["assistant_id"] == str(assistant_id)
+    assert call_kwargs["messages"] == pre_hire_chat_payload["pre_hire_chat"]
+    assert "is_staging" in call_kwargs
 
 
 @pytest.mark.anyio
 async def test_delete_assistant_deletes_contexts(
     client: AsyncClient,
-    pre_hire_chat_payload,
 ):
-    # Create an assistant with pre_hire_chat to ensure context is created
+    # Create an assistant
     payload = {
         "first_name": "Deletable",
         "surname": "Dan",
         "create_infra": False,
-        **pre_hire_chat_payload,
     }
-    create_resp = await client.post(
-        "/v0/assistant",
-        json=payload,
-        headers=HEADERS,
-    )
+    create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
     assert create_resp.status_code == 200
-    assistant_id = create_resp.json()["info"]["agent_id"]
+    assistant_info = create_resp.json()["info"]
+    assistant_id = assistant_info["agent_id"]
+
+    # Manually create a project and context to simulate logs being present
+    project_name = "Assistants"
+    context_name = (
+        f"{assistant_info['first_name']}{assistant_info['surname']}/Transcripts"
+    )
+    # The "Assistants" project is created automatically on first assistant creation
+    log_payload = {
+        "project": project_name,
+        "context": context_name,
+        "entries": [{"message": "test"}],
+    }
+    log_resp = await client.post("/v0/logs", json=log_payload, headers=HEADERS)
+    assert log_resp.status_code == 200
 
     # Verify context and logs exist before deletion
-    context_name = "DeletableDan/Transcripts"
     logs_before_delete = await client.get(
-        f"/v0/logs?project=Assistants&context={context_name}",
+        f"/v0/logs?project={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert logs_before_delete.status_code == 200
     assert (
         logs_before_delete.json()["count"] > 0
-    ), "Context was created but no logs were found."
+    ), "Context was not created properly before test."
 
     # Delete the assistant
     delete_resp = await client.delete(
@@ -1115,7 +1200,7 @@ async def test_delete_assistant_deletes_contexts(
     # A successful deletion can result in either the context being empty (200 OK, count=0)
     # or the context itself being gone (404 Not Found). Both are valid success states.
     logs_after_delete = await client.get(
-        f"/v0/logs?project=Assistants&context={context_name}",
+        f"/v0/logs?project={project_name}&context={context_name}",
         headers=HEADERS,
     )
 
@@ -1128,3 +1213,197 @@ async def test_delete_assistant_deletes_contexts(
         assert (
             logs_after_delete.json()["count"] == 0
         ), f"Context still exists and is not empty. Found {logs_after_delete.json()['count']} logs."
+
+
+@pytest.mark.anyio
+async def test_delete_assistant_contact(client: AsyncClient):
+    # Mock the infrastructure deletion calls to avoid external API calls during testing
+    with patch(
+        "orchestra.web.api.assistant.views.delete_phone_number",
+    ) as mock_delete_phone, patch(
+        "orchestra.web.api.assistant.views.delete_email",
+    ) as mock_delete_email:
+
+        # 1. Create a base assistant
+        base_payload = {
+            "first_name": "Contact",
+            "surname": "Remover",
+            "create_infra": False,
+        }
+        create_resp = await client.post(
+            "/v0/assistant",
+            json=base_payload,
+            headers=HEADERS,
+        )
+        assert create_resp.status_code == 200
+        assistant_id = create_resp.json()["info"]["agent_id"]
+
+        # 2. Update the assistant to have all contact details for the test
+        contact_payload = {
+            "email": "contact.remover@example.com",
+            "phone": "+15558675309",
+            "user_phone": "+15558675310",  # user_phone can be different
+            "user_whatsapp_number": "+15558675311",
+            "create_infra": False,
+        }
+        update_resp = await client.patch(
+            f"/v0/assistant/{assistant_id}/config",
+            json=contact_payload,
+            headers=HEADERS,
+        )
+        assert update_resp.status_code == 200
+
+        # 3. Use an admin endpoint to set the assistant_whatsapp_number for a complete test case
+        assistant_whatsapp_number = "+15551112222"
+        admin_patch_resp = await client.patch(
+            f"/v0/admin/assistant?phone={contact_payload['phone']}&new_assistant_whatsapp_number={assistant_whatsapp_number}",
+            headers=ADMIN_HEADERS,
+        )
+        assert admin_patch_resp.status_code == 200
+        assert (
+            admin_patch_resp.json()["info"]["assistant_whatsapp_number"]
+            == assistant_whatsapp_number
+        )
+
+        # 4. Delete Email contact
+        delete_email_payload = {"contact_type": "email"}
+        delete_email_resp = await client.request(
+            "DELETE",
+            f"/v0/assistant/{assistant_id}/contact",
+            json=delete_email_payload,
+            headers=HEADERS,
+        )
+        assert delete_email_resp.status_code == 200, delete_email_resp.text
+        email_deleted_info = delete_email_resp.json()["info"]
+        assert email_deleted_info["email"] is None
+        assert (
+            email_deleted_info["phone"] == contact_payload["phone"]
+        )  # Should be unchanged
+        mock_delete_email.assert_called_once_with(contact_payload["email"])
+
+        # 5. Delete Phone contact
+        delete_phone_payload = {"contact_type": "phone"}
+        delete_phone_resp = await client.request(
+            "DELETE",
+            f"/v0/assistant/{assistant_id}/contact",
+            json=delete_phone_payload,
+            headers=HEADERS,
+        )
+        assert delete_phone_resp.status_code == 200, delete_phone_resp.text
+        phone_deleted_info = delete_phone_resp.json()["info"]
+        assert phone_deleted_info["phone"] is None
+        assert phone_deleted_info["user_phone"] is None
+        assert phone_deleted_info["email"] is None  # Should still be None
+        assert (
+            phone_deleted_info["assistant_whatsapp_number"] == assistant_whatsapp_number
+        )  # Unchanged
+        mock_delete_phone.assert_called_once_with(contact_payload["phone"])
+
+        # 6. Delete WhatsApp contact
+        delete_whatsapp_payload = {"contact_type": "whatsapp"}
+        delete_whatsapp_resp = await client.request(
+            "DELETE",
+            f"/v0/assistant/{assistant_id}/contact",
+            json=delete_whatsapp_payload,
+            headers=HEADERS,
+        )
+        assert delete_whatsapp_resp.status_code == 200, delete_whatsapp_resp.text
+        whatsapp_deleted_info = delete_whatsapp_resp.json()["info"]
+        assert whatsapp_deleted_info["user_whatsapp_number"] is None
+        assert whatsapp_deleted_info["assistant_whatsapp_number"] is None
+        assert whatsapp_deleted_info["phone"] is None  # Should still be None
+
+        # 7. Test invalid contact type
+        delete_invalid_payload = {"contact_type": "carrier_pigeon"}
+        delete_invalid_resp = await client.request(
+            "DELETE",
+            f"/v0/assistant/{assistant_id}/contact",
+            json=delete_invalid_payload,
+            headers=HEADERS,
+        )
+        assert delete_invalid_resp.status_code == 422  # Unprocessable Entity
+
+        # 8. Test non-existent assistant
+        delete_nonexistent_resp = await client.request(
+            "DELETE",
+            f"/v0/assistant/999999/contact",
+            json=delete_email_payload,
+            headers=HEADERS,
+        )
+        assert delete_nonexistent_resp.status_code == 404
+
+
+@pytest.mark.anyio
+@patch("orchestra.web.api.assistant.views.reawaken_assistant")
+async def test_update_assistant_contact_info_reawakens(
+    mock_reawaken,
+    client: AsyncClient,
+):
+    # Create an assistant
+    payload = {"first_name": "Reawaken", "surname": "Updater", "create_infra": False}
+    create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert create_resp.status_code == 200
+    assistant_id = create_resp.json()["info"]["agent_id"]
+
+    # Update a contact field (phone) and expect reawaken to be called
+    update_contact_payload = {"phone": "+15550001111", "create_infra": True}
+    patch_contact_resp = await client.patch(
+        f"/v0/assistant/{assistant_id}/config",
+        json=update_contact_payload,
+        headers=HEADERS,
+    )
+    assert patch_contact_resp.status_code == 200
+    mock_reawaken.assert_called_once()
+    # Use ANY from unittest.mock for the is_staging flag
+    mock_reawaken.call_args[0][0] == str(assistant_id)
+
+    # Reset the mock and update a non-contact field
+    mock_reawaken.reset_mock()
+    update_non_contact_payload = {"about": "new bio", "create_infra": True}
+    patch_non_contact_resp = await client.patch(
+        f"/v0/assistant/{assistant_id}/config",
+        json=update_non_contact_payload,
+        headers=HEADERS,
+    )
+    assert patch_non_contact_resp.status_code == 200
+    mock_reawaken.assert_not_called()
+
+
+@pytest.mark.anyio
+@patch("orchestra.web.api.assistant.views.delete_phone_number")
+@patch("orchestra.web.api.assistant.views.reawaken_assistant")
+async def test_delete_assistant_contact_reawakens(
+    mock_reawaken,
+    mock_delete_phone,
+    client: AsyncClient,
+):
+    # 1. Create an assistant
+    payload = {"first_name": "Reawaken", "surname": "Deleter", "create_infra": False}
+    create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert create_resp.status_code == 200
+    assistant_id = create_resp.json()["info"]["agent_id"]
+
+    # 2. Add a phone number to it so we can delete it
+    # We set create_infra=False because we are mocking the reawaken call anyway
+    update_payload = {"phone": "+15552223333", "create_infra": False}
+    update_resp = await client.patch(
+        f"/v0/assistant/{assistant_id}/config",
+        json=update_payload,
+        headers=HEADERS,
+    )
+    assert update_resp.status_code == 200
+    mock_reawaken.assert_not_called()  # Should not be called when create_infra is false
+
+    # 3. Delete the phone contact and verify reawaken is called
+    delete_payload = {"contact_type": "phone"}
+    delete_resp = await client.request(
+        "DELETE",
+        f"/v0/assistant/{assistant_id}/contact",
+        json=delete_payload,
+        headers=HEADERS,
+    )
+    assert delete_resp.status_code == 200
+    mock_reawaken.assert_called_once()
+    assert mock_reawaken.call_args[0][0] == str(assistant_id)
+    # Also assert the mock for deleting the phone number was called
+    mock_delete_phone.assert_called_once_with("+15552223333")

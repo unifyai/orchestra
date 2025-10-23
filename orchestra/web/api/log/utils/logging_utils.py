@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from fastapi import Depends, HTTPException, Request
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     JSON,
     Integer,
@@ -73,6 +74,185 @@ __all__ = [
     "get_or_create_usage_project",
     "log_chat_completion_event",
 ]
+
+
+def enforce_types(
+    field_name,
+    value,
+    *,
+    field_types,
+    field_type_dao: FieldTypeDAO,
+    context_dao: ContextDAO,
+    project_id: int,
+    batch_index=None,
+    explicit_types=None,
+    context_id=None,
+    is_param: bool = False,
+):
+    """
+    Module-level type enforcement function (extracted from create_logs_internal).
+
+    - Fields with type "Any": Accept any value (mixed types)
+    - Fields with strict type: Require explicit_type (if provided) to match field type
+    - New fields: Created with DEFAULT_FIELD_TYPE ("Any") unless explicit type provided
+    - "NoneType": Treated as a weak type – None is allowed for any field type
+    """
+    from orchestra.web.api.log.utils.type_utils import is_untyped_field
+
+    # Extract explicit_type if provided in explicit_types (can be str or JSON schema)
+    explicit_type_spec = None
+    enum_values = None
+    enum_restrict = False
+
+    if explicit_types and field_name in explicit_types:
+        field_spec = explicit_types[field_name]
+        if isinstance(field_spec, dict):
+            explicit_type_spec = field_spec.get("type")
+            enum_values = field_spec.get("values")
+            enum_restrict = field_spec.get("restrict", False)
+        elif isinstance(field_spec, str):
+            explicit_type_spec = field_spec
+
+    # Get field info if it exists
+    field_info = field_types.get(field_name)
+
+    if field_info:
+        # Field exists - check category first
+        existing_category = field_info["field_category"]
+        new_category = "param" if is_param else "entry"
+        if existing_category != new_category:
+            new_article = "an" if new_category == "entry" else "a"
+            existing_article = "an" if existing_category == "entry" else "a"
+            raise HTTPException(
+                status_code=400,
+                detail=f"Field '{field_name}' already exists as {existing_article} {existing_category}. Cannot create it as {new_article} {new_category}.",
+            )
+
+        # Check field type
+        field_type = field_info["field_type"]
+
+        # Case 1: Field is untyped (DEFAULT_FIELD_TYPE/"Any") - accept any value (mixed types)
+        if is_untyped_field(field_type):
+            # Field is untyped/accepts mixed types (including None)
+            # We don't update the field_type (it stays "Any")
+            return
+
+        # Case 2: Field has strict type (not "Any") - check value type
+        from orchestra.web.api.log.utils.type_utils import (
+            is_pydantic_schema,
+            normalize_pydantic_schema,
+            types_match,
+            validate_value_against_pydantic_schema,
+        )
+
+        # Always try to validate against FIELD TYPE if it's a valid Pydantic schema
+        tried_field_schema = False
+        if is_pydantic_schema(field_type):
+            tried_field_schema = True
+            try:
+                field_schema = normalize_pydantic_schema(field_type)
+                ok_field, err_field = validate_value_against_pydantic_schema(
+                    value,
+                    field_schema,
+                )
+            except Exception as e:
+                ok_field, err_field = (False, str(e))
+            if not ok_field:
+                batch_info = (
+                    f" (in batch entry {batch_index})"
+                    if batch_index is not None
+                    else ""
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Type validation against field schema failed for '{field_name}'{batch_info}: {err_field}",
+                )
+
+        # If explicit_type provided, also validate against EXPLICIT schema when it's Pydantic
+        if explicit_type_spec is not None and is_pydantic_schema(explicit_type_spec):
+            schema = normalize_pydantic_schema(explicit_type_spec)
+            ok_explicit, err_explicit = validate_value_against_pydantic_schema(
+                value,
+                schema,
+            )
+            if not ok_explicit:
+                batch_info = (
+                    f" (in batch entry {batch_index})"
+                    if batch_index is not None
+                    else ""
+                )
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Type validation against explicit schema failed for '{field_name}'{batch_info}: {err_explicit}",
+                )
+
+        # If neither field nor explicit were Pydantic schemas, fall back to string typing logic
+        if not tried_field_schema and not (
+            explicit_type_spec is not None and is_pydantic_schema(explicit_type_spec)
+        ):
+            if explicit_type_spec is not None:
+                comparable_type = str(explicit_type_spec)
+                if not types_match(field_type, comparable_type):
+                    batch_info = (
+                        f" (in batch entry {batch_index})"
+                        if batch_index is not None
+                        else ""
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Type mismatch for field '{field_name}'{batch_info}: field has strict type '{field_type}', but explicit_type '{comparable_type}' was provided.",
+                    )
+            else:
+                inferred_type = LogDAO.infer_type(field_name, value, explicit_type=None)
+                if not types_match(field_type, inferred_type):
+                    batch_info = (
+                        f" (in batch entry {batch_index})"
+                        if batch_index is not None
+                        else ""
+                    )
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Type mismatch for field '{field_name}'{batch_info}: field has strict type '{field_type}', but value has inferred type '{inferred_type}'. Value: {str(value)[:100]}",
+                    )
+    else:
+        # Field doesn't exist - create it
+        # New policy: We CAN create new fields, but we CANNOT modify existing fields
+        field_spec = explicit_types.get(field_name, {}) if explicit_types else {}
+        mutable = (
+            field_spec.get("mutable", False) if isinstance(field_spec, dict) else False
+        )
+        unique = (
+            field_spec.get("unique", False) if isinstance(field_spec, dict) else False
+        )
+
+        # Extract explicit type if provided
+        explicit_field_type = None
+        if isinstance(field_spec, dict):
+            explicit_field_type = field_spec.get("type")  # str or JSON schema
+        elif isinstance(field_spec, str):
+            explicit_field_type = field_spec
+
+        # If in a versioned context, force mutable=True
+        if context_id and context_dao.is_versioned(context_id):
+            mutable = True
+
+        # Create field - type precedence:
+        # 1. Explicit type (from explicit_types) → strict typing
+        # 2. No explicit type → "Any" (untyped)
+        # Note: infer_type=False because we're in create_logs_internal with explicit_types support
+        field_type_dao.create_field_type_if_absent(
+            project_id,
+            field_name,
+            value,
+            mutable=mutable,
+            unique=unique,
+            field_category="param" if is_param else "entry",
+            context_id=context_id,
+            field_type=explicit_field_type,  # Pass explicit type if provided
+            enum_values=enum_values,
+            enum_restrict=enum_restrict,
+            infer_type=False,  # Don't infer - default to "Any" if no explicit type
+        )
 
 
 def _paginate_events(
@@ -327,7 +507,8 @@ def _build_sort_clauses(
                 and isinstance(expr_dict.get("lhs"), dict)
                 and expr_dict["lhs"].get("type") == "identifier"
                 and isinstance(expr_dict.get("rhs"), dict)
-                and expr_dict["rhs"].get("operand") == "embed"
+                and expr_dict["rhs"].get("operand")
+                in ("embed", "embed_image")  # Support both text and image embeddings
             ):
                 is_vector_sort = True
                 vector_sort_details = {
@@ -903,13 +1084,38 @@ def _get_logs_query(
             )
             rhs_vec, _ = _select_value(rhs_sql, session, is_vector=True)
 
-            # 3) Choose the correct distance operator
+            # 3) Detect the model and dimension for this key
+            # Query to get the model used for this embedding key
+            embedding_model_query = session.execute(
+                select(Embedding.model).where(Embedding.key == lhs_key).limit(1),
+            ).scalar()
+
+            # Map model to dimension for proper casting
+            model_to_dim = {
+                "text-embedding-3-small": 1536,
+                "multimodalembedding@001": 1408,
+            }
+            embedding_dim = model_to_dim.get(embedding_model_query, None)
+
+            # 4) Choose the correct distance operator and cast vector
             op = {"cosine": "<=>", "l2": "<->", "ip": "<#>"}[operand]
-            dist = Embedding.vector.op(op)(rhs_vec)
+
+            # Cast the vector to the correct dimension to use the HNSW index
+            # This is critical for pgvector to use the model-specific partial indexes
+            if embedding_dim and embedding_model_query:
+                # Use casted vector to match the expression index
+                casted_vector = func.cast(Embedding.vector, Vector(embedding_dim))
+                dist = casted_vector.op(op)(rhs_vec)
+                # Add model filter for the partial index
+                model_filter = Embedding.model == embedding_model_query
+            else:
+                # Fallback: no cast (will be slower without index)
+                dist = Embedding.vector.op(op)(rhs_vec)
+                model_filter = literal(True)
 
             asc_sort = mode == "ascending"
 
-            # 4) ANN top-K on Embedding first (pushdown LIMIT)
+            # 5) ANN top-K on Embedding first (pushdown LIMIT)
             top_k = (offset or 0) + (limit or 100)
             ann_topk = (
                 select(
@@ -918,6 +1124,7 @@ def _get_logs_query(
                 )
                 .where(
                     Embedding.key == lhs_key,
+                    model_filter,  # Filter by model for partial index
                     Embedding.vector.isnot(None),
                     Embedding.ref_id.in_(select(event_ids.c.id)),
                 )
@@ -1187,79 +1394,6 @@ def create_logs_internal(
         context_id=context_id,
     )
 
-    def enforce_types(
-        field_name,
-        value,
-        batch_index=None,
-        explicit_types=None,
-        context_id=None,
-        is_param=False,
-    ):
-        entered_type = LogDAO.infer_type(field_name, value)
-        field_info = field_types.get(field_name)
-        if field_info:
-            # Check field category first
-            existing_category = field_info["field_category"]
-            new_category = "param" if is_param else "entry"
-            if existing_category != new_category:
-                new_article = "an" if new_category == "entry" else "a"
-                existing_article = "an" if existing_category == "entry" else "a"
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Field '{field_name}' already exists as {existing_article} {existing_category}. Cannot create it as {new_article} {new_category}.",
-                )
-
-        # Then check data type
-        expected_type = field_info["field_type"] if field_info else None
-        if expected_type:
-            if expected_type == "NoneType":
-                if entered_type == "NoneType":
-                    return
-                # update the field type to the new type
-                field_type_dao.upsert_field_type(
-                    project_id,
-                    field_name,
-                    value,
-                    mutable=field_info.get("mutable", False),
-                    unique=field_info.get("unique", False),
-                    field_category="param" if is_param else "entry",
-                    context_id=context_id,
-                )
-            elif entered_type != expected_type and entered_type != "NoneType":
-                batch_info = (
-                    f" (in batch entry {batch_index})"
-                    if batch_index is not None
-                    else ""
-                )
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Type mismatch for field '{field_name}'{batch_info}: expected {expected_type}, got {entered_type}. Value: {str(value)[:100]}",
-                )
-        else:
-            # Extract mutable and unique flags from explicit_types if present
-            mutable = (
-                explicit_types.get(field_name, {}).get("mutable", False)
-                if explicit_types
-                else False
-            )
-            unique = (
-                explicit_types.get(field_name, {}).get("unique", False)
-                if explicit_types
-                else False
-            )
-            # If in a versioned context, force mutable=True
-            if context_id and context_dao.is_versioned(context_id):
-                mutable = True
-            field_type_dao.create_field_type_if_absent(
-                project_id,
-                field_name,
-                value,
-                mutable=mutable,
-                unique=unique,
-                field_category="param" if is_param else "entry",
-                context_id=context_id,
-            )
-
     # Bulk create all log events at once
     entries_len = len(entries_list)
     params_len = len(params_list)
@@ -1354,156 +1488,241 @@ def create_logs_internal(
     # Prepare collections for bulk operations
     new_field_types = []
     log_records_to_create = []
+    failed_logs = []
+    successful_indices = []
 
     # Process all logs in the batch
     for i in range(total_logs):
         log_event_id = log_event_ids[i]
 
-        # Get current entries and params
-        # If i exceeds list length, use the last item in the list
-        current_entries = entries_list[min(i, entries_len - 1)]
-        current_params = params_list[min(i, params_len - 1)]
+        # Per-log staging to isolate failures
+        perlog_field_types = []
+        perlog_records = []
 
-        # Add auto-incremented values from row_ids that are not in unique_keys back to entries
-        if context_obj and context_obj.auto_counting and row_ids and i < len(row_ids):
-            row_id_dict = row_ids[i] if isinstance(row_ids[i], dict) else {}
-            unique_keys = context_obj.unique_keys or {}
+        # Get current entries and params (clone to avoid in-place mutations leaking)
+        current_entries = dict(entries_list[min(i, entries_len - 1)] or {})
+        current_params = dict(params_list[min(i, params_len - 1)] or {})
+        try:
+            # Add auto-incremented values from row_ids that are not in unique_keys back to entries
+            if (
+                context_obj
+                and context_obj.auto_counting
+                and row_ids
+                and i < len(row_ids)
+            ):
+                row_id_dict = row_ids[i] if isinstance(row_ids[i], dict) else {}
+                unique_keys = context_obj.unique_keys or {}
 
-            for col_name, col_value in row_id_dict.items():
-                # Only add if it's an auto-counting field that's NOT in unique_keys
-                # (unique_key fields are already handled by log_event_dao.bulk_create)
-                if (
-                    col_name in context_obj.auto_counting
-                    and col_name not in unique_keys
-                ):
+                for col_name, col_value in row_id_dict.items():
+                    # Only add if it's an auto-counting field that's NOT in unique_keys
+                    # (unique_key fields are already handled by log_event_dao.bulk_create)
                     if (
-                        col_name not in current_entries
-                        and col_name not in current_params
+                        col_name in context_obj.auto_counting
+                        and col_name not in unique_keys
                     ):
-                        # Add to entries
-                        current_entries[col_name] = col_value
+                        if (
+                            col_name not in current_entries
+                            and col_name not in current_params
+                        ):
+                            # Add to entries
+                            current_entries[col_name] = col_value
 
-        # Extract explicit types - NOTE: This mutates entries/params dicts in-place
-        # Callers should pass fresh copies if they need to reuse the original dicts
-        entries_explicit_types = (
-            current_entries.pop("explicit_types", {})
-            if isinstance(current_entries, dict)
-            else None
-        )
-        params_explicit_types = (
-            current_params.pop("explicit_types", {})
-            if isinstance(current_params, dict)
-            else None
-        )
+            # Extract explicit types - NOTE: This mutates entries/params dicts in-place
+            # Callers should pass fresh copies if they need to reuse the original dicts
+            entries_explicit_types = (
+                current_entries.pop("explicit_types", {})
+                if isinstance(current_entries, dict)
+                else None
+            )
+            params_explicit_types = (
+                current_params.pop("explicit_types", {})
+                if isinstance(current_params, dict)
+                else None
+            )
 
-        # Process params - collect them for bulk creation
-        for k, v in current_params.items():
-            # Check and register new field types if needed
-            if k not in field_types:
-                mutable = (
-                    params_explicit_types.get(k, {}).get("mutable", False)
-                    if params_explicit_types
-                    else False
+            # Process params - create new fields if they don't exist
+            for k, v in current_params.items():
+                # Check if field needs to be created
+                if k not in field_types:
+                    mutable = (
+                        params_explicit_types.get(k, {}).get("mutable", False)
+                        if params_explicit_types
+                        else False
+                    )
+                    unique = (
+                        params_explicit_types.get(k, {}).get("unique", False)
+                        if params_explicit_types
+                        else False
+                    )
+                    # If in a versioned context, force mutable=True
+                    if context_obj and context_obj.is_versioned:
+                        mutable = True
+
+                    # Check for explicit type
+                    field_type = None
+                    enum_values = None
+                    enum_restrict = False
+                    if params_explicit_types and k in params_explicit_types:
+                        field_spec = params_explicit_types[k]
+                        if isinstance(field_spec, dict):
+                            field_type = field_spec.get("type")
+                            enum_values = field_spec.get("values")
+                            enum_restrict = field_spec.get("restrict", False)
+                        elif isinstance(field_spec, str):
+                            field_type = field_spec
+
+                    perlog_field_types.append(
+                        {
+                            "project_id": project_id,
+                            "field_name": k,
+                            "value": v,
+                            "mutable": mutable,
+                            "unique": unique,
+                            "field_category": "param",
+                            "context_id": context_id,
+                            "field_type": field_type,
+                            "enum_values": enum_values,
+                            "enum_restrict": enum_restrict,
+                        },
+                    )
+                else:
+                    # Field exists - enforce types (cannot modify existing field types)
+                    enforce_types(
+                        k,
+                        v,
+                        field_types=field_types,
+                        field_type_dao=field_type_dao,
+                        context_dao=context_dao,
+                        project_id=project_id,
+                        batch_index=i,
+                        explicit_types=params_explicit_types,
+                        context_id=context_id,
+                        is_param=True,
+                    )
+
+                # Determine version for parameter
+                existing_param = log_dao.filter(
+                    key=k,
+                    value=json.dumps(v),
+                    project_id=project_id,
                 )
-                unique = (
-                    params_explicit_types.get(k, {}).get("unique", False)
-                    if params_explicit_types
-                    else False
-                )
-                # If in a versioned context, force mutable=True
-                if context_obj and context_obj.is_versioned:
-                    mutable = True
-                new_field_types.append(
+                if existing_param:
+                    version = existing_param[0][0].param_version
+                else:
+                    version = log_dao.get_next_param_version(project_id, context_id, k)
+
+                # Add to records for bulk creation
+                perlog_records.append(
                     {
                         "project_id": project_id,
-                        "field_name": k,
+                        "log_event_id": log_event_id,
+                        "key": k,
                         "value": v,
-                        "mutable": mutable,
-                        "unique": unique,
-                        "field_category": "param",
+                        "param_version": version,
+                        "explicit_types": params_explicit_types,
                         "context_id": context_id,
                     },
                 )
-            else:
-                # Enforce types for existing fields
-                enforce_types(k, v, i, params_explicit_types, context_id, is_param=True)
 
-            # Determine version for parameter
-            existing_param = log_dao.filter(
-                key=k,
-                value=json.dumps(v),
-                project_id=project_id,
-            )
-            if existing_param:
-                version = existing_param[0][0].param_version
-            else:
-                version = log_dao.get_next_param_version(project_id, context_id, k)
+            # Process entries - create new fields if they don't exist
+            for k, v in current_entries.items():
+                # Check if field needs to be created
+                if k not in field_types:
+                    mutable = (
+                        entries_explicit_types.get(k, {}).get("mutable", False)
+                        if entries_explicit_types
+                        else False
+                    )
+                    unique = (
+                        entries_explicit_types.get(k, {}).get("unique", False)
+                        if entries_explicit_types
+                        else False
+                    )
+                    # If in a versioned context, force mutable=True
+                    if context_obj and context_obj.is_versioned:
+                        mutable = True
 
-            # Add to records for bulk creation
-            log_records_to_create.append(
-                {
-                    "project_id": project_id,
-                    "log_event_id": log_event_id,
-                    "key": k,
-                    "value": v,
-                    "param_version": version,
-                    "explicit_types": params_explicit_types,
-                    "context_id": context_id,
-                },
-            )
+                    # Check for explicit type
+                    field_type = None
+                    enum_values = None
+                    enum_restrict = False
+                    if entries_explicit_types and k in entries_explicit_types:
+                        field_spec = entries_explicit_types[k]
+                        if isinstance(field_spec, dict):
+                            field_type = field_spec.get("type")
+                            enum_values = field_spec.get("values")
+                            enum_restrict = field_spec.get("restrict", False)
+                        elif isinstance(field_spec, str):
+                            field_type = field_spec
 
-        # Process entries - collect them for bulk creation
-        for k, v in current_entries.items():
-            # Check and register new field types if needed
-            if k not in field_types:
-                mutable = (
-                    entries_explicit_types.get(k, {}).get("mutable", False)
-                    if entries_explicit_types
-                    else False
-                )
-                unique = (
-                    entries_explicit_types.get(k, {}).get("unique", False)
-                    if entries_explicit_types
-                    else False
-                )
-                # If in a versioned context, force mutable=True
-                if context_obj and context_obj.is_versioned:
-                    mutable = True
-                new_field_types.append(
+                    perlog_field_types.append(
+                        {
+                            "project_id": project_id,
+                            "field_name": k,
+                            "value": v,
+                            "mutable": mutable,
+                            "unique": unique,
+                            "field_category": "entry",
+                            "context_id": context_id,
+                            "field_type": field_type,
+                            "enum_values": enum_values,
+                            "enum_restrict": enum_restrict,
+                        },
+                    )
+                else:
+                    # Field exists - enforce types (cannot modify existing field types)
+                    enforce_types(
+                        k,
+                        v,
+                        field_types=field_types,
+                        field_type_dao=field_type_dao,
+                        context_dao=context_dao,
+                        project_id=project_id,
+                        batch_index=i,
+                        explicit_types=entries_explicit_types,
+                        context_id=context_id,
+                        is_param=False,
+                    )
+
+                # Add to records for bulk creation (entries don't have version)
+                perlog_records.append(
                     {
                         "project_id": project_id,
-                        "field_name": k,
+                        "log_event_id": log_event_id,
+                        "key": k,
                         "value": v,
-                        "mutable": mutable,
-                        "unique": unique,
-                        "field_category": "entry",
+                        "explicit_types": entries_explicit_types,
                         "context_id": context_id,
                     },
                 )
-            else:
-                # Enforce types for existing fields
-                enforce_types(
-                    k,
-                    v,
-                    i,
-                    entries_explicit_types,
-                    context_id,
-                    is_param=False,
-                )
 
-            # Add to records for bulk creation (entries don't have version)
-            log_records_to_create.append(
+            # If we made it here, this log is valid; stage its artifacts
+            new_field_types.extend(perlog_field_types)
+            log_records_to_create.extend(perlog_records)
+            successful_indices.append(i)
+
+        except HTTPException as http_err:
+            try:
+                log_event_dao.delete(log_event_id)
+            except Exception:
+                pass
+            failed_logs.append(
                 {
-                    "project_id": project_id,
-                    "log_event_id": log_event_id,
-                    "key": k,
-                    "value": v,
-                    "explicit_types": entries_explicit_types,
-                    "context_id": context_id,
+                    "index": i,
+                    "error": getattr(http_err, "detail", str(http_err)),
                 },
             )
+            continue
+        except Exception as e:  # Broad catch to avoid aborting the batch
+            try:
+                log_event_dao.delete(log_event_id)
+            except Exception:
+                pass
+            failed_logs.append({"index": i, "error": str(e)})
+            continue
 
     # Bulk create new field types if any
+    # Note: We CAN create new fields, but we CANNOT modify existing fields
     try:
         if new_field_types:
             field_type_dao.bulk_create_field_types(new_field_types)
@@ -1511,14 +1730,37 @@ def create_logs_internal(
         raise HTTPException(status_code=400, detail=str(e))
 
     # Bulk create all log records
+    created_event_ids = [log_event_ids[i] for i in successful_indices]
     try:
-        log_dao.bulk_create(log_records_to_create, context_obj=context_obj)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        if log_records_to_create:
+            log_dao.bulk_create(log_records_to_create, context_obj=context_obj)
+    except Exception:
+        # Fallback to per-log insertion to salvage successes
+        # Build per-log buckets
+        by_event = {}
+        for rec in log_records_to_create:
+            eid = rec.get("log_event_id")
+            by_event.setdefault(eid, []).append(rec)
+        # Reset created list and attempt per-log
+        created_event_ids = []
+        for i in successful_indices:
+            eid = log_event_ids[i]
+            recs = by_event.get(eid, [])
+            if not recs:
+                continue
+            try:
+                log_dao.bulk_create(recs, context_obj=context_obj)
+                created_event_ids.append(eid)
+            except Exception as e:
+                try:
+                    log_event_dao.delete(eid)
+                except Exception:
+                    pass
+                failed_logs.append({"index": i, "error": str(e)})
 
     # Check for duplicates if context doesn't allow duplicates
     if context_obj and not context_obj.allow_duplicates:
-        for log_event_id in log_event_ids:
+        for log_event_id in created_event_ids:
             # Check for duplicates
             duplicate = context_dao.check_for_duplicates(context_obj.id, log_event_id)
             if duplicate:
@@ -1530,7 +1772,7 @@ def create_logs_internal(
     if context_obj and context_obj.is_versioned:
         context_obj.updated_at = datetime.now(timezone.utc)
 
-    # Build row_ids payload
+    # Build row_ids payload (unique key columns only)
     row_ids_payload = None
     unique_keys = context_obj.unique_keys or {}
 
@@ -1538,23 +1780,44 @@ def create_logs_internal(
     ids_list = []
 
     # Transform row_ids into the list format
-    if row_ids and unique_keys:
+    # Filter row_ids to only successful ones (preserve order)
+    row_ids_filtered = [row_ids[i] for i in successful_indices] if row_ids else []
+
+    if row_ids_filtered and unique_keys:
         # Use the preserved order from context
         names = context_obj.unique_key_names or list(unique_keys.keys())
 
-        if isinstance(row_ids[0], dict):
+        if isinstance(row_ids_filtered[0], dict):
             # Dictionary format - convert to list of lists using the correct order
-            for row_id in row_ids:
+            for row_id in row_ids_filtered:
                 ids_list.append([row_id.get(name) for name in names])
         else:
             # Legacy single ID case - wrap each ID in a list
-            ids_list = [[row_id] for row_id in row_ids]
+            ids_list = [[row_id] for row_id in row_ids_filtered]
 
     row_ids_payload = {
         "names": names,
         "ids": ids_list,
     }
-    return {"log_event_ids": log_event_ids, "row_ids": row_ids_payload}
+
+    # Build auto_counting payload (all auto-counting columns with their values)
+    # row_ids from DAO contains dictionaries with ALL auto_counting columns (both in unique_keys and not)
+    # Always return a dict, empty if no auto-counting configured
+    auto_counting_payload = {}
+    auto_counting_cfg = context_obj.auto_counting or {}
+    if row_ids_filtered and auto_counting_cfg and isinstance(row_ids_filtered[0], dict):
+        # Extract auto-counting values as a dict mapping column name to list of values
+        for col_name in auto_counting_cfg.keys():
+            auto_counting_payload[col_name] = [
+                row_id.get(col_name) for row_id in row_ids_filtered
+            ]
+
+    return {
+        "log_event_ids": created_event_ids,
+        "row_ids": row_ids_payload,
+        "auto_counting": auto_counting_payload,
+        "failed": failed_logs,
+    }
 
 
 # TODO(yusha): refactor get_logs_query to make it modular
@@ -2380,15 +2643,22 @@ def _create_logs_from_joined_rows(
 
             if existing_field_type:
                 # Validate type consistency
+                from orchestra.web.api.log.utils.type_utils import (
+                    is_untyped_field,
+                    types_match,
+                )
+
                 entered_type = LogDAO.infer_type(col, val)
-                if (
-                    existing_field_type.field_type != "NoneType"
-                    and entered_type != "NoneType"
-                ):
-                    if entered_type != existing_field_type.field_type:
+
+                # Only validate type if the field is strictly typed (not "Any")
+                if not is_untyped_field(existing_field_type.field_type):
+                    if not types_match(existing_field_type.field_type, entered_type):
                         raise HTTPException(
                             status_code=400,
-                            detail=f"Type mismatch for field '{col}' in joined result: expected {existing_field_type.field_type}, got {entered_type}",
+                            detail=(
+                                f"Type mismatch for field '{col}' in joined result: "
+                                f"expected {existing_field_type.field_type}, got {entered_type}"
+                            ),
                         )
             elif original_field_type:
                 # Copy the original field type to the new context

@@ -261,7 +261,7 @@ async def test_get_logs_w_date_sorting(client: AsyncClient):
     data = log_data["logs_for_various"]
     dates = list()
     for i in range(len(data)):
-        date = datetime(1993, 3, i + 1, tzinfo=timezone.utc).strftime("%Y-%m-%d")
+        date = datetime(1993, 3, i + 1, tzinfo=timezone.utc).isoformat()
         dates.append(date)
         entries = data[i]
         entries["_/timestamp"] = date
