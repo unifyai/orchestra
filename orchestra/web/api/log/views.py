@@ -230,6 +230,12 @@ def create_logs(
             log_dao=log_dao,
             context_dao=context_dao,
         )
+
+        # Final sanity: if nothing succeeded and there are failures, surface 400
+        if not result.get("log_event_ids") and result.get("failed"):
+            first_error = result["failed"][0].get("error", "Log creation failed")
+            raise HTTPException(status_code=400, detail=first_error)
+
         return {
             "info": "Logs created successfully!",
             "log_event_ids": result["log_event_ids"],
@@ -1649,90 +1655,90 @@ def update_logs(
 
     successful_update_ids: set[int] = set()
 
-    # First, handle flat updates (grouped per log for partial success)
+    # First, handle flat updates
     if all_flat_updates:
-        groups: dict[int, list[dict]] = {}
-        for upd in all_flat_updates:
-            le_id = upd.get("log_event_id")
-            if le_id is None:
-                continue
-            groups.setdefault(le_id, []).append(upd)
+        try:
+            # Call bulk_update once with all updates
+            bulk_result = log_dao.bulk_update(
+                all_flat_updates,
+                field_types=field_types,
+                overwrite=body.overwrite,
+            )
 
-        for le_id, group in groups.items():
-            try:
-                log_dao.bulk_update(
-                    group,
-                    field_types=field_types,
-                    overwrite=body.overwrite,
-                )
-                successful_update_ids.add(le_id)
-            except ValueError as e:
-                detail = e.detail if isinstance(e, HTTPException) else str(e)
-                failed_updates.append(
-                    {
-                        "log_event_id": le_id,
-                        "error": f"Found differing log param value with the same version: {detail}",
-                    },
-                )
-            except OverwriteError as e:
-                detail = e.detail if isinstance(e, HTTPException) else str(e)
-                failed_updates.append(
-                    {
-                        "log_event_id": le_id,
-                        "error": f"Existing value cannot be overwritten because overwrite is set to False: {detail}",
-                    },
-                )
-            except ImmutableFieldError as e:
-                detail = e.detail if isinstance(e, HTTPException) else str(e)
-                failed_updates.append(
-                    {
-                        "log_event_id": le_id,
-                        "error": f"Field is immutable and cannot be modified: {detail}",
-                    },
-                )
+            # Add bulk_update failures to our failed_updates list
+            failed_updates.extend(bulk_result["failed"])
 
-        # Duplicate checks only for successful updates
-        if successful_update_ids:
-            if "ctx_ids" in locals() and ctx_ids:
-                for context_id in ctx_ids:
-                    if context_id is not None:
-                        ctx_obj = (
-                            context_dao.session.query(Context)
-                            .filter_by(id=context_id)
-                            .first()
-                        )
-                        if ctx_obj and not ctx_obj.allow_duplicates:
-                            for log_id in successful_update_ids:
+            # For each successful ID from bulk_update, check for duplicates
+            for le_id in bulk_result["successful_update_ids"]:
+                duplicate_found = False
+                if "ctx_ids" in locals() and ctx_ids:
+                    for context_id in ctx_ids:
+                        if context_id is not None:
+                            ctx_obj = (
+                                context_dao.session.query(Context)
+                                .filter_by(id=context_id)
+                                .first()
+                            )
+                            if ctx_obj and not ctx_obj.allow_duplicates:
                                 duplicate = context_dao.check_for_duplicates_subset(
                                     context_id=context_id,
-                                    log_event_id=log_id,
+                                    log_event_id=le_id,
                                     keys_to_check=list(updated_entry_keys),
                                 )
                                 if duplicate:
                                     failed_updates.append(
                                         {
-                                            "log_event_id": log_id,
-                                            "error": f"Duplicate in context '{ctx_obj.name}'",
+                                            "log_event_id": le_id,
+                                            "error": f"Duplicate log entry detected in context '{ctx_obj.name}'",
                                         },
                                     )
-            elif ctx_id is not None:
-                ctx_obj = (
-                    context_dao.session.query(Context).filter_by(id=ctx_id).first()
-                )
-                if ctx_obj and not ctx_obj.allow_duplicates:
-                    for log_id in successful_update_ids:
+                                    duplicate_found = True
+                                    break
+                elif ctx_id is not None:
+                    ctx_obj = (
+                        context_dao.session.query(Context).filter_by(id=ctx_id).first()
+                    )
+                    if ctx_obj and not ctx_obj.allow_duplicates:
                         duplicate = context_dao.check_for_duplicates_subset(
                             context_id=ctx_id,
-                            log_event_id=log_id,
+                            log_event_id=le_id,
                             keys_to_check=list(updated_entry_keys),
                         )
                         if duplicate:
                             failed_updates.append(
                                 {
-                                    "log_event_id": log_id,
+                                    "log_event_id": le_id,
                                     "error": f"Duplicate log entry detected in context '{ctx_obj.name}'",
                                 },
                             )
+                            duplicate_found = True
+
+                if not duplicate_found:
+                    successful_update_ids.add(le_id)
+        except ValueError as e:
+            detail = e.detail if isinstance(e, HTTPException) else str(e)
+            failed_updates.append(
+                {
+                    "log_event_id": le_id,
+                    "error": f"Found differing log param value with the same version: {detail}",
+                },
+            )
+        except OverwriteError as e:
+            detail = e.detail if isinstance(e, HTTPException) else str(e)
+            failed_updates.append(
+                {
+                    "log_event_id": le_id,
+                    "error": f"Existing value cannot be overwritten because overwrite is set to False: {detail}",
+                },
+            )
+        except ImmutableFieldError as e:
+            detail = e.detail if isinstance(e, HTTPException) else str(e)
+            failed_updates.append(
+                {
+                    "log_event_id": le_id,
+                    "error": f"Field is immutable and cannot be modified: {detail}",
+                },
+            )
 
     # Then, handle nested updates if any exist (grouped per log/key for partial success)
     if all_nested_updates:
@@ -1751,7 +1757,51 @@ def update_logs(
                     group,
                     field_types=field_types,
                 )
-                successful_update_ids.add(le_id)
+                # Inline duplicate checks for this log id; only mark success if it passes
+                duplicate_found = False
+                if "ctx_ids" in locals() and ctx_ids:
+                    for context_id in ctx_ids:
+                        if context_id is not None:
+                            ctx_obj = (
+                                context_dao.session.query(Context)
+                                .filter_by(id=context_id)
+                                .first()
+                            )
+                            if ctx_obj and not ctx_obj.allow_duplicates:
+                                duplicate = context_dao.check_for_duplicates_subset(
+                                    context_id=context_id,
+                                    log_event_id=le_id,
+                                    keys_to_check=list(updated_entry_keys),
+                                )
+                                if duplicate:
+                                    failed_updates.append(
+                                        {
+                                            "log_event_id": le_id,
+                                            "error": f"Duplicate log entry detected in context '{ctx_obj.name}'",
+                                        },
+                                    )
+                                    duplicate_found = True
+                elif ctx_id is not None:
+                    ctx_obj = (
+                        context_dao.session.query(Context).filter_by(id=ctx_id).first()
+                    )
+                    if ctx_obj and not ctx_obj.allow_duplicates:
+                        duplicate = context_dao.check_for_duplicates_subset(
+                            context_id=ctx_id,
+                            log_event_id=le_id,
+                            keys_to_check=list(updated_entry_keys),
+                        )
+                        if duplicate:
+                            failed_updates.append(
+                                {
+                                    "log_event_id": le_id,
+                                    "error": f"Duplicate log entry detected in context '{ctx_obj.name}'",
+                                },
+                            )
+                            duplicate_found = True
+
+                if not duplicate_found:
+                    successful_update_ids.add(le_id)
             except ValueError as e:
                 detail = e.detail if isinstance(e, HTTPException) else str(e)
                 failed_updates.append(
@@ -1799,6 +1849,11 @@ def update_logs(
         if ctx_obj and ctx_obj.is_versioned and updates_by_log_id:
             ctx_obj.updated_at = datetime.now(timezone.utc)
             context_dao.session.commit()
+
+    # Final sanity: if everything failed, surface an error instead of returning 200
+    if not successful_update_ids and failed_updates:
+        first_error = failed_updates[0].get("error", "Update failed")
+        raise HTTPException(status_code=400, detail=first_error)
 
     # Recompute derived logs that reference any updated base logs (only successes).
     if updated_ids:
