@@ -142,12 +142,58 @@ async def test_update_logs_overwrites(client: AsyncClient):
 
     log_ids = [log_id, log_id_2]
 
-    response = await _update_multiple_logs_w_overwrite(client, log_ids, overwrite=False)
+    # Will fail with the first log_id because of overwrite=False
+    response = await _update_multiple_logs_w_overwrite(
+        client,
+        [log_id],
+        overwrite=False,
+    )
     assert response.status_code == 400, response.json()
 
+    response = await _get_log(client, project_name, log_id)
+    assert response.status_code == 200, response.json()
+    new_entries = response.json()["logs"][0]["entries"]
+    # Confirm that the log was not updated
+    assert len(new_entries) == 3
+    assert new_entries["a/b/c/input"] == orig_entries["a/b/c/input"]
+    assert new_entries["a/b/c/boolean_input"] == orig_entries["a/b/c/boolean_input"]
+    assert new_entries["a/b/c/numeric_input"] == orig_entries["a/b/c/numeric_input"]
+
+    # Will pass partially with both [log_id, log_id_2] because of overwrite=False
+    # since first log_id contains matching keys resulting in failure of overwriting
+    # but second log_id_2 will be updated successfully
+    response = await _update_multiple_logs_w_overwrite(client, log_ids, overwrite=False)
+    assert response.status_code == 200, response.json()
+    assert len(response.json()["failed"]) == 1
+    assert response.json()["failed"][0]["log_event_id"] == log_id
+    assert (
+        "Existing value cannot be overwritten because overwrite is set to False"
+        in response.json()["failed"][0]["error"]
+    )
+
+    response = await _get_log(client, project_name, log_id)
+    assert response.status_code == 200, response.json()
+    new_entries = response.json()["logs"][0]["entries"]
+    # Confirm that the log was not updated
+    assert len(new_entries) == 3
+    assert new_entries["a/b/c/input"] == orig_entries["a/b/c/input"]
+    assert new_entries["a/b/c/boolean_input"] == orig_entries["a/b/c/boolean_input"]
+    assert new_entries["a/b/c/numeric_input"] == orig_entries["a/b/c/numeric_input"]
+
+    response = await _get_log(client, project_name, log_id_2)
+    assert response.status_code == 200, response.json()
+    new_entries = response.json()["logs"][0]["entries"]
+    # Confirm that the log was updated
+    assert len(new_entries) == 4
+    assert new_entries["a/b/c/boolean_input"] != orig_entries["a/b/c/boolean_input"]
+    assert new_entries["a/b/c/numeric_input"] != orig_entries["a/b/c/numeric_input"]
+
+    # Will pass with both [log_id, log_id_2] because of overwrite=True
+    # since both logs will be updated successfully
     response = await _update_multiple_logs_w_overwrite(client, log_ids, overwrite=True)
     assert response.status_code == 200, response.json()
 
+    # Confirm that the logs were updated
     response = await _get_log(client, project_name, log_id)
     assert response.status_code == 200, response.json()
     new_entries = response.json()["logs"][0]["entries"]
@@ -160,6 +206,8 @@ async def test_update_logs_overwrites(client: AsyncClient):
     assert response.status_code == 200, response.json()
     new_entries = response.json()["logs"][0]["entries"]
     assert len(new_entries) == 4
+    assert new_entries["a/b/c/boolean_input"] != orig_entries["a/b/c/boolean_input"]
+    assert new_entries["a/b/c/numeric_input"] != orig_entries["a/b/c/numeric_input"]
 
 
 @pytest.mark.anyio
