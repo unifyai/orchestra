@@ -4142,7 +4142,7 @@ def create_fields(
     if request.backfill_logs:
         try:
             # Get all log events in this context
-            log_event_ids = (
+            le_rows = (
                 session.query(LogEvent.id)
                 .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
                 .filter(
@@ -4152,54 +4152,59 @@ def create_fields(
                 .all()
             )
 
-            if log_event_ids:
-                # Create LogDAO instance for bulk_create
-                log_dao = LogDAO(session, context_dao)
+            log_event_ids = [row[0] for row in le_rows]
 
-                # Prepare entries for bulk creation
+            if log_event_ids and request.fields:
+                field_names = list(request.fields.keys())
+
+                # Query existing base (log_event_id, key) pairs in one shot
+                existing_base_pairs = (
+                    session.query(LogEventLog.log_event_id, Log.key)
+                    .join(Log, Log.id == LogEventLog.log_id)
+                    .filter(
+                        LogEventLog.log_event_id.in_(log_event_ids),
+                        Log.key.in_(field_names),
+                    )
+                    .all()
+                )
+
+                # Query existing derived (log_event_id, key) pairs in one shot
+                existing_derived_pairs = (
+                    session.query(LogEventDerivedLog.log_event_id, DerivedLog.key)
+                    .join(
+                        DerivedLog,
+                        DerivedLog.id == LogEventDerivedLog.derived_log_id,
+                    )
+                    .filter(
+                        LogEventDerivedLog.log_event_id.in_(log_event_ids),
+                        DerivedLog.key.in_(field_names),
+                    )
+                    .all()
+                )
+
+                existing_pairs = set(existing_base_pairs) | set(existing_derived_pairs)
+
+                # Prepare entries to create for missing pairs only
                 entries_to_create = []
-                for log_event_id_tuple in log_event_ids:
-                    log_event_id = log_event_id_tuple[0]
-                    for field_name in request.fields.keys():
-                        # Check if this field already exists for this log event in Log or DerivedLog
-                        existing_log = (
-                            session.query(Log)
-                            .join(LogEventLog, LogEventLog.log_id == Log.id)
-                            .filter(
-                                LogEventLog.log_event_id == log_event_id,
-                                Log.key == field_name,
-                            )
-                            .first()
+                for le_id in log_event_ids:
+                    for fname in field_names:
+                        if (le_id, fname) in existing_pairs:
+                            continue
+                        entries_to_create.append(
+                            {
+                                "project_id": project_id,
+                                "log_event_id": le_id,
+                                "key": fname,
+                                "value": None,
+                                "context_id": context_id,
+                            },
                         )
 
-                        existing_derived_log = (
-                            session.query(DerivedLog)
-                            .join(
-                                LogEventDerivedLog,
-                                LogEventDerivedLog.derived_log_id == DerivedLog.id,
-                            )
-                            .filter(
-                                LogEventDerivedLog.log_event_id == log_event_id,
-                                DerivedLog.key == field_name,
-                            )
-                            .first()
-                        )
+                backfilled_count = len(entries_to_create)
 
-                        # Only create if it doesn't already exist in either Log or DerivedLog
-                        if not existing_log and not existing_derived_log:
-                            entries_to_create.append(
-                                {
-                                    "project_id": project_id,
-                                    "log_event_id": log_event_id,
-                                    "key": field_name,
-                                    "value": None,
-                                    "context_id": context_id,
-                                },
-                            )
-                            backfilled_count += 1
-
-                # Bulk create the entries
                 if entries_to_create:
+                    # Create LogDAO instance for bulk_create
+                    log_dao = LogDAO(session, context_dao)
                     log_dao.bulk_create(entries_to_create)
                     session.commit()
         except Exception as e:
