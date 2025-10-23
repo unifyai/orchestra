@@ -63,6 +63,114 @@ __all__ = [
 ]
 
 
+# Value-level OR coalescing helper: returns first truthy value (as text)
+def _value_or_coalesce_subq(
+    or_filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+):
+    """
+    Build a subquery implementing Python's value-level `x or y`:
+    returns x if truthy (non-empty for strings, non-null), else y.
+    Always returns a subquery with a text value column.
+    """
+    from .core import build_sql_query
+
+    lhs_node = or_filter_dict.get("lhs")
+    rhs_node = or_filter_dict.get("rhs")
+
+    lhs_expr = build_sql_query(
+        lhs_node,
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+    )
+    rhs_expr = build_sql_query(
+        rhs_node,
+        log_event_alias,
+        session,
+        log_event_ids=log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+    )
+
+    lhs_is_sub = isinstance(lhs_expr, Subquery)
+    rhs_is_sub = isinstance(rhs_expr, Subquery)
+
+    # Truthiness of LHS
+    lhs_truthy = _create_truthiness_condition(lhs_expr, session)
+
+    # Extract string/text values
+    if lhs_is_sub:
+        lhs_val, _ = _select_value(lhs_expr, session)
+        lhs_text = func.replace(cast(lhs_val, String), '"', "")
+    else:
+        lhs_text = func.replace(cast(lhs_expr, String), '"', "")
+
+    if rhs_is_sub:
+        rhs_val, _ = _select_value(rhs_expr, session)
+        rhs_text = func.replace(cast(rhs_val, String), '"', "")
+    else:
+        rhs_text = func.replace(cast(rhs_expr, String), '"', "")
+
+    coalesced = case((lhs_truthy, lhs_text), else_=rhs_text)
+
+    # Build a subquery source to carry log_event_id
+    if lhs_is_sub and rhs_is_sub:
+        from_clause = lhs_expr.outerjoin(
+            rhs_expr,
+            lhs_expr.c.log_event_id == rhs_expr.c.log_event_id,
+        )
+        select_cols = [
+            func.coalesce(lhs_expr.c.log_event_id, rhs_expr.c.log_event_id).label(
+                "log_event_id",
+            ),
+            coalesced.label("value"),
+            literal("str").label("inferred_type"),
+        ]
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(from_clause),
+            prefix="value_or",
+        )
+
+    base = lhs_expr if lhs_is_sub else rhs_expr
+    if isinstance(base, Subquery):
+        select_cols = [base.c.log_event_id.label("log_event_id")]
+        if "__comp_idx__" in base.c.keys():
+            select_cols.append(base.c.__comp_idx__.label("__comp_idx__"))
+        if "__parent_idx__" in base.c.keys():
+            select_cols.append(base.c.__parent_idx__.label("__parent_idx__"))
+        select_cols.extend(
+            [coalesced.label("value"), literal("str").label("inferred_type")],
+        )
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(base),
+            prefix="value_or",
+        )
+
+    # Fallback: no subquery on either side, inflate from log_event_alias
+    ids_subq = alias_utils.subquery_with_unique_alias(
+        select(log_event_alias.id.label("log_event_id")),
+        prefix="ids_for_value_or",
+    )
+    return alias_utils.subquery_with_unique_alias(
+        select(
+            ids_subq.c.log_event_id,
+            coalesced.label("value"),
+            literal("str").label("inferred_type"),
+        ).select_from(ids_subq),
+        prefix="value_or",
+    )
+
+
 # Helper function for logical operators (and, or, not)
 def _create_truthiness_condition(subq_or_literal, session):
     """
@@ -372,24 +480,50 @@ def _handle_arithmetic_operator(
         SQLAlchemy condition or expression based on the arithmetic operator.
     """
     operand = filter_dict.get("operand")
-    lhs = build_sql_query(
-        filter_dict.get("lhs"),
-        log_event_alias,
-        session,
-        log_event_ids=log_event_ids,
-        is_derived=is_derived,
-        local_scope=local_scope,
-        is_vector=is_vector,
-    )
-    rhs = build_sql_query(
-        filter_dict.get("rhs"),
-        log_event_alias,
-        session,
-        log_event_ids=log_event_ids,
-        is_derived=is_derived,
-        local_scope=local_scope,
-        is_vector=is_vector,
-    )
+    lhs_node = filter_dict.get("lhs")
+    rhs_node = filter_dict.get("rhs")
+
+    # Rewrite value-level `or` used inside arithmetic into a coalescing subquery
+    if isinstance(lhs_node, dict) and lhs_node.get("operand") == "or":
+        lhs = _value_or_coalesce_subq(
+            lhs_node,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+        )
+    else:
+        lhs = build_sql_query(
+            lhs_node,
+            log_event_alias,
+            session,
+            log_event_ids=log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+        )
+    if isinstance(rhs_node, dict) and rhs_node.get("operand") == "or":
+        rhs = _value_or_coalesce_subq(
+            rhs_node,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+        )
+    else:
+        rhs = build_sql_query(
+            rhs_node,
+            log_event_alias,
+            session,
+            log_event_ids=log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+        )
 
     lhs_is_sub = isinstance(lhs, Subquery)
     rhs_is_sub = isinstance(rhs, Subquery)

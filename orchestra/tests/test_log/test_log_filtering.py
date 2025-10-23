@@ -184,6 +184,71 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
         # We'll assume the API handled it correctly
 
 
+@pytest.mark.anyio
+async def test_full_name_filter_expression(client: AsyncClient):
+    project_name = "test_full_name_filter"
+    await _create_project(client, project_name)
+
+    # Create logs covering various edge cases
+    logs = [
+        {
+            "first_name": "John",
+            "surname": "Doe",
+            "note": "should match via left branch",
+        },
+        {
+            "first_name": "JOHN",
+            "surname": None,
+            "note": "should match via left branch (case)",
+        },
+        {
+            "first_name": None,
+            "surname": "Johnson",
+            "note": "should match via right branch ('john' in full name)",
+        },
+        {"first_name": "Alice", "surname": "Smith", "note": "should NOT match"},
+        {"first_name": "Jo", "surname": "Hnson", "note": "should NOT"},
+        {
+            "first_name": "",
+            "surname": "Johnny",
+            "note": "should match via right branch 'john' substring",
+        },
+    ]
+
+    created_ids = []
+    for entry in logs:
+        resp = await _create_log(client, project_name, entries=entry)
+        assert resp.status_code == 200, resp.json()
+        created_ids.append(resp.json()["log_event_ids"][0])
+
+    expr = "((first_name is not None and first_name.lower() == 'john') or ('john' in (((first_name or '' ) + ' ' + (surname or '')).lower())))"
+
+    r = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": expr},
+        headers=HEADERS,
+    )
+    assert r.status_code == 200, r.text
+    result = r.json()["logs"]
+
+    # Determine expected matches according to Python semantics used by the parser
+    expected = []
+    for i, e in enumerate(logs):
+        fn = e.get("first_name")
+        sn = e.get("surname")
+        left = (fn is not None) and (str(fn).lower() == "john")
+        full = f"{(fn or '')} {(sn or '')}".lower()
+        right = "john" in full
+        if left or right:
+            expected.append(created_ids[i])
+
+    got_ids = sorted([log["id"] for log in result])
+    exp_ids = sorted(expected)
+    assert (
+        got_ids == exp_ids
+    ), f"Mismatched result ids. Got {got_ids}, expected {exp_ids}"
+
+
 # Tests for the new AST-based parser implementation
 @pytest.mark.parametrize(
     "expression, expected_dict",
@@ -691,6 +756,59 @@ async def test_log_filter_helper(client: AsyncClient, expression, values):
                 },
                 "operand": "==",
                 "rhs": "test",
+            },
+        ),
+        (
+            "((first_name is not None and first_name.lower() == 'john') or ('john' in (((first_name or '' ) + ' ' + (surname or '')).lower())))",
+            {
+                "lhs": {
+                    "lhs": {
+                        "lhs": {"type": "identifier", "value": "first_name"},
+                        "operand": "is not",
+                        "rhs": None,
+                    },
+                    "operand": "and",
+                    "rhs": {
+                        "lhs": {
+                            "operand": "str_method",
+                            "method": "lower",
+                            "rhs": {"type": "identifier", "value": "first_name"},
+                            "args": [],
+                        },
+                        "operand": "==",
+                        "rhs": "john",
+                    },
+                },
+                "operand": "or",
+                "rhs": {
+                    "lhs": "john",
+                    "operand": "in",
+                    "rhs": {
+                        "operand": "str_method",
+                        "method": "lower",
+                        "rhs": {
+                            "lhs": {
+                                "lhs": {
+                                    "lhs": {
+                                        "type": "identifier",
+                                        "value": "first_name",
+                                    },
+                                    "operand": "or",
+                                    "rhs": "",
+                                },
+                                "operand": "+",
+                                "rhs": " ",
+                            },
+                            "operand": "+",
+                            "rhs": {
+                                "lhs": {"type": "identifier", "value": "surname"},
+                                "operand": "or",
+                                "rhs": "",
+                            },
+                        },
+                        "args": [],
+                    },
+                },
             },
         ),
     ],
