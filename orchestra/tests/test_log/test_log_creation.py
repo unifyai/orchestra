@@ -9,6 +9,56 @@ from . import HEADERS, _create_log, _create_project
 
 
 @pytest.mark.anyio
+async def test_batch_create_partial_success_with_failed_logs(client: AsyncClient):
+    project_name = "batch-partial-success-with-failed-logs"
+    _ = await _create_project(client, project_name)
+
+    # Pre-create strict typed fields
+    resp_ft = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project": project_name,
+            "fields": {
+                "age": {"type": "int", "mutable": True},
+                "name": {"type": "str", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert resp_ft.status_code == 200, resp_ft.json()
+
+    # Batch with one invalid log (age is wrong type)
+    payload = {
+        "project": project_name,
+        "entries": [
+            {"name": "ok-1", "age": 30},  # valid
+            {"name": "bad", "age": "thirty"},  # invalid
+            {"name": "ok-2", "age": 25},  # valid
+        ],
+        "params": {},
+    }
+
+    response = await client.post("/v0/logs", json=payload, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    data = response.json()
+
+    # We expect only 2 created ids and one failure reported
+    created_ids = data.get("log_event_ids", [])
+    failed = data.get("failed", [])
+    assert len(created_ids) == 2
+    assert any(f.get("index") == 1 for f in failed)  # second item failed
+
+    # Verify the two valid logs exist and the bad one does not
+    logs_resp = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    assert logs_resp.status_code == 200, logs_resp.json()
+    logs = logs_resp.json()["logs"]
+    # Extract names for sanity
+    names = [l["entries"].get("name") for l in logs]
+    assert "ok-1" in names and "ok-2" in names
+    assert "bad" not in names
+
+
+@pytest.mark.anyio
 async def test_create_logs(client: AsyncClient):
     project_name = "eval-project"
     _ = await _create_project(client, project_name)
@@ -51,6 +101,64 @@ async def test_create_logs(client: AsyncClient):
 
     # When no unique_keys/auto_counting are configured, auto_counting should be empty dict
     assert response.json()["auto_counting"] == {}
+
+
+@pytest.mark.anyio
+async def test_batch_create_partial_success(client: AsyncClient):
+    """Batch create should not fail the entire batch when one entry is invalid."""
+    project_name = "batch-partial-success"
+    _ = await _create_project(client, project_name)
+
+    # Pre-create a strict typed field: age must be int
+    resp_ft = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project": project_name,
+            "fields": {
+                "age": {"type": "int", "mutable": True},
+                "name": {"type": "str", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert resp_ft.status_code == 200, resp_ft.json()
+
+    # Batch: one good, one bad (age wrong type), two more good
+    batch_entries = [
+        {"name": "Alice", "age": 30},
+        {"name": "Bob", "age": "thirty"},  # invalid
+        {"name": "Carol", "age": 25},
+        {"name": "Dave", "age": 35},
+    ]
+
+    res = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": batch_entries,
+        },
+        headers=HEADERS,
+    )
+    assert res.status_code == 200, res.text
+    body = res.json()
+
+    # Should return only two created ids and a failed list with index=1
+    assert "log_event_ids" in body and isinstance(body["log_event_ids"], list)
+    assert len(body["log_event_ids"]) == 3
+    assert "failed" in body and isinstance(body["failed"], list)
+    assert any(f.get("index") == 1 for f in body["failed"])  # Bob failed
+
+    # Verify only two logs are actually stored
+    all_logs = await client.get(
+        f"/v0/logs?project={project_name}",
+        headers=HEADERS,
+    )
+    assert all_logs.status_code == 200, all_logs.text
+    logs = all_logs.json()["logs"]
+
+    # Filter by names to be explicit
+    names = sorted(lg["entries"].get("name") for lg in logs)
+    assert names == ["Alice", "Carol", "Dave"]
 
 
 @pytest.mark.anyio
