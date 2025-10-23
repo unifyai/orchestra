@@ -1,7 +1,6 @@
 import base64
 from typing import Optional
 
-import httpx
 from fastapi import HTTPException, status
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
@@ -21,60 +20,11 @@ class CallRecordingService:
         self.recording_dao = recording_dao
         self.bucket_service = bucket_service
 
-    async def record_call(self, agent_id: int, recording_url: str) -> CallRecording:
-        """
-        1) Verify assistant exists
-        2) Download audio bytes from recording_url
-        3) Determine content_type
-        4) Call BucketService.upload_recording(bytes, content_type)
-        5) Persist via RecordingDAO.create_recording(agent_id, filename, url)
-        6) Return the CallRecording model instance
-        """
-        # 1) Verify assistant exists
-        assistant = self.assistant_dao.get_assistant_by_id(agent_id=agent_id)
-        if not assistant:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Assistant not found.",
-            )
-
-        # 2) Download audio bytes
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(recording_url)
-                response.raise_for_status()
-            except httpx.HTTPStatusError as exc:
-                raise HTTPException(
-                    status_code=exc.response.status_code,
-                    detail=f"Failed to download recording: {exc}",
-                )
-
-            content = response.content
-            # 3) Determine content_type
-            content_type = response.headers.get(
-                "content-type",
-                "application/octet-stream",
-            )
-
-        # 4) Upload recording to bucket
-        try:
-            url, filename = self.bucket_service.upload_recording(content, content_type)
-        except Exception as exc:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to upload recording: {exc}",
-            )
-
-        # 5) Persist via DAO
-        recording = self.recording_dao.create_recording(agent_id, filename, url)
-
-        # 6) Return the CallRecording model instance
-        return recording
-
-    async def record_call_from_raw(
+    async def record_call(
         self,
         user_id: str,
         agent_id: int,
+        conference_name: str,
         recording_raw: str,
         content_type: Optional[str] = None,
         is_staging: bool = False,
@@ -113,9 +63,10 @@ class CallRecordingService:
 
         # 4) Upload recording to bucket
         try:
-            url, filename = self.bucket_service.upload_recording(
+            url, file_path = self.bucket_service.upload_recording(
                 content,
                 content_type,
+                f"{agent_id}/{conference_name}.mp3",
                 is_staging=is_staging,
             )
         except Exception as exc:
@@ -125,7 +76,7 @@ class CallRecordingService:
             )
 
         # 5) Persist via DAO
-        recording = self.recording_dao.create_recording(agent_id, filename, url)
+        recording = self.recording_dao.create_recording(agent_id, file_path, url)
 
         # 6) Return the CallRecording model instance
         return recording

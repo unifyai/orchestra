@@ -119,6 +119,7 @@ class ProductionTrafficMiddleware(BaseHTTPMiddleware):
 
         finally:
             # Calculate time taken in milliseconds
+            response_timestamp = time.time()
             time_taken = response_timestamp - request_timestamp
 
             # Get SQL trace data if available

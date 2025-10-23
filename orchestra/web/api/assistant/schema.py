@@ -19,16 +19,26 @@ class InfoResponse(GenericModel, Generic[T]):
 
 
 class ChatMessage(BaseModel):
-    message_id: int = Field(
+    role: Literal["user", "assistant"] = Field(
         ...,
-        description="Unique identifier for the message in the exchange",
+        description="The role of the message sender.",
+        example="assistant",
     )
-    medium: str = Field("unify_chat", description="Communication medium")
-    sender_id: int = Field(..., description="ID of the sender")
-    receiver_ids: List[int] = Field(..., description="List of receiver IDs")
-    timestamp: datetime = Field(..., description="Timestamp of the message")
-    content: str = Field(..., description="Content of the message")
-    exchange_id: int = Field(..., description="ID of the exchange")
+    msg: str = Field(
+        ...,
+        description="The content of the message.",
+        example="Hello, how can I help you?",
+    )
+
+
+class UnifyMessage(BaseModel):
+    assistant_id: int = Field(..., description="The ID of the assistant to message.")
+    contact_id: int = Field(
+        ...,
+        description="The ID of the contact sending the message. Currently only '1' (the user) is supported.",
+        example=1,
+    )
+    message: str = Field(..., description="The message content.", example="Hello!")
 
 
 class AssistantCreate(BaseModel):
@@ -366,26 +376,9 @@ class AssistantStatus(BaseModel):
         ...,
         description="Whether the assistant service process is currently running.",
     )
-    uptime_seconds: float = Field(..., description="Service uptime in seconds.")
-    process_id: Optional[int] = Field(
+    job_name: Optional[str] = Field(
         None,
-        description="The process ID of the assistant service.",
-    )
-    assistant_id: str = Field(
-        ...,
-        description="The ID of the assistant, as configured in its environment.",
-    )
-    shutdown_reason: Optional[str] = Field(
-        None,
-        description="The reason for the last shutdown, if applicable.",
-    )
-    inactivity_timeout_minutes: int = Field(
-        ...,
-        description="The configured inactivity timeout in minutes.",
-    )
-    message: Optional[str] = Field(
-        None,
-        description="An additional human-readable status message.",
+        description="Name of the job running the assistant service.",
     )
 
     class Config:
@@ -393,21 +386,11 @@ class AssistantStatus(BaseModel):
         schema_extra = {
             "example_running": {
                 "running": True,
-                "uptime_seconds": 3600.5,
-                "process_id": 12345,
-                "assistant_id": "123",
-                "shutdown_reason": None,
-                "inactivity_timeout_minutes": 6,
-                "message": None,
+                "job_name": "assistant_service_123",
             },
             "example_inactive": {
                 "running": False,
-                "uptime_seconds": 0,
-                "process_id": None,
-                "assistant_id": "123",
-                "shutdown_reason": "inactivity_timeout",
-                "inactivity_timeout_minutes": 6,
-                "message": "Service shut down due to 6 minutes of inactivity",
+                "job_name": None,
             },
         }
 
@@ -422,6 +405,13 @@ class RecordingCreate(BaseModel):
         ...,
         description="ID of the assistant to associate the recording with",
         example=123,
+    )
+    conference_name: str = (
+        Field(
+            ...,
+            description="Name of the conference to associate the recording with",
+            example="Unity_Sample_Conference",
+        ),
     )
     recording_raw: str = Field(
         ...,
@@ -897,3 +887,15 @@ class ReplicatePredictionResponse(BaseModel):
     class Config:
         orm_mode = True
         from_attributes = True
+
+
+class AssistantContactRemoval(BaseModel):
+    """
+    Schema for removing a contact method from an assistant.
+    """
+
+    contact_type: Literal["phone", "email", "whatsapp"] = Field(
+        ...,
+        description="The type of contact information to remove.",
+        example="email",
+    )

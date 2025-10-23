@@ -9,26 +9,40 @@ async def test_get_fields_with_derived_entries(client: AsyncClient):
     project_name = "test_project_derived"
     _ = await _create_project(client, project_name)
 
-    # Create base logs
+    # Phase 1: Implicit creation for base and params → data_type should be "Any"
     response = await _create_log(
         client,
         project_name,
-        params={"param1": "test"},
-        entries={"base_field": 100, "temperature": 25.5},
+        params={"param1_implicit": "test"},
+        entries={"base_field_implicit": 100, "temperature_implicit": 25.5},
     )
     assert response.status_code == 200
     log_id = response.json()["log_event_ids"][0]
+
+    # Verify implicit fields are "Any"
+    resp_fields_implicit = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert resp_fields_implicit.status_code == 200
+    f_implicit = resp_fields_implicit.json()
+    assert f_implicit["param1_implicit"]["field_type"] == "param"
+    assert f_implicit["param1_implicit"]["data_type"] == "Any"
+    assert f_implicit["base_field_implicit"]["field_type"] == "entry"
+    assert f_implicit["base_field_implicit"]["data_type"] == "Any"
+    assert f_implicit["temperature_implicit"]["field_type"] == "entry"
+    assert f_implicit["temperature_implicit"]["data_type"] == "Any"
 
     # Create derived entries
     derived_configs = [
         {
             "key": "temp_plus_10",
-            "equation": "{t:temperature} + 10",
+            "equation": "{t:temperature_implicit} + 10",
             "referenced_logs": {"t": [log_id]},
         },
         {
             "key": "double_base",
-            "equation": "{b:base_field} * 2",
+            "equation": "{b:base_field_implicit} * 2",
             "referenced_logs": {"b": [log_id]},
         },
     ]
@@ -43,7 +57,7 @@ async def test_get_fields_with_derived_entries(client: AsyncClient):
         )
         assert response.status_code == 200
 
-    # Get field types and verify response
+    # Get field types and verify response after implicit creation
     response = await client.get(
         f"/v0/logs/fields?project={project_name}",
         headers=HEADERS,
@@ -51,30 +65,30 @@ async def test_get_fields_with_derived_entries(client: AsyncClient):
     assert response.status_code == 200
     fields = response.json()
 
-    # Verify base entries
-    assert fields["base_field"]["field_type"] == "entry"
-    assert fields["base_field"]["data_type"] == "int"
-    assert fields["base_field"]["artifacts"] == ""
-    assert fields["base_field"]["created_at"] is not None
-    assert fields["base_field"]["mutable"] is True
+    # Verify base entries (implicit are Any)
+    assert fields["base_field_implicit"]["field_type"] == "entry"
+    assert fields["base_field_implicit"]["data_type"] == "Any"
+    assert fields["base_field_implicit"]["artifacts"] == ""
+    assert fields["base_field_implicit"]["created_at"] is not None
+    assert fields["base_field_implicit"]["mutable"] is True
 
-    assert fields["temperature"]["field_type"] == "entry"
-    assert fields["temperature"]["data_type"] == "float"
-    assert fields["temperature"]["artifacts"] == ""
-    assert fields["temperature"]["created_at"] is not None
-    assert fields["temperature"]["mutable"] is True
+    assert fields["temperature_implicit"]["field_type"] == "entry"
+    assert fields["temperature_implicit"]["data_type"] == "Any"
+    assert fields["temperature_implicit"]["artifacts"] == ""
+    assert fields["temperature_implicit"]["created_at"] is not None
+    assert fields["temperature_implicit"]["mutable"] is True
 
-    # Verify params
-    assert fields["param1"]["field_type"] == "param"
-    assert fields["param1"]["data_type"] == "str"
-    assert fields["param1"]["artifacts"] == ""
-    assert fields["param1"]["created_at"] is not None
-    assert fields["param1"]["mutable"] is True
+    # Verify params (implicit Any)
+    assert fields["param1_implicit"]["field_type"] == "param"
+    assert fields["param1_implicit"]["data_type"] == "Any"
+    assert fields["param1_implicit"]["artifacts"] == ""
+    assert fields["param1_implicit"]["created_at"] is not None
+    assert fields["param1_implicit"]["mutable"] is True
 
     # Verify derived entries
     assert fields["temp_plus_10"]["field_type"] == "derived_entry"
     assert fields["temp_plus_10"]["data_type"] == "float"
-    assert fields["temp_plus_10"]["artifacts"] == "{t:temperature} + 10"
+    assert fields["temp_plus_10"]["artifacts"] == "{t:temperature_implicit} + 10"
     assert fields["temp_plus_10"]["created_at"] is not None
     assert (
         fields["temp_plus_10"]["mutable"] is False
@@ -82,7 +96,7 @@ async def test_get_fields_with_derived_entries(client: AsyncClient):
 
     assert fields["double_base"]["field_type"] == "derived_entry"
     assert fields["double_base"]["data_type"] == "int"
-    assert fields["double_base"]["artifacts"] == "{b:base_field} * 2"
+    assert fields["double_base"]["artifacts"] == "{b:base_field_implicit} * 2"
     assert fields["double_base"]["created_at"] is not None
     assert (
         fields["double_base"]["mutable"] is False
@@ -91,6 +105,76 @@ async def test_get_fields_with_derived_entries(client: AsyncClient):
     # Verify field ordering by created_at
     created_times = [fields[k]["created_at"] for k in fields.keys()]
     assert created_times == sorted(created_times)
+
+    # Phase 2: Explicit creation with new names → data_type should match explicit types
+    response_explicit = await _create_log(
+        client,
+        project_name,
+        params={},
+        entries={
+            "base_field": 100,
+            "temperature": 25.5,
+            "explicit_types": {
+                "base_field": {"type": "int", "mutable": True},
+                "temperature": {"type": "float", "mutable": True},
+            },
+        },
+    )
+    assert response_explicit.status_code == 200
+
+    fields_after = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert fields_after.status_code == 200
+    fields2 = fields_after.json()
+    assert fields2["base_field"]["data_type"] == "int"
+    assert fields2["temperature"]["data_type"] == "float"
+
+    # Explicit derived entry creation based on explicit base fields
+    log_id2 = response_explicit.json()["log_event_ids"][0]
+    derived_explicit_configs = [
+        {
+            "key": "temp_plus_10_explicit",
+            "equation": "{t:temperature} + 10",
+            "referenced_logs": {"t": [log_id2]},
+        },
+        {
+            "key": "double_base_explicit",
+            "equation": "{b:base_field} * 2",
+            "referenced_logs": {"b": [log_id2]},
+        },
+    ]
+
+    for config in derived_explicit_configs:
+        resp = await _create_derived_entry(
+            client,
+            project_name,
+            config["key"],
+            config["equation"],
+            config["referenced_logs"],
+        )
+        assert resp.status_code == 200
+
+    # Verify explicit derived entries in get_fields
+    fields_resp_exp = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert fields_resp_exp.status_code == 200
+    fields_exp = fields_resp_exp.json()
+
+    assert fields_exp["temp_plus_10_explicit"]["field_type"] == "derived_entry"
+    assert fields_exp["temp_plus_10_explicit"]["data_type"] == "float"
+    assert fields_exp["temp_plus_10_explicit"]["artifacts"] == "{t:temperature} + 10"
+    assert fields_exp["temp_plus_10_explicit"]["created_at"] is not None
+    assert fields_exp["temp_plus_10_explicit"]["mutable"] is False
+
+    assert fields_exp["double_base_explicit"]["field_type"] == "derived_entry"
+    assert fields_exp["double_base_explicit"]["data_type"] == "int"
+    assert fields_exp["double_base_explicit"]["artifacts"] == "{b:base_field} * 2"
+    assert fields_exp["double_base_explicit"]["created_at"] is not None
+    assert fields_exp["double_base_explicit"]["mutable"] is False
 
 
 @pytest.mark.anyio
@@ -423,7 +507,7 @@ async def test_rename_field_preserves_order(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_create_fields_happy_path(client: AsyncClient):
-    """Test creating fields with explicit and null types"""
+    """Test creating fields with explicit and untyped fields"""
     project_name = "test-create-fields"
     context_name = "fields-context"
 
@@ -439,13 +523,13 @@ async def test_create_fields_happy_path(client: AsyncClient):
         headers=HEADERS,
     )
 
-    # Create fields with explicit and null types
+    # Create fields with explicit and untyped fields
     fields_data = {
         "project": project_name,
         "context": context_name,
         "fields": {
             "accuracy": "float",  # Explicit type
-            "value": None,  # Null type (auto-detect)
+            "value": None,  # Untyped field (defaults to "Any")
         },
     }
     response = await client.post(
@@ -471,8 +555,8 @@ async def test_create_fields_happy_path(client: AsyncClient):
     # Check that the explicit type was set correctly
     assert fields["accuracy"]["data_type"] == "float"
 
-    # Check that the null type was set to NoneType
-    assert fields["value"]["data_type"] == "NoneType"
+    # Check that the untyped field defaults to "Any"
+    assert fields["value"]["data_type"] == "Any"
 
 
 @pytest.mark.anyio
@@ -566,7 +650,7 @@ async def test_delete_fields_endpoint(client: AsyncClient):
         json={"project": project_name, "fields": ["col1", "col2"]},
         headers=HEADERS,
     )
-    assert delete_response.status_code == 200
+    assert delete_response.status_code == 200, delete_response.json()
     assert delete_response.json()["deleted_fields"] == ["col1", "col2"]
 
     # Verify the columns no longer exist
@@ -1246,3 +1330,74 @@ async def test_field_description_crud(client: AsyncClient):
     assert "field_without_description" in fields
     assert fields["field_without_description"]["data_type"] == "int"
     assert fields["field_without_description"]["description"] is None
+
+
+@pytest.mark.anyio
+async def test_explicit_nested_type_in_get_fields(client: AsyncClient):
+    """Test that get_fields returns explicit nested types correctly."""
+    project_name = "test-get-fields-nested"
+    await _create_project(client, project_name)
+
+    # Create a log with nested explicit type
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "values": [1, 2, 3],
+                "metrics": {"acc": 0.9, "loss": 0.1},
+                "explicit_types": {
+                    "values": {"type": "List[int]", "mutable": True},
+                    "metrics": {"type": "Dict[str, float]", "mutable": True},
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Get fields and verify they return the explicit types
+    fields_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200
+    fields = fields_response.json()
+
+    # Should return the explicit nested types, not the base types
+    assert fields["values"]["data_type"] == "List[int]"
+    assert fields["metrics"]["data_type"] == "Dict[str, float]"
+
+
+@pytest.mark.anyio
+async def test_explicit_type_overrides_in_fields(client: AsyncClient):
+    """Test that explicit types override inferred types in get_fields."""
+    project_name = "test-explicit-override-fields"
+    await _create_project(client, project_name)
+
+    # Create a log with explicit type overriding inference
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "recording_url": "",
+                "explicit_types": {
+                    "recording_url": {"type": "str", "mutable": True},
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Get fields and verify explicit type is returned
+    fields_response = await client.get(
+        f"/v0/logs/fields?project={project_name}",
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200
+    fields = fields_response.json()
+
+    # Should return "str", not "audio" or "Any"
+    assert fields["recording_url"]["data_type"] == "str"

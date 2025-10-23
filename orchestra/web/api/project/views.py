@@ -712,6 +712,16 @@ def delete_project_logs(
     """
     Deletes all logs in a project.
     """
+    # Check if trying to delete from protected projects (Unity, AssistantJobs)
+    if project.name in ["Unity", "AssistantJobs"]:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"The '{project.name}' project is protected "
+                "and cannot have its logs deleted.",
+            ),
+        )
+
     log_event_dao = LogEventDAO(session)
     # Get all log events for the project
     log_events = log_event_dao.filter(project_id=project.id)
@@ -757,6 +767,15 @@ def delete_project_contexts(
     Deletes all contexts and their associated logs from a project.
     The project's interfaces remain untouched.
     """
+    # Check if trying to delete from protected projects (Unity, AssistantJobs)
+    if project.name in ["Unity", "AssistantJobs"]:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"The '{project.name}' project is protected "
+                "and cannot have its contexts deleted.",
+            ),
+        )
 
     context_dao = ContextDAO(session)
     # Get all contexts for the project
@@ -802,11 +821,11 @@ def delete_project(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
-    # Check if trying to delete the protected project (Unity)
-    if project.name in ["Unity", "Debug"]:
+    # Check if trying to delete the protected projects (Unity, AssistantJobs)
+    if project.name in ["Unity", "AssistantJobs"]:
         raise HTTPException(
             status_code=403,
-            detail="The 'Unity' project cannot be deleted.",
+            detail=f"The '{project.name}' project is protected and cannot be deleted.",
         )
 
     # Check if trying to delete the protected project (Production Traffic)
