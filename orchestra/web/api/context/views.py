@@ -21,7 +21,6 @@ from orchestra.web.api.context.schema import (
     ContextRollback,
     RenameContextRequest,
 )
-from orchestra.web.api.log.views import _get_logs_query
 from orchestra.web.api.utils.http_responses import not_found
 
 router = APIRouter()
@@ -611,6 +610,8 @@ def add_logs_to_context(
         if hasattr(request, "log_ids") and request.log_ids:
             log_ids = request.log_ids
         elif hasattr(request, "log_args") and request.log_args:
+            from orchestra.web.api.log.views import _get_logs_query
+
             # Use log_args to query for matching logs
             log_args = request.log_args
             raw_rows, _, _ = _get_logs_query(
