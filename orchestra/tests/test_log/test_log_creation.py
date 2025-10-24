@@ -1610,7 +1610,9 @@ async def test_create_with_pydantic_schema_validation_failure(client: AsyncClien
 
 
 @pytest.mark.anyio
-async def test_create_with_nested_pydantic_schema(client: AsyncClient):
+async def test_create_with_nested_pydantic_schema_and_nullable_fields(
+    client: AsyncClient,
+):
     """Test creating field with nested Pydantic schema."""
     pytest.importorskip("pydantic")
     from typing import List as TypingList
@@ -1623,12 +1625,14 @@ async def test_create_with_nested_pydantic_schema(client: AsyncClient):
 
     class Order(BaseModel):
         order_id: str
-        items: TypingList[Item]
+        items: TypingList[Item] | None
 
     project_name = "test-nested-pydantic"
     _ = await _create_project(client, project_name)
 
     order_schema = Order.model_json_schema()
+
+    print(f"order_schema: {order_schema}")
 
     # Create log with nested Pydantic schema
     response = await client.post(
@@ -1652,6 +1656,25 @@ async def test_create_with_nested_pydantic_schema(client: AsyncClient):
     )
     assert response.status_code == 200, response.json()
 
+    # Create log with nested Pydantic schema and nullable fields
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "order": {
+                    "order_id": "ORD-002",
+                    "items": None,
+                },
+                "explicit_types": {
+                    "order": {"type": order_schema, "mutable": True},
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
     # Verify
     logs_response = await client.get(
         f"/v0/logs?project={project_name}",
@@ -1659,9 +1682,11 @@ async def test_create_with_nested_pydantic_schema(client: AsyncClient):
     )
     assert logs_response.status_code == 200, logs_response.json()
     logs = logs_response.json()["logs"]
-    assert len(logs) == 1
-    assert logs[0]["entries"]["order"]["order_id"] == "ORD-001"
-    assert len(logs[0]["entries"]["order"]["items"]) == 2
+    assert len(logs) == 2
+    assert logs[1]["entries"]["order"]["order_id"] == "ORD-001"
+    assert len(logs[1]["entries"]["order"]["items"]) == 2
+    assert logs[0]["entries"]["order"]["order_id"] == "ORD-002"
+    assert logs[0]["entries"]["order"]["items"] is None
 
     # Verify field type normalization for nested schema
     fields_response = await client.get(
