@@ -40,6 +40,7 @@ from orchestra.db.models.orchestra_models import (
     Context,
     DerivedLog,
     Embedding,
+    FieldType,
     JSONLog,
     JSONLogHistory,
     Log,
@@ -2539,6 +2540,7 @@ def _create_logs_from_joined_rows(
     log_event_derived_logs = []
     json_logs = []
     embeddings_to_create = []  # Track embeddings that need to be created
+    parsed_rows: list[tuple[dict, dict]] = []  # (row_dict, metadata_dict) per row
 
     # Process each row
     for row in result_rows:
@@ -2556,6 +2558,8 @@ def _create_logs_from_joined_rows(
                     # Regular data column - store original value (including numpy arrays)
                     row_dict[col] = value
 
+        parsed_rows.append((row_dict, metadata_dict))
+
         # Create a new LogEvent
         log_event = LogEvent(
             project_id=project_id,
@@ -2571,21 +2575,57 @@ def _create_logs_from_joined_rows(
     session.flush()
 
     # Now create the related records with the generated IDs
+    # Build caches for field type lookups to avoid per-field DAO calls
+    all_field_names: set[str] = set()
+    for pr_row_dict, _ in parsed_rows:
+        all_field_names.update(pr_row_dict.keys())
+
+    source_ft_cache: dict[tuple[int | None, str], FieldType | None] = {}
+    if source_contexts:
+        for src_ctx in source_contexts.values():
+            if src_ctx is not None:
+                fts = (
+                    session.query(FieldType)
+                    .filter(
+                        FieldType.project_id == project_id,
+                        FieldType.context_id == src_ctx,
+                        FieldType.field_name.in_(list(all_field_names)),
+                    )
+                    .all()
+                )
+                for ft in fts:
+                    source_ft_cache[(src_ctx, ft.field_name)] = ft
+    # Global (context_id = None)
+    fts_global = (
+        session.query(FieldType)
+        .filter(
+            FieldType.project_id == project_id,
+            FieldType.context_id.is_(None),
+            FieldType.field_name.in_(list(all_field_names)),
+        )
+        .all()
+    )
+    for ft in fts_global:
+        source_ft_cache[(None, ft.field_name)] = ft
+
+    target_ft_cache: dict[str, FieldType] = {}
+    fts_target = (
+        session.query(FieldType)
+        .filter(
+            FieldType.project_id == project_id,
+            FieldType.context_id == context_id,
+            FieldType.field_name.in_(list(all_field_names)),
+        )
+        .all()
+    )
+    for ft in fts_target:
+        target_ft_cache[ft.field_name] = ft
+
+    # Track new field types to avoid duplicates
+    new_field_types_seen: set[tuple[int, str]] = set()
+
     for i, log_event in enumerate(log_events):
-        row = result_rows[i]
-        # Separate regular columns from metadata - reuse the same logic
-        row_dict = {}
-        metadata_dict = {}
-        for col in row._fields:
-            value = getattr(row, col)
-            if col != "id":  # Skip the id column
-                table, meta_type = extract_metadata(col)
-                if table:
-                    # This is a metadata column
-                    metadata_dict[col] = value
-                else:
-                    # Regular data column - store original value (including numpy arrays)
-                    row_dict[col] = value
+        row_dict, metadata_dict = parsed_rows[i]
 
         # Create LogEventContext association
         log_event_contexts.append(
@@ -2609,37 +2649,19 @@ def _create_logs_from_joined_rows(
                 f"{col}__derived_log__referenced_logs",
             )
 
-            # Look up the original field type from any source context
+            # Look up the original field type using pre-fetched caches
             original_field_type = None
-
-            # Try to find the field type in any source context
             if source_contexts:
-                for alias, src_context_id in source_contexts.items():
-                    field_type = field_type_dao.get_by_name_and_context(
-                        project_id=project_id,
-                        field_name=col,
-                        context_id=src_context_id,
-                    )
-                    if field_type:
-                        original_field_type = field_type
+                for src_ctx in source_contexts.values():
+                    ft = source_ft_cache.get((src_ctx, col))
+                    if ft is not None:
+                        original_field_type = ft
                         break
+            if original_field_type is None:
+                original_field_type = source_ft_cache.get((None, col))
 
-            # Also check if it exists in the current project (global field types)
-            if not original_field_type:
-                field_type = field_type_dao.get_by_name_and_context(
-                    project_id=project_id,
-                    field_name=col,
-                    context_id=None,  # Global field type
-                )
-                if field_type:
-                    original_field_type = field_type
-
-            # Check if field already exists in target context
-            existing_field_type = field_type_dao.get_by_name_and_context(
-                project_id=project_id,
-                field_name=col,
-                context_id=context_id,
-            )
+            # Check if field already exists in target context via cache
+            existing_field_type = target_ft_cache.get(col)
 
             if existing_field_type:
                 # Validate type consistency
@@ -2669,20 +2691,23 @@ def _create_logs_from_joined_rows(
                     else original_field_type.field_category
                 )
 
-                new_field_types.append(
-                    {
-                        "project_id": project_id,
-                        "field_name": col,
-                        "value": val,
-                        "mutable": original_field_type.mutable,
-                        "unique": original_field_type.unique,
-                        "field_category": field_category,
-                        "enum_values": original_field_type.enum_values,
-                        "enum_restrict": original_field_type.enum_restrict,
-                        "description": original_field_type.description,
-                        "context_id": context_id,
-                    },
-                )
+                key_ft = (context_id, col)
+                if key_ft not in new_field_types_seen:
+                    new_field_types_seen.add(key_ft)
+                    new_field_types.append(
+                        {
+                            "project_id": project_id,
+                            "field_name": col,
+                            "value": val,
+                            "mutable": original_field_type.mutable,
+                            "unique": original_field_type.unique,
+                            "field_category": field_category,
+                            "enum_values": original_field_type.enum_values,
+                            "enum_restrict": original_field_type.enum_restrict,
+                            "description": original_field_type.description,
+                            "context_id": context_id,
+                        },
+                    )
             else:
                 # No original field type found, infer from value
                 # Determine field category based on source
@@ -2693,17 +2718,20 @@ def _create_logs_from_joined_rows(
                 # Only make it mutable if the context is versioned
                 mutable = context_obj and context_obj.is_versioned
 
-                new_field_types.append(
-                    {
-                        "project_id": project_id,
-                        "field_name": col,
-                        "value": val,
-                        "mutable": mutable,
-                        "unique": False,
-                        "field_category": field_category,
-                        "context_id": context_id,
-                    },
-                )
+                key_ft = (context_id, col)
+                if key_ft not in new_field_types_seen:
+                    new_field_types_seen.add(key_ft)
+                    new_field_types.append(
+                        {
+                            "project_id": project_id,
+                            "field_name": col,
+                            "value": val,
+                            "mutable": mutable,
+                            "unique": False,
+                            "field_category": field_category,
+                            "context_id": context_id,
+                        },
+                    )
 
             # Values from result_rows are already JSONB from Log/DerivedLog tables
             # No need to encode - they're already properly formatted
@@ -2746,7 +2774,6 @@ def _create_logs_from_joined_rows(
                 )
 
         new_log_ids.append(log_event.id)
-
     # Flush to get Log and DerivedLog IDs
     session.flush()
 
@@ -2780,13 +2807,8 @@ def _create_logs_from_joined_rows(
         for i, (log_event, row) in enumerate(zip(log_events, result_rows)):
             log_event_id_a = getattr(row, "log_event_id_a", None)
             log_event_id_b = getattr(row, "log_event_id_b", None)
-
-            # Rebuild metadata dict for this row
-            metadata_dict = {}
-            for col in row._fields:
-                table, meta_type = extract_metadata(col)
-                if table:
-                    metadata_dict[col] = getattr(row, col)
+            # Use pre-parsed metadata
+            _, metadata_dict = parsed_rows[i]
 
             # Check each field in this row
             for col in row._fields:
@@ -2827,17 +2849,12 @@ def _create_logs_from_joined_rows(
                                     },
                                 )
                                 break  # Found embedding for this key
-
     # Create associations
     log_idx = 0
     derived_log_idx = 0
     for i, (log_event, row) in enumerate(zip(log_events, result_rows)):
-        # Rebuild metadata dict for this row
-        metadata_dict = {}
-        for col in row._fields:
-            table, meta_type = extract_metadata(col)
-            if table:
-                metadata_dict[col] = getattr(row, col)
+        # Use pre-parsed metadata
+        _, metadata_dict = parsed_rows[i]
 
         # Create associations for each field
         for col in row._fields:
@@ -2867,7 +2884,6 @@ def _create_logs_from_joined_rows(
                     ),
                 )
                 log_idx += 1
-
     # Bulk create new field types if any
     try:
         if new_field_types:
@@ -2921,7 +2937,6 @@ def _create_logs_from_joined_rows(
             )
 
         session.bulk_save_objects(log_event_json_logs)
-
     return new_log_ids
 
 
@@ -3118,7 +3133,6 @@ def _create_logs_by_reference(
     session.bulk_save_objects(log_event_contexts)
     session.bulk_save_objects(log_event_logs)
     session.bulk_save_objects(log_event_derived_logs)
-
     return new_log_ids
 
 
@@ -3233,7 +3247,6 @@ def _join_logs(
             session=session,
             alias="A",
         )
-
         subq_b, fields_b = _build_log_subquery(
             args=pair_of_args[1],
             project_name=project_name,
@@ -3245,7 +3258,6 @@ def _join_logs(
             session=session,
             alias="B",
         )
-
         # Construct the join query
         joined_query = _construct_join_query(
             subq_a=subq_a,
@@ -3258,7 +3270,6 @@ def _join_logs(
             include_log_ids=True,  # Always include log IDs for embedding lookups
             session=session,
         )
-
         # Execute the join query
         result_rows = session.execute(joined_query).fetchall()
 
@@ -3297,7 +3308,6 @@ def _join_logs(
 
         # Commit the transaction
         session.commit()
-
         return new_log_ids
 
     except Exception as e:

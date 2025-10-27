@@ -1229,3 +1229,443 @@ async def test_join_with_derived_cosine_similarity_copy_false(client: AsyncClien
             assert (
                 -1 <= cos_value <= 1 or cos_value == 2
             ), f"_sum_cos value {cos_value} is out of expected range for log {i}"
+
+
+@pytest.mark.anyio
+async def test_join_transcripts_contacts_with_embeddings(client: AsyncClient):
+    """Create Contacts and Transcripts contexts from Pydantic models, embed columns, then join."""
+
+    import json
+    import random
+    from datetime import datetime, timedelta, timezone
+    from typing import List as TypingList
+    from typing import Optional
+
+    from pydantic import BaseModel, Field, RootModel
+
+    UNASSIGNED = -1
+
+    class RawImageRef(BaseModel):
+        url: str = Field(description="Image URL")
+        width: Optional[int] = None
+        height: Optional[int] = None
+
+    class AnnotatedImageRef(BaseModel):
+        raw_image_ref: RawImageRef = Field(
+            description="Reference to the underlying raw image",
+        )
+        annotation: str = Field(description="Context-specific annotation")
+
+    class AnnotatedImageRefs(RootModel[TypingList[AnnotatedImageRef]]):
+        pass
+
+    class Contact(BaseModel):
+        contact_id: int = Field(default=UNASSIGNED, ge=UNASSIGNED)
+        first_name: Optional[str] = None
+        surname: Optional[str] = None
+        email_address: Optional[str] = Field(
+            default=None,
+            pattern=r"^[^@]+@[^@]+$",
+        )
+        phone_number: Optional[str] = Field(default=None, pattern=r"^\+?[0-9]+$")
+        whatsapp_number: Optional[str] = Field(default=None, pattern=r"^\+?[0-9]+$")
+        bio: Optional[str] = None
+        rolling_summary: Optional[str] = None
+        respond_to: bool = False
+        response_policy: Optional[str] = None
+
+    class Message(BaseModel):
+        message_id: int = Field(ge=-1)
+        medium: str
+        sender_id: int
+        receiver_ids: TypingList[int]
+        timestamp: datetime
+        content: str
+        exchange_id: int = Field(ge=-1)
+        images: AnnotatedImageRefs = Field(
+            default_factory=lambda: AnnotatedImageRefs.model_validate([]),
+        )
+
+    def model_to_fields(model: type[BaseModel]) -> dict[str, dict]:
+        fields: dict[str, dict] = {}
+        for name, f in model.model_fields.items():
+            ann = f.annotation
+            try:
+                if isinstance(ann, type) and issubclass(ann, BaseModel):
+                    fields[name] = {
+                        "type": json.dumps(ann.model_json_schema()),
+                        "mutable": True,
+                    }
+                    if getattr(f, "description", None):
+                        fields[name]["description"] = f.description
+                    continue
+            except Exception:
+                pass
+            origin = getattr(ann, "__origin__", None)
+            if origin in (list, TypingList):
+                dtype = "list"
+            elif ann in (int,):
+                dtype = "int"
+            elif ann in (float,):
+                dtype = "float"
+            elif ann in (bool,):
+                dtype = "bool"
+            elif ann in (datetime,):
+                dtype = "datetime"
+            else:
+                dtype = "str"
+            entry = {"type": dtype, "mutable": True}
+            if getattr(f, "description", None):
+                entry["description"] = f.description
+            fields[name] = entry
+        return fields
+
+    project_name = "proj_join_transcripts_contacts_embeddings"
+    await _create_project(client, project_name, user=1)
+
+    contacts_context = "Contacts"
+    transcripts_context = "Transcripts"
+
+    contacts_fields = model_to_fields(Contact)
+    transcripts_fields = model_to_fields(Message)
+    resp_ft = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project": project_name,
+            "fields": {**contacts_fields, **transcripts_fields},
+        },
+        headers=HEADERS,
+    )
+    assert resp_ft.status_code == 200, resp_ft.text
+
+    CONTACTS: TypingList[dict] = [
+        {
+            "first_name": "Carlos",
+            "surname": "Diaz",
+            "email_address": "carlos.diaz@example.com",
+            "phone_number": "+14155550000",
+            "whatsapp_number": "+14155550000",
+        },
+        {
+            "first_name": "Dan",
+            "surname": "Turner",
+            "email_address": "dan.turner@example.com",
+            "phone_number": "+447700900001",
+            "whatsapp_number": "+447700900001",
+        },
+        {
+            "first_name": "Julia",
+            "surname": "Nguyen",
+            "email_address": "julia.nguyen@example.com",
+            "phone_number": "+447700900002",
+            "whatsapp_number": "+447700900002",
+        },
+        {
+            "first_name": "Jimmy",
+            "surname": "O'Brian",
+            "email_address": "jimmy.obrien@example.com",
+            "phone_number": "+61240011000",
+            "whatsapp_number": "+61240011000",
+        },
+        {
+            "first_name": "Anne",
+            "surname": "Fischer",
+            "email_address": "anne.fischer@example.com",
+            "phone_number": "+49891234567",
+            "whatsapp_number": "+49891234567",
+        },
+        {
+            "first_name": "John",
+            "surname": "Doe",
+            "email_address": "john.doe@example.com",
+            "phone_number": "+1234567890",
+            "whatsapp_number": "+1234567890",
+        },
+        {
+            "first_name": "Jane",
+            "surname": "Doe",
+            "email_address": "jane.doe@example.com",
+            "phone_number": "+1234567890",
+            "whatsapp_number": "+1234567890",
+        },
+        {
+            "first_name": "Jim",
+            "surname": "Beam",
+            "email_address": "jim.beam@example.com",
+            "phone_number": "+1234567890",
+            "whatsapp_number": "+1234567890",
+        },
+        {
+            "first_name": "Jill",
+            "surname": "Doe",
+            "email_address": "jill.doe@example.com",
+            "phone_number": "+1234567890",
+            "whatsapp_number": "+1234567890",
+        },
+        {
+            "first_name": "Jack",
+            "surname": "Doe",
+            "email_address": "jack.doe@example.com",
+            "phone_number": "+1234567890",
+            "whatsapp_number": "+1234567890",
+        },
+    ]
+
+    id_by_name: dict[str, int] = {}
+    for idx, c in enumerate(CONTACTS):
+        contact_entry = {"contact_id": idx, **c}
+        resp = await _create_log(
+            client,
+            project_name,
+            context=contacts_context,
+            entries=contact_entry,
+        )
+        assert resp.status_code == 200, resp.text
+        id_by_name[c["first_name"].lower()] = idx
+
+    def z(dt: datetime) -> str:
+        return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
+    now = datetime(2025, 4, 20, 15, 0, tzinfo=timezone.utc)
+    later = datetime(2025, 4, 26, 9, 30, tzinfo=timezone.utc)
+    carlos_id = id_by_name["carlos"]
+    dan_id = id_by_name["dan"]
+    julia_id = id_by_name["julia"]
+    jimmy_id = id_by_name["jimmy"]
+    anne_id = id_by_name["anne"]
+
+    messages: TypingList[dict] = []
+
+    messages.append(
+        dict(
+            message_id=0,
+            medium="phone_call",
+            sender_id=dan_id,
+            receiver_ids=[julia_id],
+            timestamp=z(now),
+            content="Hi Julia, it's Dan. Quick check-in about Q2 metrics.",
+            exchange_id=0,
+            images=[],
+        ),
+    )
+    messages.append(
+        dict(
+            message_id=1,
+            medium="phone_call",
+            sender_id=julia_id,
+            receiver_ids=[dan_id],
+            timestamp=z(now + timedelta(seconds=30)),
+            content="Sure Dan, ready when you are.",
+            exchange_id=0,
+            images=[],
+        ),
+    )
+
+    messages.append(
+        dict(
+            message_id=2,
+            medium="phone_call",
+            sender_id=dan_id,
+            receiver_ids=[julia_id],
+            timestamp=z(later),
+            content="Morning Julia – finalising the London event agenda today.",
+            exchange_id=1,
+            images=[],
+        ),
+    )
+    messages.append(
+        dict(
+            message_id=3,
+            medium="phone_call",
+            sender_id=julia_id,
+            receiver_ids=[dan_id],
+            timestamp=z(later + timedelta(seconds=45)),
+            content="Great. Let's confirm the speaker list and coffee budget.",
+            exchange_id=1,
+            images=[],
+        ),
+    )
+
+    t_email = datetime(2025, 4, 21, 12, 0, tzinfo=timezone.utc)
+    messages.append(
+        dict(
+            message_id=4,
+            medium="email",
+            sender_id=carlos_id,
+            receiver_ids=[dan_id],
+            timestamp=z(t_email),
+            content=(
+                "Subject: Stapler bulk order\n\nHi Dan, I'm interested in buying 200 units."
+            ),
+            exchange_id=2,
+            images=[],
+        ),
+    )
+    messages.append(
+        dict(
+            message_id=5,
+            medium="email",
+            sender_id=dan_id,
+            receiver_ids=[carlos_id],
+            timestamp=z(t_email + timedelta(hours=2)),
+            content="Hi Carlos — sure, $4.50 per unit. See attached PDF.",
+            exchange_id=2,
+            images=[],
+        ),
+    )
+
+    t_holiday = datetime(2025, 4, 22, 18, 10, tzinfo=timezone.utc)
+    messages.append(
+        dict(
+            message_id=6,
+            medium="whatsapp_message",
+            sender_id=jimmy_id,
+            receiver_ids=[dan_id],
+            timestamp=z(t_holiday),
+            content=("Heads-up Dan, I'll be on holiday from 2025-05-15 to 2025-05-30."),
+            exchange_id=3,
+            images=[],
+        ),
+    )
+
+    t_excuse = datetime(2025, 4, 23, 9, 0, tzinfo=timezone.utc)
+    messages.append(
+        dict(
+            message_id=7,
+            medium="whatsapp_message",
+            sender_id=anne_id,
+            receiver_ids=[dan_id],
+            timestamp=z(t_excuse),
+            content=(
+                "Sorry Dan, I can't join the Berlin trip because my passport expired."
+            ),
+            exchange_id=4,
+            images=[],
+        ),
+    )
+
+    random.seed(12345)
+    # Create 300+ filler messages to ensure we have more than 300 logs total
+    filler_messages = 300
+    for i in range(filler_messages):
+        a, b = random.sample(list(id_by_name.values()), 2)
+        messages.append(
+            dict(
+                message_id=100 + i,
+                medium=random.choice(["email", "phone_call", "whatsapp_message"]),
+                sender_id=a if i % 2 == 0 else b,
+                receiver_ids=[b if i % 2 == 0 else a],
+                timestamp=z(
+                    datetime(2024, 5, 1, 12, 0, tzinfo=timezone.utc)
+                    + timedelta(minutes=i),
+                ),
+                content=random.choice(
+                    [
+                        "Quick ping",
+                        "Following up on that thing",
+                        "FYI",
+                        "This is filler",
+                    ],
+                ),
+                exchange_id=10 + (i // 3),
+                images=[],
+            ),
+        )
+
+    for msg in messages:
+        resp = await _create_log(
+            client,
+            project_name,
+            context=transcripts_context,
+            entries=msg,
+        )
+        assert resp.status_code == 200, resp.text
+
+    resp_d1 = await client.post(
+        "/v0/logs/derived",
+        json={
+            "project": project_name,
+            "context": transcripts_context,
+            "key": "_medium_emb",
+            "equation": "embed({lg:medium}, model='text-embedding-3-small')",
+            "referenced_logs": {"lg": {"context": transcripts_context}},
+        },
+        headers=HEADERS,
+    )
+    assert resp_d1.status_code == 200, resp_d1.text
+
+    resp_d2 = await client.post(
+        "/v0/logs/derived",
+        json={
+            "project": project_name,
+            "context": contacts_context,
+            "key": "_first_name_emb",
+            "equation": "embed({lg:first_name}, model='text-embedding-3-small')",
+            "referenced_logs": {"lg": {"context": contacts_context}},
+        },
+        headers=HEADERS,
+    )
+    assert resp_d2.status_code == 200, resp_d2.text
+
+    join_payload = {
+        "project": project_name,
+        "pair_of_args": [
+            {"context": transcripts_context},
+            {"context": contacts_context},
+        ],
+        "join_expr": "A.sender_id == B.contact_id",
+        "mode": "inner",
+        "new_context": "Joined__Transcripts__Contacts",
+        "columns": {
+            "A.message_id": "message_id",
+            "A.medium": "medium",
+            "A.sender_id": "sender_id",
+            "A.receiver_ids": "receiver_ids",
+            "A.timestamp": "timestamp",
+            "A.content": "content",
+            "A.exchange_id": "exchange_id",
+            "A.images": "images",
+            "A._medium_emb": "_medium_emb",
+            "B._first_name_emb": "_first_name_emb",
+        },
+        "copy": True,
+    }
+
+    join_resp = await client.post("/v0/logs/join", json=join_payload, headers=HEADERS)
+    assert join_resp.status_code == 200, join_resp.text
+
+    get_resp = await client.get(
+        f"/v0/logs?project={project_name}&context=Joined__Transcripts__Contacts",
+        headers=HEADERS,
+    )
+    assert get_resp.status_code == 200, get_resp.text
+    joined_logs = get_resp.json().get("logs", [])
+    assert len(joined_logs) == len(messages)
+    assert (
+        len(messages) > 300
+    ), f"Expected more than 300 messages, but got {len(messages)}"
+
+    for i, log in enumerate(joined_logs):
+        entries = log.get("entries", {})
+        derived_entries = log.get("derived_entries", {})
+        for key in [
+            "message_id",
+            "medium",
+            "sender_id",
+            "receiver_ids",
+            "timestamp",
+            "content",
+            "exchange_id",
+        ]:
+            assert key in entries and entries[key] is not None
+
+        def _get_vec(dct: dict, k: str):
+            v = dct.get(k)
+            if v is None:
+                return entries.get(k)
+            return v
+
+        med_vec = _get_vec(derived_entries, "_medium_emb")
+        name_vec = _get_vec(derived_entries, "_first_name_emb")
+        assert isinstance(med_vec, list) and len(med_vec) == 1536
+        assert isinstance(name_vec, list) and len(name_vec) == 1536
