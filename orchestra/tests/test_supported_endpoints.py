@@ -47,8 +47,8 @@ async def test_endpoints_of_all(  # noqa: WPS218, E501
     url = "/v0/endpoints"
     response = await client.get(url, headers=HEADERS)
     assert response.status_code == status.HTTP_200_OK
-    for endpoint in ["llama-3.1-8b-chat@together-ai", "llama-3-8b-chat@deepinfra"]:
-        assert endpoint in json.loads(response.text)
+    for endpoint in ["llama", "claude", "deepseek", "mistral", "gemini", "grok"]:
+        assert endpoint in response.text
 
 
 @pytest.mark.anyio

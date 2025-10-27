@@ -53,7 +53,7 @@ async def test_text_generation(  # noqa: WPS218, E501
 
     pre_credits = await get_credits(client)
     response = await client.post("/v0/chat/completions", headers=HEADERS, json=data)
-    assert response.status_code == status.HTTP_200_OK
+    assert response.status_code == status.HTTP_200_OK, response.text
 
     if stream:
         for line in response.iter_lines():
