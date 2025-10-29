@@ -534,7 +534,9 @@ def admin_list_assistants(
                     desktop_url=a.desktop_url,
                     user_local_desktop=a.user_local_desktop,
                     about=a.about,
-                    weekly_limit=float(a.weekly_limit),
+                    weekly_limit=float(a.weekly_limit)
+                    if a.weekly_limit is not None
+                    else None,
                     max_parallel=a.max_parallel,
                     created_at=a.created_at,
                     updated_at=a.updated_at,
