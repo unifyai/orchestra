@@ -3440,6 +3440,7 @@ def get_logs_metric(
                     keys=all_keys,
                     metric=common_metric,
                     project_id=project_obj.id,
+                    context_id=context_id,
                     field_types=field_types,
                     filter_expr=request.filter_expr,
                     from_ids=request.from_ids,

@@ -26,6 +26,7 @@ from orchestra.db.models.orchestra_models import (
     DerivedLog,
     Log,
     LogEvent,
+    LogEventContext,
     LogEventDerivedLog,
     LogEventLog,
 )
@@ -500,8 +501,12 @@ def _compute_metric_for_key_grouped(
         actual_field = parts[-1]  # Last part is the actual field name
         group_by_info.append((actual_field, is_param))
 
-    # 1) Build initial query to find matching LogEvent IDs
+    # 1) Build initial query to find matching LogEvent IDs (scoped to context when provided)
     query = session.query(LogEvent.id).filter(LogEvent.project_id == project_obj.id)
+    if context_id is not None:
+        query = query.join(LogEventContext).filter(
+            LogEventContext.context_id == context_id,
+        )
 
     assert not (key_from_ids and key_exclude_ids), (
         f"Only one of from_ids or exclude_ids can be set for key '{key}', "
@@ -941,8 +946,12 @@ def compute_metric_for_key(
     Returns:
         The computed metric value
     """
-    # 1) Build initial query to find matching LogEvent IDs
+    # 1) Build initial query to find matching LogEvent IDs (scoped to context when provided)
     query = session.query(LogEvent.id).filter(LogEvent.project_id == project_obj.id)
+    if context_id is not None:
+        query = query.join(LogEventContext).filter(
+            LogEventContext.context_id == context_id,
+        )
 
     assert not (key_from_ids and key_exclude_ids), (
         f"Only one of from_ids or exclude_ids can be set for key '{key}', "
@@ -1219,6 +1228,7 @@ def compute_metric_bulk(
     keys: Sequence[str],
     metric: str,
     project_id: int,
+    context_id: Optional[int],
     field_types: Dict[str, str],
     filter_expr: Optional[str] = None,
     from_ids: Optional[str] = None,
@@ -1243,8 +1253,12 @@ def compute_metric_bulk(
     if not keys:
         return {}
 
-    # 1) Build initial query to find matching LogEvent IDs
+    # 1) Build initial query to find matching LogEvent IDs (scoped to context when provided)
     query = session.query(LogEvent.id).filter(LogEvent.project_id == project_id)
+    if context_id is not None:
+        query = query.join(LogEventContext).filter(
+            LogEventContext.context_id == context_id,
+        )
 
     assert not (from_ids and exclude_ids), (
         f"Only one of from_ids or exclude_ids can be set, "
