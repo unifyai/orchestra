@@ -1,5 +1,6 @@
 import json
 import statistics
+import uuid
 from datetime import datetime, timedelta
 from typing import List, Optional
 
@@ -1718,3 +1719,348 @@ async def test_get_logs_metric_key_specific_filters_with_mixed_null_float_derive
             assert (
                 False
             ), f"Key-specific filter metrics endpoint threw an exception for {metric}: {type(e).__name__}: {str(e)}"
+
+
+@pytest.mark.anyio
+async def test_metrics_count_matches_rows_and_resets_on_context_delete(
+    client: AsyncClient,
+):
+    """
+    Fundamental reproduction for metric count inconsistency on auto-increment fields using Orchestra endpoints.
+
+    Steps:
+      1) Create a fresh context with an auto-incrementing "row_id" field.
+      2) Verify the metric count starts at 0 (fresh context).
+      3) Insert three rows without specifying "row_id" (auto-counting assigns ids).
+      4) Verify get_logs(...) returns 3 rows and metric count == 3.
+      5) Delete the context and recreate it.
+      6) Verify metric count resets to 0 for the recreated context.
+    """
+    project_name = f"metrics-count-{uuid.uuid4().hex[:8]}"
+    ctx = f"tests/local_storage/metrics/{uuid.uuid4().hex}"
+
+    def _as_int0(v):
+        return 0 if v is None else int(v)
+
+    async def _create_ctx():
+        # Ensure a context with auto-counting on 'row_id'
+        resp = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={
+                "name": ctx,
+                "unique_keys": {"row_id": "int"},
+                "auto_counting": {"row_id": None},
+                "description": "Metrics test context",
+            },
+            headers=HEADERS,
+        )
+        assert resp.status_code == 200, resp.text
+        # Create fields explicitly for clarity
+        resp = await client.post(
+            "/v0/logs/fields",
+            json={
+                "project": project_name,
+                "context": ctx,
+                "fields": {
+                    "row_id": {"type": "int"},
+                    "name": {"type": "str"},
+                },
+            },
+            headers=HEADERS,
+        )
+        assert resp.status_code == 200, resp.text
+
+    async def _seed_filler_contexts(num: int = 10):
+        for i in range(num):
+            filler = f"{ctx}-filler-{i}-{uuid.uuid4().hex[:6]}"
+            resp = await client.post(
+                f"/v0/project/{project_name}/contexts",
+                json={
+                    "name": filler,
+                    "description": "filler",
+                    "unique_keys": {"row_id": "int"},
+                    "auto_counting": {"row_id": None},
+                },
+                headers=HEADERS,
+            )
+            assert resp.status_code == 200, resp.text
+            for j in range(i + 1):
+                r = await _create_log(
+                    client,
+                    project_name,
+                    entries={"name": f"F{i}-{j}"},
+                    context=filler,
+                )
+                assert r.status_code == 200, r.text
+
+    # Create project
+    _ = await _create_project(client, project_name)
+
+    try:
+        # Create fresh context
+        await _create_ctx()
+
+        # Seed filler contexts under same project
+        await _seed_filler_contexts()
+
+        # 2) Initial metric should be zero in a fresh context
+        resp = await client.get(
+            "/v0/logs/metric/count",
+            params={
+                "project": project_name,
+                "key": "row_id",
+                "context": ctx,
+            },
+            headers=HEADERS,
+        )
+        assert resp.status_code == 200, resp.text
+        initial_metric = resp.json()
+        assert _as_int0(initial_metric) == 0
+
+        # 3) Insert three rows; 'row_id' is auto-incremented by the backend
+        for name in ["A", "B", "C"]:
+            r = await _create_log(
+                client,
+                project_name,
+                entries={"name": name},
+                context=ctx,
+            )
+            assert r.status_code == 200, r.text
+
+        # 4) Verify get_logs(...) returns 3 rows and metric count == 3
+        rows_resp = await client.get(
+            "/v0/logs",
+            params={"project": project_name, "context": ctx},
+            headers=HEADERS,
+        )
+        assert rows_resp.status_code == 200, rows_resp.text
+        row_count = len(rows_resp.json()["logs"])
+
+        metric_resp = await client.get(
+            "/v0/logs/metric/count",
+            params={
+                "project": project_name,
+                "key": "row_id",
+                "context": ctx,
+            },
+            headers=HEADERS,
+        )
+        assert metric_resp.status_code == 200, metric_resp.text
+        metric_after = metric_resp.json()
+
+        assert row_count == 3, f"Expected 3 rows, got {row_count} (context={ctx})"
+        assert (
+            _as_int0(metric_after) == row_count
+        ), f"Metric/row mismatch in context={ctx}: metric={_as_int0(metric_after)}, rows={row_count}"
+
+        # 5) Delete the context and recreate; metric must reset to 0
+        del_resp = await client.delete(
+            f"/v0/project/{project_name}/contexts/{ctx}",
+            headers=HEADERS,
+        )
+        assert del_resp.status_code == 200, del_resp.text
+
+        await _create_ctx()
+
+        metric_reset_resp = await client.get(
+            "/v0/logs/metric/count",
+            params={
+                "project": project_name,
+                "key": "row_id",
+                "context": ctx,
+            },
+            headers=HEADERS,
+        )
+        assert metric_reset_resp.status_code == 200, metric_reset_resp.text
+        metric_reset = metric_reset_resp.json()
+        assert _as_int0(metric_reset) == 0
+
+    finally:
+        # Best-effort cleanup
+        try:
+            await client.delete(
+                f"/v0/project/{project_name}/contexts/{ctx}",
+                headers=HEADERS,
+            )
+        except Exception:
+            pass
+
+
+@pytest.mark.anyio
+async def test_metrics_max_matches_row_ids_and_resets_on_context_delete(
+    client: AsyncClient,
+):
+    """
+    Fundamental check for the "max" metric on an auto-increment field using Orchestra endpoints.
+
+    Steps:
+      1) Create a fresh context with auto-incrementing "row_id".
+      2) Verify initial max metric is 0 (empty context).
+      3) Insert three rows; read back the rows and compute max(row_id) from entries.
+      4) Verify get_logs_metric("max", key="row_id") equals that computed max.
+      5) Delete the context and recreate; verify max resets to 0.
+    """
+    project_name = f"metrics-max-{uuid.uuid4().hex[:8]}"
+    ctx = f"tests/local_storage/metrics_max/{uuid.uuid4().hex}"
+
+    def _as_int0(v):
+        return 0 if v is None else int(v)
+
+    async def _create_ctx():
+        resp = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={
+                "name": ctx,
+                "unique_keys": {"row_id": "int"},
+                "auto_counting": {"row_id": None},
+                "description": "Metrics test context (max)",
+            },
+            headers=HEADERS,
+        )
+        assert resp.status_code == 200, resp.text
+        resp = await client.post(
+            "/v0/logs/fields",
+            json={
+                "project": project_name,
+                "context": ctx,
+                "fields": {
+                    "row_id": {"type": "int"},
+                    "name": {"type": "str"},
+                },
+            },
+            headers=HEADERS,
+        )
+        assert resp.status_code == 200, resp.text
+
+    async def _seed_filler_contexts(num: int = 10):
+        for i in range(num):
+            filler = f"{ctx}-filler-{i}-{uuid.uuid4().hex[:6]}"
+            resp = await client.post(
+                f"/v0/project/{project_name}/contexts",
+                json={
+                    "name": filler,
+                    "description": "filler",
+                    "unique_keys": {"row_id": "int"},
+                    "auto_counting": {"row_id": None},
+                },
+                headers=HEADERS,
+            )
+            assert resp.status_code == 200, resp.text
+            for j in range(i + 1):
+                r = await _create_log(
+                    client,
+                    project_name,
+                    entries={"name": f"F{i}-{j}"},
+                    context=filler,
+                )
+                assert r.status_code == 200, r.text
+
+    _ = await _create_project(client, project_name)
+
+    try:
+        await _create_ctx()
+
+        # Seed filler contexts under same project
+        await _seed_filler_contexts()
+
+        # 2) Initial max metric should be zero in a fresh context
+        resp = await client.get(
+            "/v0/logs/metric/max",
+            params={
+                "project": project_name,
+                "key": "row_id",
+                "context": ctx,
+            },
+            headers=HEADERS,
+        )
+        assert resp.status_code == 200, resp.text
+        initial_max = resp.json()
+        assert _as_int0(initial_max) == 0
+
+        # 3) Insert three rows; backend assigns row_id automatically
+        created_row_ids: List[int] = []
+        for name in ["A", "B", "C"]:
+            r = await _create_log(
+                client,
+                project_name,
+                entries={"name": name},
+                context=ctx,
+            )
+            assert r.status_code == 200, r.text
+            j = r.json()
+            try:
+                ids = j.get("row_ids", {}).get("ids", [])
+                if ids and isinstance(ids, list) and ids[0]:
+                    # Take the first id in case multiple unique cols
+                    created_row_ids.append(int(ids[0][0]))
+            except Exception:
+                pass
+
+        # Read back the rows and compute max(row_id)
+        rows_resp = await client.get(
+            "/v0/logs",
+            params={"project": project_name, "context": ctx},
+            headers=HEADERS,
+        )
+        assert rows_resp.status_code == 200, rows_resp.text
+        logs = rows_resp.json()["logs"]
+
+        row_ids: List[int] = []
+        for lg in logs:
+            entries = lg.get("entries", {}) if isinstance(lg, dict) else {}
+            rid = entries.get("row_id")
+            if isinstance(rid, int):
+                row_ids.append(rid)
+
+        # Fallback to creation responses if row_id isn't materialized in entries
+        if len(row_ids) < 3 and created_row_ids:
+            row_ids = created_row_ids
+
+        assert (
+            len(row_ids) == 3
+        ), f"Expected 3 row_id values after inserts, got {len(row_ids)} (context={ctx})"
+        computed_max = max(row_ids) if row_ids else 0
+
+        metric_resp = await client.get(
+            "/v0/logs/metric/max",
+            params={
+                "project": project_name,
+                "key": "row_id",
+                "context": ctx,
+            },
+            headers=HEADERS,
+        )
+        assert metric_resp.status_code == 200, metric_resp.text
+        metric_max_after = metric_resp.json()
+        assert _as_int0(metric_max_after) == computed_max, (
+            f"Metric max mismatch in context={ctx}: metric={_as_int0(metric_max_after)}, "
+            f"rows_max={computed_max}, rows={sorted(row_ids)}"
+        )
+
+        # 5) Delete the context and recreate; metric must reset to 0
+        del_resp = await client.delete(
+            f"/v0/project/{project_name}/contexts/{ctx}",
+            headers=HEADERS,
+        )
+        assert del_resp.status_code == 200, del_resp.text
+
+        await _create_ctx()
+
+        metric_reset_resp = await client.get(
+            "/v0/logs/metric/max",
+            params={
+                "project": project_name,
+                "key": "row_id",
+                "context": ctx,
+            },
+            headers=HEADERS,
+        )
+        assert metric_reset_resp.status_code == 200, metric_reset_resp.text
+        metric_max_reset = metric_reset_resp.json()
+        assert _as_int0(metric_max_reset) == 0
+
+    finally:
+        await client.delete(
+            f"/v0/project/{project_name}/contexts/{ctx}",
+            headers=HEADERS,
+        )
