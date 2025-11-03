@@ -713,7 +713,7 @@ def delete_project_logs(
     Deletes all logs in a project.
     """
     # Check if trying to delete from protected projects (Unity, AssistantJobs)
-    if project.name in ["Unity", "AssistantJobs"]:
+    if project.name in ["Unity"]:
         raise HTTPException(
             status_code=403,
             detail=(
@@ -768,7 +768,7 @@ def delete_project_contexts(
     The project's interfaces remain untouched.
     """
     # Check if trying to delete from protected projects (Unity, AssistantJobs)
-    if project.name in ["Unity", "AssistantJobs"]:
+    if project.name in ["Unity"]:
         raise HTTPException(
             status_code=403,
             detail=(
