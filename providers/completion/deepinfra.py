@@ -36,7 +36,7 @@ supported_models = {
     "gpt-oss-120b": {
         "endpoint": "deepinfra/openai/gpt-oss-120b",
         "context_window": 128000,
-        "cost": {"prompt": 0.05, "completion": 0.27},
+        "cost": {"prompt": 0.05, "completion": 0.24},
     },
     "deepseek-v3.2": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3.2-Exp",
