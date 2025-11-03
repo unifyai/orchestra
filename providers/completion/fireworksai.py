@@ -51,7 +51,7 @@ supported_models = {
     "deepseek-r1": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/deepseek-r1-0528",
         "context_window": 160000,
-        "cost": {"prompt": 3, "completion": 8},
+        "cost": {"prompt": 1.35, "completion": 5.4},
     },
     "deepseek-v3": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/deepseek-v3",
