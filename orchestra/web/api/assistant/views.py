@@ -369,7 +369,10 @@ def create_assistant(
                     print(f"EMAIL CREATED: {created_email}")
 
                     time.sleep(10)
-                    watch_response = watch_email(created_email)
+                    watch_response = watch_email(
+                        created_email,
+                        is_staging=settings.is_staging,
+                    )
                     print(watch_response)
                     if "detail" in watch_response:
                         raise Exception(
@@ -1235,7 +1238,10 @@ def update_assistant_config(
                     print(f"EMAIL CREATED ON ASSISTANT UPDATE: {email_to_update}")
 
                     time.sleep(10)
-                    watch_response = watch_email(email_to_update)
+                    watch_response = watch_email(
+                        email_to_update,
+                        is_staging=settings.is_staging,
+                    )
                     print(watch_response)
                     if "detail" in watch_response:
                         raise Exception(
