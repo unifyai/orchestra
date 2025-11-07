@@ -1,44 +1,45 @@
-"""Schema for organization endpoints."""
+"""Organization management schemas."""
+
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class OrganizationCreate(BaseModel):
-    """Request model for creating an organization."""
+    """Schema for creating an organization."""
 
-    name: str = Field(..., description="Organization name", example="Acme Corp")
-    billing_user_id: Optional[str] = Field(
-        None,
-        description="User ID for billing. Defaults to the creator if not specified.",
-        example="user_123",
-    )
+    name: str
+    billing_user_id: Optional[str] = None
 
 
 class OrganizationUpdate(BaseModel):
-    """Request model for updating an organization."""
+    """Schema for updating an organization."""
 
-    name: Optional[str] = Field(
-        None,
-        description="New organization name",
-        example="Acme Inc",
-    )
-    billing_user_id: Optional[str] = Field(
-        None,
-        description="New billing user ID",
-        example="user_456",
-    )
+    name: Optional[str] = None
+    billing_user_id: Optional[str] = None
 
 
 class OrganizationResponse(BaseModel):
-    """Response model for organization."""
+    """Schema for organization response."""
 
-    id: int = Field(..., description="Organization ID")
-    name: str = Field(..., description="Organization name")
-    owner_id: str = Field(..., description="Owner user ID")
-    billing_user_id: str = Field(..., description="Billing user ID")
-    created_at: datetime = Field(..., description="Creation timestamp")
+    id: int
+    name: str
+    owner_id: str
+    billing_user_id: str
+    created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = {"from_attributes": True}
+
+
+class OrganizationMemberAdd(BaseModel):
+    """Schema for adding a member to an organization."""
+
+    user_id: str
+    level: str = "user"  # owner, admin, user
+
+
+class OrganizationMemberRemove(BaseModel):
+    """Schema for removing a member from an organization."""
+
+    user_id: str

@@ -5,6 +5,7 @@ from fastapi.routing import APIRouter
 
 from orchestra.web.api import (  # noqa: WPS235
     admin,
+    api_keys,
     context,
     credits,
     custom_api_keys,
@@ -129,6 +130,7 @@ groupings = {
         "Credits",
         "Query Logging",
         "Organizations",
+        "API Keys",
     ],
 }
 
@@ -202,6 +204,11 @@ api_router.include_router(
 api_router.include_router(
     organization.router,
     tags=["Organizations"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    api_keys.router,
+    tags=["API Keys"],
     dependencies=API_KEY_AUTH,
 )
 
