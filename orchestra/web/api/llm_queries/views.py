@@ -333,6 +333,10 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     request_body = request.model_dump()
     if region:
         request_body["region"] = region
+
+    # Get organization context from request state (None = personal query)
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
+
     db_operations_kwargs = {
         "user_id": user_id,
         "secondary_user_id": request.user,
@@ -343,6 +347,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         "used_router": using_router,
         "router": router_str,
         "tags": tags,
+        "organization_id": organization_id,
     }
 
     if request_failed:

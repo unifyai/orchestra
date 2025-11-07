@@ -17,6 +17,7 @@ from orchestra.web.api import (  # noqa: WPS235
     log,
     logging,
     monitoring,
+    organization,
     project,
     provider,
     supported_endpoints,
@@ -127,6 +128,7 @@ groupings = {
     "Account": [
         "Credits",
         "Query Logging",
+        "Organizations",
     ],
 }
 
@@ -195,6 +197,11 @@ api_router.include_router(
 api_router.include_router(
     credits.router,
     tags=["Credits"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    organization.router,
+    tags=["Organizations"],
     dependencies=API_KEY_AUTH,
 )
 

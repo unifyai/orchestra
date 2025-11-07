@@ -260,6 +260,9 @@ def log_query(
         name=_model_name,
     )
 
+    # Get organization context from request state (None = personal query)
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
+
     # Calculate cost and consume credits if requested
     cost = 0.0
     if consume_credits and not os.environ.get("ON_PREM"):
@@ -286,9 +289,16 @@ def log_query(
                 using_litellm=bool(provider.litellm_provider_prefix),
             )
 
-        # Deduct credits from user
+        # Deduct credits from the appropriate billing user
         if cost > 0:
-            users_dao.recharge_credit(request_fastapi.state.user_id, -cost)
+            from orchestra.lib.billing import get_billing_user_id
+
+            billing_user_id = get_billing_user_id(
+                session=session,
+                user_id=request_fastapi.state.user_id,
+                organization_id=organization_id,
+            )
+            users_dao.recharge_credit(billing_user_id, -cost)
 
     try:
         query_dao.create_query(
@@ -302,6 +312,7 @@ def log_query(
             query_body=json.dumps(query_body),
             response_body=json.dumps(response_body),
             status_code=200,
+            organization_id=organization_id,
             tags=tags,
         )
         return {"info": "Query logged successfully"}

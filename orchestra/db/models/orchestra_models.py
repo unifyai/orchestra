@@ -420,6 +420,12 @@ class Query(Base):
         nullable=False,
         index=True,
     )
+    organization_id = Column(
+        Integer(),
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     at = Column(sa.TIMESTAMP(), nullable=False)
     model_provider_str = Column(String(), nullable=False)
     endpoint_id = Column(Integer(), ForeignKey("endpoint.id"), index=True)
@@ -590,7 +596,11 @@ class Organization(Base):
         String,
         ForeignKey("auth_user.id", ondelete="CASCADE"),
         nullable=False,
-        unique=True,
+    )
+    billing_user_id = Column(
+        String,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
     )
     name = Column(String, unique=True, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())

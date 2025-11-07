@@ -458,6 +458,66 @@ async def reset_api_key(
     return new_api_key
 
 
+@admin_router.post("/auth-user/{user_id}/organization-api-key")
+async def create_organization_api_key(
+    user_id: str,
+    organization_id: int,
+    name: str = "",
+    session: Session = Depends(get_db_session),
+):
+    """
+    Create an organization-specific API key for a user.
+
+    This key will have organization context and billing will be charged to
+    the organization's billing_user_id.
+    """
+    api_key_dao = ApiKeyDAO(session)
+    org_dao = OrganizationDAO(session)
+    org_member_dao = OrganizationMemberDAO(session)
+
+    # Verify organization exists
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Organization with id {organization_id} not found",
+        )
+
+    # Verify user is a member of the organization
+    memberships = org_member_dao.filter(
+        organization_id=organization_id,
+        user_id=user_id,
+    )
+    if not memberships:
+        raise HTTPException(
+            status_code=403,
+            detail=f"User {user_id} is not a member of organization {organization_id}",
+        )
+
+    # Check if org API key already exists
+    existing_key = api_key_dao.filter(
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+    if existing_key:
+        raise HTTPException(
+            status_code=400,
+            detail="User already has an organization API key for this organization",
+        )
+
+    # Create organization API key
+    new_api_key = generate_key()
+    api_key_dao.create(
+        key=new_api_key,
+        name=name or f"org_{org.name}",
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+    session.commit()
+
+    return {"api_key": new_api_key, "organization_id": organization_id}
+
+
 @admin_router.get("/organization/list")
 async def list_organization(
     name: str,

@@ -3,12 +3,14 @@
 import os
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Optional
 
 import stripe
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
     RECHARGE_TYPE_AUTO,
+    Organization,
     Recharge,
     RechargeStatus,
 )
@@ -120,3 +122,44 @@ def queue_auto_recharge(session: Session, user: User, credits: int) -> None:
             # Don't raise - we still want the recharge record in the database
     else:
         print(f"[AUTO-RECHARGE] WARNING: User {user.id} has no Stripe customer ID")
+
+
+def get_billing_user_id(
+    session: Session,
+    user_id: str,
+    organization_id: Optional[int] = None,
+) -> str:
+    """
+    Determine which user account should be billed for a query.
+
+    For personal queries (organization_id is None):
+        - Bill the user directly
+
+    For organizational queries (organization_id is set):
+        - Bill the organization's billing_user_id
+
+    Args:
+        session: Database session
+        user_id: The ID of the user making the request (the actor)
+        organization_id: The organization context (None = personal)
+
+    Returns:
+        The user ID that should be billed
+
+    Raises:
+        ValueError: If organization_id is provided but organization not found
+    """
+    # Personal query - bill the user directly
+    if organization_id is None:
+        return user_id
+
+    # Organizational query - bill the organization's billing user
+    org = session.query(Organization).filter_by(id=organization_id).first()
+
+    if not org:
+        raise ValueError(
+            f"Organization with id {organization_id} not found. "
+            f"Cannot determine billing user.",
+        )
+
+    return org.billing_user_id
