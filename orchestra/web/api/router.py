@@ -23,6 +23,7 @@ from orchestra.web.api import (  # noqa: WPS235
     provider,
     roles,
     supported_endpoints,
+    teams,
     users,
 )
 from orchestra.web.api.assistant import admin_router as assistant_admin_router
@@ -210,6 +211,12 @@ api_router.include_router(
 api_router.include_router(
     roles.router,
     tags=["Roles & Permissions"],
+    dependencies=API_KEY_AUTH,
+)
+
+api_router.include_router(
+    teams.router,
+    tags=["Teams & Resource Access"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(

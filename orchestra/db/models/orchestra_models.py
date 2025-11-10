@@ -709,6 +709,87 @@ class RolePermission(Base):
     )
 
 
+class Team(Base):
+    """Model for teams within organizations."""
+
+    __tablename__ = "team"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    description = Column(String, nullable=True)
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("name", "organization_id", name="uq_team_name_org"),
+    )
+
+
+class TeamMember(Base):
+    """Join table for Team-User many-to-many relationship."""
+
+    __tablename__ = "team_member"
+
+    id = Column(Integer, primary_key=True)
+    team_id = Column(
+        Integer,
+        ForeignKey("team.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id = Column(
+        String,
+        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("team_id", "user_id", name="uq_team_member"),)
+
+
+class ResourceAccess(Base):
+    """Model for resource-level access control (RBAC)."""
+
+    __tablename__ = "resource_access"
+
+    id = Column(Integer, primary_key=True)
+    resource_type = Column(
+        String,
+        nullable=False,
+    )  # e.g., 'project', 'interface', 'tab', 'tile'
+    resource_id = Column(Integer, nullable=False)
+    role_id = Column(
+        Integer,
+        ForeignKey("role.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    grantee_type = Column(
+        String,
+        nullable=False,
+    )  # 'user' or 'team'
+    grantee_id = Column(
+        String,
+        nullable=False,
+    )  # user_id or team_id (as string)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "resource_type",
+            "resource_id",
+            "role_id",
+            "grantee_type",
+            "grantee_id",
+            name="uq_resource_access",
+        ),
+        Index("idx_resource_access_resource", "resource_type", "resource_id"),
+        Index("idx_resource_access_grantee", "grantee_type", "grantee_id"),
+    )
+
+
 class ApiKey(Base):
     __tablename__ = "api_key"
 
