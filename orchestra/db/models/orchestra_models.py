@@ -638,6 +638,11 @@ class OrganizationMember(Base):
         String,
         nullable=False,
     )  # owner, admin, user -> owner is duplicated info? :/
+    role_id = Column(
+        Integer,
+        ForeignKey("role.id", ondelete="SET NULL"),
+        nullable=True,
+    )  # RBAC role for this member (defaults to "Member" system role)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
 

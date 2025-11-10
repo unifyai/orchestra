@@ -37,9 +37,30 @@ class OrganizationMemberAdd(BaseModel):
 
     user_id: str
     level: str = "user"  # owner, admin, user
+    role_id: Optional[int] = None  # RBAC role (defaults to Member if not provided)
 
 
 class OrganizationMemberRemove(BaseModel):
     """Schema for removing a member from an organization."""
 
     user_id: str
+
+
+class OrganizationMemberRoleUpdate(BaseModel):
+    """Schema for updating a member's role."""
+
+    role_id: int
+
+
+class OrganizationMemberResponse(BaseModel):
+    """Schema for organization member response."""
+
+    id: int
+    user_id: str
+    organization_id: int
+    level: str
+    role_id: Optional[int]
+    role_name: Optional[str] = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}

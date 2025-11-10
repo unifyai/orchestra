@@ -7,10 +7,13 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.organization.schema import (
     OrganizationCreate,
     OrganizationMemberAdd,
+    OrganizationMemberResponse,
+    OrganizationMemberRoleUpdate,
     OrganizationResponse,
     OrganizationUpdate,
 )
@@ -38,6 +41,7 @@ async def create_organization(
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
     org_member_dao = OrganizationMemberDAO(session)
+    role_dao = RoleDAO(session)
 
     # Check if organization name already exists
     existing = org_dao.filter(name=organization.name)
@@ -55,11 +59,17 @@ async def create_organization(
             billing_user_id=organization.billing_user_id or user_id,
         )
 
-        # Add creator as owner member
+        # Get Owner system role
+        owner_role = role_dao.get_by_name("Owner", organization_id=None)
+        if not owner_role:
+            raise ValueError("Owner system role not found")
+
+        # Add creator as owner member with Owner role
         org_member_dao.create(
             organization_id=org.id,
             user_id=user_id,
             level="owner",
+            role_id=owner_role.id,
         )
 
         session.commit()
@@ -253,6 +263,7 @@ async def add_organization_member(
     org_dao = OrganizationDAO(session)
     org_member_dao = OrganizationMemberDAO(session)
     api_key_dao = ApiKeyDAO(session)
+    role_dao = RoleDAO(session)
 
     # Get organization
     org = org_dao.get(organization_id)
@@ -282,10 +293,19 @@ async def add_organization_member(
 
     # Add member
     try:
+        # Determine role: use provided role_id or default to Member
+        role_id = member_data.role_id
+        if role_id is None:
+            member_role = role_dao.get_by_name("Member", organization_id=None)
+            if not member_role:
+                raise ValueError("Member system role not found")
+            role_id = member_role.id
+
         org_member_dao.create(
             organization_id=organization_id,
             user_id=member_data.user_id,
             level=member_data.level,
+            role_id=role_id,
         )
 
         # Create organization API key for the new member
@@ -386,4 +406,163 @@ async def remove_organization_member(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to remove member: {str(e)}",
+        )
+
+
+@router.get(
+    "/organizations/{organization_id}/members",
+    response_model=List[OrganizationMemberResponse],
+)
+async def list_organization_members(
+    request_fastapi: Request,
+    organization_id: int,
+    session: Session = Depends(get_db_session),
+) -> List[OrganizationMemberResponse]:
+    """
+    List all members of an organization with their roles.
+
+    Only organization members can view the member list.
+    """
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    org_member_dao = OrganizationMemberDAO(session)
+    role_dao = RoleDAO(session)
+
+    # Get organization
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {organization_id} not found",
+        )
+
+    # Check if user is a member or owner
+    is_owner = org.owner_id == user_id
+    existing_member = org_member_dao.filter(
+        organization_id=organization_id,
+        user_id=user_id,
+    )
+    if not is_owner and not existing_member:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only organization members can view the member list",
+        )
+
+    # Get all members
+    all_members_result = org_member_dao.filter(organization_id=organization_id)
+
+    # Build response with role names
+    members_response = []
+    for member_row in all_members_result:
+        member = member_row[0]
+        role_name = None
+        if member.role_id:
+            role = role_dao.get(member.role_id)
+            role_name = role.name if role else None
+
+        members_response.append(
+            OrganizationMemberResponse(
+                id=member.id,
+                user_id=member.user_id,
+                organization_id=member.organization_id,
+                level=member.level,
+                role_id=member.role_id,
+                role_name=role_name,
+                created_at=member.created_at,
+            ),
+        )
+
+    return members_response
+
+
+@router.patch(
+    "/organizations/{organization_id}/members/{member_user_id}/role",
+    response_model=OrganizationMemberResponse,
+)
+async def update_member_role(
+    request_fastapi: Request,
+    organization_id: int,
+    member_user_id: str,
+    role_update: OrganizationMemberRoleUpdate,
+    session: Session = Depends(get_db_session),
+) -> OrganizationMemberResponse:
+    """
+    Update an organization member's RBAC role.
+
+    Only the organization owner can update member roles.
+    """
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    org_member_dao = OrganizationMemberDAO(session)
+    role_dao = RoleDAO(session)
+
+    # Get organization
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {organization_id} not found",
+        )
+
+    # Check if user is the owner
+    if org.owner_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the organization owner can update member roles",
+        )
+
+    # Cannot change the owner's role
+    if member_user_id == org.owner_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot change the organization owner's role",
+        )
+
+    # Verify the role exists and is a system role
+    role = role_dao.get(role_update.role_id)
+    if not role:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Role with id {role_update.role_id} not found",
+        )
+
+    if not role.is_system_role:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Only system roles can be assigned to members",
+        )
+
+    # Get the member
+    member = org_member_dao.get_member(member_user_id, organization_id)
+    if not member:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User is not a member of this organization",
+        )
+
+    # Update role
+    try:
+        org_member_dao.update_member_role(
+            user_id=member_user_id,
+            organization_id=organization_id,
+            role_id=role_update.role_id,
+        )
+        session.commit()
+
+        # Return updated member
+        updated_member = org_member_dao.get_member(member_user_id, organization_id)
+        return OrganizationMemberResponse(
+            id=updated_member.id,
+            user_id=updated_member.user_id,
+            organization_id=updated_member.organization_id,
+            level=updated_member.level,
+            role_id=updated_member.role_id,
+            role_name=role.name,
+            created_at=updated_member.created_at,
+        )
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update member role: {str(e)}",
         )

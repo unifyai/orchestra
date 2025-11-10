@@ -399,7 +399,6 @@ async def test_personal_project_other_users_no_access(client: AsyncClient, dbses
     assert has_read is False
 
 
-@pytest.mark.skip(reason="Resource sharing endpoints not implemented yet (Phase 4/5)")
 @pytest.mark.anyio
 async def test_cannot_share_personal_project(client: AsyncClient, dbsession):
     """Test that personal projects cannot be shared via RBAC."""

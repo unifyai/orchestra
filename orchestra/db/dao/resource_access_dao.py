@@ -363,13 +363,22 @@ class ResourceAccessDAO:
             if owner_role and role_dao.has_permission(owner_role.id, permission_name):
                 return True
 
-        # Check if user is organization member (implicit Member role)
+        # Check if user is organization member (use their assigned role)
         org_member_dao = OrganizationMemberDAO(self.session)
-        member = org_member_dao.filter(user_id=user_id, organization_id=org_id)
+        member_obj = org_member_dao.get_member(user_id, org_id)
 
-        if member:
-            member_role = role_dao.get_by_name("Member", organization_id=None)
-            if member_role and role_dao.has_permission(member_role.id, permission_name):
+        if member_obj:
+            # Use the member's assigned role_id, or default to Member if not set
+            member_role_id = member_obj.role_id
+            if member_role_id is None:
+                # Fallback to Member role if no role assigned
+                member_role = role_dao.get_by_name("Member", organization_id=None)
+                member_role_id = member_role.id if member_role else None
+
+            if member_role_id and role_dao.has_permission(
+                member_role_id,
+                permission_name,
+            ):
                 return True
 
         return False
