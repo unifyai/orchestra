@@ -1,4 +1,5 @@
 from typing import Optional
+from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import HTTPException, status
@@ -17,6 +18,28 @@ async def approve_default_user(client: AsyncClient):
     assert (
         approve_resp.status_code == status.HTTP_200_OK
     ), f"Failed to approve default user {user_id}: {approve_resp.json()}"
+
+
+@pytest.fixture(autouse=True)
+def mock_assistant_infra_calls(request):
+    """
+    Automatically mock assistant infrastructure webhooks for all tests.
+    This prevents real network calls, making tests fast and reliable.
+    """
+    if "no_mock_infra" in request.keywords:
+        yield
+        return
+
+    with patch(
+        "orchestra.web.api.assistant.views.wake_up_assistant"
+    ) as mock_wake_up, patch(
+        "orchestra.web.api.assistant.views.reawaken_assistant"
+    ) as mock_reawaken:
+
+        mock_wake_up.return_value = MagicMock(status_code=200)
+        mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
+
+        yield mock_wake_up, mock_reawaken
 
 
 # Helper to assign an available WhatsApp number not in use by any assistant for a given user

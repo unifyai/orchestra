@@ -197,6 +197,9 @@ class AssistantDAO:
                 detail="Failed to send message to assistant.",
             )
 
+        # TODO: Update the response fetching to avoid relying on the transcripts logs
+        # ---------------------------------------------------------------------------
+
         # 4. Poll for the response
         timeout_seconds = 60
         poll_interval_seconds = 2
@@ -251,6 +254,8 @@ class AssistantDAO:
             status_code=status.HTTP_408_REQUEST_TIMEOUT,
             detail=f"Did not receive a response from the assistant within {timeout_seconds} seconds.",
         )
+
+        # ---------------------------------------------------------------------------
 
     def create_assistant(
         self,
