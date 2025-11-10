@@ -641,6 +641,74 @@ class OrganizationMember(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
 
 
+class Permission(Base):
+    """Model for permissions (atomic actions like 'project:read', 'interface:edit')."""
+
+    __tablename__ = "permission"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, unique=True, nullable=False)  # e.g., "project:read"
+    description = Column(String, nullable=True)
+    resource_type = Column(String, nullable=False)  # e.g., "project", "interface"
+    action = Column(String, nullable=False)  # e.g., "read", "write", "delete"
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+
+class Role(Base):
+    """Model for roles within organizations."""
+
+    __tablename__ = "role"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)  # e.g., "Owner", "Admin", "Member", "Viewer"
+    description = Column(String, nullable=True)
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=True,  # NULL = system role, available to all orgs
+    )
+    is_system_role = Column(
+        Boolean,
+        server_default="f",
+        nullable=False,
+    )  # True for built-in roles
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+    # Relationships
+    permissions = relationship(
+        "Permission",
+        secondary="role_permission",
+        backref="roles",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("name", "organization_id", name="uq_role_name_org"),
+    )
+
+
+class RolePermission(Base):
+    """Join table for Role-Permission many-to-many relationship."""
+
+    __tablename__ = "role_permission"
+
+    id = Column(Integer, primary_key=True)
+    role_id = Column(
+        Integer,
+        ForeignKey("role.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    permission_id = Column(
+        Integer,
+        ForeignKey("permission.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("role_id", "permission_id", name="uq_role_permission"),
+    )
+
+
 class ApiKey(Base):
     __tablename__ = "api_key"
 

@@ -21,6 +21,7 @@ from orchestra.web.api import (  # noqa: WPS235
     organization,
     project,
     provider,
+    roles,
     supported_endpoints,
     users,
 )
@@ -204,6 +205,11 @@ api_router.include_router(
 api_router.include_router(
     organization.router,
     tags=["Organizations"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    roles.router,
+    tags=["Roles & Permissions"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
