@@ -1,10 +1,8 @@
 from datetime import datetime
 from typing import Any, Dict, Generic, List, Literal, Optional, TypeVar
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, model_validator
 from pydantic.generics import GenericModel
-
-from orchestra.settings import settings
 
 T = TypeVar("T")
 
@@ -117,9 +115,14 @@ class AssistantCreate(BaseModel):
         example="bf0a246a-8642-498a-9950-80c35e9276b5",
     )
     voice_provider: Optional[str] = Field(
-        settings.selected_voice_provider,
+        None,
         description="Provider of the selected voice (e.g., 'elevenlabs', 'openai')",
         example="elevenlabs",
+    )
+    voice_mode: Optional[Literal["tts", "sts"]] = Field(
+        None,
+        description="The type of voice interaction, either text-to-speech (tts) or speech-to-speech (sts).",
+        example="tts",
     )
     user_phone: Optional[str] = Field(
         None,
@@ -146,6 +149,25 @@ class AssistantCreate(BaseModel):
         description="A list of chat messages from the pre-hire conversation to be logged.",
     )
 
+    @model_validator(mode="after")
+    def check_voice_fields(cls, self):
+        voice_id, voice_provider, voice_mode = (
+            self.voice_id,
+            self.voice_provider,
+            self.voice_mode,
+        )
+
+        # If any voice field is provided, id and provider are required.
+        if any(v is not None for v in [voice_id, voice_provider, voice_mode]):
+            if voice_id is None or voice_provider is None:
+                raise ValueError(
+                    "If providing voice information, both 'voice_id' and 'voice_provider' are required.",
+                )
+            # Default voice_mode if it wasn't specified
+            if voice_mode is None:
+                self.voice_mode = "tts"
+        return self
+
     class Config:
         orm_mode = True
         schema_extra = {
@@ -165,6 +187,7 @@ class AssistantCreate(BaseModel):
                 "email": "ada.lovelace@unify.ai",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "voice_provider": "cartesia",
+                "voice_mode": "tts",
                 "user_phone": "+15551234567",
                 "user_whatsapp_number": "+15551234567",
             },
@@ -250,6 +273,7 @@ class AssistantRead(AssistantCreate):
                 "assistant_whatsapp_number": "+15551234567",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "voice_provider": "cartesia",
+                "voice_mode": "tts",
                 "agent_id": "12345",
                 "user_id": "123",
                 "created_at": "2025-04-25T10:30:00Z",
@@ -333,6 +357,11 @@ class AssistantUpdate(BaseModel):
         description="Provider of the selected voice (e.g., 'elevenlabs', 'openai')",
         example="elevenlabs",
     )
+    voice_mode: Optional[Literal["tts", "sts"]] = Field(
+        None,
+        description="The type of voice interaction, either text-to-speech (tts) or speech-to-speech (sts).",
+        example="tts",
+    )
     country: Optional[str] = Field(
         None,
         description="Country code for phone number provisioning (e.g., US, GB)",
@@ -343,6 +372,51 @@ class AssistantUpdate(BaseModel):
         description="Whether to create infrastructure for the assistant during update (e.g., phone, email). Set to false for testing.",
         exclude=True,
     )
+
+    @model_validator(mode="after")
+    def check_voice_fields_on_update(cls, self):
+        """Validate voice fields for PATCH operations."""
+        provided = self.__pydantic_fields_set__
+
+        has_id = "voice_id" in provided
+        has_provider = "voice_provider" in provided
+        has_mode = "voice_mode" in provided
+
+        # No voice fields provided, nothing to do
+        if not any([has_id, has_provider, has_mode]):
+            return self
+
+        # Clearing voice by sending "voice_id": null
+        if has_id and self.voice_id is None:
+            self.voice_provider = None
+            self.voice_mode = None
+            return self
+
+        # Setting/updating voice: if one of id/provider is given, both must be.
+        if has_id or has_provider:
+            if not (has_id and has_provider):
+                raise ValueError(
+                    "To set or update voice information, both 'voice_id' and 'voice_provider' must be provided together.",
+                )
+
+            # Since 'has_id' is true, and we passed the 'clearing' check, self.voice_id is not None.
+            # We just need to check if self.voice_provider is not None.
+            if self.voice_provider is None:
+                raise ValueError(
+                    "'voice_provider' cannot be null when setting a voice.",
+                )
+
+            # Default voice_mode if not provided
+            if not has_mode:
+                self.voice_mode = "tts"
+
+        # Only mode was provided, which is not allowed.
+        elif has_mode:
+            raise ValueError(
+                "Cannot update 'voice_mode' alone. Please provide 'voice_id' and 'voice_provider'.",
+            )
+
+        return self
 
     class Config:
         orm_mode = True
@@ -362,6 +436,7 @@ class AssistantUpdate(BaseModel):
                 "email": "ada.lovelace@newdomain.com",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "voice_provider": "cartesia",
+                "voice_mode": "tts",
                 "country": "GB",
             },
         }

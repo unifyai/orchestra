@@ -1,7 +1,7 @@
 import logging
 import time
 from decimal import Decimal
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import HTTPException, status
 from sqlalchemy import exists, func, select
@@ -277,6 +277,7 @@ class AssistantDAO:
         user_whatsapp_number: Optional[str] = None,
         voice_id: Optional[str] = None,
         voice_provider: Optional[str] = None,
+        voice_mode: Optional[str] = None,
         country: Optional[str] = None,
     ) -> Assistant:
         """
@@ -301,6 +302,7 @@ class AssistantDAO:
             user_whatsapp_number=user_whatsapp_number,
             voice_id=voice_id,
             voice_provider=voice_provider,
+            voice_mode=voice_mode,
             country=country,
         )
         self.session.add(assistant)
@@ -363,21 +365,7 @@ class AssistantDAO:
         self,
         user_id: str,
         agent_id: int,
-        weekly_limit: Optional[Decimal] = None,
-        max_parallel: Optional[int] = None,
-        about: Optional[str] = None,
-        desktop_url: Optional[str] = None,
-        user_local_desktop: Optional[str] = None,
-        phone: Optional[str] = None,
-        user_phone: Optional[str] = None,
-        email: Optional[str] = None,
-        user_whatsapp_number: Optional[str] = None,
-        assistant_whatsapp_number: Optional[str] = None,
-        voice_id: Optional[str] = None,
-        voice_provider: Optional[str] = None,
-        country: Optional[str] = None,
-        profile_photo: Optional[str] = None,
-        profile_video: Optional[str] = None,
+        update_data: Dict[str, Any],
     ) -> Optional[Assistant]:
         """
         Update configuration for an existing Assistant.
@@ -385,36 +373,10 @@ class AssistantDAO:
         assistant = self.get_assistant_by_id(user_id, agent_id)
         if not assistant:
             return None
-        if weekly_limit is not None:
-            assistant.weekly_limit = weekly_limit
-        if max_parallel is not None:
-            assistant.max_parallel = max_parallel
-        if about is not None:
-            assistant.about = about
-        if desktop_url is not None:
-            assistant.desktop_url = desktop_url
-        if user_local_desktop is not None:
-            assistant.user_local_desktop = user_local_desktop
-        if phone is not None:
-            assistant.phone = phone
-        if user_phone is not None:
-            assistant.user_phone = user_phone
-        if email is not None:
-            assistant.email = email
-        if user_whatsapp_number is not None:
-            assistant.user_whatsapp_number = user_whatsapp_number
-        if assistant_whatsapp_number is not None:
-            assistant.assistant_whatsapp_number = assistant_whatsapp_number
-        if voice_id is not None:
-            assistant.voice_id = voice_id
-        if voice_provider is not None:
-            assistant.voice_provider = voice_provider
-        if country is not None:
-            assistant.country = country
-        if profile_photo is not None:
-            assistant.profile_photo = profile_photo
-        if profile_video is not None:
-            assistant.profile_video = profile_video
+
+        for key, value in update_data.items():
+            setattr(assistant, key, value)
+
         self.session.add(assistant)
         return assistant
 

@@ -633,11 +633,15 @@ def admin_update_assistant(
     a = assistants[0]
 
     # Update only the assistant WhatsApp number
+    update_data = {}
+    if new_assistant_whatsapp_number:
+        update_data["assistant_whatsapp_number"] = new_assistant_whatsapp_number
+    if new_user_whatsapp_number:
+        update_data["user_whatsapp_number"] = new_user_whatsapp_number
     updated = dao.update_assistant(
         user_id=a.user_id,
         agent_id=a.agent_id,
-        assistant_whatsapp_number=new_assistant_whatsapp_number,
-        user_whatsapp_number=new_user_whatsapp_number,
+        update_data=update_data,
     )
     session.commit()
 

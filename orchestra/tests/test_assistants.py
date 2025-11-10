@@ -40,9 +40,9 @@ def mock_assistant_infra_calls(request):
         return
 
     with patch(
-        "orchestra.web.api.assistant.views.wake_up_assistant"
+        "orchestra.web.api.assistant.views.wake_up_assistant",
     ) as mock_wake_up, patch(
-        "orchestra.web.api.assistant.views.reawaken_assistant"
+        "orchestra.web.api.assistant.views.reawaken_assistant",
     ) as mock_reawaken:
 
         mock_wake_up.return_value = MagicMock(status_code=200)
@@ -1370,3 +1370,234 @@ async def test_delete_assistant_contact_reawakens(
     assert mock_reawaken.call_args[0][0] == str(assistant_id)
     # Also assert the mock for deleting the phone number was called
     mock_delete_phone.assert_called_once_with("+15552223333")
+
+
+# ==== Voice Configuration Validation Tests ====
+
+
+@pytest.mark.anyio
+async def test_create_assistant_with_valid_voice_config(client: AsyncClient):
+    """Tests creating an assistant with full and partial valid voice configs."""
+
+    # Pre-register the voices that will be used in this test
+    voice1_payload = {
+        "voice_id": "voice123",
+        "name": "Test Voice Full",
+        "description": "A voice for testing.",
+        "language": "en",
+        "provider": "cartesia",
+    }
+    reg_resp1 = await client.post(
+        "/v0/assistant/voice",
+        json=voice1_payload,
+        headers=HEADERS,
+    )
+    assert reg_resp1.status_code == 201, "Failed to register first test voice"
+
+    voice2_payload = {
+        "voice_id": "voice456",
+        "name": "Test Voice Partial",
+        "description": "Another voice for testing.",
+        "language": "en",
+        "provider": "elevenlabs",
+    }
+    reg_resp2 = await client.post(
+        "/v0/assistant/voice",
+        json=voice2_payload,
+        headers=HEADERS,
+    )
+    assert reg_resp2.status_code == 201, "Failed to register second test voice"
+
+    # Case 1: Full voice config
+    payload_full = {
+        "first_name": "Voice",
+        "surname": "Full",
+        "voice_id": "voice123",
+        "voice_provider": "cartesia",
+        "voice_mode": "sts",
+        "create_infra": False,
+    }
+    resp_full = await client.post("/v0/assistant", json=payload_full, headers=HEADERS)
+    assert resp_full.status_code == 200, resp_full.text
+    data_full = resp_full.json()["info"]
+    assert data_full["voice_id"] == "voice123"
+    assert data_full["voice_provider"] == "cartesia"
+    assert data_full["voice_mode"] == "sts"
+
+    # Case 2: Partial voice config (mode should default to 'tts')
+    payload_partial = {
+        "first_name": "Voice",
+        "surname": "Partial",
+        "voice_id": "voice456",
+        "voice_provider": "elevenlabs",
+        # voice_mode is omitted
+        "create_infra": False,
+    }
+    resp_partial = await client.post(
+        "/v0/assistant",
+        json=payload_partial,
+        headers=HEADERS,
+    )
+    assert resp_partial.status_code == 200, resp_partial.text
+    data_partial = resp_partial.json()["info"]
+    assert data_partial["voice_id"] == "voice456"
+    assert data_partial["voice_provider"] == "elevenlabs"
+    assert data_partial["voice_mode"] == "tts"  # Check default
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "invalid_payload",
+    [
+        {"first_name": "Invalid", "surname": "Voice1", "voice_id": "only_id"},
+        {
+            "first_name": "Invalid",
+            "surname": "Voice2",
+            "voice_provider": "only_provider",
+        },
+        {"first_name": "Invalid", "surname": "Voice3", "voice_mode": "tts"},
+    ],
+)
+async def test_create_assistant_with_invalid_voice_config(
+    client: AsyncClient,
+    invalid_payload,
+):
+    """Tests creating an assistant with various invalid voice configs."""
+    payload = {**invalid_payload, "create_infra": False}
+    resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert resp.status_code == 422
+    assert (
+        "If providing voice information, both 'voice_id' and 'voice_provider' are required"
+        in resp.text
+    )
+
+
+@pytest.mark.anyio
+async def test_update_assistant_voice_config_valid_cases(client: AsyncClient):
+    """Tests valid scenarios for updating an assistant's voice configuration."""
+    # 1. Create a base assistant with no voice
+    base_payload = {"first_name": "Voice", "surname": "Updater", "create_infra": False}
+    create_resp = await client.post("/v0/assistant", json=base_payload, headers=HEADERS)
+    assert create_resp.status_code == 200
+    assistant_id = create_resp.json()["info"]["agent_id"]
+
+    # Pre-register the voices that will be used for updates.
+    voice_openai_payload = {
+        "voice_id": "v_upd_1",
+        "name": "Update Voice OpenAI",
+        "description": "...",
+        "language": "en",
+        "provider": "openai",
+    }
+    reg1 = await client.post(
+        "/v0/assistant/voice",
+        json=voice_openai_payload,
+        headers=HEADERS,
+    )
+    assert reg1.status_code == 201
+
+    voice_cartesia_payload = {
+        "voice_id": "v_upd_2",
+        "name": "Update Voice Cartesia",
+        "description": "...",
+        "language": "en",
+        "provider": "cartesia",
+    }
+    reg2 = await client.post(
+        "/v0/assistant/voice",
+        json=voice_cartesia_payload,
+        headers=HEADERS,
+    )
+    assert reg2.status_code == 201
+
+    # 2. Update to add full voice config
+    update_full = {
+        "voice_id": "v_upd_1",
+        "voice_provider": "openai",
+        "voice_mode": "sts",
+    }
+    patch1 = await client.patch(
+        f"/v0/assistant/{assistant_id}/config",
+        json=update_full,
+        headers=HEADERS,
+    )
+    assert patch1.status_code == 200, patch1.text
+    d1 = patch1.json()["info"]
+    assert (
+        d1["voice_id"] == "v_upd_1"
+        and d1["voice_provider"] == "openai"
+        and d1["voice_mode"] == "sts"
+    )
+
+    # 3. Update with partial config (mode defaults to 'tts')
+    update_partial = {"voice_id": "v_upd_2", "voice_provider": "cartesia"}
+    patch2 = await client.patch(
+        f"/v0/assistant/{assistant_id}/config",
+        json=update_partial,
+        headers=HEADERS,
+    )
+    assert patch2.status_code == 200, patch2.text
+    d2 = patch2.json()["info"]
+    assert (
+        d2["voice_id"] == "v_upd_2"
+        and d2["voice_provider"] == "cartesia"
+        and d2["voice_mode"] == "tts"
+    )
+
+    # 4. Clear voice config
+    update_clear = {"voice_id": None}
+    patch3 = await client.patch(
+        f"/v0/assistant/{assistant_id}/config",
+        json=update_clear,
+        headers=HEADERS,
+    )
+    assert patch3.status_code == 200, patch3.text
+    d3 = patch3.json()["info"]
+    assert (
+        d3["voice_id"] is None
+        and d3["voice_provider"] is None
+        and d3["voice_mode"] is None
+    )
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "invalid_payload, error_msg",
+    [
+        (
+            {"voice_id": "v_inv_1"},
+            "both 'voice_id' and 'voice_provider' must be provided",
+        ),
+        (
+            {"voice_provider": "cartesia"},
+            "both 'voice_id' and 'voice_provider' must be provided",
+        ),
+        ({"voice_mode": "sts"}, "Cannot update 'voice_mode' alone"),
+        (
+            {"voice_id": "v_inv_2", "voice_provider": None},
+            "'voice_provider' cannot be null",
+        ),
+    ],
+)
+async def test_update_assistant_with_invalid_voice_config(
+    client: AsyncClient,
+    invalid_payload,
+    error_msg,
+):
+    """Tests updating an assistant with various invalid voice configs."""
+    base_payload = {
+        "first_name": "Invalid",
+        "surname": "VoiceUpdate",
+        "create_infra": False,
+    }
+    create_resp = await client.post("/v0/assistant", json=base_payload, headers=HEADERS)
+    assert create_resp.status_code == 200
+    assistant_id = create_resp.json()["info"]["agent_id"]
+
+    resp = await client.patch(
+        f"/v0/assistant/{assistant_id}/config",
+        json=invalid_payload,
+        headers=HEADERS,
+    )
+    assert resp.status_code == 422
+    assert error_msg in resp.text

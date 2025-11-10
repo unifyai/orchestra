@@ -1359,6 +1359,7 @@ class Assistant(Base):
         index=True,
     )
     voice_provider = Column(String, nullable=True)
+    voice_mode = Column(String, nullable=True)
 
     __table_args__ = (
         ForeignKeyConstraint(
@@ -1375,6 +1376,10 @@ class Assistant(Base):
         sa.CheckConstraint(
             "user_local_desktop IN ('ubuntu', 'windows', 'macos')",
             name="ck_assistant_user_local_desktop",
+        ),
+        sa.CheckConstraint(
+            "voice_mode IN ('tts', 'sts')",
+            name="ck_assistant_voice_mode",
         ),
     )
 
