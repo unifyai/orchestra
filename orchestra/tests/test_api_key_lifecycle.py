@@ -385,10 +385,15 @@ async def test_cannot_remove_organization_owner(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_non_owner_cannot_add_members(client: AsyncClient):
-    """Test that non-owners cannot add members to an organization."""
+async def test_adding_members_requires_org_write_permission(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test that adding members requires org:write permission."""
+    from orchestra.db.dao.role_dao import RoleDAO
+
     owner = await create_test_user(client, "owner_perm@test.com")
-    member = await create_test_user(client, "member_perm@test.com")
+    viewer = await create_test_user(client, "viewer_perm@test.com")
     new_user = await create_test_user(client, "new_user_perm@test.com")
 
     # Create organization
@@ -399,19 +404,23 @@ async def test_non_owner_cannot_add_members(client: AsyncClient):
     )
     org_id = org_response.json()["id"]
 
-    # Add member (automatically creates org API key)
-    add_member_response = await client.post(
+    # Get Viewer role (no org:write permission)
+    role_dao = RoleDAO(dbsession)
+    viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
+
+    # Add viewer (automatically creates org API key)
+    add_viewer_response = await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": viewer["id"], "level": "user", "role_id": viewer_role.id},
         headers=owner["headers"],
     )
-    assert add_member_response.status_code == status.HTTP_201_CREATED
-    member_org_api_key = add_member_response.json()["api_key"]
+    assert add_viewer_response.status_code == status.HTTP_201_CREATED
+    viewer_org_api_key = add_viewer_response.json()["api_key"]
 
-    # Try to add new user as a non-owner member
+    # Try to add new user as viewer (no org:write) - should fail
     add_response = await client.post(
         f"/v0/organizations/{org_id}/members",
         json={"user_id": new_user["id"], "level": "user"},
-        headers={"Authorization": f"Bearer {member_org_api_key}"},
+        headers={"Authorization": f"Bearer {viewer_org_api_key}"},
     )
     assert add_response.status_code == status.HTTP_403_FORBIDDEN

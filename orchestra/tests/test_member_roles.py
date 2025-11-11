@@ -221,10 +221,14 @@ async def test_cannot_update_owner_role(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_only_owner_can_update_roles(client: AsyncClient, dbsession):
-    """Test that only the organization owner can update member roles."""
+async def test_role_update_requires_org_write_permission(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test that updating member roles requires org:write permission."""
     owner = await create_test_user(client, "role_update_owner@test.com")
     admin = await create_test_user(client, "role_update_admin@test.com")
+    viewer = await create_test_user(client, "role_update_viewer@test.com")
     member = await create_test_user(client, "role_update_member@test.com")
 
     # Create organization
@@ -239,11 +243,17 @@ async def test_only_owner_can_update_roles(client: AsyncClient, dbsession):
     role_dao = RoleDAO(dbsession)
     admin_role = role_dao.get_by_name("Admin", organization_id=None)
     viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
+    member_role = role_dao.get_by_name("Member", organization_id=None)
 
-    # Add admin and member
+    # Add admin, viewer, and member
     await client.post(
         f"/v0/organizations/{org_id}/members",
         json={"user_id": admin["id"], "level": "admin", "role_id": admin_role.id},
+        headers=owner["headers"],
+    )
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": viewer["id"], "level": "user", "role_id": viewer_role.id},
         headers=owner["headers"],
     )
     await client.post(
@@ -252,13 +262,21 @@ async def test_only_owner_can_update_roles(client: AsyncClient, dbsession):
         headers=owner["headers"],
     )
 
-    # Try to update member's role as admin (should fail)
+    # Admin (has org:write) CAN update member's role
     update_response = await client.patch(
         f"/v0/organizations/{org_id}/members/{member['id']}/role",
         json={"role_id": viewer_role.id},
         headers=admin["headers"],
     )
-    assert update_response.status_code == status.HTTP_403_FORBIDDEN
+    assert update_response.status_code == status.HTTP_200_OK
+
+    # Viewer (no org:write) CANNOT update member's role
+    update_response2 = await client.patch(
+        f"/v0/organizations/{org_id}/members/{member['id']}/role",
+        json={"role_id": member_role.id},
+        headers=viewer["headers"],
+    )
+    assert update_response2.status_code == status.HTTP_403_FORBIDDEN
 
 
 @pytest.mark.anyio
@@ -475,7 +493,7 @@ async def test_only_system_roles_can_be_assigned(client: AsyncClient, dbsession)
 
 @pytest.mark.anyio
 async def test_member_list_requires_membership(client: AsyncClient):
-    """Test that only organization members can list members."""
+    """Test that listing organization members requires org:read permission."""
     owner = await create_test_user(client, "list_perm_owner@test.com")
     outsider = await create_test_user(client, "list_perm_outsider@test.com")
 
@@ -487,14 +505,14 @@ async def test_member_list_requires_membership(client: AsyncClient):
     )
     org_id = org_response.json()["id"]
 
-    # Owner can list members
+    # Owner (has org:read) can list members
     list_response = await client.get(
         f"/v0/organizations/{org_id}/members",
         headers=owner["headers"],
     )
     assert list_response.status_code == status.HTTP_200_OK
 
-    # Outsider cannot list members
+    # Outsider (no org:read) cannot list members
     outsider_response = await client.get(
         f"/v0/organizations/{org_id}/members",
         headers=outsider["headers"],

@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.organization.schema import (
@@ -121,19 +122,18 @@ async def get_organization(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user has access (is owner or member)
-    is_owner = org.owner_id == user_id
-    is_member = bool(
-        org_member_dao.filter(
-            organization_id=organization_id,
-            user_id=user_id,
-        ),
+    # Check if user has org:read permission
+    resource_access_dao = ResourceAccessDAO(session)
+    has_permission = resource_access_dao.check_user_permission(
+        user_id,
+        "org",
+        organization_id,
+        "org:read",
     )
-
-    if not (is_owner or is_member):
+    if not has_permission:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have access to this organization",
+            detail="You do not have permission to view this organization",
         )
 
     return OrganizationResponse.model_validate(org)
@@ -149,10 +149,11 @@ async def update_organization(
     """
     Update an organization.
 
-    Only the organization owner can update it.
+    Requires org:write permission.
     """
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
 
     # Get organization
     org = org_dao.get(organization_id)
@@ -162,11 +163,17 @@ async def update_organization(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user is the owner
-    if org.owner_id != user_id:
+    # Check if user has org:write permission
+    has_permission = resource_access_dao.check_user_permission(
+        user_id,
+        "org",
+        organization_id,
+        "org:write",
+    )
+    if not has_permission:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the organization owner can update it",
+            detail="You do not have permission to update this organization",
         )
 
     # Check for name conflict if name is being updated
@@ -210,11 +217,12 @@ async def delete_organization(
     """
     Delete an organization.
 
-    Only the organization owner can delete it.
+    Requires org:delete permission (typically only Owner role has this).
     This will also delete all associated data (projects, members, etc.).
     """
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
 
     # Get organization
     org = org_dao.get(organization_id)
@@ -224,11 +232,17 @@ async def delete_organization(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user is the owner
-    if org.owner_id != user_id:
+    # Check if user has org:delete permission
+    has_permission = resource_access_dao.check_user_permission(
+        user_id,
+        "org",
+        organization_id,
+        "org:delete",
+    )
+    if not has_permission:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the organization owner can delete it",
+            detail="You do not have permission to delete this organization",
         )
 
     # Delete organization
@@ -256,7 +270,7 @@ async def add_organization_member(
     """
     Add a member to an organization.
 
-    Only the organization owner can add members.
+    Requires org:write permission.
     Automatically creates an organization-specific API key for the new member.
     """
     user_id = request_fastapi.state.user_id
@@ -264,6 +278,7 @@ async def add_organization_member(
     org_member_dao = OrganizationMemberDAO(session)
     api_key_dao = ApiKeyDAO(session)
     role_dao = RoleDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
 
     # Get organization
     org = org_dao.get(organization_id)
@@ -273,11 +288,17 @@ async def add_organization_member(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user is the owner
-    if org.owner_id != user_id:
+    # Check if user has org:write permission
+    has_permission = resource_access_dao.check_user_permission(
+        user_id,
+        "org",
+        organization_id,
+        "org:write",
+    )
+    if not has_permission:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the organization owner can add members",
+            detail="You do not have permission to add members to this organization",
         )
 
     # Check if member already exists
@@ -345,7 +366,7 @@ async def remove_organization_member(
     """
     Remove a member from an organization.
 
-    Only the organization owner can remove members.
+    Requires org:write permission.
     Automatically revokes all organization-specific API keys for the member.
     Personal API keys are NOT affected.
     """
@@ -353,6 +374,7 @@ async def remove_organization_member(
     org_dao = OrganizationDAO(session)
     org_member_dao = OrganizationMemberDAO(session)
     api_key_dao = ApiKeyDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
 
     # Get organization
     org = org_dao.get(organization_id)
@@ -362,11 +384,17 @@ async def remove_organization_member(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if requesting user is the owner
-    if org.owner_id != requesting_user_id:
+    # Check if requesting user has org:write permission
+    has_permission = resource_access_dao.check_user_permission(
+        requesting_user_id,
+        "org",
+        organization_id,
+        "org:write",
+    )
+    if not has_permission:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the organization owner can remove members",
+            detail="You do not have permission to remove members from this organization",
         )
 
     # Don't allow removing the owner
@@ -421,12 +449,13 @@ async def list_organization_members(
     """
     List all members of an organization with their roles.
 
-    Only organization members can view the member list.
+    Requires org:read permission.
     """
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
     org_member_dao = OrganizationMemberDAO(session)
     role_dao = RoleDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
 
     # Get organization
     org = org_dao.get(organization_id)
@@ -436,16 +465,17 @@ async def list_organization_members(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user is a member or owner
-    is_owner = org.owner_id == user_id
-    existing_member = org_member_dao.filter(
-        organization_id=organization_id,
-        user_id=user_id,
+    # Check if user has org:read permission
+    has_permission = resource_access_dao.check_user_permission(
+        user_id,
+        "org",
+        organization_id,
+        "org:read",
     )
-    if not is_owner and not existing_member:
+    if not has_permission:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only organization members can view the member list",
+            detail="You do not have permission to view members of this organization",
         )
 
     # Get all members
@@ -489,12 +519,13 @@ async def update_member_role(
     """
     Update an organization member's RBAC role.
 
-    Only the organization owner can update member roles.
+    Requires org:write permission.
     """
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
     org_member_dao = OrganizationMemberDAO(session)
     role_dao = RoleDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
 
     # Get organization
     org = org_dao.get(organization_id)
@@ -504,11 +535,17 @@ async def update_member_role(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user is the owner
-    if org.owner_id != user_id:
+    # Check if user has org:write permission
+    has_permission = resource_access_dao.check_user_permission(
+        user_id,
+        "org",
+        organization_id,
+        "org:write",
+    )
+    if not has_permission:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the organization owner can update member roles",
+            detail="You do not have permission to update member roles in this organization",
         )
 
     # Cannot change the owner's role
