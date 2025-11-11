@@ -1,7 +1,7 @@
 """Add organization billing support
 
 Revision ID: add_org_billing
-Revises: support_variable_vector_dims
+Revises: 3d05bea20ead
 Create Date: 2025-11-07 16:00:00.000000
 
 """
@@ -10,7 +10,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "add_org_billing"
-down_revision = "support_variable_vector_dims"
+down_revision = "3d05bea20ead"
 branch_labels = None
 depends_on = None
 
