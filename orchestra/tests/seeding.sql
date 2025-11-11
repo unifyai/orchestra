@@ -145,30 +145,21 @@ INSERT INTO datapoint VALUES (53, 10, 'output_cost_per_token', 0.02, NULL, NOW()
 INSERT INTO datapoint VALUES (54, 10, 'ttft', 450, NULL, NOW());
 INSERT INTO datapoint VALUES (55, 10, 'itl', 10, NULL, NOW());
 
--- RBAC: Permissions
+-- RBAC: Permissions (project and org only)
 INSERT INTO permission (name, description, resource_type, action) VALUES
 ('project:read', 'View project details', 'project', 'read'),
 ('project:write', 'Edit project', 'project', 'write'),
 ('project:delete', 'Delete project', 'project', 'delete'),
-('interface:read', 'View interface', 'interface', 'read'),
-('interface:write', 'Edit interface', 'interface', 'write'),
-('interface:delete', 'Delete interface', 'interface', 'delete'),
-('tab:read', 'View tab', 'tab', 'read'),
-('tab:write', 'Edit tab', 'tab', 'write'),
-('tab:delete', 'Delete tab', 'tab', 'delete'),
-('tile:read', 'View tile', 'tile', 'read'),
-('tile:write', 'Edit tile', 'tile', 'write'),
-('tile:delete', 'Delete tile', 'tile', 'delete'),
 ('org:read', 'View organization details', 'organization', 'read'),
 ('org:write', 'Edit organization settings, billing, and members', 'organization', 'write'),
 ('org:delete', 'Delete organization', 'organization', 'delete');
 
 -- RBAC: System Roles
 INSERT INTO role (name, description, organization_id, is_system_role) VALUES
-('Owner', 'Full access to all resources and settings', NULL, true),
+('Owner', 'Full access to projects and organization', NULL, true),
 ('Admin', 'Full access except deleting organization', NULL, true),
-('Member', 'Create and edit content and organization settings, cannot delete', NULL, true),
-('Viewer', 'Read-only access to organization resources', NULL, true);
+('Member', 'Read and write projects and organization, cannot delete', NULL, true),
+('Viewer', 'Read-only access to projects and organization', NULL, true);
 
 -- RBAC: Owner role gets all permissions
 INSERT INTO role_permission (role_id, permission_id)

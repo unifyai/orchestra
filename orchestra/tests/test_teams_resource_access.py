@@ -1001,3 +1001,48 @@ async def test_explicit_grant_overrides_implicit_access(client: AsyncClient, dbs
         project_id,
         "project:write",
     ), "Should NOT have write - explicit Viewer grant replaces implicit Member role"
+
+
+@pytest.mark.anyio
+async def test_only_project_org_resource_types_allowed(client: AsyncClient, dbsession):
+    """Test that only 'project' and 'org' resource types are allowed."""
+    owner = await create_test_user(client, "invalid_resource_owner@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Invalid Resource Test Org"},
+        headers=owner["headers"],
+    )
+    assert org_response.status_code == status.HTTP_201_CREATED
+    org_id = org_response.json()["id"]
+
+    # Create a team
+    team_response = await client.post(
+        f"/v0/organizations/{org_id}/teams",
+        json={"name": "Test Team"},
+        headers=owner["headers"],
+    )
+    assert team_response.status_code == status.HTTP_201_CREATED
+    team_id = team_response.json()["id"]
+
+    # Get system role
+    role_dao = RoleDAO(dbsession)
+    viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
+
+    # Try to grant access to invalid resource types
+    invalid_types = ["interface", "tab", "tile", "invalid"]
+
+    for invalid_type in invalid_types:
+        response = await client.post(
+            f"/v0/resources/{invalid_type}/999/access",
+            json={
+                "role_id": viewer_role.id,
+                "grantee_type": "team",
+                "grantee_id": str(team_id),
+            },
+            headers=owner["headers"],
+        )
+        assert response.status_code == status.HTTP_400_BAD_REQUEST
+        assert "Invalid resource type" in response.json()["detail"]
+        assert "Only 'project' and 'org' are supported" in response.json()["detail"]

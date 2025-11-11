@@ -18,10 +18,15 @@ async def test_list_permissions(client: AsyncClient):
     assert response.status_code == status.HTTP_200_OK
 
     permissions = response.json()
-    # Should have 15 permissions (5 resources × 3 actions each)
-    assert len(permissions) == 15
+    # Should have 6 permissions (2 resources × 3 actions each)
+    # project:read, project:write, project:delete
+    # org:read, org:write, org:delete
+    assert len(permissions) == 6
     assert any(p["name"] == "project:read" for p in permissions)
-    assert any(p["name"] == "interface:write" for p in permissions)
+    assert any(p["name"] == "project:write" for p in permissions)
+    assert any(p["name"] == "project:delete" for p in permissions)
+    assert any(p["name"] == "org:read" for p in permissions)
+    assert any(p["name"] == "org:write" for p in permissions)
     assert any(p["name"] == "org:delete" for p in permissions)
 
 
@@ -95,15 +100,13 @@ async def test_create_custom_role(client: AsyncClient, dbsession):
     perms_response = await client.get("/v0/permissions", headers=owner["headers"])
     permissions = perms_response.json()
     project_read_id = next(p["id"] for p in permissions if p["name"] == "project:read")
-    interface_read_id = next(
-        p["id"] for p in permissions if p["name"] == "interface:read"
-    )
+    org_read_id = next(p["id"] for p in permissions if p["name"] == "org:read")
 
     # Create custom role
     role_data = {
         "name": "Project Reader",
-        "description": "Can read projects and interfaces",
-        "permission_ids": [project_read_id, interface_read_id],
+        "description": "Can read projects and organizations",
+        "permission_ids": [project_read_id, org_read_id],
     }
 
     response = await client.post(
@@ -115,7 +118,7 @@ async def test_create_custom_role(client: AsyncClient, dbsession):
 
     role = response.json()
     assert role["name"] == "Project Reader"
-    assert role["description"] == "Can read projects and interfaces"
+    assert role["description"] == "Can read projects and organizations"
     assert role["organization_id"] == org_id
     assert role["is_system_role"] is False
     assert len(role["permissions"]) == 2
@@ -261,7 +264,7 @@ async def test_get_system_role(client: AsyncClient, dbsession):
     role = response.json()
     assert role["name"] == "Owner"
     assert role["is_system_role"] is True
-    assert len(role["permissions"]) == 15  # Owner should have all 15 permissions
+    assert len(role["permissions"]) == 6  # Owner should have all 6 permissions
 
 
 @pytest.mark.anyio
@@ -518,35 +521,36 @@ async def test_system_role_permissions(client: AsyncClient, dbsession):
     role_dao = RoleDAO(dbsession)
     permission_dao = PermissionDAO(dbsession)
 
-    # Check Owner role has all permissions (15 total)
+    # Check Owner role has all permissions (6 total: project + org × 3 actions)
     owner_role = role_dao.get_by_name("Owner", organization_id=None)
     owner_perms = role_dao.get_role_permissions(owner_role.id)
     all_perms = permission_dao.list_all()
-    assert len(owner_perms) == len(all_perms) == 15
+    assert len(owner_perms) == len(all_perms) == 6
 
-    # Check Admin role does not have org:delete (should have 14 permissions)
+    # Check Admin role does not have org:delete (should have 5 permissions)
     admin_role = role_dao.get_by_name("Admin", organization_id=None)
     admin_perms = role_dao.get_role_permissions(admin_role.id)
-    assert len(admin_perms) == 14
+    assert len(admin_perms) == 5
     assert not role_dao.has_permission(admin_role.id, "org:delete")
     assert role_dao.has_permission(admin_role.id, "org:read")
     assert role_dao.has_permission(admin_role.id, "org:write")
     assert role_dao.has_permission(admin_role.id, "project:delete")
 
-    # Check Member role has read/write only (10 permissions: 5 resources × 2 actions)
+    # Check Member role has read/write only (4 permissions: 2 resources × 2 actions)
     member_role = role_dao.get_by_name("Member", organization_id=None)
     member_perms = role_dao.get_role_permissions(member_role.id)
-    assert len(member_perms) == 10
+    assert len(member_perms) == 4
     assert role_dao.has_permission(member_role.id, "project:read")
     assert role_dao.has_permission(member_role.id, "project:write")
+    assert role_dao.has_permission(member_role.id, "org:read")
     assert role_dao.has_permission(member_role.id, "org:write")
     assert not role_dao.has_permission(member_role.id, "project:delete")
     assert not role_dao.has_permission(member_role.id, "org:delete")
 
-    # Check Viewer role has only read permissions (5 permissions)
+    # Check Viewer role has only read permissions (2 permissions: project + org read)
     viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
     viewer_perms = role_dao.get_role_permissions(viewer_role.id)
-    assert len(viewer_perms) == 5
+    assert len(viewer_perms) == 2
     assert all(p.action == "read" for p in viewer_perms)
 
 

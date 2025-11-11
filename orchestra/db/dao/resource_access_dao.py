@@ -4,14 +4,7 @@ from typing import List, Optional
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import (
-    Interface,
-    Project,
-    ResourceAccess,
-    Tab,
-    TeamMember,
-    Tile,
-)
+from orchestra.db.models.orchestra_models import Project, ResourceAccess, TeamMember
 
 
 class ResourceAccessDAO:
@@ -175,60 +168,26 @@ class ResourceAccessDAO:
         """
         Check if a resource is personal (not associated with an organization).
 
-        :param resource_type: Type of resource.
+        Only project and org resources are supported.
+        Projects can be personal (user_id set, organization_id NULL).
+        Organizations are never personal.
+
+        :param resource_type: Type of resource ("project" or "org").
         :param resource_id: Resource ID.
         :return: True if personal, False if organizational.
+        :raises ValueError: If resource_type is not supported.
         """
         if resource_type == "project":
             project = self.session.query(Project).filter_by(id=resource_id).first()
             return project is not None and project.organization_id is None
-
-        if resource_type == "interface":
-            interface = self.session.query(Interface).filter_by(id=resource_id).first()
-            if interface:
-                project = (
-                    self.session.query(Project)
-                    .filter_by(id=interface.project_id)
-                    .first()
-                )
-                return project is not None and project.organization_id is None
+        elif resource_type == "org":
+            # Organizations are never personal
             return False
-
-        if resource_type == "tab":
-            tab = self.session.query(Tab).filter_by(id=resource_id).first()
-            if tab:
-                interface = (
-                    self.session.query(Interface).filter_by(id=tab.interface_id).first()
-                )
-                if interface:
-                    project = (
-                        self.session.query(Project)
-                        .filter_by(id=interface.project_id)
-                        .first()
-                    )
-                    return project is not None and project.organization_id is None
-            return False
-
-        if resource_type == "tile":
-            tile = self.session.query(Tile).filter_by(id=resource_id).first()
-            if tile:
-                tab = self.session.query(Tab).filter_by(id=tile.tab_id).first()
-                if tab:
-                    interface = (
-                        self.session.query(Interface)
-                        .filter_by(id=tab.interface_id)
-                        .first()
-                    )
-                    if interface:
-                        project = (
-                            self.session.query(Project)
-                            .filter_by(id=interface.project_id)
-                            .first()
-                        )
-                        return project is not None and project.organization_id is None
-            return False
-
-        return False
+        else:
+            raise ValueError(
+                f"Unsupported resource type: {resource_type}. "
+                "Only 'project' and 'org' are supported.",
+            )
 
     def _check_personal_ownership(
         self,
@@ -239,61 +198,26 @@ class ResourceAccessDAO:
         """
         Check if user owns a personal resource.
 
-        :param resource_type: Type of resource.
+        Only personal projects have ownership.
+        Organizations cannot be personal.
+
+        :param resource_type: Type of resource ("project" only for personal).
         :param resource_id: Resource ID.
         :param user_id: User ID.
         :return: True if user is owner, False otherwise.
+        :raises ValueError: If resource_type is not supported.
         """
         if resource_type == "project":
             project = self.session.query(Project).filter_by(id=resource_id).first()
             return project is not None and project.user_id == user_id
-
-        if resource_type == "interface":
-            interface = self.session.query(Interface).filter_by(id=resource_id).first()
-            if interface:
-                project = (
-                    self.session.query(Project)
-                    .filter_by(id=interface.project_id)
-                    .first()
-                )
-                return project is not None and project.user_id == user_id
+        elif resource_type == "org":
+            # Organizations cannot be personal
             return False
-
-        if resource_type == "tab":
-            tab = self.session.query(Tab).filter_by(id=resource_id).first()
-            if tab:
-                interface = (
-                    self.session.query(Interface).filter_by(id=tab.interface_id).first()
-                )
-                if interface:
-                    project = (
-                        self.session.query(Project)
-                        .filter_by(id=interface.project_id)
-                        .first()
-                    )
-                    return project is not None and project.user_id == user_id
-            return False
-
-        if resource_type == "tile":
-            tile = self.session.query(Tile).filter_by(id=resource_id).first()
-            if tile:
-                tab = self.session.query(Tab).filter_by(id=tile.tab_id).first()
-                if tab:
-                    interface = (
-                        self.session.query(Interface)
-                        .filter_by(id=tab.interface_id)
-                        .first()
-                    )
-                    if interface:
-                        project = (
-                            self.session.query(Project)
-                            .filter_by(id=interface.project_id)
-                            .first()
-                        )
-                        return project is not None and project.user_id == user_id
-            return False
-
-        return False
+        else:
+            raise ValueError(
+                f"Unsupported resource type: {resource_type}. "
+                "Only 'project' and 'org' are supported.",
+            )
 
     def _check_org_permission(
         self,
@@ -389,62 +313,27 @@ class ResourceAccessDAO:
         resource_id: int,
     ) -> Optional[int]:
         """
-        Get the organization ID for a resource by traversing the hierarchy.
+        Get the organization ID for a resource.
 
-        :param resource_type: Type of resource.
+        Projects have organization_id directly.
+        For "org" type, the resource_id IS the organization_id.
+
+        :param resource_type: Type of resource ("project" or "org").
         :param resource_id: Resource ID.
         :return: Organization ID or None if personal/not found.
+        :raises ValueError: If resource_type is not supported.
         """
         if resource_type == "project":
             project = self.session.query(Project).filter_by(id=resource_id).first()
             return project.organization_id if project else None
-
-        if resource_type == "interface":
-            interface = self.session.query(Interface).filter_by(id=resource_id).first()
-            if interface:
-                project = (
-                    self.session.query(Project)
-                    .filter_by(id=interface.project_id)
-                    .first()
-                )
-                return project.organization_id if project else None
-            return None
-
-        if resource_type == "tab":
-            tab = self.session.query(Tab).filter_by(id=resource_id).first()
-            if tab:
-                interface = (
-                    self.session.query(Interface).filter_by(id=tab.interface_id).first()
-                )
-                if interface:
-                    project = (
-                        self.session.query(Project)
-                        .filter_by(id=interface.project_id)
-                        .first()
-                    )
-                    return project.organization_id if project else None
-            return None
-
-        if resource_type == "tile":
-            tile = self.session.query(Tile).filter_by(id=resource_id).first()
-            if tile:
-                tab = self.session.query(Tab).filter_by(id=tile.tab_id).first()
-                if tab:
-                    interface = (
-                        self.session.query(Interface)
-                        .filter_by(id=tab.interface_id)
-                        .first()
-                    )
-                    if interface:
-                        project = (
-                            self.session.query(Project)
-                            .filter_by(id=interface.project_id)
-                            .first()
-                        )
-                        return project.organization_id if project else None
-            return None
-
-        return None
+        elif resource_type == "org":
+            # For organization resources, the resource_id IS the organization_id
+            return resource_id
+        else:
+            raise ValueError(
+                f"Unsupported resource type: {resource_type}. "
+                "Only 'project' and 'org' are supported.",
+            )
 
     def filter_accessible_resources(
         self,
@@ -456,15 +345,24 @@ class ResourceAccessDAO:
         Get IDs of all resources of a given type that user can access.
 
         Returns both personal and organizational resource IDs.
+        Only "project" and "org" resource types are supported.
 
         :param user_id: User ID.
-        :param resource_type: Type of resource.
+        :param resource_type: Type of resource ("project" or "org").
         :param permission_name: Required permission.
         :return: List of resource IDs.
+        :raises ValueError: If resource_type is not supported.
         """
+        # Validate resource type
+        if resource_type not in ("project", "org"):
+            raise ValueError(
+                f"Unsupported resource type: {resource_type}. "
+                "Only 'project' and 'org' are supported.",
+            )
+
         accessible_ids = []
 
-        # Personal resources: user is creator
+        # Personal resources: only projects can be personal
         if resource_type == "project":
             personal_projects = (
                 self.session.query(Project.id)

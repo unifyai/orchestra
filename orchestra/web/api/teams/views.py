@@ -553,18 +553,25 @@ async def grant_resource_access(
     session: Session = Depends(get_db_session),
 ) -> ResourceAccessResponse:
     """
-    Grant access to a resource (project/interface/tab/tile).
+    Grant access to a resource (project or org).
 
     Only works for organizational resources. Personal resources cannot be shared.
     User must have appropriate permissions on the resource.
 
     :param request_fastapi: FastAPI request object.
-    :param resource_type: Type of resource.
+    :param resource_type: Type of resource ("project" or "org").
     :param resource_id: Resource ID.
     :param access_data: Access grant data.
     :param session: Database session.
     :return: Created access entry.
     """
+    # Validate resource type
+    if resource_type not in ("project", "org"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid resource type: {resource_type}. Only 'project' and 'org' are supported.",
+        )
+
     user_id = request_fastapi.state.user_id
     resource_access_dao = ResourceAccessDAO(session)
     role_dao = RoleDAO(session)
@@ -638,16 +645,23 @@ async def revoke_resource_access(
     session: Session = Depends(get_db_session),
 ) -> None:
     """
-    Revoke access to a resource.
+    Revoke access to a resource (project or org).
 
     User must have appropriate permissions on the resource.
 
     :param request_fastapi: FastAPI request object.
-    :param resource_type: Type of resource.
+    :param resource_type: Type of resource ("project" or "org").
     :param resource_id: Resource ID.
     :param access_data: Access revoke data.
     :param session: Database session.
     """
+    # Validate resource type
+    if resource_type not in ("project", "org"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid resource type: {resource_type}. Only 'project' and 'org' are supported.",
+        )
+
     user_id = request_fastapi.state.user_id
     resource_access_dao = ResourceAccessDAO(session)
 
@@ -695,16 +709,23 @@ async def list_resource_access(
     session: Session = Depends(get_db_session),
 ) -> ResourceAccessListResponse:
     """
-    List all access entries for a resource.
+    List all access entries for a resource (project or org).
 
     User must have read permission on the resource.
 
     :param request_fastapi: FastAPI request object.
-    :param resource_type: Type of resource.
+    :param resource_type: Type of resource ("project" or "org").
     :param resource_id: Resource ID.
     :param session: Database session.
     :return: List of access entries.
     """
+    # Validate resource type
+    if resource_type not in ("project", "org"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid resource type: {resource_type}. Only 'project' and 'org' are supported.",
+        )
+
     user_id = request_fastapi.state.user_id
     resource_access_dao = ResourceAccessDAO(session)
     role_dao = RoleDAO(session)

@@ -121,24 +121,17 @@ def downgrade() -> None:
 
 
 def _seed_permissions() -> None:
-    """Seed default atomic permissions for resources."""
+    """
+    Seed default atomic permissions for resources.
+
+    Only project and organization permissions are included.
+    Interface/tab/tile permissions are not needed - project-level access is sufficient.
+    """
     permissions = [
         # Project permissions
         ("project:read", "View project details", "project", "read"),
         ("project:write", "Edit project", "project", "write"),
         ("project:delete", "Delete project", "project", "delete"),
-        # Interface permissions
-        ("interface:read", "View interface", "interface", "read"),
-        ("interface:write", "Edit interface", "interface", "write"),
-        ("interface:delete", "Delete interface", "interface", "delete"),
-        # Tab permissions
-        ("tab:read", "View tab", "tab", "read"),
-        ("tab:write", "Edit tab", "tab", "write"),
-        ("tab:delete", "Delete tab", "tab", "delete"),
-        # Tile permissions
-        ("tile:read", "View tile", "tile", "read"),
-        ("tile:write", "Edit tile", "tile", "write"),
-        ("tile:delete", "Delete tile", "tile", "delete"),
         # Organization permissions
         ("org:read", "View organization details", "organization", "read"),
         (
@@ -160,16 +153,24 @@ def _seed_permissions() -> None:
 
 
 def _seed_system_roles() -> None:
-    """Seed system roles (Owner, Admin, Member, Viewer) with appropriate permissions."""
-    # Create Owner role (full access to all resources)
+    """
+    Seed system roles with appropriate permissions.
+
+    Permission counts (6 total):
+    - Owner: 6 permissions (all: project + org read/write/delete)
+    - Admin: 5 permissions (all except org:delete)
+    - Member: 4 permissions (project + org read/write)
+    - Viewer: 2 permissions (project + org read only)
+    """
+    # Create Owner role (full access to projects and organization)
     op.execute(
         """
         INSERT INTO role (name, description, organization_id, is_system_role)
-        VALUES ('Owner', 'Full access to all resources and settings', NULL, true);
+        VALUES ('Owner', 'Full access to projects and organization', NULL, true);
         """,
     )
 
-    # Assign all permissions to Owner
+    # Assign all 6 permissions to Owner
     op.execute(
         """
         INSERT INTO role_permission (role_id, permission_id)
@@ -188,7 +189,7 @@ def _seed_system_roles() -> None:
         """,
     )
 
-    # Assign permissions to Admin (all except org:delete)
+    # Assign 5 permissions to Admin (all except org:delete)
     op.execute(
         """
         INSERT INTO role_permission (role_id, permission_id)
@@ -200,15 +201,15 @@ def _seed_system_roles() -> None:
         """,
     )
 
-    # Create Member role (read/write content and org settings, no delete)
+    # Create Member role (read/write projects and org, cannot delete)
     op.execute(
         """
         INSERT INTO role (name, description, organization_id, is_system_role)
-        VALUES ('Member', 'Create and edit content and organization settings, cannot delete', NULL, true);
+        VALUES ('Member', 'Read and write projects and organization, cannot delete', NULL, true);
         """,
     )
 
-    # Assign permissions to Member (read/write for all resources, no delete)
+    # Assign 4 permissions to Member (project + org read/write)
     op.execute(
         """
         INSERT INTO role_permission (role_id, permission_id)
@@ -224,11 +225,11 @@ def _seed_system_roles() -> None:
     op.execute(
         """
         INSERT INTO role (name, description, organization_id, is_system_role)
-        VALUES ('Viewer', 'Read-only access to organization resources', NULL, true);
+        VALUES ('Viewer', 'Read-only access to projects and organization', NULL, true);
         """,
     )
 
-    # Assign permissions to Viewer (read-only)
+    # Assign 2 permissions to Viewer (project + org read only)
     op.execute(
         """
         INSERT INTO role_permission (role_id, permission_id)
