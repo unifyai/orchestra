@@ -1,9 +1,12 @@
 from datetime import datetime
 from typing import Literal, Optional
+from zoneinfo import available_timezones
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from orchestra.web.api.utils.tax_id_validator import validate_tax_id_for_country
+
+VALID_TIMEZONES = available_timezones()
 
 
 class UserRequest(BaseModel):
@@ -13,6 +16,18 @@ class UserRequest(BaseModel):
     name: Optional[str] = None
     last_name: Optional[str] = None
     job_title: Optional[str] = None
+    timezone: Optional[str] = None
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: Optional[str]) -> Optional[str]:
+        """Ensure the timezone is a valid IANA timezone name."""
+        if v is None:
+            # Allow timezone to be optional
+            return v
+        if v not in VALID_TIMEZONES:
+            raise ValueError(f"'{v}' is not a valid IANA timezone.")
+        return v
 
 
 class AccountRequest(BaseModel):

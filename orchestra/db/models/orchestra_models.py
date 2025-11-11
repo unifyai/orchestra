@@ -469,6 +469,7 @@ class AuthUser(Base):
     last_name = Column(String)
     job_title = Column(String)
     image = Column(String)
+    timezone = Column(String, nullable=True)
     # Account tier, developer, professional, enterprise
     tier = Column(String, nullable=False, server_default="developer")
     # Toggles managed by usage quotas
@@ -1339,6 +1340,7 @@ class Assistant(Base):
     user_local_desktop = Column(String, nullable=True)
     about = Column(String, nullable=True)
     country = Column(String, nullable=True)
+    timezone = Column(String, nullable=True)
     weekly_limit = Column(Numeric, nullable=True)
     max_parallel = Column(Integer, nullable=True)
     email = Column(String, nullable=True)

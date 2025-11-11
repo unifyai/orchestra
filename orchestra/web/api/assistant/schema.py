@@ -1,10 +1,13 @@
 from datetime import datetime
 from typing import Any, Dict, Generic, List, Literal, Optional, TypeVar
+from zoneinfo import available_timezones
 
-from pydantic import BaseModel, Field, HttpUrl, model_validator
+from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 from pydantic.generics import GenericModel
 
 T = TypeVar("T")
+
+VALID_TIMEZONES = available_timezones()
 
 
 class InfoResponse(GenericModel, Generic[T]):
@@ -148,6 +151,18 @@ class AssistantCreate(BaseModel):
         None,
         description="A list of chat messages from the pre-hire conversation to be logged.",
     )
+    timezone: Optional[str] = Field(
+        None,
+        description="Timezone of the assistant in IANA format",
+        example="America/New_York",
+    )
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in VALID_TIMEZONES:
+            raise ValueError(f"'{v}' is not a valid IANA timezone.")
+        return v
 
     @model_validator(mode="after")
     def check_voice_fields(cls, self):
@@ -184,6 +199,7 @@ class AssistantCreate(BaseModel):
                 "user_local_desktop": "windows",
                 "about": "Mathematician and writer known for work on Analytical Engine",
                 "country": "US",
+                "timezone": "America/New_York",
                 "email": "ada.lovelace@unify.ai",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "voice_provider": "cartesia",
@@ -266,6 +282,7 @@ class AssistantRead(AssistantCreate):
                 "user_local_desktop": "windows",
                 "about": "Mathematician and writer known for work on Analytical Engine",
                 "country": "US",
+                "timezone": "America/New_York",
                 "email": "ada.lovelace@unify.ai",
                 "phone": "+15551234567",
                 "user_phone": "+15551234567",
@@ -367,11 +384,23 @@ class AssistantUpdate(BaseModel):
         description="Country code for phone number provisioning (e.g., US, GB)",
         example="GB",
     )
+    timezone: Optional[str] = Field(
+        None,
+        description="Timezone of the assistant in IANA format",
+        example="Europe/London",
+    )
     create_infra: Optional[bool] = Field(
         True,
         description="Whether to create infrastructure for the assistant during update (e.g., phone, email). Set to false for testing.",
         exclude=True,
     )
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in VALID_TIMEZONES:
+            raise ValueError(f"'{v}' is not a valid IANA timezone.")
+        return v
 
     @model_validator(mode="after")
     def check_voice_fields_on_update(cls, self):
@@ -438,6 +467,7 @@ class AssistantUpdate(BaseModel):
                 "voice_provider": "cartesia",
                 "voice_mode": "tts",
                 "country": "GB",
+                "timezone": "Europe/London",
             },
         }
 

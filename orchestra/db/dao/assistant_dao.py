@@ -2,6 +2,7 @@ import logging
 import time
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
+from zoneinfo import available_timezones
 
 from fastapi import HTTPException, status
 from sqlalchemy import exists, func, select
@@ -18,6 +19,8 @@ from orchestra.db.models.orchestra_models import (
 )
 from orchestra.settings import settings
 from orchestra.web.api.utils.assistant_infra import send_unify_message
+
+VALID_TIMEZONES = available_timezones()
 
 
 class AssistantDAO:
@@ -279,10 +282,15 @@ class AssistantDAO:
         voice_provider: Optional[str] = None,
         voice_mode: Optional[str] = None,
         country: Optional[str] = None,
+        timezone: Optional[str] = None,
     ) -> Assistant:
         """
         Create a new Assistant for the given user.
         """
+
+        if timezone is not None and timezone not in VALID_TIMEZONES:
+            raise ValueError(f"'{timezone}' is not a valid IANA timezone.")
+
         assistant = Assistant(
             user_id=user_id,
             first_name=first_name,
@@ -304,6 +312,7 @@ class AssistantDAO:
             voice_provider=voice_provider,
             voice_mode=voice_mode,
             country=country,
+            timezone=timezone,
         )
         self.session.add(assistant)
         self.session.flush()
@@ -373,6 +382,11 @@ class AssistantDAO:
         assistant = self.get_assistant_by_id(user_id, agent_id)
         if not assistant:
             return None
+
+        if "timezone" in update_data:
+            tz = update_data["timezone"]
+            if tz is not None and tz not in VALID_TIMEZONES:
+                raise ValueError(f"'{tz}' is not a valid IANA timezone.")
 
         for key, value in update_data.items():
             setattr(assistant, key, value)

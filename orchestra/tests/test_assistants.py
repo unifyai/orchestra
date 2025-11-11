@@ -99,6 +99,7 @@ async def test_create_assistant_success(client: AsyncClient):
         "region": "North America",
         "profile_photo": "https://example.com/photos/alice.jpg",
         "about": "AI researcher specializing in natural language processing",
+        "timezone": "America/New_York",
         "create_infra": False,
     }
     resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
@@ -110,6 +111,7 @@ async def test_create_assistant_success(client: AsyncClient):
     assert data["first_name"] == payload["first_name"]
     assert data["surname"] == payload["surname"]
     assert data["age"] == payload["age"]
+    assert data["timezone"] == payload["timezone"]
     assert isinstance(data["weekly_limit"], float)
     assert data["weekly_limit"] == payload["weekly_limit"]
     assert data["max_parallel"] == payload["max_parallel"]
@@ -157,6 +159,7 @@ async def test_list_assistants_after_create(client: AsyncClient):
         "region": "Europe",
         "profile_photo": "https://example.com/photos/carol.jpg",
         "about": "Data scientist with expertise in statistical modeling",
+        "timezone": "Europe/London",
         "create_infra": False,
     }
     payload2 = {
@@ -168,6 +171,7 @@ async def test_list_assistants_after_create(client: AsyncClient):
         "region": "Asia",
         "profile_photo": "https://example.com/photos/dave.jpg",
         "about": "Software engineer focused on distributed systems",
+        "timezone": "Asia/Tokyo",
         "create_infra": False,
     }
     r1 = await client.post("/v0/assistant", json=payload1, headers=HEADERS)
@@ -190,6 +194,7 @@ async def test_list_assistants_after_create(client: AsyncClient):
         assert "about" in assistant
         assert "phone" in assistant
         assert "email" in assistant
+        assert "timezone" in assistant
         # Default values for optional fields
         assert assistant["phone"] is None
         assert assistant["email"] is None
@@ -207,6 +212,7 @@ async def test_update_weekly_limit_only(client: AsyncClient):
         "region": "South America",
         "profile_photo": "https://example.com/photos/eve.jpg",
         "about": "Machine learning expert with focus on computer vision",
+        "timezone": "America/Sao_Paulo",
         "create_infra": False,
     }
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
@@ -226,6 +232,7 @@ async def test_update_weekly_limit_only(client: AsyncClient):
     assert updated["region"] == payload["region"]
     assert updated["profile_photo"] == payload["profile_photo"]
     assert updated["about"] == payload["about"]
+    assert updated["timezone"] == payload["timezone"]
     assert updated["phone"] is None
     assert updated["email"] is None
 
@@ -260,6 +267,37 @@ async def test_update_max_parallel_only(client: AsyncClient):
     assert updated["surname"] == payload["surname"]
     assert updated["region"] == payload["region"]
     assert updated["profile_photo"] == payload["profile_photo"]
+    assert updated["about"] == payload["about"]
+
+
+@pytest.mark.anyio
+async def test_update_timezone_only(client: AsyncClient):
+    payload = {
+        "first_name": "Timezone",
+        "surname": "Tester",
+        "age": 40,
+        "weekly_limit": 30.0,
+        "max_parallel": 2,
+        "region": "South America",
+        "about": "Testing timezone updates",
+        "timezone": "America/Sao_Paulo",
+        "create_infra": False,
+    }
+    create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    aid = create.json()["info"]["agent_id"]
+    new_timezone = "Europe/Lisbon"
+    update_payload = {"timezone": new_timezone, "create_infra": False}
+    patch = await client.patch(
+        f"/v0/assistant/{aid}/config",
+        json=update_payload,
+        headers=HEADERS,
+    )
+    assert patch.status_code == 200
+    updated = patch.json()["info"]
+    assert updated["timezone"] == new_timezone
+    assert updated["weekly_limit"] == payload["weekly_limit"]
+    assert updated["first_name"] == payload["first_name"]
+    assert updated["region"] == payload["region"]
     assert updated["about"] == payload["about"]
 
 
@@ -478,6 +516,7 @@ async def test_update_multiple_fields(client: AsyncClient):
         "region": "Africa",
         "profile_photo": "https://example.com/photos/kevin.jpg",
         "about": "Original bio information",
+        "timezone": "Africa/Nairobi",
         "create_infra": False,
     }
     create = await client.post("/v0/assistant", json=payload, headers=HEADERS)
@@ -486,6 +525,7 @@ async def test_update_multiple_fields(client: AsyncClient):
         "about": "Updated professional bio with new skills",
         "phone": "+1-555-987-6543",
         "email": "kevin.brown@example.com",
+        "timezone": "UTC",
         "create_infra": False,
     }
     patch = await client.patch(
@@ -498,6 +538,7 @@ async def test_update_multiple_fields(client: AsyncClient):
     assert updated["about"] == update_payload["about"]
     assert updated["phone"] == update_payload["phone"]
     assert updated["email"] == update_payload["email"]
+    assert updated["timezone"] == update_payload["timezone"]
     assert updated["first_name"] == payload["first_name"]
     assert updated["region"] == payload["region"]
 
@@ -1048,6 +1089,29 @@ async def test_create_assistant_duplicate_name_fails(
     assert data3["surname"] == payload["surname"]
 
 
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "invalid_timezone",
+    ["PST", "UTC+1", "Europe/Fake_City", "gmt"],
+)
+async def test_create_assistant_with_invalid_timezone(
+    client: AsyncClient,
+    invalid_timezone: str,
+):
+    """Test that creating an assistant with an invalid timezone fails."""
+    payload = {
+        "first_name": "Timezone",
+        "surname": "Fail",
+        "timezone": invalid_timezone,
+        "create_infra": False,
+    }
+    resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    error_detail = resp.json()["detail"][0]
+    assert "timezone" in error_detail["loc"]
+    assert "not a valid IANA timezone" in error_detail["msg"]
+
+
 # --- Assistant project creation and logging ---
 @pytest.fixture
 def pre_hire_chat_payload():
@@ -1330,6 +1394,34 @@ async def test_update_assistant_contact_info_reawakens(
     )
     assert patch_non_contact_resp.status_code == 200
     mock_reawaken.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_update_assistant_with_invalid_timezone(client: AsyncClient):
+    """Test that updating an assistant with an invalid timezone fails."""
+    # 1. Create a valid assistant first
+    payload = {
+        "first_name": "Timezone",
+        "surname": "UpdateFail",
+        "create_infra": False,
+    }
+    create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    assert create_resp.status_code == 200
+    assistant_id = create_resp.json()["info"]["agent_id"]
+
+    # 2. Attempt to update with an invalid timezone
+    update_payload = {"timezone": "America/Wrong_City", "create_infra": False}
+    patch_resp = await client.patch(
+        f"/v0/assistant/{assistant_id}/config",
+        json=update_payload,
+        headers=HEADERS,
+    )
+
+    # 3. Assert the request fails with a validation error
+    assert patch_resp.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+    error_detail = patch_resp.json()["detail"][0]
+    assert "timezone" in error_detail["loc"]
+    assert "not a valid IANA timezone" in error_detail["msg"]
 
 
 @pytest.mark.anyio

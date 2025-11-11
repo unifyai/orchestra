@@ -335,6 +335,7 @@ def create_assistant(
             email=assistant_in.email,
             country=assistant_in.country,
             user_whatsapp_number=assistant_in.user_whatsapp_number,
+            timezone=assistant_in.timezone,
         )
 
         # Commit the assistant creation before infrastructure setup
@@ -638,6 +639,7 @@ def create_assistant(
             user_whatsapp_number=assistant.user_whatsapp_number,
             assistant_whatsapp_number=assistant.assistant_whatsapp_number,
             user_phone=assistant.user_phone,
+            timezone=assistant.timezone,
         ),
     )
 
@@ -673,6 +675,7 @@ def create_assistant(
                                 "voice_provider": "cartesia",
                                 "voice_mode": "tts",
                                 "country": "US",
+                                "timezone": "America/New_York",
                                 "created_at": "2025-04-25T12:00:00Z",
                                 "updated_at": "2025-04-25T12:00:00Z",
                             },
@@ -693,6 +696,7 @@ def create_assistant(
                                 "voice_provider": "cartesia",
                                 "voice_mode": "tts",
                                 "country": "CA",
+                                "timezone": "America/Vancouver",
                                 "created_at": "2025-04-24T10:30:00Z",
                                 "updated_at": "2025-04-24T10:30:00Z",
                             },
@@ -763,6 +767,7 @@ def list_assistants(
                     voice_id=a.voice_id,
                     voice_provider=a.voice_provider,
                     voice_mode=a.voice_mode,
+                    timezone=a.timezone,
                 )
                 for a in assistants
             ],
@@ -884,6 +889,7 @@ def delete_assistant_contact(
                 voice_id=updated_assistant.voice_id,
                 voice_provider=updated_assistant.voice_provider,
                 voice_mode=updated_assistant.voice_mode,
+                timezone=updated_assistant.timezone,
             ),
         )
 
@@ -1127,6 +1133,7 @@ def delete_assistant(
                             "voice_provider": "cartesia",
                             "voice_mode": "tts",
                             "country": "US",
+                            "timezone": "America/New_York",
                             "created_at": "2025-04-25T12:00:00Z",
                             "updated_at": "2025-04-25T14:30:00Z",
                         },
@@ -1430,6 +1437,7 @@ def update_assistant_config(
                 voice_id=updated.voice_id,
                 voice_provider=updated.voice_provider,
                 voice_mode=updated.voice_mode,
+                timezone=updated.timezone,
             ),
         )
     except Exception as e:
@@ -2127,7 +2135,7 @@ def delete_voice(
     except Exception as e_generic:
         session.rollback()
         logging.error(
-            f"Generic error during voice deletion {voice_id}: {str(e_generic)}"
+            f"Generic error during voice deletion {voice_id}: {str(e_generic)}",
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
