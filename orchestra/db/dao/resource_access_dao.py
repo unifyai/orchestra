@@ -10,8 +10,30 @@ from orchestra.db.models.orchestra_models import Project, ResourceAccess, TeamMe
 class ResourceAccessDAO:
     """DAO for managing resource access (RBAC)."""
 
+    # Module-level cache for permission checks (shared across instances)
+    # Key: (user_id, resource_type, resource_id, permission_name)
+    # Value: bool (has permission)
+    _permission_cache = {}
+    _cache_size_limit = 10000  # Prevent unbounded growth
+
     def __init__(self, session: Session):
         self.session = session
+
+    @classmethod
+    def clear_permission_cache(cls):
+        """Clear the permission cache. Call this when roles/memberships change."""
+        cls._permission_cache.clear()
+
+    @classmethod
+    def _get_cache_key(
+        cls,
+        user_id: str,
+        resource_type: str,
+        resource_id: int,
+        permission_name: str,
+    ) -> str:
+        """Generate cache key for permission check."""
+        return f"{user_id}:{resource_type}:{resource_id}:{permission_name}"
 
     def grant_access(
         self,
@@ -23,6 +45,8 @@ class ResourceAccessDAO:
     ) -> ResourceAccess:
         """
         Grant access to a resource for a user or team.
+
+        Clears the permission cache since permissions have changed.
 
         :param resource_type: Type of resource ('project', 'interface', etc.).
         :param resource_id: Resource ID.
@@ -40,6 +64,8 @@ class ResourceAccessDAO:
         )
         self.session.add(access)
         self.session.flush()
+        # Clear cache since permissions changed
+        self.clear_permission_cache()
         return access
 
     def revoke_access(
@@ -52,6 +78,8 @@ class ResourceAccessDAO:
     ) -> None:
         """
         Revoke access to a resource.
+
+        Clears the permission cache since permissions have changed.
 
         :param resource_type: Type of resource.
         :param resource_id: Resource ID.
@@ -71,6 +99,8 @@ class ResourceAccessDAO:
 
         query.delete()
         self.session.flush()
+        # Clear cache since permissions changed
+        self.clear_permission_cache()
 
     def get_resource_access(
         self,
@@ -145,24 +175,47 @@ class ResourceAccessDAO:
         For personal projects: User is owner if project.user_id == user_id.
         For org projects: Check ResourceAccess + team memberships.
 
+        Uses caching to improve performance. Cache is cleared when calling
+        clear_permission_cache().
+
         :param user_id: User ID.
         :param resource_type: Type of resource ('project', 'interface', 'tab', 'tile').
         :param resource_id: Resource ID.
         :param permission_name: Permission name (e.g., 'project:read').
         :return: True if user has permission, False otherwise.
         """
-        # Step 1: Check if this is a personal resource
-        if self._is_personal_resource(resource_type, resource_id):
-            # Personal resource: creator has all permissions
-            return self._check_personal_ownership(resource_type, resource_id, user_id)
-
-        # Step 2: Check org resource access via RBAC
-        return self._check_org_permission(
+        # Check cache first
+        cache_key = self._get_cache_key(
             user_id,
             resource_type,
             resource_id,
             permission_name,
         )
+        if cache_key in self._permission_cache:
+            return self._permission_cache[cache_key]
+
+        # Cache miss - compute permission
+        # Step 1: Check if this is a personal resource
+        if self._is_personal_resource(resource_type, resource_id):
+            # Personal resource: creator has all permissions
+            result = self._check_personal_ownership(resource_type, resource_id, user_id)
+        else:
+            # Step 2: Check org resource access via RBAC
+            result = self._check_org_permission(
+                user_id,
+                resource_type,
+                resource_id,
+                permission_name,
+            )
+
+        # Store in cache (with size limit check)
+        if len(self._permission_cache) >= self._cache_size_limit:
+            # Simple eviction: clear entire cache when limit reached
+            # Could be improved with LRU eviction, but this is simple and effective
+            self._permission_cache.clear()
+
+        self._permission_cache[cache_key] = result
+        return result
 
     def _is_personal_resource(self, resource_type: str, resource_id: int) -> bool:
         """
