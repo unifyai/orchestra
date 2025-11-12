@@ -31,9 +31,9 @@ def mock_assistant_infra_calls(request):
         return
 
     with patch(
-        "orchestra.web.api.assistant.views.wake_up_assistant"
+        "orchestra.web.api.assistant.views.wake_up_assistant",
     ) as mock_wake_up, patch(
-        "orchestra.web.api.assistant.views.reawaken_assistant"
+        "orchestra.web.api.assistant.views.reawaken_assistant",
     ) as mock_reawaken:
 
         mock_wake_up.return_value = MagicMock(status_code=200)
@@ -133,7 +133,7 @@ async def test_assistant_whatsapp_number_assignment_single_user(client: AsyncCli
         "age": 30,
         "weekly_limit": 10.0,
         "max_parallel": 2,
-        "region": "Region1",
+        "nationality": "Nationality1",
         "about": "First test assistant",
         "phone": "+1000000001",
         "user_phone": user_phone,
@@ -153,7 +153,7 @@ async def test_assistant_whatsapp_number_assignment_single_user(client: AsyncCli
         "age": 35,
         "weekly_limit": 15.0,
         "max_parallel": 3,
-        "region": "Region2",
+        "nationality": "Nationality2",
         "about": "Second test assistant",
         "phone": "+1000000002",
         "user_phone": user_phone,
@@ -204,7 +204,7 @@ async def test_assistant_whatsapp_number_assignment_multiple_users(client: Async
         "age": 30,
         "weekly_limit": 10.0,
         "max_parallel": 2,
-        "region": "Region1",
+        "nationality": "Nationality1",
         "about": "First test assistant",
         "phone": "+1000000001",
         "user_phone": "+2000000001",
@@ -224,7 +224,7 @@ async def test_assistant_whatsapp_number_assignment_multiple_users(client: Async
         "age": 35,
         "weekly_limit": 15.0,
         "max_parallel": 3,
-        "region": "Region2",
+        "nationality": "Nationality2",
         "about": "Second test assistant",
         "phone": "+1000000002",
         "user_phone": "+2000000002",
@@ -277,7 +277,7 @@ async def test_assistant_whatsapp_conflict_both(client: AsyncClient):
         "age": 30,
         "weekly_limit": 10.0,
         "max_parallel": 2,
-        "region": "Region1",
+        "nationality": "Nationality1",
         "about": "First test assistant",
         "phone": "+1000000001",
         "user_phone": "+2000000001",
@@ -297,7 +297,7 @@ async def test_assistant_whatsapp_conflict_both(client: AsyncClient):
         "age": 35,
         "weekly_limit": 15.0,
         "max_parallel": 3,
-        "region": "Region2",
+        "nationality": "Nationality2",
         "about": "Second test assistant",
         "phone": "+1000000002",
         "user_phone": "+2000000002",
@@ -374,7 +374,7 @@ async def test_assistant_whatsapp_conflict_none_non_sharing_contact(
         "age": 30,
         "weekly_limit": 5.0,
         "max_parallel": 1,
-        "region": "ConflictRegion",
+        "nationality": "ConflictNationality",
         "about": "Testing conflict assistant",
         "phone": "+1000000001",
         "user_phone": user_phone,
@@ -464,7 +464,7 @@ async def test_assistant_whatsapp_conflict_single_sharing_contact(client: AsyncC
         "age": 30,
         "weekly_limit": 5.0,
         "max_parallel": 1,
-        "region": "ConflictRegion",
+        "nationality": "ConflictNationality",
         "about": "Testing conflict assistant",
         "phone": "+1000000001",
         "user_phone": user_phone,

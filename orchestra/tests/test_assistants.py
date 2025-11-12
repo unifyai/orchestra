@@ -96,7 +96,7 @@ async def test_create_assistant_success(client: AsyncClient):
         "age": 28,
         "weekly_limit": 15.5,
         "max_parallel": 3,
-        "region": "North America",
+        "nationality": "United States",
         "profile_photo": "https://example.com/photos/alice.jpg",
         "about": "AI researcher specializing in natural language processing",
         "timezone": "America/New_York",
@@ -115,7 +115,7 @@ async def test_create_assistant_success(client: AsyncClient):
     assert isinstance(data["weekly_limit"], float)
     assert data["weekly_limit"] == payload["weekly_limit"]
     assert data["max_parallel"] == payload["max_parallel"]
-    assert data["region"] == payload["region"]
+    assert data["nationality"] == payload["nationality"]
     assert data["profile_photo"] == payload["profile_photo"]
     assert data["about"] == payload["about"]
     assert data["phone"] is None
@@ -156,10 +156,10 @@ async def test_list_assistants_after_create(client: AsyncClient):
         "age": 22,
         "weekly_limit": 12.0,
         "max_parallel": 1,
-        "region": "Europe",
+        "nationality": "Germany",
         "profile_photo": "https://example.com/photos/carol.jpg",
         "about": "Data scientist with expertise in statistical modeling",
-        "timezone": "Europe/London",
+        "timezone": "Europe/Berlin",
         "create_infra": False,
     }
     payload2 = {
@@ -168,10 +168,10 @@ async def test_list_assistants_after_create(client: AsyncClient):
         "age": 35,
         "weekly_limit": 20.0,
         "max_parallel": 5,
-        "region": "Asia",
+        "nationality": "China",
         "profile_photo": "https://example.com/photos/dave.jpg",
         "about": "Software engineer focused on distributed systems",
-        "timezone": "Asia/Tokyo",
+        "timezone": "Asia/Shanghai",
         "create_infra": False,
     }
     r1 = await client.post("/v0/assistant", json=payload1, headers=HEADERS)
@@ -189,7 +189,7 @@ async def test_list_assistants_after_create(client: AsyncClient):
 
     # Verify all assistants have the new fields
     for assistant in data:
-        assert "region" in assistant
+        assert "nationality" in assistant
         assert "profile_photo" in assistant
         assert "about" in assistant
         assert "phone" in assistant
@@ -209,7 +209,7 @@ async def test_update_weekly_limit_only(client: AsyncClient):
         "age": 40,
         "weekly_limit": 30.0,
         "max_parallel": 2,
-        "region": "South America",
+        "nationality": "United States",
         "profile_photo": "https://example.com/photos/eve.jpg",
         "about": "Machine learning expert with focus on computer vision",
         "timezone": "America/Sao_Paulo",
@@ -229,7 +229,7 @@ async def test_update_weekly_limit_only(client: AsyncClient):
     assert updated["weekly_limit"] == new_limit
     assert updated["max_parallel"] == payload["max_parallel"]
     assert updated["first_name"] == payload["first_name"]
-    assert updated["region"] == payload["region"]
+    assert updated["nationality"] == payload["nationality"]
     assert updated["profile_photo"] == payload["profile_photo"]
     assert updated["about"] == payload["about"]
     assert updated["timezone"] == payload["timezone"]
@@ -246,7 +246,7 @@ async def test_update_max_parallel_only(client: AsyncClient):
         "age": 50,
         "weekly_limit": 25.0,
         "max_parallel": 4,
-        "region": "Australia",
+        "nationality": "Australia",
         "profile_photo": "https://example.com/photos/frank.jpg",
         "about": "Robotics engineer specializing in autonomous systems",
         "create_infra": False,
@@ -265,7 +265,7 @@ async def test_update_max_parallel_only(client: AsyncClient):
     assert updated["max_parallel"] == new_parallel
     assert updated["weekly_limit"] == payload["weekly_limit"]
     assert updated["surname"] == payload["surname"]
-    assert updated["region"] == payload["region"]
+    assert updated["nationality"] == payload["nationality"]
     assert updated["profile_photo"] == payload["profile_photo"]
     assert updated["about"] == payload["about"]
 
@@ -278,7 +278,7 @@ async def test_update_timezone_only(client: AsyncClient):
         "age": 40,
         "weekly_limit": 30.0,
         "max_parallel": 2,
-        "region": "South America",
+        "nationality": "United States",
         "about": "Testing timezone updates",
         "timezone": "America/Sao_Paulo",
         "create_infra": False,
@@ -297,7 +297,7 @@ async def test_update_timezone_only(client: AsyncClient):
     assert updated["timezone"] == new_timezone
     assert updated["weekly_limit"] == payload["weekly_limit"]
     assert updated["first_name"] == payload["first_name"]
-    assert updated["region"] == payload["region"]
+    assert updated["nationality"] == payload["nationality"]
     assert updated["about"] == payload["about"]
 
 
@@ -322,7 +322,7 @@ async def test_delete_assistant_success(client: AsyncClient):
         "age": 85,
         "weekly_limit": 50.0,
         "max_parallel": 1,
-        "region": "North America",
+        "nationality": "United States",
         "profile_photo": "https://example.com/photos/grace.jpg",
         "about": "Computer scientist and pioneer in programming languages",
         "create_infra": False,
@@ -352,7 +352,7 @@ async def test_update_about_only(client: AsyncClient):
         "age": 32,
         "weekly_limit": 35.0,
         "max_parallel": 3,
-        "region": "Asia",
+        "nationality": "China",
         "profile_photo": "https://example.com/photos/hannah.jpg",
         "about": "Original bio information",
         "create_infra": False,
@@ -370,7 +370,7 @@ async def test_update_about_only(client: AsyncClient):
     updated = patch.json()["info"]
     assert updated["about"] == new_about
     assert updated["first_name"] == payload["first_name"]
-    assert updated["region"] == payload["region"]
+    assert updated["nationality"] == payload["nationality"]
     assert updated["phone"] is None
     assert updated["email"] is None
 
@@ -384,7 +384,7 @@ async def test_update_phone_only(client: AsyncClient):
         "age": 45,
         "weekly_limit": 40.0,
         "max_parallel": 2,
-        "region": "Europe",
+        "nationality": "Germany",
         "profile_photo": "https://example.com/photos/ian.jpg",
         "about": "Cybersecurity expert with focus on network security",
         "create_infra": False,
@@ -403,7 +403,7 @@ async def test_update_phone_only(client: AsyncClient):
     assert updated["phone"] == new_phone
     assert updated["email"] is None
     assert updated["about"] == payload["about"]
-    assert updated["region"] == payload["region"]
+    assert updated["nationality"] == payload["nationality"]
 
 
 @pytest.mark.anyio
@@ -415,7 +415,7 @@ async def test_update_email_only(client: AsyncClient):
         "age": 38,
         "weekly_limit": 22.5,
         "max_parallel": 4,
-        "region": "South America",
+        "nationality": "United States",
         "profile_photo": "https://example.com/photos/julia.jpg",
         "about": "Data engineer specializing in big data infrastructure",
         "create_infra": False,
@@ -446,7 +446,7 @@ async def test_update_desktop_url_only(client: AsyncClient):
         "age": 27,
         "weekly_limit": 12.0,
         "max_parallel": 2,
-        "region": "Europe",
+        "nationality": "Germany",
         "profile_photo": "https://example.com/photos/desktop.jpg",
         "about": "Testing desktop url update",
         "create_infra": False,
@@ -476,7 +476,7 @@ async def test_update_user_local_desktop_only(client: AsyncClient):
         "age": 31,
         "weekly_limit": 10.0,
         "max_parallel": 2,
-        "region": "Digital Ocean",
+        "nationality": "France",
         "about": "An assistant for testing desktop updates.",
         "create_infra": False,
     }
@@ -500,7 +500,7 @@ async def test_update_user_local_desktop_only(client: AsyncClient):
     updated_data = patch_resp.json()["info"]
     assert updated_data["user_local_desktop"] == new_desktop
     assert updated_data["first_name"] == payload["first_name"]
-    assert updated_data["region"] == payload["region"]
+    assert updated_data["nationality"] == payload["nationality"]
     assert updated_data["weekly_limit"] == payload["weekly_limit"]
 
 
@@ -513,7 +513,7 @@ async def test_update_multiple_fields(client: AsyncClient):
         "age": 29,
         "weekly_limit": 18.0,
         "max_parallel": 2,
-        "region": "Africa",
+        "nationality": "South Africa",
         "profile_photo": "https://example.com/photos/kevin.jpg",
         "about": "Original bio information",
         "timezone": "Africa/Nairobi",
@@ -540,7 +540,7 @@ async def test_update_multiple_fields(client: AsyncClient):
     assert updated["email"] == update_payload["email"]
     assert updated["timezone"] == update_payload["timezone"]
     assert updated["first_name"] == payload["first_name"]
-    assert updated["region"] == payload["region"]
+    assert updated["nationality"] == payload["nationality"]
 
 
 @pytest.mark.anyio
@@ -552,7 +552,7 @@ async def test_assistant_recordings_audio_lifecycle(client: AsyncClient):
         "age": 29,
         "weekly_limit": 18.0,
         "max_parallel": 2,
-        "region": "Africa",
+        "nationality": "South Africa",
         "profile_photo": "https://example.com/photos/kevin.jpg",
         "about": "Original bio information",
         "create_infra": False,
@@ -624,7 +624,7 @@ async def test_admin_list_assistant_emails(client: AsyncClient):
         "age": 33,
         "weekly_limit": 25.0,
         "max_parallel": 3,
-        "region": "Europe",
+        "nationality": "Germany",
         "profile_photo": "https://example.com/photos/laura.jpg",
         "about": "AI ethics researcher with focus on fairness in algorithms",
         "create_infra": False,
@@ -635,7 +635,7 @@ async def test_admin_list_assistant_emails(client: AsyncClient):
         "age": 41,
         "weekly_limit": 30.0,
         "max_parallel": 4,
-        "region": "North America",
+        "nationality": "United States",
         "profile_photo": "https://example.com/photos/michael.jpg",
         "about": "Cloud architecture specialist with expertise in distributed systems",
         "create_infra": False,
@@ -684,7 +684,7 @@ async def test_search_assistants_by_phone(client: AsyncClient):
         "age": 31,
         "weekly_limit": 15.0,
         "max_parallel": 2,
-        "region": "Europe",
+        "nationality": "Germany",
         "profile_photo": "https://example.com/photos/paul.jpg",
         "about": "Mobile app developer",
         "phone": "+15551112222",
@@ -696,7 +696,7 @@ async def test_search_assistants_by_phone(client: AsyncClient):
         "age": 26,
         "weekly_limit": 18.0,
         "max_parallel": 1,
-        "region": "Asia",
+        "nationality": "China",
         "profile_photo": "https://example.com/photos/quinn.jpg",
         "about": "UX designer",
         "phone": "+15553334444",
@@ -730,7 +730,7 @@ async def test_search_assistants_by_email(client: AsyncClient):
         "age": 29,
         "weekly_limit": 22.0,
         "max_parallel": 3,
-        "region": "North America",
+        "nationality": "United States",
         "profile_photo": "https://example.com/photos/rachel.jpg",
         "about": "Backend developer",
         "email": "rachel.martinez@example.com",
@@ -742,7 +742,7 @@ async def test_search_assistants_by_email(client: AsyncClient):
         "age": 37,
         "weekly_limit": 25.0,
         "max_parallel": 4,
-        "region": "Australia",
+        "nationality": "Australia",
         "profile_photo": "https://example.com/photos/sam.jpg",
         "about": "DevOps engineer",
         "email": "sam.johnson@example.com",
@@ -776,7 +776,7 @@ async def test_admin_list_assistants_filter_phone(client: AsyncClient):
         "age": 28,
         "weekly_limit": 15.0,
         "max_parallel": 1,
-        "region": "Asia",
+        "nationality": "China",
         "profile_photo": "https://example.com/photos/phone1.jpg",
         "about": "Phone test assistant 1",
         "phone": "+15551111111",
@@ -788,7 +788,7 @@ async def test_admin_list_assistants_filter_phone(client: AsyncClient):
         "age": 32,
         "weekly_limit": 18.0,
         "max_parallel": 2,
-        "region": "Australia",
+        "nationality": "Australia",
         "profile_photo": "https://example.com/photos/phone2.jpg",
         "about": "Phone test assistant 2",
         "phone": "+15552222222",
@@ -825,7 +825,7 @@ async def test_admin_list_assistants_filter_email(client: AsyncClient):
         "age": 26,
         "weekly_limit": 12.0,
         "max_parallel": 1,
-        "region": "South America",
+        "nationality": "United States",
         "profile_photo": "https://example.com/photos/email1.jpg",
         "about": "Email test assistant 1",
         "email": "email.test1@example.com",
@@ -837,7 +837,7 @@ async def test_admin_list_assistants_filter_email(client: AsyncClient):
         "age": 40,
         "weekly_limit": 30.0,
         "max_parallel": 4,
-        "region": "Africa",
+        "nationality": "South Africa",
         "profile_photo": "https://example.com/photos/email2.jpg",
         "about": "Email test assistant 2",
         "email": "email.test2@example.com",
@@ -874,7 +874,7 @@ async def test_admin_list_assistants_filter_agent_id(client: AsyncClient):
         "age": 21,
         "weekly_limit": 10.0,
         "max_parallel": 1,
-        "region": "Test",
+        "nationality": "Test",
         "profile_photo": "https://example.com/a1.jpg",
         "about": "Assistant One",
         "create_infra": False,
@@ -885,7 +885,7 @@ async def test_admin_list_assistants_filter_agent_id(client: AsyncClient):
         "age": 22,
         "weekly_limit": 11.0,
         "max_parallel": 2,
-        "region": "Test",
+        "nationality": "Test",
         "profile_photo": "https://example.com/a2.jpg",
         "about": "Assistant Two",
         "create_infra": False,
@@ -929,7 +929,7 @@ async def test_admin_list_assistants_for_user(client: AsyncClient):
         "age": 30,
         "weekly_limit": 10.0,
         "max_parallel": 1,
-        "region": "Testland",
+        "nationality": "Testland",
         "profile_photo": "https://example.com/u1.jpg",
         "about": "Assistant for user1",
         "create_infra": False,
@@ -978,7 +978,7 @@ async def test_admin_update_assistant_whatsapp_number_and_user_whatsapp(
         "age": 25,
         "weekly_limit": 5.0,
         "max_parallel": 1,
-        "region": "Testland",
+        "nationality": "Testland",
         "profile_photo": "https://example.com/a1.jpg",
         "about": "First assistant",
         "phone": initial_phone1,
@@ -998,7 +998,7 @@ async def test_admin_update_assistant_whatsapp_number_and_user_whatsapp(
         "age": 28,
         "weekly_limit": 6.0,
         "max_parallel": 1,
-        "region": "Testland",
+        "nationality": "Testland",
         "profile_photo": "https://example.com/a2.jpg",
         "about": "Second assistant",
         "phone": initial_phone2,
@@ -1047,7 +1047,7 @@ async def test_create_assistant_duplicate_name_fails(
         "age": 35,
         "weekly_limit": 20.0,
         "max_parallel": 2,
-        "region": "North America",
+        "nationality": "United States",
         "about": "A test assistant.",
         "create_infra": False,
     }
@@ -1092,7 +1092,7 @@ async def test_create_assistant_duplicate_name_fails(
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     "invalid_timezone",
-    ["PST", "UTC+1", "Europe/Fake_City", "gmt"],
+    ["PST", "UTC+1", "Germany/Fake_City", "gmt"],
 )
 async def test_create_assistant_with_invalid_timezone(
     client: AsyncClient,
