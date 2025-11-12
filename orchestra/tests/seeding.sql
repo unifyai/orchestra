@@ -158,7 +158,7 @@ INSERT INTO permission (name, description, resource_type, action) VALUES
 INSERT INTO role (name, description, organization_id, is_system_role) VALUES
 ('Owner', 'Full access to projects and organization', NULL, true),
 ('Admin', 'Full access except deleting organization', NULL, true),
-('Member', 'Read and write projects and organization, cannot delete', NULL, true),
+('Member', 'Read and write projects, view organization details', NULL, true),
 ('Viewer', 'Read-only access to projects and organization', NULL, true);
 
 -- RBAC: Owner role gets all permissions
@@ -170,10 +170,12 @@ INSERT INTO role_permission (role_id, permission_id)
 SELECT (SELECT id FROM role WHERE name = 'Admin' AND is_system_role = true), id
 FROM permission WHERE name != 'org:delete';
 
--- RBAC: Member role gets read + write only
+-- RBAC: Member role gets project read/write + org read
 INSERT INTO role_permission (role_id, permission_id)
 SELECT (SELECT id FROM role WHERE name = 'Member' AND is_system_role = true), id
-FROM permission WHERE action IN ('read', 'write');
+FROM permission
+WHERE (resource_type = 'project' AND action IN ('read', 'write'))
+   OR (resource_type = 'organization' AND action = 'read');
 
 -- RBAC: Viewer role gets read only
 INSERT INTO role_permission (role_id, permission_id)

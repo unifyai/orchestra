@@ -536,14 +536,14 @@ async def test_system_role_permissions(client: AsyncClient, dbsession):
     assert role_dao.has_permission(admin_role.id, "org:write")
     assert role_dao.has_permission(admin_role.id, "project:delete")
 
-    # Check Member role has read/write only (4 permissions: 2 resources × 2 actions)
+    # Check Member role has project read/write + org read (3 permissions)
     member_role = role_dao.get_by_name("Member", organization_id=None)
     member_perms = role_dao.get_role_permissions(member_role.id)
-    assert len(member_perms) == 4
+    assert len(member_perms) == 3
     assert role_dao.has_permission(member_role.id, "project:read")
     assert role_dao.has_permission(member_role.id, "project:write")
     assert role_dao.has_permission(member_role.id, "org:read")
-    assert role_dao.has_permission(member_role.id, "org:write")
+    assert not role_dao.has_permission(member_role.id, "org:write")
     assert not role_dao.has_permission(member_role.id, "project:delete")
     assert not role_dao.has_permission(member_role.id, "org:delete")
 

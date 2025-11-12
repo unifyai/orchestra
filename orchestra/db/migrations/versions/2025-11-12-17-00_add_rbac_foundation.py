@@ -159,7 +159,7 @@ def _seed_system_roles() -> None:
     Permission counts (6 total):
     - Owner: 6 permissions (all: project + org read/write/delete)
     - Admin: 5 permissions (all except org:delete)
-    - Member: 4 permissions (project + org read/write)
+    - Member: 3 permissions (project read/write, org read only)
     - Viewer: 2 permissions (project + org read only)
     """
     # Create Owner role (full access to projects and organization)
@@ -201,15 +201,15 @@ def _seed_system_roles() -> None:
         """,
     )
 
-    # Create Member role (read/write projects and org, cannot delete)
+    # Create Member role (read/write projects, read-only org access)
     op.execute(
         """
         INSERT INTO role (name, description, organization_id, is_system_role)
-        VALUES ('Member', 'Read and write projects and organization, cannot delete', NULL, true);
+        VALUES ('Member', 'Read and write projects, view organization details', NULL, true);
         """,
     )
 
-    # Assign 4 permissions to Member (project + org read/write)
+    # Assign 3 permissions to Member (project read/write + org read)
     op.execute(
         """
         INSERT INTO role_permission (role_id, permission_id)
@@ -217,7 +217,8 @@ def _seed_system_roles() -> None:
             (SELECT id FROM role WHERE name = 'Member' AND is_system_role = true),
             id
         FROM permission
-        WHERE action IN ('read', 'write');
+        WHERE (resource_type = 'project' AND action IN ('read', 'write'))
+            OR (resource_type = 'organization' AND action = 'read');
         """,
     )
 
