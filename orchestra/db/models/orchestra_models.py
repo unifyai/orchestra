@@ -640,9 +640,9 @@ class OrganizationMember(Base):
     )  # owner, admin, user -> owner is duplicated info? :/
     role_id = Column(
         Integer,
-        ForeignKey("role.id", ondelete="SET NULL"),
-        nullable=True,
-    )  # RBAC role for this member (defaults to "Member" system role)
+        ForeignKey("role.id", ondelete="RESTRICT"),
+        nullable=False,
+    )  # RBAC role for this member (explicit, never NULL - defaults to "Member" system role)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
 

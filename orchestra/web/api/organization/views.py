@@ -314,19 +314,12 @@ async def add_organization_member(
 
     # Add member
     try:
-        # Determine role: use provided role_id or default to Member
-        role_id = member_data.role_id
-        if role_id is None:
-            member_role = role_dao.get_by_name("Member", organization_id=None)
-            if not member_role:
-                raise ValueError("Member system role not found")
-            role_id = member_role.id
-
+        # DAO will default to Member role if role_id is None
         org_member_dao.create(
             organization_id=organization_id,
             user_id=member_data.user_id,
             level=member_data.level,
-            role_id=role_id,
+            role_id=member_data.role_id,
         )
 
         # Create organization API key for the new member

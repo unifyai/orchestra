@@ -1035,17 +1035,18 @@ def transfer_project_to_organization(
             detail=f"Organization with id {transfer_request.organization_id} not found",
         )
 
-    # Verify user has org:write permission on target organization
-    has_permission = resource_access_dao.check_user_permission(
+    # Verify user has project:write permission in target organization
+    # This checks if the user's role in the org includes project:write
+    has_permission = resource_access_dao.check_user_has_permission_in_org(
         user_id,
-        "org",
         transfer_request.organization_id,
-        "org:write",
+        "project:write",
     )
     if not has_permission:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"You do not have permission to add projects to organization '{org.name}'",
+            detail=f"You do not have permission to add projects to organization '{org.name}'. "
+            "You must be a member with project:write permission.",
         )
 
     try:
@@ -1145,21 +1146,19 @@ def transfer_project_to_personal(
     # Get organization
     org = org_dao.get(project.organization_id)
 
-    # Verify user has project:delete permission OR is org owner
-    has_delete_permission = resource_access_dao.check_user_permission(
+    # Verify user has project:write permission
+    has_write_permission = resource_access_dao.check_user_permission(
         user_id,
         "project",
         project_id,
-        "project:delete",
+        "project:write",
     )
 
-    is_org_owner = org and org.owner_id == user_id
-
-    if not (has_delete_permission or is_org_owner):
+    if not has_write_permission:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have permission to transfer this project to personal ownership. "
-            "Only users with project:delete permission or organization owners can do this.",
+            "You need project:write permission.",
         )
 
     try:

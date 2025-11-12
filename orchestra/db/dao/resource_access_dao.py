@@ -217,6 +217,59 @@ class ResourceAccessDAO:
         self._permission_cache[cache_key] = result
         return result
 
+    def check_user_has_permission_in_org(
+        self,
+        user_id: str,
+        organization_id: int,
+        permission_name: str,
+    ) -> bool:
+        """
+        Check if user's role in an organization includes a specific permission.
+
+        This is different from check_user_permission() which checks permissions
+        on a specific resource. This checks what permissions the user WOULD have
+        based on their organization membership role.
+
+        Use case: When transferring a personal project to an org, check if the user
+        has the necessary permissions in that org (via their membership role).
+
+        :param user_id: User ID.
+        :param organization_id: Organization ID.
+        :param permission_name: Permission name (e.g., 'project:write').
+        :return: True if user's org role includes permission, False otherwise.
+        """
+        from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+        from orchestra.db.models.orchestra_models import Permission, RolePermission
+
+        org_member_dao = OrganizationMemberDAO(self.session)
+
+        # Get user's membership
+        membership = org_member_dao.get_member(user_id, organization_id)
+        if not membership:
+            return False
+
+        # role_id should always be set explicitly (NOT NULL in database)
+        if not membership.role_id:
+            # This should never happen after migration
+            raise ValueError(
+                f"Organization member {user_id} in org {organization_id} has no role_id. "
+                "This indicates a data integrity issue - all members must have explicit roles.",
+            )
+        role_id = membership.role_id
+
+        # Check if role has the permission
+        permission_exists = (
+            self.session.query(Permission)
+            .join(RolePermission, RolePermission.permission_id == Permission.id)
+            .filter(
+                RolePermission.role_id == role_id,
+                Permission.name == permission_name,
+            )
+            .first()
+        )
+
+        return permission_exists is not None
+
     def _is_personal_resource(self, resource_type: str, resource_id: int) -> bool:
         """
         Check if a resource is personal (not associated with an organization).
@@ -283,6 +336,7 @@ class ResourceAccessDAO:
         Check org resource permission via RBAC.
 
         Logic:
+        0. Organization owner always has full permissions (checked first)
         1. Check if resource has ANY explicit grants
         2. If YES: Only check explicit grants for this user (no implicit fallback)
         3. If NO: Apply implicit organization membership access
@@ -293,10 +347,28 @@ class ResourceAccessDAO:
         :param permission_name: Permission name.
         :return: True if user has permission, False otherwise.
         """
+        from orchestra.db.dao.organization_dao import OrganizationDAO
         from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
         from orchestra.db.dao.role_dao import RoleDAO
 
         role_dao = RoleDAO(self.session)
+
+        # Step 0: Check if user is organization owner FIRST (before explicit grants)
+        # Organization owners always have full permissions via their Owner role
+        org_id = self._get_resource_organization_id(resource_type, resource_id)
+
+        if org_id is not None:
+            org_dao = OrganizationDAO(self.session)
+            org = org_dao.get(org_id)
+
+            if org and org.owner_id == user_id:
+                # Organization owner has implicit full permissions via Owner role
+                owner_role = role_dao.get_by_name("Owner", organization_id=None)
+                if owner_role and role_dao.has_permission(
+                    owner_role.id,
+                    permission_name,
+                ):
+                    return True  # Owner always has access
 
         # Step 1: Check if THIS RESOURCE has any explicit ResourceAccess entries
         any_resource_access = (
@@ -310,6 +382,7 @@ class ResourceAccessDAO:
 
         if any_resource_access:
             # Resource has explicit RBAC configured - only check explicit grants
+            # (Org owner already checked above, so this only applies to non-owners)
             access_entries = self.get_user_access(user_id, resource_type, resource_id)
 
             if not access_entries:
@@ -324,38 +397,26 @@ class ResourceAccessDAO:
             return False  # Has grants but none provide this permission
 
         # Step 2: No explicit RBAC - use implicit organization membership
-        org_id = self._get_resource_organization_id(resource_type, resource_id)
-
+        # (Org owner already checked above in Step 0)
         if org_id is None:
             return False
-
-        # Check if user is organization owner (implicit Owner role)
-        from orchestra.db.dao.organization_dao import OrganizationDAO
-
-        org_dao = OrganizationDAO(self.session)
-        org = org_dao.get(org_id)
-
-        if org and org.owner_id == user_id:
-            owner_role = role_dao.get_by_name("Owner", organization_id=None)
-            if owner_role and role_dao.has_permission(owner_role.id, permission_name):
-                return True
 
         # Check if user is organization member (use their assigned role)
         org_member_dao = OrganizationMemberDAO(self.session)
         member_obj = org_member_dao.get_member(user_id, org_id)
 
         if member_obj:
-            # Use the member's assigned role_id, or default to Member if not set
-            member_role_id = member_obj.role_id
-            if member_role_id is None:
-                # Fallback to Member role if no role assigned
-                member_role = role_dao.get_by_name("Member", organization_id=None)
-                member_role_id = member_role.id if member_role else None
+            # role_id should always be set explicitly (NOT NULL in database)
+            if not member_obj.role_id:
+                # This should never happen after migration
+                raise ValueError(
+                    f"Organization member {user_id} in org {org_id} has no role_id. "
+                    "This indicates a data integrity issue - all members must have explicit roles.",
+                )
 
-            if member_role_id and role_dao.has_permission(
-                member_role_id,
-                permission_name,
-            ):
+            member_role_id = member_obj.role_id
+
+            if role_dao.has_permission(member_role_id, permission_name):
                 return True
 
         return False

@@ -245,8 +245,11 @@ async def test_transfer_requires_ownership(client: AsyncClient, dbsession):
 
 
 @pytest.mark.anyio
-async def test_transfer_requires_org_write_permission(client: AsyncClient, dbsession):
-    """Test that transferring to org requires org:write permission."""
+async def test_transfer_requires_project_write_permission_in_org(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test that transferring to org requires user to be member with project:write permission."""
     user = await create_test_user(client, "transfer_user@test.com")
     org_owner = await create_test_user(client, "org_owner@test.com")
 
@@ -282,6 +285,86 @@ async def test_transfer_requires_org_write_permission(client: AsyncClient, dbses
 
     assert transfer_response.status_code == status.HTTP_403_FORBIDDEN
     assert "do not have permission" in transfer_response.json()["detail"]
+    assert "project:write" in transfer_response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_viewer_cannot_transfer_but_member_can(client: AsyncClient, dbsession):
+    """Test that Viewer role (no project:write) can't transfer, but Member role (has project:write) can."""
+    user = await create_test_user(client, "member_user@test.com")
+    org_owner = await create_test_user(client, "org_owner_2@test.com")
+
+    # Org owner creates organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Role Test Org"},
+        headers=org_owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Add user to org as Viewer (has project:read only, not project:write)
+    role_dao = RoleDAO(dbsession)
+    viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
+
+    add_member_response = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": user["id"], "level": "user", "role_id": viewer_role.id},
+        headers=org_owner["headers"],
+    )
+    assert add_member_response.status_code == status.HTTP_201_CREATED
+
+    # User creates personal project
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    project_dao.create(
+        name="Viewer_Test_Project",
+        user_id=user["id"],
+        organization_id=None,
+    )
+    dbsession.commit()
+
+    projects = project_dao.filter(user_id=user["id"], name="Viewer_Test_Project")
+    project = projects[0][0]
+
+    # User tries to transfer as Viewer (should fail - no project:write)
+    transfer_response = await client.post(
+        f"/v0/project/{project.id}/transfer-to-organization",
+        json={"organization_id": org_id},
+        headers=user["headers"],
+    )
+
+    assert transfer_response.status_code == status.HTTP_403_FORBIDDEN
+    assert "project:write" in transfer_response.json()["detail"]
+
+    # Now update user's role to Member (has project:write)
+    member_role = role_dao.get_by_name("Member", organization_id=None)
+
+    update_role_response = await client.patch(
+        f"/v0/organizations/{org_id}/members/{user['id']}/role",
+        json={"role_id": member_role.id},
+        headers=org_owner["headers"],
+    )
+    assert update_role_response.status_code == status.HTTP_200_OK
+
+    # Now user should be able to transfer (has project:write)
+    transfer_response_2 = await client.post(
+        f"/v0/project/{project.id}/transfer-to-organization",
+        json={"organization_id": org_id},
+        headers=user["headers"],
+    )
+
+    assert transfer_response_2.status_code == status.HTTP_200_OK
+    transfer_data = transfer_response_2.json()
+    assert transfer_data["success"] is True
+    assert transfer_data["from_type"] == "personal"
+    assert transfer_data["to_type"] == "organization"
+
+    # Verify project is now organizational
+    dbsession.refresh(project)
+    assert project.organization_id == org_id
+    assert project.user_id is None
 
 
 @pytest.mark.anyio

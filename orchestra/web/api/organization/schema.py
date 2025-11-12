@@ -37,7 +37,7 @@ class OrganizationMemberAdd(BaseModel):
 
     user_id: str
     level: str = "user"  # owner, admin, user
-    role_id: Optional[int] = None  # RBAC role (defaults to Member if not provided)
+    role_id: Optional[int] = None  # RBAC role (defaults to Member role if not provided)
 
 
 class OrganizationMemberRemove(BaseModel):

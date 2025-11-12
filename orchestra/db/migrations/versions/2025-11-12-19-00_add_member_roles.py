@@ -21,21 +21,27 @@ def upgrade() -> None:
 
     Connects organization membership with RBAC roles, allowing members
     to have specific roles that determine their default permissions.
+
+    Enforces explicit role assignment:
+    - All members MUST have a role_id (NOT NULL)
+    - Defaults to Member role for existing members
+    - Organization owners get Owner role
+    - ondelete="RESTRICT" prevents deleting in-use roles
     """
-    # Add role_id column to organization_member
+    # Add role_id column to organization_member (initially nullable for data migration)
     op.add_column(
         "organization_member",
         sa.Column("role_id", sa.Integer(), nullable=True),
     )
 
-    # Add foreign key constraint
+    # Add foreign key constraint with RESTRICT (temporary, will be recreated)
     op.create_foreign_key(
         "fk_organization_member_role_id",
         "organization_member",
         "role",
         ["role_id"],
         ["id"],
-        ondelete="SET NULL",
+        ondelete="RESTRICT",
     )
 
     # Set default role for existing members
@@ -60,12 +66,31 @@ def upgrade() -> None:
     """,
     )
 
+    # Now that all members have role_id set, make it NOT NULL
+    op.alter_column(
+        "organization_member",
+        "role_id",
+        nullable=False,
+        existing_type=sa.Integer(),
+    )
+
 
 def downgrade() -> None:
     """Remove role_id from organization_member."""
+    # Make column nullable before dropping (for safe downgrade)
+    op.alter_column(
+        "organization_member",
+        "role_id",
+        nullable=True,
+        existing_type=sa.Integer(),
+    )
+
+    # Drop foreign key constraint
     op.drop_constraint(
         "fk_organization_member_role_id",
         "organization_member",
         type_="foreignkey",
     )
+
+    # Drop column
     op.drop_column("organization_member", "role_id")
