@@ -27,49 +27,86 @@ def upgrade() -> None:
     - Defaults to Member role for existing members
     - Organization owners get Owner role
     - ondelete="RESTRICT" prevents deleting in-use roles
+
+    Uses production-safe approach with minimal locking:
+    - Adds column without constraints first (brief lock)
+    - Adds foreign key as NOT VALID (no table scan required)
+    - Populates data
+    - Validates constraint separately (allows concurrent reads/writes)
+    - Finally makes column NOT NULL (brief lock, data already populated)
     """
-    # Increase lock timeout to 60 seconds to handle live database modifications
-    op.execute("SET lock_timeout = '60s'")
-
-    # Add role_id column to organization_member (initially nullable for data migration)
-    op.add_column(
-        "organization_member",
-        sa.Column("role_id", sa.Integer(), nullable=True),
+    # Step 1: Add column with default NULL (requires brief ACCESS EXCLUSIVE lock)
+    # PostgreSQL can add a nullable column without rewriting the table
+    op.execute(
+        """
+        ALTER TABLE organization_member
+        ADD COLUMN IF NOT EXISTS role_id INTEGER DEFAULT NULL;
+        """,
     )
 
-    # Add foreign key constraint with RESTRICT (temporary, will be recreated)
-    op.create_foreign_key(
-        "fk_organization_member_role_id",
-        "organization_member",
-        "role",
-        ["role_id"],
-        ["id"],
-        ondelete="RESTRICT",
+    # Step 2: Add foreign key constraint as NOT VALID
+    # This allows the constraint to be added without validating existing rows
+    # Uses only SHARE ROW EXCLUSIVE lock, which doesn't block reads/writes
+    op.execute(
+        """
+        ALTER TABLE organization_member
+        ADD CONSTRAINT fk_organization_member_role_id
+        FOREIGN KEY (role_id) REFERENCES role(id)
+        ON DELETE RESTRICT
+        NOT VALID;
+        """,
     )
 
-    # Set default role for existing members
+    # Step 3: Populate data - Set default role for existing members
     # Get the "Member" system role ID and assign to all existing members
     op.execute(
         """
         UPDATE organization_member
-        SET role_id = (SELECT id FROM role WHERE name = 'Member' AND organization_id IS NULL LIMIT 1)
-        WHERE role_id IS NULL
-    """,
+        SET role_id = (
+            SELECT id FROM role
+            WHERE name = 'Member'
+            AND organization_id IS NULL
+            LIMIT 1
+        )
+        WHERE role_id IS NULL;
+        """,
     )
 
-    # Set "Owner" role for organization owners
+    # Step 4: Set "Owner" role for organization owners
     op.execute(
         """
         UPDATE organization_member om
-        SET role_id = (SELECT id FROM role WHERE name = 'Owner' AND organization_id IS NULL LIMIT 1)
+        SET role_id = (
+            SELECT id FROM role
+            WHERE name = 'Owner'
+            AND organization_id IS NULL
+            LIMIT 1
+        )
         FROM organization o
         WHERE om.organization_id = o.id
         AND om.user_id = o.owner_id
-        AND om.role_id = (SELECT id FROM role WHERE name = 'Member' AND organization_id IS NULL LIMIT 1)
-    """,
+        AND om.role_id = (
+            SELECT id FROM role
+            WHERE name = 'Member'
+            AND organization_id IS NULL
+            LIMIT 1
+        );
+        """,
     )
 
-    # Now that all members have role_id set, make it NOT NULL
+    # Step 5: Validate the constraint
+    # This validates existing rows against the constraint without blocking writes
+    # New rows are still checked against the constraint even when NOT VALID
+    op.execute(
+        """
+        ALTER TABLE organization_member
+        VALIDATE CONSTRAINT fk_organization_member_role_id;
+        """,
+    )
+
+    # Step 6: Make column NOT NULL
+    # Now that all rows have role_id populated, make it required
+    # This requires brief ACCESS EXCLUSIVE lock but is quick since data is already set
     op.alter_column(
         "organization_member",
         "role_id",

@@ -23,9 +23,6 @@ def upgrade() -> None:
     3. Add organization_id to query table for tracking org vs personal queries
     4. Backfill existing organizations with billing_user_id = owner_id
     """
-    # Increase lock timeout to 60 seconds to handle live database modifications
-    op.execute("SET lock_timeout = '60s'")
-
     # Drop the unique constraint on owner_id (users can own multiple organizations)
     op.drop_constraint(
         "organization_owner_id_key",
