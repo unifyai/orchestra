@@ -28,8 +28,15 @@ def upgrade() -> None:
     - Organization owners get Owner role
     - ondelete="RESTRICT" prevents deleting in-use roles
     """
-    # Increase lock timeout to 300 seconds to handle live database modifications
-    op.execute("SET lock_timeout = '300s'")
+    op.execute(
+        """
+        SELECT pg_terminate_backend(pid)
+        FROM pg_stat_activity
+        WHERE pid != pg_backend_pid()           -- Don't kill our own session
+          AND datname = current_database()       -- Only this database
+          AND usename != 'cloudsqlsuperuser';    -- Don't kill Cloud SQL admin
+        """,
+    )
 
     # Add role_id column to organization_member (initially nullable for data migration)
     op.add_column(
