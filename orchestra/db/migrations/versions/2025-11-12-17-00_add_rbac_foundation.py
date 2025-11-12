@@ -2,7 +2,7 @@
 
 Revision ID: add_rbac_foundation
 Revises: add_org_billing
-Create Date: 2025-11-07 17:00:00.000000
+Create Date: 2025-11-12 17:00:00.000000
 
 """
 import sqlalchemy as sa

@@ -1,8 +1,8 @@
 """add_member_roles
 
-Revision ID: 2025-11-07-19-00
-Revises: 2025-11-07-18-00
-Create Date: 2025-11-07 19:00:00
+Revision ID: add_member_roles
+Revises: add_rbac_teams_resource_access
+Create Date: 2025-11-12 19:00:00.000000
 
 """
 import sqlalchemy as sa

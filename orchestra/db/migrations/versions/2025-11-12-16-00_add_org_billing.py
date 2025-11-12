@@ -1,8 +1,8 @@
 """Add organization billing support
 
 Revision ID: add_org_billing
-Revises: 3d05bea20ead
-Create Date: 2025-11-07 16:00:00.000000
+Revises: 1cb930843ee0
+Create Date: 2025-11-12 16:00:00.000000
 
 """
 import sqlalchemy as sa
@@ -10,7 +10,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "add_org_billing"
-down_revision = "3d05bea20ead"
+down_revision = "1cb930843ee0"
 branch_labels = None
 depends_on = None
 
