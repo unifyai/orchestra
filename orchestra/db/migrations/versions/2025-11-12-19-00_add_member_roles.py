@@ -28,6 +28,9 @@ def upgrade() -> None:
     - Organization owners get Owner role
     - ondelete="RESTRICT" prevents deleting in-use roles
     """
+    # Increase lock timeout to 60 seconds to handle live database modifications
+    op.execute("SET lock_timeout = '60s'")
+
     # Add role_id column to organization_member (initially nullable for data migration)
     op.add_column(
         "organization_member",
