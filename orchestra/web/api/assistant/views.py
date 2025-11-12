@@ -179,7 +179,7 @@ def message_assistant(
                             "phone": "+1-555-123-4567",
                             "email": "alice.smith@example.com",
                             "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
-                            "country": "US",
+                            "phone_country": "US",
                         },
                     },
                 },
@@ -320,7 +320,7 @@ def create_assistant(
             first_name=assistant_in.first_name,
             surname=assistant_in.surname,
             age=assistant_in.age,
-            region=assistant_in.region,
+            nationality=assistant_in.nationality,
             profile_photo=assistant_in.profile_photo,
             profile_video=assistant_in.profile_video,
             desktop_url=assistant_in.desktop_url,
@@ -333,7 +333,7 @@ def create_assistant(
             voice_mode=assistant_in.voice_mode,
             phone=assistant_in.phone,
             email=assistant_in.email,
-            country=assistant_in.country,
+            phone_country=assistant_in.phone_country,
             user_whatsapp_number=assistant_in.user_whatsapp_number,
             timezone=assistant_in.timezone,
         )
@@ -384,9 +384,13 @@ def create_assistant(
 
                 # Step 3: create phone number if user_phone is provided
                 if assistant_in.user_phone:
-                    country = assistant_in.country if assistant_in.country else "US"
+                    phone_country = (
+                        assistant_in.phone_country
+                        if assistant_in.phone_country
+                        else "US"
+                    )
                     phone_response = create_phone_number(
-                        country=country,
+                        phone_country=phone_country,
                         is_staging=settings.is_staging,
                     )
                     if "detail" in phone_response:
@@ -616,7 +620,7 @@ def create_assistant(
             first_name=assistant.first_name,
             surname=assistant.surname,
             age=assistant.age,
-            region=assistant.region,
+            nationality=assistant.nationality,
             profile_photo=assistant.profile_photo,
             profile_video=assistant.profile_video,
             desktop_url=assistant.desktop_url,
@@ -635,7 +639,7 @@ def create_assistant(
             voice_id=assistant.voice_id,
             voice_provider=assistant.voice_provider,
             voice_mode=assistant.voice_mode,
-            country=assistant.country,
+            phone_country=assistant.phone_country,
             user_whatsapp_number=assistant.user_whatsapp_number,
             assistant_whatsapp_number=assistant.assistant_whatsapp_number,
             user_phone=assistant.user_phone,
@@ -667,14 +671,14 @@ def create_assistant(
                                 "max_parallel": 3,
                                 "phone": "+1-555-123-4567",
                                 "email": "alice.smith@example.com",
-                                "region": "North America",
+                                "nationality": "United States",
                                 "profile_photo": "https://example.com/photos/alice.jpg",
                                 "profile_video": "https://example.com/videos/alice.mp4",
                                 "about": "Mathematician and writer known for work on Analytical Engine",
                                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                                 "voice_provider": "cartesia",
                                 "voice_mode": "tts",
-                                "country": "US",
+                                "phone_country": "US",
                                 "timezone": "America/New_York",
                                 "created_at": "2025-04-25T12:00:00Z",
                                 "updated_at": "2025-04-25T12:00:00Z",
@@ -688,14 +692,14 @@ def create_assistant(
                                 "max_parallel": 2,
                                 "phone": "+1-555-987-6543",
                                 "email": "bob.jones@example.com",
-                                "region": "South America",
+                                "nationality": "Mexico",
                                 "profile_photo": "https://example.com/photos/bob.jpg",
                                 "profile_video": "https://example.com/videos/bob.mp4",
                                 "about": "Machine learning expert with focus on computer vision",
                                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                                 "voice_provider": "cartesia",
                                 "voice_mode": "tts",
-                                "country": "CA",
+                                "phone_country": "CA",
                                 "timezone": "America/Vancouver",
                                 "created_at": "2025-04-24T10:30:00Z",
                                 "updated_at": "2025-04-24T10:30:00Z",
@@ -746,13 +750,13 @@ def list_assistants(
                     first_name=a.first_name,
                     surname=a.surname,
                     age=a.age,
-                    region=a.region,
+                    nationality=a.nationality,
                     profile_photo=a.profile_photo,
                     profile_video=a.profile_video,
                     desktop_url=a.desktop_url,
                     user_local_desktop=a.user_local_desktop,
                     about=a.about,
-                    country=a.country,
+                    phone_country=a.phone_country,
                     weekly_limit=(
                         float(a.weekly_limit) if a.weekly_limit is not None else None
                     ),
@@ -866,13 +870,13 @@ def delete_assistant_contact(
                 first_name=updated_assistant.first_name,
                 surname=updated_assistant.surname,
                 age=updated_assistant.age,
-                region=updated_assistant.region,
+                nationality=updated_assistant.nationality,
                 profile_photo=updated_assistant.profile_photo,
                 profile_video=updated_assistant.profile_video,
                 desktop_url=updated_assistant.desktop_url,
                 user_local_desktop=updated_assistant.user_local_desktop,
                 about=updated_assistant.about,
-                country=updated_assistant.country,
+                phone_country=updated_assistant.phone_country,
                 weekly_limit=(
                     float(updated_assistant.weekly_limit)
                     if updated_assistant.weekly_limit is not None
@@ -1126,13 +1130,13 @@ def delete_assistant(
                             "about": "Award-winning mathematician specializing in algorithm development",
                             "phone": "+1-555-987-6543",
                             "email": "alice.smith@example.com",
-                            "region": "North America",
+                            "nationality": "United States",
                             "profile_photo": "https://example.com/photos/alice.jpg",
                             "profile_video": "https://example.com/videos/alice.mp4",
                             "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                             "voice_provider": "cartesia",
                             "voice_mode": "tts",
-                            "country": "US",
+                            "phone_country": "US",
                             "timezone": "America/New_York",
                             "created_at": "2025-04-25T12:00:00Z",
                             "updated_at": "2025-04-25T14:30:00Z",
@@ -1279,9 +1283,11 @@ def update_assistant_config(
             # 2- If so, create an assistant phone number
             if update.user_phone and not existing_assistant.phone:
                 try:
-                    country = update.country if update.country else "US"
+                    phone_country = (
+                        update.phone_country if update.phone_country else "US"
+                    )
                     phone_response = create_phone_number(
-                        country=country,
+                        phone_country=phone_country,
                         is_staging=settings.is_staging,
                     )
                     if "detail" in phone_response:
@@ -1414,13 +1420,13 @@ def update_assistant_config(
                 first_name=updated.first_name,
                 surname=updated.surname,
                 age=updated.age,
-                region=updated.region,
+                nationality=updated.nationality,
                 profile_photo=updated.profile_photo,
                 profile_video=updated.profile_video,
                 desktop_url=updated.desktop_url,
                 user_local_desktop=updated.user_local_desktop,
                 about=updated.about,
-                country=updated.country,
+                phone_country=updated.phone_country,
                 weekly_limit=(
                     float(updated.weekly_limit)
                     if updated.weekly_limit is not None

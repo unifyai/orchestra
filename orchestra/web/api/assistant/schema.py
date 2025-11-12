@@ -72,9 +72,9 @@ class AssistantCreate(BaseModel):
         description="Maximum number of parallel tasks the assistant can handle",
         example=2,
     )
-    region: Optional[str] = Field(
+    nationality: Optional[str] = Field(
         None,
-        description="Geographic region of the assistant",
+        description="Assistant's nationality",
         example="North America",
     )
     profile_photo: Optional[str] = Field(
@@ -101,11 +101,6 @@ class AssistantCreate(BaseModel):
         None,
         description="Brief description about the assistant",
         example="Mathematician and writer known for work on Analytical Engine",
-    )
-    country: Optional[str] = Field(
-        "US",
-        description="Country code for phone number provisioning (e.g., US, GB)",
-        example="US",
     )
     email: Optional[str] = Field(
         None,
@@ -146,6 +141,11 @@ class AssistantCreate(BaseModel):
         None,
         description="Phone number of the assistant (just for testing purposes)",
         exclude=True,
+    )
+    phone_country: Optional[str] = Field(
+        "US",
+        description="Country code for phone number provisioning (e.g., US, GB)",
+        example="US",
     )
     pre_hire_chat: Optional[List[ChatMessage]] = Field(
         None,
@@ -192,13 +192,13 @@ class AssistantCreate(BaseModel):
                 "age": 28,
                 "weekly_limit": 15.75,
                 "max_parallel": 2,
-                "region": "North America",
+                "nationality": "North America",
                 "profile_photo": "https://example.com/photos/ada.jpg",
                 "profile_video": "https://example.com/videos/ada.mp4",
                 "desktop_url": "https://app.example.com/assistants/ada",
                 "user_local_desktop": "windows",
                 "about": "Mathematician and writer known for work on Analytical Engine",
-                "country": "US",
+                "phone_country": "US",
                 "timezone": "America/New_York",
                 "email": "ada.lovelace@unify.ai",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
@@ -275,13 +275,13 @@ class AssistantRead(AssistantCreate):
                 "age": 28,
                 "weekly_limit": 15.75,
                 "max_parallel": 2,
-                "region": "North America",
+                "nationality": "North America",
                 "profile_photo": "https://example.com/photos/ada.jpg",
                 "profile_video": "https://example.com/videos/ada.mp4",
                 "desktop_url": "https://app.example.com/assistants/ada",
                 "user_local_desktop": "windows",
                 "about": "Mathematician and writer known for work on Analytical Engine",
-                "country": "US",
+                "phone_country": "US",
                 "timezone": "America/New_York",
                 "email": "ada.lovelace@unify.ai",
                 "phone": "+15551234567",
@@ -354,6 +354,11 @@ class AssistantUpdate(BaseModel):
         description="Contact phone number for the assistant",
         example="+15559876543",
     )
+    phone_country: Optional[str] = Field(
+        None,
+        description="Country code for phone number provisioning (e.g., US, GB)",
+        example="GB",
+    )
     email: Optional[str] = Field(
         None,
         description="Email address for the assistant",
@@ -378,11 +383,6 @@ class AssistantUpdate(BaseModel):
         None,
         description="The type of voice interaction, either text-to-speech (tts) or speech-to-speech (sts).",
         example="tts",
-    )
-    country: Optional[str] = Field(
-        None,
-        description="Country code for phone number provisioning (e.g., US, GB)",
-        example="GB",
     )
     timezone: Optional[str] = Field(
         None,
@@ -466,7 +466,7 @@ class AssistantUpdate(BaseModel):
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "voice_provider": "cartesia",
                 "voice_mode": "tts",
-                "country": "GB",
+                "phone_country": "GB",
                 "timezone": "Europe/London",
             },
         }
