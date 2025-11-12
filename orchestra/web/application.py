@@ -10,7 +10,6 @@ from sentry_sdk.integrations.logging import LoggingIntegration
 from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
 
 from orchestra.settings import settings
-from orchestra.web.api.router import api_router
 
 # from orchestra.web.api.utils.production_traffic_middleware import (
 #     ProductionTrafficMiddleware,
@@ -72,7 +71,7 @@ def get_app() -> FastAPI:
     register_shutdown_event(app)
 
     # Register API router
-    app.include_router(router=api_router, prefix="/v0")
+    # app.include_router(router=api_router, prefix="/v0")
 
     # Add Prometheus metrics endpoint
     app.add_api_route("/metrics", metrics)
