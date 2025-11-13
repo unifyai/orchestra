@@ -528,7 +528,7 @@ def admin_list_assistants(
                     first_name=a.first_name,
                     surname=a.surname,
                     age=a.age,
-                    region=a.region,
+                    nationality=a.nationality,
                     profile_photo=a.profile_photo,
                     profile_video=a.profile_video,
                     desktop_url=a.desktop_url,
@@ -633,11 +633,15 @@ def admin_update_assistant(
     a = assistants[0]
 
     # Update only the assistant WhatsApp number
+    update_data = {}
+    if new_assistant_whatsapp_number:
+        update_data["assistant_whatsapp_number"] = new_assistant_whatsapp_number
+    if new_user_whatsapp_number:
+        update_data["user_whatsapp_number"] = new_user_whatsapp_number
     updated = dao.update_assistant(
         user_id=a.user_id,
         agent_id=a.agent_id,
-        assistant_whatsapp_number=new_assistant_whatsapp_number,
-        user_whatsapp_number=new_user_whatsapp_number,
+        update_data=update_data,
     )
     session.commit()
 
@@ -649,13 +653,13 @@ def admin_update_assistant(
             first_name=updated.first_name,
             surname=updated.surname,
             age=updated.age,
-            region=updated.region,
+            nationality=updated.nationality,
             profile_photo=updated.profile_photo,
             profile_video=updated.profile_video,
             desktop_url=updated.desktop_url,
             user_local_desktop=updated.user_local_desktop,
             about=updated.about,
-            country=updated.country,
+            phone_country=updated.phone_country,
             weekly_limit=float(updated.weekly_limit)
             if updated.weekly_limit is not None
             else None,
@@ -726,7 +730,7 @@ def admin_list_assistants_for_user(
                     first_name=a.first_name,
                     surname=a.surname,
                     age=a.age,
-                    region=a.region,
+                    nationality=a.nationality,
                     profile_photo=a.profile_photo,
                     profile_video=a.profile_video,
                     desktop_url=a.desktop_url,

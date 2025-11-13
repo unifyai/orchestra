@@ -33,6 +33,28 @@ async def approve_default_user(client: AsyncClient):
     ), f"Failed to approve default user {user_id}: {approve_resp.json()}"
 
 
+@pytest.fixture(autouse=True)
+def mock_assistant_infra_calls(request):
+    """
+    Automatically mock assistant infrastructure webhooks for all tests.
+    This prevents real network calls, making tests fast and reliable.
+    """
+    if "no_mock_infra" in request.keywords:
+        yield
+        return
+
+    with patch(
+        "orchestra.web.api.assistant.views.wake_up_assistant",
+    ) as mock_wake_up, patch(
+        "orchestra.web.api.assistant.views.reawaken_assistant",
+    ) as mock_reawaken:
+
+        mock_wake_up.return_value = MagicMock(status_code=200)
+        mock_reawaken.return_value = MagicMock(status_code=200, json=lambda: {})
+
+        yield mock_wake_up, mock_reawaken
+
+
 def _get_sample_wav_bytes() -> bytes:
     sample_path = Path(__file__).parent / "sample_datasets" / "sample_recording.wav"
     if not sample_path.exists():
@@ -337,6 +359,81 @@ async def test_delete_preset_voice(
     assert resp_del.status_code == 200
     assert "deleted successfully" in resp_del.json()["info"].lower()
     cartesia_mock.delete_voice.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_delete_voice_in_use_fails(
+    client: AsyncClient,
+    dbsession,
+    mock_tts_services_factory,
+):
+    cartesia_mock, _, _, _ = mock_tts_services_factory
+    user_id = await get_user_id_from_request_state(client)
+    voice_id_in_use = "voice-in-use-test"
+    provider = "cartesia"
+
+    # 1. Register the voice
+    reg_payload = {
+        "voice_id": voice_id_in_use,
+        "name": "Voice In Use",
+        "description": "...",
+        "gender": "f",
+        "language": "en",
+        "is_preset": False,
+        "provider": provider,
+    }
+    with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
+        mock_state.user_id = user_id
+        reg_resp = await client.post(
+            "/v0/assistant/voice",
+            json=reg_payload,
+            headers=HEADERS,
+        )
+        assert reg_resp.status_code == status.HTTP_201_CREATED
+
+    # 2. Create an assistant that uses this voice
+    assistant_payload = {
+        "first_name": "Voice",
+        "surname": "User",
+        "voice_id": voice_id_in_use,
+        "voice_provider": provider,
+        "voice_mode": "tts",
+        "create_infra": False,
+    }
+    create_resp = await client.post(
+        "/v0/assistant",
+        json=assistant_payload,
+        headers=HEADERS,
+    )
+    assert create_resp.status_code == status.HTTP_200_OK
+    assistant_id = create_resp.json()["info"]["agent_id"]
+
+    # 3. Attempt to delete the voice (should fail)
+    with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
+        mock_state.user_id = user_id
+        resp_del_fail = await client.delete(
+            f"/v0/assistant/voice/{voice_id_in_use}?provider={provider}",
+            headers=HEADERS,
+        )
+
+    assert resp_del_fail.status_code == status.HTTP_409_CONFLICT
+    assert "in use by at least one assistant" in resp_del_fail.json()["detail"]
+
+    # 4. Clean up: Delete assistant, then the voice
+    del_assistant_resp = await client.delete(
+        f"/v0/assistant/{assistant_id}",
+        headers=HEADERS,
+    )
+    assert del_assistant_resp.status_code == 200
+
+    with patch("orchestra.web.api.assistant.views.Request.state") as mock_state:
+        mock_state.user_id = user_id
+        resp_del_success = await client.delete(
+            f"/v0/assistant/voice/{voice_id_in_use}?provider={provider}",
+            headers=HEADERS,
+        )
+    assert resp_del_success.status_code == 200
+    cartesia_mock.delete_voice.assert_called_once_with(voice_id_in_use)
 
 
 @pytest.mark.anyio

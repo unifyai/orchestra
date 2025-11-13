@@ -183,3 +183,20 @@ class ProjectTreeItem(BaseModel):
     interfaces: List[InterfaceInfo]
     favorite: bool = False
     position: Optional[int] = None
+
+
+class TransferToOrganizationRequest(BaseModel):
+    """Request model for transferring a personal project to an organization."""
+
+    organization_id: int
+
+
+class TransferResponse(BaseModel):
+    """Response model for project transfer operations."""
+
+    success: bool
+    project_id: int
+    project_name: str
+    from_type: str  # "personal" or "organization"
+    to_type: str  # "personal" or "organization"
+    message: str

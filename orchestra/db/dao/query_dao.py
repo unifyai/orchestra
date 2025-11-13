@@ -30,19 +30,22 @@ class QueryDAO:
         signature: Optional[str] = None,
         used_router: Optional[bool] = None,
         router: Optional[str] = None,
+        organization_id: Optional[int] = None,
         tags: Optional[list[str]] = None,
     ) -> None:
         """
         Add single query to session.
 
-        :param user_id: user_id of a query.
-        :param at: at of a query.
+        :param user_id: user_id of a query (the actor).
+        :param at: timestamp of a query.
         :param endpoint_id: endpoint_id of a query.
         :param credits: credits of a query (whole-credit units, Decimal OK).
+        :param organization_id: organization_id if query is in org context (NULL = personal).
         """
 
         new_query = Query(
             user_id=user_id,
+            organization_id=organization_id,
             at=at,
             model_provider_str=model_provider_str,
             endpoint_id=endpoint_id,
@@ -110,6 +113,7 @@ class QueryDAO:
     def filter(
         self,
         user_id: Optional[str] = None,
+        organization_id: Optional[int] = None,
         start_time: Optional[datetime.datetime] = None,
         end_time: Optional[datetime.datetime] = None,
         endpoint_ids: Optional[list[int]] = None,
@@ -127,6 +131,8 @@ class QueryDAO:
         query = select(Query, func.count(Query.id).over().label("count"))
         if user_id:
             query = query.where(Query.user_id == user_id)
+        if organization_id is not None:
+            query = query.where(Query.organization_id == organization_id)
 
         if start_time:
             query = query.filter(Query.at > start_time)

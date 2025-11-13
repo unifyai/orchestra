@@ -3,7 +3,7 @@ from typing import List, Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import Organization
+from orchestra.db.models.orchestra_models import Organization, OrganizationMember
 
 
 class OrganizationDAO:
@@ -14,26 +14,52 @@ class OrganizationDAO:
         self,
         name: str,
         owner_id: str,
-    ) -> None:
+        billing_user_id: Optional[str] = None,
+    ) -> Organization:
+        """
+        Create a new organization.
 
-        self.session.add(
-            Organization(
-                name=name,
-                owner_id=owner_id,
-            ),
+        :param name: Organization name.
+        :param owner_id: ID of the user who owns the organization.
+        :param billing_user_id: ID of the user who will be billed. Defaults to owner_id.
+        :return: The created Organization object.
+        """
+        # Default billing user to owner if not specified
+        if billing_user_id is None:
+            billing_user_id = owner_id
+
+        org = Organization(
+            name=name,
+            owner_id=owner_id,
+            billing_user_id=billing_user_id,
         )
+        self.session.add(org)
+        self.session.flush()  # Flush to get the org ID
+        return org
 
     def filter(
         self,
         id: Optional[int] = None,
         owner_id: Optional[str] = None,
+        billing_user_id: Optional[str] = None,
         name: Optional[str] = None,
     ) -> List[Organization]:
+        """
+        Filter organizations by various criteria.
+
+        :param id: Organization ID.
+        :param owner_id: Owner user ID.
+        :param billing_user_id: Billing user ID.
+        :param name: Organization name.
+        :return: List of matching organizations.
+        """
         query = select(Organization)
         if id:
             query = query.where(Organization.id == id)
         if owner_id:
             query = query.where(Organization.owner_id == owner_id)
+        if billing_user_id:
+            query = query.where(Organization.billing_user_id == billing_user_id)
         if name:
             query = query.where(Organization.name == name)
         rows = self.session.execute(query)
@@ -43,9 +69,18 @@ class OrganizationDAO:
         self,
         id: int,
         owner_id: Optional[str] = None,
+        billing_user_id: Optional[str] = None,
         name: Optional[str] = None,
     ) -> None:
-        query = select()
+        """
+        Update an organization.
+
+        :param id: Organization ID.
+        :param owner_id: New owner user ID.
+        :param billing_user_id: New billing user ID.
+        :param name: New organization name.
+        """
+        query = select(Organization)
         query = query.where(Organization.id == id)
         raw = self.session.execute(query)
         entry = raw.scalars().first()
@@ -54,8 +89,16 @@ class OrganizationDAO:
                 setattr(entry, "name", name)
             if owner_id:
                 setattr(entry, "owner_id", owner_id)
+            if billing_user_id:
+                setattr(entry, "billing_user_id", billing_user_id)
 
     def delete(self, id: int):
+        """
+        Delete an organization and all its associated data.
+
+        :param id: Organization ID.
+        :raises ValueError: If the organization doesn't exist or deletion fails.
+        """
         try:
             org = self.session.query(Organization).filter_by(id=id).one()
             self.session.delete(org)
@@ -63,3 +106,47 @@ class OrganizationDAO:
         except:
             self.session.rollback()
             raise ValueError
+
+    def get(self, id: int) -> Optional[Organization]:
+        """
+        Get an organization by ID.
+
+        :param id: Organization ID.
+        :return: Organization object or None if not found.
+        """
+        return self.session.query(Organization).filter_by(id=id).first()
+
+    def get_billing_user_id(self, organization_id: int) -> Optional[str]:
+        """
+        Get the billing user ID for an organization.
+
+        :param organization_id: Organization ID.
+        :return: Billing user ID or None if organization not found.
+        """
+        org = self.get(organization_id)
+        return org.billing_user_id if org else None
+
+    def get_user_organizations(self, user_id: str) -> List[Organization]:
+        """
+        Get all organizations a user is a member of or owns.
+
+        :param user_id: User ID.
+        :return: List of organizations.
+        """
+        # Get orgs where user is owner
+        owned_orgs = list(
+            self.session.query(Organization)
+            .filter(Organization.owner_id == user_id)
+            .all(),
+        )
+
+        # Get orgs where user is a member
+        member_orgs = list(
+            self.session.query(Organization)
+            .join(OrganizationMember)
+            .filter(OrganizationMember.user_id == user_id)
+            .filter(Organization.owner_id != user_id)  # Exclude owned orgs
+            .all(),
+        )
+
+        return owned_orgs + member_orgs

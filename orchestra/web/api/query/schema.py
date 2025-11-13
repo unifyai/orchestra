@@ -9,13 +9,15 @@ class QueryModelRequest(BaseModel):
     Request model for creating new query model.
 
     Attributes:
-        user_id (str): The id of the user.
+        user_id (str): The id of the user (actor).
+        organization_id (Optional[int]): The organization context (None = personal query).
         at (datetime): The time of the query.
         endpoint_id (int): The id of the endpoint.
         credits (float): The credits of the query.
     """
 
     user_id: str
+    organization_id: Optional[int] = None
     model_provider_str: str
     endpoint_id: Optional[int]
     custom_endpoint_id: Optional[int]

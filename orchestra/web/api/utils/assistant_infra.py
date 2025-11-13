@@ -7,12 +7,12 @@ COMMS_URL = os.environ.get("UNITY_COMMS_URL")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 
-def create_phone_number(country: str = "US", is_staging: bool = False):
+def create_phone_number(phone_country: str = "US", is_staging: bool = False):
     """
     Create a phone number for the user by making a POST request to the comms endpoint.
 
     Args:
-        country (str): The country code for phone number provisioning (e.g., "US", "GB").
+        phone_country (str): The country code for phone number provisioning (e.g., "US", "GB").
         is_staging (bool): Whether to create the phone number in staging or prod
 
     Returns:
@@ -39,7 +39,7 @@ def create_phone_number(country: str = "US", is_staging: bool = False):
             "voice_url": voice_url,
             "sms_url": sms_url,
             "status_callback": status_callback,
-            "country": country,
+            "phone_country": phone_country,
         },
     ).json()
 

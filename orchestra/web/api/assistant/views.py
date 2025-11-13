@@ -179,7 +179,7 @@ def message_assistant(
                             "phone": "+1-555-123-4567",
                             "email": "alice.smith@example.com",
                             "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
-                            "country": "US",
+                            "phone_country": "US",
                         },
                     },
                 },
@@ -320,7 +320,7 @@ def create_assistant(
             first_name=assistant_in.first_name,
             surname=assistant_in.surname,
             age=assistant_in.age,
-            region=assistant_in.region,
+            nationality=assistant_in.nationality,
             profile_photo=assistant_in.profile_photo,
             profile_video=assistant_in.profile_video,
             desktop_url=assistant_in.desktop_url,
@@ -330,10 +330,12 @@ def create_assistant(
             max_parallel=assistant_in.max_parallel,
             voice_id=assistant_in.voice_id,
             voice_provider=assistant_in.voice_provider,
+            voice_mode=assistant_in.voice_mode,
             phone=assistant_in.phone,
             email=assistant_in.email,
-            country=assistant_in.country,
+            phone_country=assistant_in.phone_country,
             user_whatsapp_number=assistant_in.user_whatsapp_number,
+            timezone=assistant_in.timezone,
         )
 
         # Commit the assistant creation before infrastructure setup
@@ -382,9 +384,13 @@ def create_assistant(
 
                 # Step 3: create phone number if user_phone is provided
                 if assistant_in.user_phone:
-                    country = assistant_in.country if assistant_in.country else "US"
+                    phone_country = (
+                        assistant_in.phone_country
+                        if assistant_in.phone_country
+                        else "US"
+                    )
                     phone_response = create_phone_number(
-                        country=country,
+                        phone_country=phone_country,
                         is_staging=settings.is_staging,
                     )
                     if "detail" in phone_response:
@@ -422,14 +428,17 @@ def create_assistant(
                 assistant_dao = AssistantDAO(session)
 
                 # Update assistant with created infrastructure details
+                update_data = {
+                    "email": created_email,
+                    "phone": created_phone,
+                    "user_phone": assistant_in.user_phone,
+                    "user_whatsapp_number": assistant_in.user_whatsapp_number,
+                    "assistant_whatsapp_number": assigned_whatsapp,
+                }
                 assistant_dao.update_assistant(
                     user_id=user_id,
                     agent_id=assistant_id,
-                    email=created_email,
-                    phone=created_phone,
-                    user_phone=assistant_in.user_phone,
-                    user_whatsapp_number=assistant_in.user_whatsapp_number,
-                    assistant_whatsapp_number=assigned_whatsapp,
+                    update_data=update_data,
                 )
                 # Commit the infrastructure updates
                 session.commit()
@@ -611,7 +620,7 @@ def create_assistant(
             first_name=assistant.first_name,
             surname=assistant.surname,
             age=assistant.age,
-            region=assistant.region,
+            nationality=assistant.nationality,
             profile_photo=assistant.profile_photo,
             profile_video=assistant.profile_video,
             desktop_url=assistant.desktop_url,
@@ -629,10 +638,12 @@ def create_assistant(
             email=assistant.email,
             voice_id=assistant.voice_id,
             voice_provider=assistant.voice_provider,
-            country=assistant.country,
+            voice_mode=assistant.voice_mode,
+            phone_country=assistant.phone_country,
             user_whatsapp_number=assistant.user_whatsapp_number,
             assistant_whatsapp_number=assistant.assistant_whatsapp_number,
             user_phone=assistant.user_phone,
+            timezone=assistant.timezone,
         ),
     )
 
@@ -660,13 +671,15 @@ def create_assistant(
                                 "max_parallel": 3,
                                 "phone": "+1-555-123-4567",
                                 "email": "alice.smith@example.com",
-                                "region": "North America",
+                                "nationality": "United States",
                                 "profile_photo": "https://example.com/photos/alice.jpg",
                                 "profile_video": "https://example.com/videos/alice.mp4",
                                 "about": "Mathematician and writer known for work on Analytical Engine",
                                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                                 "voice_provider": "cartesia",
-                                "country": "US",
+                                "voice_mode": "tts",
+                                "phone_country": "US",
+                                "timezone": "America/New_York",
                                 "created_at": "2025-04-25T12:00:00Z",
                                 "updated_at": "2025-04-25T12:00:00Z",
                             },
@@ -679,13 +692,15 @@ def create_assistant(
                                 "max_parallel": 2,
                                 "phone": "+1-555-987-6543",
                                 "email": "bob.jones@example.com",
-                                "region": "South America",
+                                "nationality": "Mexico",
                                 "profile_photo": "https://example.com/photos/bob.jpg",
                                 "profile_video": "https://example.com/videos/bob.mp4",
                                 "about": "Machine learning expert with focus on computer vision",
                                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                                 "voice_provider": "cartesia",
-                                "country": "CA",
+                                "voice_mode": "tts",
+                                "phone_country": "CA",
+                                "timezone": "America/Vancouver",
                                 "created_at": "2025-04-24T10:30:00Z",
                                 "updated_at": "2025-04-24T10:30:00Z",
                             },
@@ -735,13 +750,13 @@ def list_assistants(
                     first_name=a.first_name,
                     surname=a.surname,
                     age=a.age,
-                    region=a.region,
+                    nationality=a.nationality,
                     profile_photo=a.profile_photo,
                     profile_video=a.profile_video,
                     desktop_url=a.desktop_url,
                     user_local_desktop=a.user_local_desktop,
                     about=a.about,
-                    country=a.country,
+                    phone_country=a.phone_country,
                     weekly_limit=(
                         float(a.weekly_limit) if a.weekly_limit is not None else None
                     ),
@@ -755,6 +770,8 @@ def list_assistants(
                     email=a.email,
                     voice_id=a.voice_id,
                     voice_provider=a.voice_provider,
+                    voice_mode=a.voice_mode,
+                    timezone=a.timezone,
                 )
                 for a in assistants
             ],
@@ -853,13 +870,13 @@ def delete_assistant_contact(
                 first_name=updated_assistant.first_name,
                 surname=updated_assistant.surname,
                 age=updated_assistant.age,
-                region=updated_assistant.region,
+                nationality=updated_assistant.nationality,
                 profile_photo=updated_assistant.profile_photo,
                 profile_video=updated_assistant.profile_video,
                 desktop_url=updated_assistant.desktop_url,
                 user_local_desktop=updated_assistant.user_local_desktop,
                 about=updated_assistant.about,
-                country=updated_assistant.country,
+                phone_country=updated_assistant.phone_country,
                 weekly_limit=(
                     float(updated_assistant.weekly_limit)
                     if updated_assistant.weekly_limit is not None
@@ -875,6 +892,8 @@ def delete_assistant_contact(
                 email=updated_assistant.email,
                 voice_id=updated_assistant.voice_id,
                 voice_provider=updated_assistant.voice_provider,
+                voice_mode=updated_assistant.voice_mode,
+                timezone=updated_assistant.timezone,
             ),
         )
 
@@ -1111,12 +1130,14 @@ def delete_assistant(
                             "about": "Award-winning mathematician specializing in algorithm development",
                             "phone": "+1-555-987-6543",
                             "email": "alice.smith@example.com",
-                            "region": "North America",
+                            "nationality": "United States",
                             "profile_photo": "https://example.com/photos/alice.jpg",
                             "profile_video": "https://example.com/videos/alice.mp4",
                             "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                             "voice_provider": "cartesia",
-                            "country": "US",
+                            "voice_mode": "tts",
+                            "phone_country": "US",
+                            "timezone": "America/New_York",
                             "created_at": "2025-04-25T12:00:00Z",
                             "updated_at": "2025-04-25T14:30:00Z",
                         },
@@ -1262,9 +1283,11 @@ def update_assistant_config(
             # 2- If so, create an assistant phone number
             if update.user_phone and not existing_assistant.phone:
                 try:
-                    country = update.country if update.country else "US"
+                    phone_country = (
+                        update.phone_country if update.phone_country else "US"
+                    )
                     phone_response = create_phone_number(
-                        country=country,
+                        phone_country=phone_country,
                         is_staging=settings.is_staging,
                     )
                     if "detail" in phone_response:
@@ -1327,24 +1350,22 @@ def update_assistant_config(
                     is_staging=settings.is_staging,
                 )["whatsapp_number"]
 
+        update_data = update.model_dump(exclude_unset=True)
+        if "create_infra" in update_data:
+            del update_data["create_infra"]
+        if "weekly_limit" in update_data and update.weekly_limit is not None:
+            update_data["weekly_limit"] = Decimal(update.weekly_limit)
+        if assistant_email:
+            update_data["email"] = assistant_email
+        if assistant_phone:
+            update_data["phone"] = assistant_phone
+        if assistant_whatsapp_number:
+            update_data["assistant_whatsapp_number"] = assistant_whatsapp_number
+
         updated = assistant_dao.update_assistant(
             user_id=request.state.user_id,
             agent_id=assistant_id,
-            profile_photo=update.profile_photo,
-            profile_video=update.profile_video,
-            desktop_url=update.desktop_url,
-            user_local_desktop=update.user_local_desktop,
-            about=update.about,
-            phone=assistant_phone,
-            email=assistant_email,
-            user_phone=update.user_phone,
-            user_whatsapp_number=update.user_whatsapp_number,
-            assistant_whatsapp_number=assistant_whatsapp_number,
-            weekly_limit=weekly_limit,
-            max_parallel=update.max_parallel,
-            voice_id=update.voice_id,
-            voice_provider=update.voice_provider,
-            country=update.country,
+            update_data=update_data,
         )
         if not updated:
             raise HTTPException(
@@ -1399,13 +1420,13 @@ def update_assistant_config(
                 first_name=updated.first_name,
                 surname=updated.surname,
                 age=updated.age,
-                region=updated.region,
+                nationality=updated.nationality,
                 profile_photo=updated.profile_photo,
                 profile_video=updated.profile_video,
                 desktop_url=updated.desktop_url,
                 user_local_desktop=updated.user_local_desktop,
                 about=updated.about,
-                country=updated.country,
+                phone_country=updated.phone_country,
                 weekly_limit=(
                     float(updated.weekly_limit)
                     if updated.weekly_limit is not None
@@ -1421,6 +1442,8 @@ def update_assistant_config(
                 user_phone=updated.user_phone,
                 voice_id=updated.voice_id,
                 voice_provider=updated.voice_provider,
+                voice_mode=updated.voice_mode,
+                timezone=updated.timezone,
             ),
         )
     except Exception as e:
@@ -2060,86 +2083,69 @@ def delete_voice(
     user_id = request.state.user_id
     voice_dao = VoiceDAO(session)
 
-    # Step 1: Get the voice from DB
+    # First, get the voice to check its existence and preset status.
     voice_to_delete = voice_dao.get_voice_by_id(
         user_id=user_id,
         voice_id=voice_id,
         provider=provider,
     )
     if not voice_to_delete:
-        # No session.rollback() needed here as it's a read operation that failed to find.
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Voice not found for this user.",
         )
 
-    # Step 2: Attempt to delete from provider if applicable
-    if not voice_to_delete.is_preset:
-
-        provider_service = None
-        if voice_to_delete.provider == "cartesia":
-            provider_service = cartesia_service
-        elif voice_to_delete.provider == "elevenlabs":
-            provider_service = elevenlabs_service
-
-        if provider_service:
-            try:
-                provider_service.delete_voice(voice_id)
-            except (CartesiaAPIError, ElevenLabsAPIError) as e_provider:
-                if e_provider.status_code == 404:
-                    logging.warning(
-                        f"Voice {voice_id} not found on {voice_to_delete.provider} (status 404). Proceeding with DB deletion.",
-                    )
-                    # Non-critical, continue to DB deletion
-                else:
-                    # CRITICAL PROVIDER FAILURE
-                    logging.error(
-                        f"Critical error deleting voice {voice_id} from {voice_to_delete.provider}: {e_provider.detail}",
-                    )
-                    session.rollback()  # Ensure rollback of any prior DB changes in this session (though unlikely here)
-                    raise HTTPException(
-                        status_code=e_provider.status_code,
-                        detail=f"Failed to delete voice from {voice_to_delete.provider}: {e_provider.detail}",
-                    )
-            except Exception as e_provider_generic:
-                # Other unexpected provider errors
-                logging.error(
-                    f"Unexpected critical error deleting voice {voice_id} from {voice_to_delete.provider}: {str(e_provider_generic)}",
-                )
-                session.rollback()
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Unexpected error during {voice_to_delete.provider} deletion: {str(e_provider_generic)}",
-                )
-
-    # Step 3: If we've reached here, it means:
-    # - Voice is a preset (provider deletion skipped)
-    # - OR Provider deletion was successful
-    # - OR Provider deletion returned 404 (non-critical)
-    # So, proceed to delete from our database.
     try:
+        # Attempt to delete from our DB first. The DAO method contains the
+        # "in-use" validation and will raise a 409 Conflict if necessary.
         voice_dao.delete_voice(user_id=user_id, voice_id=voice_id, provider=provider)
+
+        # If the voice is not a preset, also delete it from the provider.
+        if not voice_to_delete.is_preset:
+            provider_service = None
+            if voice_to_delete.provider == "cartesia":
+                provider_service = cartesia_service
+            elif voice_to_delete.provider == "elevenlabs":
+                provider_service = elevenlabs_service
+
+            if provider_service:
+                try:
+                    provider_service.delete_voice(voice_id)
+                except (CartesiaAPIError, ElevenLabsAPIError) as e_provider:
+                    # If the provider says "not found," it's a non-critical error.
+                    # We can proceed since our goal is to have it deleted.
+                    if e_provider.status_code == 404:
+                        logging.warning(
+                            f"Voice {voice_id} not found on {voice_to_delete.provider} during deletion attempt. Continuing with DB deletion.",
+                        )
+                    else:
+                        # For other provider errors, we must roll back our DB change.
+                        raise e_provider  # This will be caught below.
+
+        # If both DB and provider deletions were successful (or skippable), commit.
         session.commit()
         return InfoResponse(info="Voice deleted successfully.")
-    except (
-        IntegrityError
-    ) as e_db_integrity:  # Should not happen on delete typically, but good to catch
+
+    except HTTPException as e:
+        session.rollback()
+        raise e
+    except (CartesiaAPIError, ElevenLabsAPIError) as e_provider:
         session.rollback()
         logging.error(
-            f"DB IntegrityError during voice deletion from DB {voice_id}: {str(e_db_integrity)}",
+            f"Critical provider error deleting voice {voice_id} from {provider}: {e_provider.detail}",
+        )
+        raise HTTPException(
+            status_code=e_provider.status_code,
+            detail=f"Failed to delete voice from {provider}: {e_provider.detail}",
+        )
+    except Exception as e_generic:
+        session.rollback()
+        logging.error(
+            f"Generic error during voice deletion {voice_id}: {str(e_generic)}",
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Database integrity error during voice deletion: {str(e_db_integrity)}",
-        )
-    except Exception as e_db_generic:  # Other errors during DB delete
-        session.rollback()
-        logging.error(
-            f"Generic error during voice deletion from DB {voice_id}: {str(e_db_generic)}",
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error deleting voice from database: {str(e_db_generic)}",
+            detail=f"Error deleting voice from database: {str(e_generic)}",
         )
 
 

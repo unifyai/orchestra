@@ -76,22 +76,32 @@ async def create_user(
     api_key_dao = ApiKeyDAO(session)
     user_dao = UsersDAO(session)
 
-    auth_user_dao.create(email=user.email)
-    user = auth_user_dao.filter(email=user.email)
+    auth_user_dao.create(
+        email=user.email,
+        name=user.name,
+        last_name=user.last_name,
+        job_title=user.job_title,
+        image=user.image,
+        timezone=user.timezone,
+    )
+    user_row = auth_user_dao.filter(email=user.email)
+    new_user = user_row[0][0]
+
     new_api_key = generate_key()
-    api_key_dao.create(key=new_api_key, name="", user_id=user[0][0].id)
+    api_key_dao.create(key=new_api_key, name="", user_id=new_user.id)
     # TODO: remove this after migrating
     try:
-        user_dao.create_users(id=user[0][0].id, credits=0)
+        user_dao.create_users(id=new_user.id, credits=0)
         # Seed default Unity project, interface, tab, and table tile for tasks
-        DefaultTasksSeeder.seed(session, user_id=user[0][0].id)
+        DefaultTasksSeeder.seed(session, user_id=new_user.id)
     except Exception as e:
         print(e)
     return {
-        "id": user[0][0].id,
-        "name": user[0][0].name,
-        "image": user[0][0].image,
-        "email": user[0][0].email,
+        "id": new_user.id,
+        "name": new_user.name,
+        "image": new_user.image,
+        "email": new_user.email,
+        "timezone": new_user.timezone,
     }
 
 
@@ -108,7 +118,11 @@ async def get_user(
     user = auth_user_dao.filter(id=user_id)
     if not user:
         raise not_found("User ID")
+    user_instance = user[0][0]
+
     api_key = api_key_dao.filter(user_id=user[0][0].id)
+    api_key_instance = api_key[0][0]
+
     org_member = organization_member_dao.filter(user_id=user[0][0].id)
     org_name, org_level = None, None
     if org_member:
@@ -116,19 +130,20 @@ async def get_user(
         org = organization_dao.filter(id=org_member[0][0].organization_id)
         org_name = org[0][0].name
     return {
-        "id": user[0][0].id,
-        "name": user[0][0].name,
-        "lastName": user[0][0].last_name,
-        "jobTitle": user[0][0].job_title,
-        "image": user[0][0].image,
-        "email": user[0][0].email,
-        "createdAt": user[0][0].created_at,
-        "apiKey": api_key[0][0].key,
+        "id": user_instance.id,
+        "name": user_instance.name,
+        "lastName": user_instance.last_name,
+        "jobTitle": user_instance.job_title,
+        "image": user_instance.image,
+        "email": user_instance.email,
+        "createdAt": user_instance.created_at,
+        "apiKey": api_key_instance.key,
         "organization": {"name": org_name, "level": org_level},
-        "assistant_hiring_approval": user[0][0].assistant_hiring_approval,
-        "has_claimed_approval_link": user[0][0].has_claimed_approval_link,
-        "business_classification": format_business_classification(user[0][0]),
-        "onboarded": user[0][0].onboarded,
+        "assistant_hiring_approval": user_instance.assistant_hiring_approval,
+        "has_claimed_approval_link": user_instance.has_claimed_approval_link,
+        "business_classification": format_business_classification(user_instance),
+        "onboarded": user_instance.onboarded,
+        "timezone": user_instance.timezone,
     }
 
 
@@ -145,7 +160,11 @@ async def get_user_by_email(
     user = auth_user_dao.filter(email=email)
     if not user:
         return None
+    user_instance = user[0][0]
+
     api_key = api_key_dao.filter(user_id=user[0][0].id)
+    api_key_instance = api_key[0][0]
+
     org_member = organization_member_dao.filter(user_id=user[0][0].id)
     org_name, org_level = None, None
     if org_member:
@@ -153,19 +172,20 @@ async def get_user_by_email(
         org = organization_dao.filter(id=org_member[0][0].organization_id)
         org_name = org[0][0].name
     return {
-        "id": user[0][0].id,
-        "name": user[0][0].name,
-        "lastName": user[0][0].last_name,
-        "jobTitle": user[0][0].job_title,
-        "image": user[0][0].image,
-        "email": user[0][0].email,
-        "createdAt": user[0][0].created_at,
-        "apiKey": api_key[0][0].key,
+        "id": user_instance.id,
+        "name": user_instance.name,
+        "lastName": user_instance.last_name,
+        "jobTitle": user_instance.job_title,
+        "image": user_instance.image,
+        "email": user_instance.email,
+        "createdAt": user_instance.created_at,
+        "apiKey": api_key_instance.key,
         "organization": {"name": org_name, "level": org_level},
-        "assistant_hiring_approval": user[0][0].assistant_hiring_approval,
-        "has_claimed_approval_link": user[0][0].has_claimed_approval_link,
-        "business_classification": format_business_classification(user[0][0]),
-        "onboarded": user[0][0].onboarded,
+        "assistant_hiring_approval": user_instance.assistant_hiring_approval,
+        "has_claimed_approval_link": user_instance.has_claimed_approval_link,
+        "business_classification": format_business_classification(user_instance),
+        "onboarded": user_instance.onboarded,
+        "timezone": user_instance.timezone,
     }
 
 
@@ -190,7 +210,11 @@ async def get_user_by_account(
     user = auth_user_dao.filter(id=account[0][0].user_id)
     if not user:
         return None
+    user_instance = user[0][0]
+
     api_key = api_key_dao.filter(user_id=user[0][0].id)
+    api_key_instance = api_key[0][0]
+
     org_member = organization_member_dao.filter(user_id=user[0][0].id)
     org_name, org_level = None, None
     if org_member:
@@ -198,19 +222,20 @@ async def get_user_by_account(
         org = organization_dao.filter(id=org_member[0][0].organization_id)
         org_name = org[0][0].name
     return {
-        "id": account[0][0].id,
-        "name": user[0][0].name,
-        "lastName": user[0][0].last_name,
-        "jobTitle": user[0][0].job_title,
-        "image": user[0][0].image,
-        "email": user[0][0].email,
-        "createdAt": user[0][0].created_at,
-        "apiKey": api_key[0][0].key,
+        "id": user_instance.id,
+        "name": user_instance.name,
+        "lastName": user_instance.last_name,
+        "jobTitle": user_instance.job_title,
+        "image": user_instance.image,
+        "email": user_instance.email,
+        "createdAt": user_instance.created_at,
+        "apiKey": api_key_instance.key,
         "organization": {"name": org_name, "level": org_level},
-        "assistant_hiring_approval": user[0][0].assistant_hiring_approval,
-        "has_claimed_approval_link": user[0][0].has_claimed_approval_link,
-        "business_classification": format_business_classification(user[0][0]),
-        "onboarded": user[0][0].onboarded,
+        "assistant_hiring_approval": user_instance.assistant_hiring_approval,
+        "has_claimed_approval_link": user_instance.has_claimed_approval_link,
+        "business_classification": format_business_classification(user_instance),
+        "onboarded": user_instance.onboarded,
+        "timezone": user_instance.timezone,
     }
 
 
@@ -228,6 +253,7 @@ async def update_user(
         name=updated_user.name,
         last_name=updated_user.last_name,
         job_title=updated_user.job_title,
+        timezone=updated_user.timezone,
     )
     return "User information updated successfully!"
 
@@ -430,6 +456,66 @@ async def reset_api_key(
         organization_id=organization_id,
     )
     return new_api_key
+
+
+@admin_router.post("/auth-user/{user_id}/organization-api-key")
+async def create_organization_api_key(
+    user_id: str,
+    organization_id: int,
+    name: str = "",
+    session: Session = Depends(get_db_session),
+):
+    """
+    Create an organization-specific API key for a user.
+
+    This key will have organization context and billing will be charged to
+    the organization's billing_user_id.
+    """
+    api_key_dao = ApiKeyDAO(session)
+    org_dao = OrganizationDAO(session)
+    org_member_dao = OrganizationMemberDAO(session)
+
+    # Verify organization exists
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Organization with id {organization_id} not found",
+        )
+
+    # Verify user is a member of the organization
+    memberships = org_member_dao.filter(
+        organization_id=organization_id,
+        user_id=user_id,
+    )
+    if not memberships:
+        raise HTTPException(
+            status_code=403,
+            detail=f"User {user_id} is not a member of organization {organization_id}",
+        )
+
+    # Check if org API key already exists
+    existing_key = api_key_dao.filter(
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+    if existing_key:
+        raise HTTPException(
+            status_code=400,
+            detail="User already has an organization API key for this organization",
+        )
+
+    # Create organization API key
+    new_api_key = generate_key()
+    api_key_dao.create(
+        key=new_api_key,
+        name=name or f"org_{org.name}",
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+    session.commit()
+
+    return {"api_key": new_api_key, "organization_id": organization_id}
 
 
 @admin_router.get("/organization/list")

@@ -1,12 +1,13 @@
 from datetime import datetime
 from typing import Any, Dict, Generic, List, Literal, Optional, TypeVar
+from zoneinfo import available_timezones
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 from pydantic.generics import GenericModel
 
-from orchestra.settings import settings
-
 T = TypeVar("T")
+
+VALID_TIMEZONES = available_timezones()
 
 
 class InfoResponse(GenericModel, Generic[T]):
@@ -71,9 +72,9 @@ class AssistantCreate(BaseModel):
         description="Maximum number of parallel tasks the assistant can handle",
         example=2,
     )
-    region: Optional[str] = Field(
+    nationality: Optional[str] = Field(
         None,
-        description="Geographic region of the assistant",
+        description="Assistant's nationality",
         example="North America",
     )
     profile_photo: Optional[str] = Field(
@@ -101,11 +102,6 @@ class AssistantCreate(BaseModel):
         description="Brief description about the assistant",
         example="Mathematician and writer known for work on Analytical Engine",
     )
-    country: Optional[str] = Field(
-        "US",
-        description="Country code for phone number provisioning (e.g., US, GB)",
-        example="US",
-    )
     email: Optional[str] = Field(
         None,
         description="Email of the assistant",
@@ -117,9 +113,14 @@ class AssistantCreate(BaseModel):
         example="bf0a246a-8642-498a-9950-80c35e9276b5",
     )
     voice_provider: Optional[str] = Field(
-        settings.selected_voice_provider,
+        None,
         description="Provider of the selected voice (e.g., 'elevenlabs', 'openai')",
         example="elevenlabs",
+    )
+    voice_mode: Optional[Literal["tts", "sts"]] = Field(
+        None,
+        description="The type of voice interaction, either text-to-speech (tts) or speech-to-speech (sts).",
+        example="tts",
     )
     user_phone: Optional[str] = Field(
         None,
@@ -141,10 +142,46 @@ class AssistantCreate(BaseModel):
         description="Phone number of the assistant (just for testing purposes)",
         exclude=True,
     )
+    phone_country: Optional[str] = Field(
+        "US",
+        description="Country code for phone number provisioning (e.g., US, GB)",
+        example="US",
+    )
     pre_hire_chat: Optional[List[ChatMessage]] = Field(
         None,
         description="A list of chat messages from the pre-hire conversation to be logged.",
     )
+    timezone: Optional[str] = Field(
+        None,
+        description="Timezone of the assistant in IANA format",
+        example="America/New_York",
+    )
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in VALID_TIMEZONES:
+            raise ValueError(f"'{v}' is not a valid IANA timezone.")
+        return v
+
+    @model_validator(mode="after")
+    def check_voice_fields(cls, self):
+        voice_id, voice_provider, voice_mode = (
+            self.voice_id,
+            self.voice_provider,
+            self.voice_mode,
+        )
+
+        # If any voice field is provided, id and provider are required.
+        if any(v is not None for v in [voice_id, voice_provider, voice_mode]):
+            if voice_id is None or voice_provider is None:
+                raise ValueError(
+                    "If providing voice information, both 'voice_id' and 'voice_provider' are required.",
+                )
+            # Default voice_mode if it wasn't specified
+            if voice_mode is None:
+                self.voice_mode = "tts"
+        return self
 
     class Config:
         orm_mode = True
@@ -155,16 +192,18 @@ class AssistantCreate(BaseModel):
                 "age": 28,
                 "weekly_limit": 15.75,
                 "max_parallel": 2,
-                "region": "North America",
+                "nationality": "North America",
                 "profile_photo": "https://example.com/photos/ada.jpg",
                 "profile_video": "https://example.com/videos/ada.mp4",
                 "desktop_url": "https://app.example.com/assistants/ada",
                 "user_local_desktop": "windows",
                 "about": "Mathematician and writer known for work on Analytical Engine",
-                "country": "US",
+                "phone_country": "US",
+                "timezone": "America/New_York",
                 "email": "ada.lovelace@unify.ai",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "voice_provider": "cartesia",
+                "voice_mode": "tts",
                 "user_phone": "+15551234567",
                 "user_whatsapp_number": "+15551234567",
             },
@@ -236,13 +275,14 @@ class AssistantRead(AssistantCreate):
                 "age": 28,
                 "weekly_limit": 15.75,
                 "max_parallel": 2,
-                "region": "North America",
+                "nationality": "North America",
                 "profile_photo": "https://example.com/photos/ada.jpg",
                 "profile_video": "https://example.com/videos/ada.mp4",
                 "desktop_url": "https://app.example.com/assistants/ada",
                 "user_local_desktop": "windows",
                 "about": "Mathematician and writer known for work on Analytical Engine",
-                "country": "US",
+                "phone_country": "US",
+                "timezone": "America/New_York",
                 "email": "ada.lovelace@unify.ai",
                 "phone": "+15551234567",
                 "user_phone": "+15551234567",
@@ -250,6 +290,7 @@ class AssistantRead(AssistantCreate):
                 "assistant_whatsapp_number": "+15551234567",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "voice_provider": "cartesia",
+                "voice_mode": "tts",
                 "agent_id": "12345",
                 "user_id": "123",
                 "created_at": "2025-04-25T10:30:00Z",
@@ -313,6 +354,11 @@ class AssistantUpdate(BaseModel):
         description="Contact phone number for the assistant",
         example="+15559876543",
     )
+    phone_country: Optional[str] = Field(
+        None,
+        description="Country code for phone number provisioning (e.g., US, GB)",
+        example="GB",
+    )
     email: Optional[str] = Field(
         None,
         description="Email address for the assistant",
@@ -333,16 +379,73 @@ class AssistantUpdate(BaseModel):
         description="Provider of the selected voice (e.g., 'elevenlabs', 'openai')",
         example="elevenlabs",
     )
-    country: Optional[str] = Field(
+    voice_mode: Optional[Literal["tts", "sts"]] = Field(
         None,
-        description="Country code for phone number provisioning (e.g., US, GB)",
-        example="GB",
+        description="The type of voice interaction, either text-to-speech (tts) or speech-to-speech (sts).",
+        example="tts",
+    )
+    timezone: Optional[str] = Field(
+        None,
+        description="Timezone of the assistant in IANA format",
+        example="Europe/London",
     )
     create_infra: Optional[bool] = Field(
         True,
         description="Whether to create infrastructure for the assistant during update (e.g., phone, email). Set to false for testing.",
         exclude=True,
     )
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in VALID_TIMEZONES:
+            raise ValueError(f"'{v}' is not a valid IANA timezone.")
+        return v
+
+    @model_validator(mode="after")
+    def check_voice_fields_on_update(cls, self):
+        """Validate voice fields for PATCH operations."""
+        provided = self.__pydantic_fields_set__
+
+        has_id = "voice_id" in provided
+        has_provider = "voice_provider" in provided
+        has_mode = "voice_mode" in provided
+
+        # No voice fields provided, nothing to do
+        if not any([has_id, has_provider, has_mode]):
+            return self
+
+        # Clearing voice by sending "voice_id": null
+        if has_id and self.voice_id is None:
+            self.voice_provider = None
+            self.voice_mode = None
+            return self
+
+        # Setting/updating voice: if one of id/provider is given, both must be.
+        if has_id or has_provider:
+            if not (has_id and has_provider):
+                raise ValueError(
+                    "To set or update voice information, both 'voice_id' and 'voice_provider' must be provided together.",
+                )
+
+            # Since 'has_id' is true, and we passed the 'clearing' check, self.voice_id is not None.
+            # We just need to check if self.voice_provider is not None.
+            if self.voice_provider is None:
+                raise ValueError(
+                    "'voice_provider' cannot be null when setting a voice.",
+                )
+
+            # Default voice_mode if not provided
+            if not has_mode:
+                self.voice_mode = "tts"
+
+        # Only mode was provided, which is not allowed.
+        elif has_mode:
+            raise ValueError(
+                "Cannot update 'voice_mode' alone. Please provide 'voice_id' and 'voice_provider'.",
+            )
+
+        return self
 
     class Config:
         orm_mode = True
@@ -362,7 +465,9 @@ class AssistantUpdate(BaseModel):
                 "email": "ada.lovelace@newdomain.com",
                 "voice_id": "bf0a246a-8642-498a-9950-80c35e9276b5",
                 "voice_provider": "cartesia",
-                "country": "GB",
+                "voice_mode": "tts",
+                "phone_country": "GB",
+                "timezone": "Europe/London",
             },
         }
 

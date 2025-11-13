@@ -11,7 +11,7 @@ from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.lib.billing import queue_auto_recharge
+from orchestra.lib.billing import get_billing_user_id, queue_auto_recharge
 from orchestra.web.api.log.utils.logging_utils import log_chat_completion_event
 from orchestra.web.api.query.schema import QueryModelRequest
 from orchestra.web.api.query.views import create_query_model
@@ -70,14 +70,16 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
     processing_time: Optional[float] = 0,
     usage: Optional[Dict] = None,
     tags: Optional[list[str]] = None,
+    organization_id: Optional[int] = None,
 ):
     """
     Perform database operations for query logging.
 
-    :param user_id: user id.
+    :param user_id: user id (the actor making the query).
     :param cost: cost of the query.
     :param model: model name.
     :param provider: provider name.
+    :param organization_id: organization context (None = personal query).
 
     :raises HTTPException: when endpoint is not found.
     """
@@ -120,6 +122,7 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
                 raise internal_endpoint_not_found
         query_model_request = QueryModelRequest(
             user_id=user_id,
+            organization_id=organization_id,
             model_provider_str=f"{model}@{provider}",
             endpoint_id=endpoint_id,
             custom_endpoint_id=custom_endpoint_id,
@@ -174,34 +177,52 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
                 status_code=status_code,
                 session=session,
             )
-        user = users_dao.get_user_with_id(user_id)
 
         if not os.environ.get("ON_PREM") and status_code == 200:
-            users_dao.recharge_credit(user_id, -cost)
+            # Determine who should be billed: user (personal) or org's billing_user
+            billing_user_id = get_billing_user_id(
+                session=session,
+                user_id=user_id,
+                organization_id=organization_id,
+            )
+
+            # Deduct credits from the billing user
+            users_dao.recharge_credit(billing_user_id, -cost)
             session.commit()  # Ensure credit deduction is committed
 
+            # Get the billing user for autorecharge checks
+            billing_user = users_dao.get_user_with_id(billing_user_id)
+
+            # Check autorecharge for the billing user
             if (
-                user.autorecharge
-                and user.credits <= user.autorecharge_threshold
-                and user.autorecharge_qty > 0
+                billing_user.autorecharge
+                and billing_user.credits <= billing_user.autorecharge_threshold
+                and billing_user.autorecharge_qty > 0
             ):
                 print(
-                    f"[BG-TASK] AUTO-RECHARGE TRIGGERED! User: {user_id}, "
-                    f"Credits: {user.credits} <= {user.autorecharge_threshold}, "
-                    f"Recharging: {user.autorecharge_qty}",
+                    f"[BG-TASK] AUTO-RECHARGE TRIGGERED! Billing User: {billing_user_id}, "
+                    f"Credits: {billing_user.credits} <= {billing_user.autorecharge_threshold}, "
+                    f"Recharging: {billing_user.autorecharge_qty}",
                 )
 
-                # Queue auto-recharge for monthly invoicing (replaces immediate Stripe call)
-                queue_auto_recharge(session, user, int(user.autorecharge_qty))
-                print(f"[BG-TASK] Auto-recharge queued for user {user_id}")
+                # Queue auto-recharge for monthly invoicing
+                queue_auto_recharge(
+                    session,
+                    billing_user,
+                    int(billing_user.autorecharge_qty),
+                )
+                print(f"[BG-TASK] Auto-recharge queued for user {billing_user_id}")
 
                 # Credit user immediately (they pay later via monthly invoice)
-                users_dao.recharge_credit(user_id, int(user.autorecharge_qty))
+                users_dao.recharge_credit(
+                    billing_user_id,
+                    int(billing_user.autorecharge_qty),
+                )
                 session.commit()
                 print(
-                    f"[BG-TASK] Credits added - User: {user_id}, "
-                    f"Amount: {user.autorecharge_qty}, "
-                    f"New balance: {user.credits + user.autorecharge_qty}",
+                    f"[BG-TASK] Credits added - User: {billing_user_id}, "
+                    f"Amount: {billing_user.autorecharge_qty}, "
+                    f"New balance: {billing_user.credits + billing_user.autorecharge_qty}",
                 )
 
             telemetry_to_pub_sub(

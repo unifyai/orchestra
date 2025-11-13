@@ -54,21 +54,33 @@ def auth_api_key(
     apikey = credentials.credentials
 
     with _ro_session() as session:  # <-- opens & closes inside
-        db_response = ApiKeyDAO(session).get_user_id_and_mail(apikey)
-    if db_response:
-        request_fastapi.state.user_id = db_response[0][0]
-        request_fastapi.state.user_email = db_response[0][1]
-        request_fastapi.state.first_name = db_response[0][2]
-        request_fastapi.state.last_name = db_response[0][3]
+        api_key_dao = ApiKeyDAO(session)
+        db_response = api_key_dao.get_user_id_and_mail(apikey)
 
-        # Update the user context for logging/tracing
-        set_user_context(
-            user_id=request_fastapi.state.user_id,
-            user_email=request_fastapi.state.user_email,
-            first_name=request_fastapi.state.first_name,
-            last_name=request_fastapi.state.last_name,
-        )
-        return
+        if db_response:
+            request_fastapi.state.user_id = db_response[0][0]
+            request_fastapi.state.user_email = db_response[0][1]
+            request_fastapi.state.first_name = db_response[0][2]
+            request_fastapi.state.last_name = db_response[0][3]
+
+            # Get the organization_id from the API key (if it's an org key)
+            # This is used for organization billing and context
+            api_keys = api_key_dao.filter(key=apikey)
+            if api_keys:
+                api_key = api_keys[0][0]  # Row object, access first element
+                # Set organization_id (None for personal API keys)
+                request_fastapi.state.organization_id = api_key.organization_id
+            else:
+                request_fastapi.state.organization_id = None
+
+            # Update the user context for logging/tracing
+            set_user_context(
+                user_id=request_fastapi.state.user_id,
+                user_email=request_fastapi.state.user_email,
+                first_name=request_fastapi.state.first_name,
+                last_name=request_fastapi.state.last_name,
+            )
+            return
     raise invalid_api_key
 
 
