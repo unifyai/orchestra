@@ -63,6 +63,12 @@ class ResourceAccessRevoke(BaseModel):
     role_id: Optional[int] = None  # If None, revoke all access
 
 
+class ResourceAccessUpdate(BaseModel):
+    """Schema for updating resource access (changing role)."""
+
+    role_id: int  # New role ID to assign
+
+
 class ResourceAccessResponse(BaseModel):
     """Schema for resource access response."""
 
