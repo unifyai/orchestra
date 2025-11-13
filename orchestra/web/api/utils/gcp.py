@@ -1,10 +1,14 @@
 import json
+import logging
 from typing import Dict, List, Optional, Tuple, Union
 
 from google.cloud import aiplatform, aiplatform_v1, pubsub_v1, storage
 from google.cloud.exceptions import NotFound
+from google.cloud.pubsub_v1.publisher.exceptions import MessageTooLargeError
 
 from orchestra.web.api.utils.helpers import CustomEncoder
+
+logger = logging.getLogger(__name__)
 
 # Pub/Sub
 try:
@@ -28,7 +32,10 @@ def send_pubsub_msg(topic: str, msg: Dict[str, str]) -> None:
     # key_path = "./archive/pubsub_2_clickhouse.json"
     # credentials = service_account.Credentials.from_service_account_file(key_path)
     # publisher = pubsub_v1.PublisherClient(credentials=credentials)
-    PUBLISHER.publish(topic, json.dumps(msg, cls=CustomEncoder).encode())
+    try:
+        PUBLISHER.publish(topic, json.dumps(msg, cls=CustomEncoder).encode())
+    except MessageTooLargeError as e:
+        logger.error(f"Error sending pubsub message: {e}")
 
 
 # Cloud Storage
