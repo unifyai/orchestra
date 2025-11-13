@@ -5,6 +5,7 @@ from fastapi.routing import APIRouter
 
 from orchestra.web.api import (  # noqa: WPS235
     admin,
+    api_keys,
     context,
     credits,
     custom_api_keys,
@@ -17,9 +18,12 @@ from orchestra.web.api import (  # noqa: WPS235
     log,
     logging,
     monitoring,
+    organization,
     project,
     provider,
+    roles,
     supported_endpoints,
+    teams,
     users,
 )
 from orchestra.web.api.assistant import admin_router as assistant_admin_router
@@ -127,6 +131,8 @@ groupings = {
     "Account": [
         "Credits",
         "Query Logging",
+        "Organizations",
+        "API Keys",
     ],
 }
 
@@ -195,6 +201,27 @@ api_router.include_router(
 api_router.include_router(
     credits.router,
     tags=["Credits"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    organization.router,
+    tags=["Organizations"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    roles.router,
+    tags=["Roles & Permissions"],
+    dependencies=API_KEY_AUTH,
+)
+
+api_router.include_router(
+    teams.router,
+    tags=["Teams & Resource Access"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    api_keys.router,
+    tags=["API Keys"],
     dependencies=API_KEY_AUTH,
 )
 
