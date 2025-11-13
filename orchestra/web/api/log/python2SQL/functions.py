@@ -396,7 +396,7 @@ def _handle_functions(
                         literal("int").label("inferred_type"),
                     ],
                 )
-                return (
+                subq = (
                     select(*select_cols)
                     .select_from(val_expr)
                     .join(
@@ -552,7 +552,7 @@ def _handle_functions(
                     select_cols.append(
                         sec_expr.c.__parent_idx__.label("__parent_idx__"),
                     )
-                expr = _pg_round_timestamp(ts_literal, sec_expr.value)
+                expr = _pg_round_timestamp(ts_literal, sec_col)
                 if isinstance(sec_expr, ColumnClause):
                     return expr
                 select_cols.extend(
@@ -622,7 +622,7 @@ def _handle_functions(
             return exists_subq
 
         # Case 2: Handle exists(<subquery>).
-        elif isinstance(rhs_expr, Subquery):
+        else:
             # Build the subquery for the argument, which can be any valid expression.
             rhs_expr = build_sql_query(
                 filter_dict.get("rhs"),
@@ -661,12 +661,6 @@ def _handle_functions(
             return alias_utils.subquery_with_unique_alias(
                 select(*select_cols).select_from(rhs_expr),
                 prefix="func_result",
-            )
-
-        else:
-            # If the argument is neither a simple identifier nor a subquery, it's invalid.
-            raise ValueError(
-                f"Invalid argument for 'exists' function: {rhs_dict}",
             )
 
     elif operand == "version":

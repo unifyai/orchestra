@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.derived_log_dao import DerivedLogDAO
 from orchestra.db.dao.favorite_project_dao import FavoriteProjectDAO
 from orchestra.db.dao.interface_dao import InterfaceDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
@@ -1888,6 +1887,8 @@ def admin_duplicate_project(
 
     The duplicate is a separate project where changes in one do not affect the other.
     """
+    from orchestra.db.dao.derived_log_dao import DerivedLogDAO
+
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)

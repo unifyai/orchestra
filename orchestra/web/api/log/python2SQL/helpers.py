@@ -24,7 +24,6 @@ from sqlalchemy import (
     Integer,
     Interval,
     String,
-    Text,
     Time,
     and_,
     case,
@@ -40,7 +39,7 @@ load_dotenv()
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
-from sqlalchemy.sql.elements import ColumnClause
+from sqlalchemy.sql.elements import ClauseElement, ColumnClause
 from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.dao.log_dao import LogDAO
@@ -616,13 +615,30 @@ def cast_expr(expr, from_type: str, to_type: str):
     elif final_type == "bool":
         return cast(expr, Boolean)
     elif final_type == "datetime":
-        return cast(func.replace(cast(expr, Text), '"', ""), DateTime(timezone=True))
+        # Prefer native casts for temporal families; only fall back to JSON text extraction for JSON sources
+        if from_type == "datetime":
+            return cast(expr, DateTime(timezone=True))
+        if from_type in ("date", "time"):
+            return cast(expr, DateTime(timezone=True))
+        return cast(expr.op("#>>")(literal_column("'{}'")), DateTime(timezone=True))
     elif final_type == "time":
-        return cast(func.replace(cast(expr, Text), '"', ""), Time)
+        if from_type == "time":
+            return cast(expr, Time)
+        if from_type == "datetime":
+            return cast(expr, Time)
+        # For JSON inputs, extract scalar text and cast
+        return cast(expr.op("#>>")(literal_column("'{}'")), Time)
     elif final_type == "date":
-        return cast(func.replace(cast(expr, Text), '"', ""), Date)
+        if from_type == "date":
+            return cast(expr, Date)
+        if from_type == "datetime":
+            # Direct cast from timestamptz -> date is valid in Postgres
+            return cast(expr, Date)
+        return cast(expr.op("#>>")(literal_column("'{}'")), Date)
     elif final_type == "timedelta":
-        return cast(func.replace(cast(expr, Text), '"', ""), Interval)
+        if from_type == "timedelta":
+            return cast(expr, Interval)
+        return cast(expr.op("#>>")(literal_column("'{}'")), Interval)
     elif final_type == "vector":
         return expr
     else:
@@ -669,6 +685,7 @@ def _build_subquery_for_identifier(
         # TODO(yusha): figure out why empty ids were passed and remove this check once we have a better way to handle it
         log_id_condition = True
         derived_log_id_condition = True
+        event_ids_join = None  # No join needed
     elif isinstance(log_event_ids, list):
         # For derived logs, we pass reference logs as list of ids
         log_id_condition = log_event_log_alias.log_event_id.in_(log_event_ids)
@@ -676,14 +693,18 @@ def _build_subquery_for_identifier(
             log_event_ids,
         )
         log_event_condition = log_event_alias.id.in_(log_event_ids)
+        event_ids_join = None  # No join needed for list
     else:
         # assert that log_event_ids is a subquery
         assert isinstance(log_event_ids, Subquery)
-        log_id_condition = log_event_log_alias.log_event_id.in_(select(log_event_ids))
-        derived_log_id_condition = log_event_derived_log_alias.log_event_id.in_(
-            select(log_event_ids),
-        )
-        log_event_condition = log_event_alias.id.in_(select(log_event_ids))
+        # Instead of IN (SELECT ...), we'll JOIN the subquery
+        # This allows PostgreSQL to optimize join order and treat it as a join key
+        # rather than a filter, enabling it to start from the filtered events
+        event_ids_join = log_event_ids
+        # No WHERE condition needed - the JOIN handles the filtering
+        log_id_condition = True
+        derived_log_id_condition = True
+        log_event_condition = True
     # Special handling for log_id field
     if key == "log_id":
         subq = select(
@@ -699,7 +720,11 @@ def _build_subquery_for_identifier(
             literal(None).label("float_value"),
             literal(None).label("bool_value"),
             literal("int").label("inferred_type"),
-        ).where(log_event_condition)
+        ).select_from(log_event_alias)
+        if event_ids_join is not None:
+            subq = subq.join(event_ids_join, log_event_alias.id == event_ids_join.c.id)
+        else:
+            subq = subq.where(log_event_condition)
         return alias_utils.subquery_with_unique_alias(
             subq,
             prefix=safe_alias or "log_id",
@@ -723,183 +748,240 @@ def _build_subquery_for_identifier(
             literal(None).label("float_value"),
             literal(None).label("bool_value"),
             literal("datetime").label("inferred_type"),
-        ).where(log_event_condition)
+        ).select_from(log_event_alias)
+        if event_ids_join is not None:
+            subq = subq.join(event_ids_join, log_event_alias.id == event_ids_join.c.id)
+        else:
+            subq = subq.where(log_event_condition)
         return alias_utils.subquery_with_unique_alias(subq, prefix=safe_alias or key)
 
     # Build base logs subquery
-    base_subq = (
-        select(
-            log_event_log_alias.log_event_id.label("log_event_id"),
-            literal(None).label("vector_value"),
-            case(
-                (
-                    or_(
-                        log_alias.inferred_type == "list",
-                        log_alias.inferred_type == "dict",
-                        log_alias.inferred_type == "tuple",
-                        log_alias.inferred_type == "set",
-                        log_alias.inferred_type == "union",
-                        log_alias.inferred_type == "Any",
-                        log_alias.inferred_type.ilike("List%"),
-                        log_alias.inferred_type.ilike("Dict%"),
-                        log_alias.inferred_type.ilike("Tuple%"),
-                        log_alias.inferred_type.ilike("Set%"),
-                        log_alias.inferred_type.ilike("Union%"),
-                        # NEW: when inferred_type stores a JSON schema string, it will typically
-                        # start with '{' and end with '}'. Treat it as JSON-family for casting.
-                        log_alias.inferred_type.like("{%"),
-                    ),
-                    cast(log_alias.value, JSONB),
+    base_subq = select(
+        log_event_log_alias.log_event_id.label("log_event_id"),
+        literal(None).label("vector_value"),
+        case(
+            (
+                or_(
+                    log_alias.inferred_type == "list",
+                    log_alias.inferred_type == "dict",
+                    log_alias.inferred_type == "tuple",
+                    log_alias.inferred_type == "set",
+                    log_alias.inferred_type == "union",
+                    log_alias.inferred_type == "Any",
+                    log_alias.inferred_type.ilike("List%"),
+                    log_alias.inferred_type.ilike("Dict%"),
+                    log_alias.inferred_type.ilike("Tuple%"),
+                    log_alias.inferred_type.ilike("Set%"),
+                    log_alias.inferred_type.ilike("Union%"),
+                    # NEW: when inferred_type stores a JSON schema string, it will typically
+                    # start with '{' and end with '}'. Treat it as JSON-family for casting.
+                    log_alias.inferred_type.like("{%"),
                 ),
-                else_=None,
-            ).label("jsonb_value"),
-            case(
-                (log_alias.inferred_type == "datetime", cast(log_alias.value, JSONB)),
-                else_=None,
-            ).label("timestamp_value"),
-            case(
-                (log_alias.inferred_type == "time", cast(log_alias.value, JSONB)),
-                else_=None,
-            ).label("time_value"),
-            case(
-                (log_alias.inferred_type == "date", cast(log_alias.value, JSONB)),
-                else_=None,
-            ).label("date_value"),
-            case(
-                (log_alias.inferred_type == "timedelta", cast(log_alias.value, JSONB)),
-                else_=None,
-            ).label("timedelta_value"),
-            case(
-                (log_alias.inferred_type == "str", extract_json_text(log_alias.value)),
-                (
-                    log_alias.inferred_type == "image",
-                    extract_json_text(log_alias.value),
+                cast(log_alias.value, JSONB),
+            ),
+            else_=None,
+        ).label("jsonb_value"),
+        # Typed scalar extractions use ->> to get text, then cast to target type
+        case(
+            (
+                log_alias.inferred_type == "datetime",
+                cast(
+                    log_alias.value.op("#>>")(literal_column("'{}'")),
+                    DateTime(timezone=True),
                 ),
-                (
-                    log_alias.inferred_type == "audio",
-                    extract_json_text(log_alias.value),
-                ),
-                else_=None,
-            ).label("str_value"),
-            case(
-                (log_alias.inferred_type == "int", _safe_float(log_alias.value)),
-                else_=None,
-            ).label("int_value"),
-            case(
-                (log_alias.inferred_type == "float", _safe_float(log_alias.value)),
-                else_=None,
-            ).label("float_value"),
-            case(
-                (log_alias.inferred_type == "bool", cast(log_alias.value, Boolean)),
-                else_=None,
-            ).label("bool_value"),
-            log_alias.inferred_type.label("inferred_type"),
+            ),
+            else_=None,
+        ).label("timestamp_value"),
+        case(
+            (
+                log_alias.inferred_type == "time",
+                cast(log_alias.value.op("#>>")(literal_column("'{}'")), Time),
+            ),
+            else_=None,
+        ).label("time_value"),
+        case(
+            (
+                log_alias.inferred_type == "date",
+                cast(log_alias.value.op("#>>")(literal_column("'{}'")), Date),
+            ),
+            else_=None,
+        ).label("date_value"),
+        case(
+            (
+                log_alias.inferred_type == "timedelta",
+                cast(log_alias.value.op("#>>")(literal_column("'{}'")), Interval),
+            ),
+            else_=None,
+        ).label("timedelta_value"),
+        case(
+            (log_alias.inferred_type == "str", extract_json_text(log_alias.value)),
+            (
+                log_alias.inferred_type == "image",
+                extract_json_text(log_alias.value),
+            ),
+            (
+                log_alias.inferred_type == "audio",
+                extract_json_text(log_alias.value),
+            ),
+            else_=None,
+        ).label("str_value"),
+        case(
+            (log_alias.inferred_type == "int", _safe_float(log_alias.value)),
+            else_=None,
+        ).label("int_value"),
+        case(
+            (log_alias.inferred_type == "float", _safe_float(log_alias.value)),
+            else_=None,
+        ).label("float_value"),
+        case(
+            (log_alias.inferred_type == "bool", cast(log_alias.value, Boolean)),
+            else_=None,
+        ).label("bool_value"),
+        log_alias.inferred_type.label("inferred_type"),
+    )
+
+    # Build FROM clause with explicit JOINs for optimal join order
+    # When event_ids_join is provided, start from it (most selective), then join to log_event_log, then log
+    if event_ids_join is not None:
+        # Start from filtered events, join to log_event_log, then to log
+        # This allows PostgreSQL to start from the selective side and apply LIMIT early
+        base_subq = base_subq.select_from(
+            event_ids_join.join(
+                log_event_log_alias,
+                log_event_log_alias.log_event_id == event_ids_join.c.id,
+            ).join(log_alias, log_event_log_alias.log_id == log_alias.id),
         )
-        .select_from(log_alias, log_event_log_alias)
-        .where(
-            log_event_log_alias.log_id == log_alias.id,
-            log_id_condition,
-            log_alias.key == key,
-        )
+    else:
+        # Fallback: use comma-separated FROM with WHERE join condition
+        base_subq = base_subq.select_from(log_alias, log_event_log_alias)
+
+    base_subq = base_subq.where(
+        log_id_condition,  # This will be True when using JOIN
+        log_alias.key == key,
     )
 
     # Build derived logs subquery
-    derived_subq = (
-        select(
-            log_event_derived_log_alias.log_event_id.label("log_event_id"),
-            literal(None).label("vector_value"),
-            case(
-                (
-                    or_(
-                        derived_log_alias.inferred_type == "list",
-                        derived_log_alias.inferred_type == "dict",
-                        derived_log_alias.inferred_type == "tuple",
-                        derived_log_alias.inferred_type == "set",
-                        derived_log_alias.inferred_type == "union",
-                        derived_log_alias.inferred_type == "Any",
-                        derived_log_alias.inferred_type.ilike("List[%"),
-                        derived_log_alias.inferred_type.ilike("Dict[%"),
-                        derived_log_alias.inferred_type.ilike("Tuple[%"),
-                        derived_log_alias.inferred_type.ilike("Set[%"),
-                        derived_log_alias.inferred_type.ilike("Union[%"),
-                        derived_log_alias.inferred_type.like("{%"),
-                    ),
-                    cast(derived_log_alias.value, JSONB),
+    derived_subq = select(
+        log_event_derived_log_alias.log_event_id.label("log_event_id"),
+        literal(None).label("vector_value"),
+        case(
+            (
+                or_(
+                    derived_log_alias.inferred_type == "list",
+                    derived_log_alias.inferred_type == "dict",
+                    derived_log_alias.inferred_type == "tuple",
+                    derived_log_alias.inferred_type == "set",
+                    derived_log_alias.inferred_type == "union",
+                    derived_log_alias.inferred_type == "Any",
+                    derived_log_alias.inferred_type.ilike("List[%"),
+                    derived_log_alias.inferred_type.ilike("Dict[%"),
+                    derived_log_alias.inferred_type.ilike("Tuple[%"),
+                    derived_log_alias.inferred_type.ilike("Set[%"),
+                    derived_log_alias.inferred_type.ilike("Union[%"),
+                    derived_log_alias.inferred_type.like("{%"),
                 ),
-                else_=None,
-            ).label("jsonb_value"),
-            case(
-                (
-                    derived_log_alias.inferred_type == "datetime",
-                    cast(derived_log_alias.value, JSONB),
+                cast(derived_log_alias.value, JSONB),
+            ),
+            else_=None,
+        ).label("jsonb_value"),
+        # Typed scalar extractions use ->> to get text, then cast to target type
+        case(
+            (
+                derived_log_alias.inferred_type == "datetime",
+                cast(
+                    derived_log_alias.value.op("#>>")(literal_column("'{}'")),
+                    DateTime(timezone=True),
                 ),
-                else_=None,
-            ).label("timestamp_value"),
-            case(
-                (
-                    derived_log_alias.inferred_type == "time",
-                    cast(derived_log_alias.value, JSONB),
+            ),
+            else_=None,
+        ).label("timestamp_value"),
+        case(
+            (
+                derived_log_alias.inferred_type == "time",
+                cast(derived_log_alias.value.op("#>>")(literal_column("'{}'")), Time),
+            ),
+            else_=None,
+        ).label("time_value"),
+        case(
+            (
+                derived_log_alias.inferred_type == "date",
+                cast(derived_log_alias.value.op("#>>")(literal_column("'{}'")), Date),
+            ),
+            else_=None,
+        ).label("date_value"),
+        case(
+            (
+                derived_log_alias.inferred_type == "timedelta",
+                cast(
+                    derived_log_alias.value.op("#>>")(literal_column("'{}'")),
+                    Interval,
                 ),
-                else_=None,
-            ).label("time_value"),
-            case(
-                (
-                    derived_log_alias.inferred_type == "date",
-                    cast(derived_log_alias.value, JSONB),
-                ),
-                else_=None,
-            ).label("date_value"),
-            case(
-                (
-                    derived_log_alias.inferred_type == "timedelta",
-                    cast(derived_log_alias.value, JSONB),
-                ),
-                else_=None,
-            ).label("timedelta_value"),
-            case(
-                (
-                    derived_log_alias.inferred_type == "str",
-                    extract_json_text(derived_log_alias.value),
-                ),
-                (
-                    derived_log_alias.inferred_type == "image",
-                    extract_json_text(derived_log_alias.value),
-                ),
-                (
-                    derived_log_alias.inferred_type == "audio",
-                    extract_json_text(derived_log_alias.value),
-                ),
-                else_=None,
-            ).label("str_value"),
-            case(
-                (
-                    derived_log_alias.inferred_type == "int",
-                    _safe_float(derived_log_alias.value),
-                ),
-                else_=None,
-            ).label("int_value"),
-            case(
-                (
-                    derived_log_alias.inferred_type == "float",
-                    _safe_float(derived_log_alias.value),
-                ),
-                else_=None,
-            ).label("float_value"),
-            case(
-                (
-                    derived_log_alias.inferred_type == "bool",
-                    cast(derived_log_alias.value, Boolean),
-                ),
-                else_=None,
-            ).label("bool_value"),
-            derived_log_alias.inferred_type.label("inferred_type"),
+            ),
+            else_=None,
+        ).label("timedelta_value"),
+        case(
+            (
+                derived_log_alias.inferred_type == "str",
+                extract_json_text(derived_log_alias.value),
+            ),
+            (
+                derived_log_alias.inferred_type == "image",
+                extract_json_text(derived_log_alias.value),
+            ),
+            (
+                derived_log_alias.inferred_type == "audio",
+                extract_json_text(derived_log_alias.value),
+            ),
+            else_=None,
+        ).label("str_value"),
+        case(
+            (
+                derived_log_alias.inferred_type == "int",
+                _safe_float(derived_log_alias.value),
+            ),
+            else_=None,
+        ).label("int_value"),
+        case(
+            (
+                derived_log_alias.inferred_type == "float",
+                _safe_float(derived_log_alias.value),
+            ),
+            else_=None,
+        ).label("float_value"),
+        case(
+            (
+                derived_log_alias.inferred_type == "bool",
+                cast(derived_log_alias.value, Boolean),
+            ),
+            else_=None,
+        ).label("bool_value"),
+        derived_log_alias.inferred_type.label("inferred_type"),
+    )
+
+    # Build FROM clause with explicit JOINs for optimal join order
+    # When event_ids_join is provided, start from it (most selective), then join to log_event_derived_log, then derived_log
+    if event_ids_join is not None:
+        # Start from filtered events, join to log_event_derived_log, then to derived_log
+        # This allows PostgreSQL to start from the selective side and apply LIMIT early
+        derived_subq = derived_subq.select_from(
+            event_ids_join.join(
+                log_event_derived_log_alias,
+                log_event_derived_log_alias.log_event_id == event_ids_join.c.id,
+            ).join(
+                derived_log_alias,
+                log_event_derived_log_alias.derived_log_id == derived_log_alias.id,
+            ),
         )
-        .select_from(derived_log_alias, log_event_derived_log_alias)
-        .where(
-            log_event_derived_log_alias.derived_log_id == derived_log_alias.id,
-            derived_log_id_condition,
-            derived_log_alias.key == key,
+    else:
+        # Fallback: use comma-separated FROM with WHERE join condition
+        derived_subq = derived_subq.select_from(
+            derived_log_alias,
+            log_event_derived_log_alias,
         )
+
+    derived_subq = derived_subq.where(
+        derived_log_id_condition,  # This will be True when using JOIN
+        derived_log_alias.key == key,
     )
     # Combine base and derived logs with union
     combined_subq = alias_utils.subquery_with_unique_alias(
@@ -913,6 +995,527 @@ def _build_subquery_for_identifier(
         if is_vector
         else combined_subq
     )
+
+
+def _build_exists_for_single_filter(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids=None,
+):
+    """
+    Build an EXISTS subquery that checks directly against base tables for simple filters.
+    This allows PostgreSQL to short-circuit per event without materializing all matching IDs.
+
+    Only works for simple filters: single identifier with comparison or membership operator.
+    For complex filters, falls back to the standard UNION ALL approach.
+
+    Args:
+        filter_dict: Filter dictionary (must be comparison or membership operator)
+        log_event_alias: Alias for LogEvent to correlate EXISTS
+        session: SQLAlchemy session
+        log_event_ids: Optional subquery of event IDs to scope the search
+
+    Returns:
+        EXISTS expression or None if filter is too complex
+    """
+    from sqlalchemy.sql.expression import exists
+
+    operand = filter_dict.get("operand")
+    if operand not in ("==", "!=", "<", ">", "<=", ">=", "in", "not in"):
+        # Only support comparison and membership operators
+        return None
+
+    lhs = filter_dict.get("lhs")
+    rhs = filter_dict.get("rhs")
+
+    # Check if LHS is a simple identifier
+    if not isinstance(lhs, dict) or lhs.get("type") != "identifier":
+        return None
+
+    key = lhs.get("value")
+    if not key or key in ("log_id", "created_at", "updated_at"):
+        # Skip special fields that are handled differently
+        return None
+
+    # Parse RHS to get the value and type
+    from .core import build_sql_query
+
+    rhs_sql = build_sql_query(rhs, log_event_alias, session, log_event_ids=None)
+    if isinstance(rhs_sql, Subquery):
+        # RHS is complex, fall back to standard approach
+        return None
+
+    # Get RHS value and type
+    if isinstance(rhs_sql, BindParameter):
+        rhs_value = rhs_sql.value
+        rhs_type = LogDAO.infer_type("", rhs_value)
+    else:
+        rhs_value = rhs_sql
+        rhs_type = "str"  # Default for literals
+
+    # Build aliases for tables
+    log_alias = aliased(Log, name="log_alias_exists")
+    log_event_log_alias = aliased(LogEventLog, name="log_event_log_alias_exists")
+    derived_log_alias = aliased(DerivedLog, name="derived_log_alias_exists")
+    log_event_derived_log_alias = aliased(
+        LogEventDerivedLog,
+        name="log_event_derived_log_alias_exists",
+    )
+
+    # Build typed value expressions for log table
+    log_value_exprs = {
+        "str": case(
+            (
+                log_alias.inferred_type == "str",
+                log_alias.value.op("#>>")(literal_column("'{}'")),
+            ),
+            (
+                log_alias.inferred_type == "image",
+                log_alias.value.op("#>>")(literal_column("'{}'")),
+            ),
+            (
+                log_alias.inferred_type == "audio",
+                log_alias.value.op("#>>")(literal_column("'{}'")),
+            ),
+            else_=None,
+        ),
+        "int": case(
+            (log_alias.inferred_type == "int", _safe_float(log_alias.value)),
+            else_=None,
+        ),
+        "float": case(
+            (log_alias.inferred_type == "float", _safe_float(log_alias.value)),
+            else_=None,
+        ),
+        "bool": case(
+            (log_alias.inferred_type == "bool", cast(log_alias.value, Boolean)),
+            else_=None,
+        ),
+        "datetime": case(
+            (
+                log_alias.inferred_type == "datetime",
+                cast(
+                    log_alias.value.op("#>>")(literal_column("'{}'")),
+                    DateTime(timezone=True),
+                ),
+            ),
+            else_=None,
+        ),
+        "date": case(
+            (
+                log_alias.inferred_type == "date",
+                cast(log_alias.value.op("#>>")(literal_column("'{}'")), Date),
+            ),
+            else_=None,
+        ),
+        "time": case(
+            (
+                log_alias.inferred_type == "time",
+                cast(log_alias.value.op("#>>")(literal_column("'{}'")), Time),
+            ),
+            else_=None,
+        ),
+    }
+
+    # Build typed value expressions for derived_log table
+    derived_value_exprs = {
+        "str": case(
+            (
+                derived_log_alias.inferred_type == "str",
+                derived_log_alias.value.op("#>>")(literal_column("'{}'")),
+            ),
+            (
+                derived_log_alias.inferred_type == "image",
+                derived_log_alias.value.op("#>>")(literal_column("'{}'")),
+            ),
+            (
+                derived_log_alias.inferred_type == "audio",
+                derived_log_alias.value.op("#>>")(literal_column("'{}'")),
+            ),
+            else_=None,
+        ),
+        "int": case(
+            (
+                derived_log_alias.inferred_type == "int",
+                _safe_float(derived_log_alias.value),
+            ),
+            else_=None,
+        ),
+        "float": case(
+            (
+                derived_log_alias.inferred_type == "float",
+                _safe_float(derived_log_alias.value),
+            ),
+            else_=None,
+        ),
+        "bool": case(
+            (
+                derived_log_alias.inferred_type == "bool",
+                cast(derived_log_alias.value, Boolean),
+            ),
+            else_=None,
+        ),
+        "datetime": case(
+            (
+                derived_log_alias.inferred_type == "datetime",
+                cast(
+                    derived_log_alias.value.op("#>>")(literal_column("'{}'")),
+                    DateTime(timezone=True),
+                ),
+            ),
+            else_=None,
+        ),
+        "date": case(
+            (
+                derived_log_alias.inferred_type == "date",
+                cast(derived_log_alias.value.op("#>>")(literal_column("'{}'")), Date),
+            ),
+            else_=None,
+        ),
+        "time": case(
+            (
+                derived_log_alias.inferred_type == "time",
+                cast(derived_log_alias.value.op("#>>")(literal_column("'{}'")), Time),
+            ),
+            else_=None,
+        ),
+    }
+
+    # Determine the LHS type by checking what typed columns exist in the subquery
+    # For now, we'll infer from the key name or use a heuristic
+    # In practice, we need to check the actual inferred_type in the database
+    # For simplicity, we'll try datetime first (common case), then fall back to other types
+
+    # Try to infer LHS type from RHS type and common patterns
+    # If RHS is date/datetime, LHS is likely datetime
+    # If RHS is string, LHS is likely string
+    # If RHS is number, LHS is likely int/float
+    from orchestra.web.api.log.utils.type_utils import get_base_storage_type
+
+    normalized_rhs_type = get_base_storage_type(rhs_type) or rhs_type
+
+    # For date comparisons, prefer datetime column (more common)
+    # We'll build expressions that handle both date and datetime
+    if normalized_rhs_type in ("date", "datetime"):
+        # Use datetime column but also handle date type
+        lhs_type_candidates = ["datetime"]
+        # Build value expressions that handle both date and datetime
+        log_val_expr = case(
+            (
+                log_alias.inferred_type == "datetime",
+                cast(
+                    log_alias.value.op("#>>")(literal_column("'{}'")),
+                    DateTime(timezone=True),
+                ),
+            ),
+            (
+                log_alias.inferred_type == "date",
+                cast(log_alias.value.op("#>>")(literal_column("'{}'")), Date),
+            ),
+            else_=None,
+        )
+        derived_val_expr = case(
+            (
+                derived_log_alias.inferred_type == "datetime",
+                cast(
+                    derived_log_alias.value.op("#>>")(literal_column("'{}'")),
+                    DateTime(timezone=True),
+                ),
+            ),
+            (
+                derived_log_alias.inferred_type == "date",
+                cast(derived_log_alias.value.op("#>>")(literal_column("'{}'")), Date),
+            ),
+            else_=None,
+        )
+        final_lhs_type = "datetime"  # Use datetime as base type
+    elif normalized_rhs_type in ("int", "float"):
+        lhs_type_candidates = ["int", "float"]
+        # Try each candidate type until we find one that works
+        log_val_expr = None
+        derived_val_expr = None
+        final_lhs_type = None
+
+        for candidate_type in lhs_type_candidates:
+            log_val_expr = log_value_exprs.get(candidate_type)
+            derived_val_expr = derived_value_exprs.get(candidate_type)
+            if log_val_expr is not None and derived_val_expr is not None:
+                final_lhs_type = candidate_type
+                break
+    elif normalized_rhs_type == "str":
+        lhs_type_candidates = ["str"]
+        log_val_expr = log_value_exprs.get("str")
+        derived_val_expr = derived_value_exprs.get("str")
+        final_lhs_type = "str"
+    elif normalized_rhs_type == "bool":
+        lhs_type_candidates = ["bool"]
+        log_val_expr = log_value_exprs.get("bool")
+        derived_val_expr = derived_value_exprs.get("bool")
+        final_lhs_type = "bool"
+    else:
+        lhs_type_candidates = [normalized_rhs_type]
+        log_val_expr = log_value_exprs.get(normalized_rhs_type)
+        derived_val_expr = derived_value_exprs.get(normalized_rhs_type)
+        final_lhs_type = normalized_rhs_type
+
+    if log_val_expr is None or derived_val_expr is None:
+        # Type not supported, fall back to standard approach
+        return None
+
+    # Build comparison expression
+    from .operators import cast_expr, unify_inferred_types
+
+    # Unify types to determine final comparison type
+    final_type = unify_inferred_types(final_lhs_type, normalized_rhs_type)
+
+    # Cast both sides to final type
+    # For date/datetime comparisons, cast both to the unified type
+    if final_type in ("date", "datetime"):
+        # Cast LHS to final_type (handles both date and datetime)
+        if final_type == "date":
+            # Cast datetime to date for comparison
+            log_val_expr = case(
+                (log_alias.inferred_type == "datetime", cast(log_val_expr, Date)),
+                (log_alias.inferred_type == "date", log_val_expr),
+                else_=None,
+            )
+            derived_val_expr = case(
+                (
+                    derived_log_alias.inferred_type == "datetime",
+                    cast(derived_val_expr, Date),
+                ),
+                (derived_log_alias.inferred_type == "date", derived_val_expr),
+                else_=None,
+            )
+        else:
+            # final_type is datetime - cast date to datetime
+            log_val_expr = case(
+                (log_alias.inferred_type == "datetime", log_val_expr),
+                (
+                    log_alias.inferred_type == "date",
+                    cast(log_val_expr, DateTime(timezone=True)),
+                ),
+                else_=None,
+            )
+            derived_val_expr = case(
+                (derived_log_alias.inferred_type == "datetime", derived_val_expr),
+                (
+                    derived_log_alias.inferred_type == "date",
+                    cast(derived_val_expr, DateTime(timezone=True)),
+                ),
+                else_=None,
+            )
+    else:
+        # For other types, use standard casting
+        log_val_expr = cast_expr(log_val_expr, final_lhs_type, final_type)
+        derived_val_expr = cast_expr(derived_val_expr, final_lhs_type, final_type)
+
+    # Cast RHS to match final type
+    rhs_expr = (
+        literal(rhs_value) if not isinstance(rhs_value, ClauseElement) else rhs_value
+    )
+    rhs_expr = cast_expr(rhs_expr, rhs_type, final_type)
+
+    # Build comparison based on operator
+    if operand == "==":
+        log_cond = log_val_expr == rhs_expr
+        derived_cond = derived_val_expr == rhs_expr
+    elif operand == "!=":
+        log_cond = log_val_expr != rhs_expr
+        derived_cond = derived_val_expr != rhs_expr
+    elif operand == "<":
+        log_cond = log_val_expr < rhs_expr
+        derived_cond = derived_val_expr < rhs_expr
+    elif operand == ">":
+        log_cond = log_val_expr > rhs_expr
+        derived_cond = derived_val_expr > rhs_expr
+    elif operand == "<=":
+        log_cond = log_val_expr <= rhs_expr
+        derived_cond = derived_val_expr <= rhs_expr
+    elif operand == ">=":
+        log_cond = log_val_expr >= rhs_expr
+        derived_cond = derived_val_expr >= rhs_expr
+    elif operand == "in":
+        if not isinstance(rhs_value, list):
+            return None  # Fall back for non-list RHS
+        log_cond = log_val_expr.in_(rhs_value)
+        derived_cond = derived_val_expr.in_(rhs_value)
+    elif operand == "not in":
+        if not isinstance(rhs_value, list):
+            return None  # Fall back for non-list RHS
+        log_cond = ~log_val_expr.in_(rhs_value)
+        derived_cond = ~derived_val_expr.in_(rhs_value)
+    else:
+        return None
+
+    # Build EXISTS subquery for log table
+    # Add inferred_type check to ensure we only check rows with matching type
+    # For date/datetime comparisons, allow both types
+    if final_type in ("date", "datetime"):
+        log_type_condition = or_(
+            log_alias.inferred_type == "datetime",
+            log_alias.inferred_type == "date",
+        )
+    else:
+        log_type_condition = log_alias.inferred_type == final_lhs_type
+
+    # Restructure EXISTS to use a more efficient join strategy
+    # Filter log by key first (using ix_log_key), then join to log_event_log
+    # This allows PostgreSQL to use the key index and then efficiently filter by log_event_id
+    # Use standard select_from with join - SQLAlchemy will handle the aliased tables correctly
+    log_exists_subq = (
+        select(1)
+        .select_from(log_alias)
+        .join(
+            log_event_log_alias,
+            log_event_log_alias.log_id == log_alias.id,
+        )
+        .where(
+            log_event_log_alias.log_event_id == log_event_alias.id,
+            log_alias.key == key,
+            log_type_condition,
+            log_cond,  # Direct comparison - PostgreSQL handles NULLs correctly
+        )
+        .limit(1)
+    )
+
+    # Build EXISTS subquery for derived_log table
+    # For date/datetime comparisons, allow both types
+    if final_type in ("date", "datetime"):
+        derived_type_condition = or_(
+            derived_log_alias.inferred_type == "datetime",
+            derived_log_alias.inferred_type == "date",
+        )
+    else:
+        derived_type_condition = derived_log_alias.inferred_type == final_lhs_type
+
+    # Restructure EXISTS to use a more efficient join strategy
+    # Filter derived_log by key first (using ix_derived_log_key), then join to log_event_derived_log
+    # Use standard select_from with join - SQLAlchemy will handle the aliased tables correctly
+    derived_exists_subq = (
+        select(1)
+        .select_from(derived_log_alias)
+        .join(
+            log_event_derived_log_alias,
+            log_event_derived_log_alias.derived_log_id == derived_log_alias.id,
+        )
+        .where(
+            log_event_derived_log_alias.log_event_id == log_event_alias.id,
+            derived_log_alias.key == key,
+            derived_type_condition,
+            derived_cond,  # Direct comparison - PostgreSQL handles NULLs correctly
+        )
+        .limit(1)
+    )
+
+    # Combine with OR - EXISTS stops after first match
+    return or_(
+        exists(log_exists_subq),
+        exists(derived_exists_subq),
+    )
+
+
+def _build_combined_exists_for_and_filters(
+    filter_conditions,
+    log_event_alias,
+    session,
+    log_event_ids=None,
+):
+    """
+    Build a single EXISTS subquery that checks ALL AND conditions together.
+    This allows PostgreSQL to optimize filter order and apply LIMIT earlier.
+
+    Args:
+        filter_conditions: List of filter dictionaries (all must be simple filters)
+        log_event_alias: Alias for LogEvent to correlate EXISTS
+        session: SQLAlchemy session
+        log_event_ids: Optional subquery of event IDs to scope the search
+
+    Returns:
+        EXISTS expression or None if any filter is too complex
+    """
+
+    # First, try to build optimized EXISTS for each condition
+    exists_conditions = []
+    for condition_dict in filter_conditions:
+        optimized_exists = _build_exists_for_single_filter(
+            condition_dict,
+            log_event_alias,
+            session,
+            log_event_ids=log_event_ids,
+        )
+        if optimized_exists is None:
+            # If any condition is too complex, fall back to sequential approach
+            return None
+        exists_conditions.append(optimized_exists)
+
+    # For AND, we need ALL conditions to be true
+    # Since each EXISTS already checks both log and derived_log tables,
+    # we can combine them with AND
+    if len(exists_conditions) == 1:
+        return exists_conditions[0]
+    elif len(exists_conditions) > 1:
+        # Combine all EXISTS conditions with AND
+        return functools.reduce(and_, exists_conditions)
+    else:
+        return None
+
+
+def _build_combined_exists_for_or_filters(
+    filter_conditions,
+    log_event_alias,
+    session,
+    log_event_ids=None,
+):
+    """
+    Build EXISTS subqueries for OR conditions, using optimized EXISTS for each.
+    This allows PostgreSQL to short-circuit per event without materializing all matching IDs.
+
+    Args:
+        filter_conditions: List of filter dictionaries
+        log_event_alias: Alias for LogEvent to correlate EXISTS
+        session: SQLAlchemy session
+        log_event_ids: Optional subquery of event IDs to scope the search
+
+    Returns:
+        OR of EXISTS expressions or None if all filters are too complex
+    """
+
+    # Try to build optimized EXISTS for each condition
+    exists_conditions = []
+    fallback_conditions = []
+
+    for condition_dict in filter_conditions:
+        optimized_exists = _build_exists_for_single_filter(
+            condition_dict,
+            log_event_alias,
+            session,
+            log_event_ids=log_event_ids,
+        )
+        if optimized_exists is not None:
+            exists_conditions.append(optimized_exists)
+        else:
+            fallback_conditions.append(condition_dict)
+
+    # If we have any optimized EXISTS conditions, combine them with OR
+    if exists_conditions:
+        if len(exists_conditions) == 1:
+            combined_exists = exists_conditions[0]
+        else:
+            # Combine all EXISTS conditions with OR
+            combined_exists = functools.reduce(or_, exists_conditions)
+
+        # If we have fallback conditions, we need to handle them separately
+        # For now, return None to fall back to the standard approach
+        # This ensures we don't mix optimized and non-optimized approaches
+        if fallback_conditions:
+            return None
+
+        return combined_exists
+    else:
+        # All conditions are too complex, fall back to standard approach
+        return None
 
 
 def _join_subqueries(lhs_subq, rhs_subq, expr, inferred_type, session=None):

@@ -836,31 +836,53 @@ def _get_logs_query(
                 # --- OPTIMIZATION FOR 'OR' ---
                 if isinstance(filter_dict, dict) and filter_dict.get("operand") == "or":
                     or_conditions = flatten_or_conditions(filter_dict)
-                    matching_id_subqueries = []
 
-                    for i, condition_dict in enumerate(or_conditions):
-                        validate_filter_dict(condition_dict)
-                        condition_sql = build_sql_query(
-                            condition_dict,
-                            LogEvent,
-                            session,
-                            log_event_ids=event_ids_subq,
-                        )
-                        if isinstance(condition_sql, Subquery):
-                            truthiness_clause = _create_truthiness_condition(
-                                condition_sql,
+                    # Try combined EXISTS approach first (optimized for simple filters)
+                    from orchestra.web.api.log.python2SQL.helpers import (
+                        _build_combined_exists_for_or_filters,
+                    )
+
+                    combined_exists = _build_combined_exists_for_or_filters(
+                        or_conditions,
+                        LogEvent,
+                        session,
+                        log_event_ids=event_ids_subq,
+                    )
+
+                    if combined_exists is not None:
+                        # Use combined EXISTS that short-circuits per event
+                        log_event_query = log_event_query.filter(combined_exists)
+                    else:
+                        # Fall back to standard UNION ALL approach
+                        matching_id_subqueries = []
+
+                        for i, condition_dict in enumerate(or_conditions):
+                            validate_filter_dict(condition_dict)
+                            condition_sql = build_sql_query(
+                                condition_dict,
+                                LogEvent,
                                 session,
+                                log_event_ids=event_ids_subq,
                             )
-                            matching_ids = select(condition_sql.c.log_event_id).where(
-                                truthiness_clause,
-                            )
-                            matching_id_subqueries.append(matching_ids)
+                            if isinstance(condition_sql, Subquery):
+                                truthiness_clause = _create_truthiness_condition(
+                                    condition_sql,
+                                    session,
+                                )
+                                matching_ids = select(
+                                    condition_sql.c.log_event_id,
+                                ).where(
+                                    truthiness_clause,
+                                )
+                                matching_id_subqueries.append(matching_ids)
 
-                    if matching_id_subqueries:
-                        unioned_ids_subq = union_all(*matching_id_subqueries).subquery()
-                        log_event_query = log_event_query.filter(
-                            LogEvent.id.in_(select(unioned_ids_subq)),
-                        )
+                        if matching_id_subqueries:
+                            unioned_ids_subq = union_all(
+                                *matching_id_subqueries,
+                            ).subquery()
+                            log_event_query = log_event_query.filter(
+                                LogEvent.id.in_(select(unioned_ids_subq)),
+                            )
 
                 # --- OPTIMIZATION FOR 'AND' ---
                 elif (
@@ -869,10 +891,99 @@ def _get_logs_query(
                 ):
                     and_conditions = flatten_and_conditions(filter_dict)
 
-                    for i, condition_dict in enumerate(and_conditions):
-                        validate_filter_dict(condition_dict)
+                    # Try combined EXISTS approach first (checks all conditions together)
+                    from orchestra.web.api.log.python2SQL.helpers import (
+                        _build_combined_exists_for_and_filters,
+                    )
+
+                    combined_exists = _build_combined_exists_for_and_filters(
+                        and_conditions,
+                        LogEvent,
+                        session,
+                        log_event_ids=event_ids_subq,
+                    )
+
+                    if combined_exists is not None:
+                        # Use combined EXISTS that allows PostgreSQL to optimize filter order
+                        log_event_query = log_event_query.filter(combined_exists)
+                    else:
+                        # Fall back to sequential EXISTS approach
+                        from orchestra.web.api.log.python2SQL.helpers import (
+                            _build_exists_for_single_filter,
+                        )
+
+                        optimized_exists_conditions = []
+                        fallback_conditions = []
+
+                        for condition_dict in and_conditions:
+                            validate_filter_dict(condition_dict)
+                            # Try optimized EXISTS approach first
+                            optimized_exists = _build_exists_for_single_filter(
+                                condition_dict,
+                                LogEvent,
+                                session,
+                                log_event_ids=event_ids_subq,
+                            )
+                            if optimized_exists is not None:
+                                optimized_exists_conditions.append(optimized_exists)
+                            else:
+                                # Fall back to standard approach
+                                fallback_conditions.append(condition_dict)
+
+                        # Apply optimized EXISTS conditions
+                        for exists_cond in optimized_exists_conditions:
+                            log_event_query = log_event_query.filter(exists_cond)
+
+                        # Apply fallback conditions using standard UNION ALL approach
+                        for condition_dict in fallback_conditions:
+                            condition_sql = build_sql_query(
+                                condition_dict,
+                                LogEvent,
+                                session,
+                                log_event_ids=event_ids_subq,
+                            )
+                            if isinstance(condition_sql, Subquery):
+                                truthiness_clause = _create_truthiness_condition(
+                                    condition_sql,
+                                    session,
+                                )
+                                log_event_query = log_event_query.filter(
+                                    exists(
+                                        select(1)
+                                        .select_from(condition_sql)
+                                        .where(
+                                            and_(
+                                                condition_sql.c.log_event_id
+                                                == LogEvent.id,
+                                                truthiness_clause,
+                                            ),
+                                        ),
+                                    ),
+                                )
+                            else:
+                                log_event_query = log_event_query.filter(condition_sql)
+
+                # --- FALLBACK FOR SINGLE CONDITIONS OR OTHER OPERATORS ---
+                else:
+                    validate_filter_dict(filter_dict)
+                    # Try optimized EXISTS approach for simple filters first
+                    from orchestra.web.api.log.python2SQL.helpers import (
+                        _build_exists_for_single_filter,
+                    )
+
+                    optimized_exists = _build_exists_for_single_filter(
+                        filter_dict,
+                        LogEvent,
+                        session,
+                        log_event_ids=event_ids_subq,
+                    )
+                    if optimized_exists is not None:
+                        # Use optimized EXISTS that short-circuits per event
+                        log_event_query = log_event_query.filter(optimized_exists)
+                    else:
+                        # Fall back to standard UNION ALL approach
                         condition_sql = build_sql_query(
-                            condition_dict,
+                            filter_dict,
                             LogEvent,
                             session,
                             log_event_ids=event_ids_subq,
@@ -896,35 +1007,6 @@ def _get_logs_query(
                             )
                         else:
                             log_event_query = log_event_query.filter(condition_sql)
-
-                # --- FALLBACK FOR SINGLE CONDITIONS OR OTHER OPERATORS ---
-                else:
-                    validate_filter_dict(filter_dict)
-                    condition_sql = build_sql_query(
-                        filter_dict,
-                        LogEvent,
-                        session,
-                        log_event_ids=event_ids_subq,
-                    )
-                    if isinstance(condition_sql, Subquery):
-                        truthiness_clause = _create_truthiness_condition(
-                            condition_sql,
-                            session,
-                        )
-                        log_event_query = log_event_query.filter(
-                            exists(
-                                select(1)
-                                .select_from(condition_sql)
-                                .where(
-                                    and_(
-                                        condition_sql.c.log_event_id == LogEvent.id,
-                                        truthiness_clause,
-                                    ),
-                                ),
-                            ),
-                        )
-                    else:
-                        log_event_query = log_event_query.filter(condition_sql)
 
             except Exception as e:
                 session.rollback()
