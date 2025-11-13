@@ -17,12 +17,31 @@ async def test_create_user(client: AsyncClient):
         "name": "Test User",
         "job_title": "Developer",
         "image": "http://...",
+        "timezone": "America/New_York",
     }
 
     response = await client.post(url, json=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
     user_data = response.json()
     assert user_data["email"] == "testuser@example.com"
+    assert user_data["timezone"] == "America/New_York"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "invalid_timezone",
+    ["foo", "UTC+1", "America/Fake_City", "PST"],
+)
+async def test_create_user_with_invalid_timezone(
+    client: AsyncClient,
+    invalid_timezone: str,
+):
+    url = "/v0/admin/auth-user"
+    params = {"email": "tz_fail@example.com", "timezone": invalid_timezone}
+    response = await client.post(url, json=params, headers=HEADERS)
+    assert response.status_code == 422, response.json()
+    assert "timezone" in response.json()["detail"][0]["loc"]
+    assert "not a valid IANA timezone" in response.json()["detail"][0]["msg"]
 
 
 @pytest.mark.anyio
@@ -56,13 +75,18 @@ async def test_get_user_by_email(client: AsyncClient):
 async def test_update_user(client: AsyncClient):
     # create user
     url = "/v0/admin/auth-user"
-    params = {"email": "testuser4@example.com"}
+    params = {"email": "testuser4@example.com", "timezone": "Europe/London"}
     response = await client.post(url, json=params, headers=HEADERS)
     user_id = response.json()["id"]
 
     # update
     url = "/v0/admin/auth-user"
-    params = {"user_id": user_id, "name": "A", "last_name": "B"}
+    params = {
+        "user_id": user_id,
+        "name": "A",
+        "last_name": "B",
+        "timezone": "Asia/Tokyo",
+    }
     response = await client.put(url, json=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
@@ -71,6 +95,7 @@ async def test_update_user(client: AsyncClient):
     response = await client.get(url, headers=HEADERS)
     assert response.status_code == 200, response.json()
     assert response.json()["name"] == "A"
+    assert response.json()["timezone"] == "Asia/Tokyo"
 
 
 @pytest.mark.anyio

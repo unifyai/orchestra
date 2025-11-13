@@ -1,7 +1,8 @@
 import logging
 import time
 from decimal import Decimal
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
+from zoneinfo import available_timezones
 
 from fastapi import HTTPException, status
 from sqlalchemy import exists, func, select
@@ -18,6 +19,8 @@ from orchestra.db.models.orchestra_models import (
 )
 from orchestra.settings import settings
 from orchestra.web.api.utils.assistant_infra import send_unify_message
+
+VALID_TIMEZONES = available_timezones()
 
 
 class AssistantDAO:
@@ -197,6 +200,9 @@ class AssistantDAO:
                 detail="Failed to send message to assistant.",
             )
 
+        # TODO: Update the response fetching to avoid relying on the transcripts logs
+        # ---------------------------------------------------------------------------
+
         # 4. Poll for the response
         timeout_seconds = 60
         poll_interval_seconds = 2
@@ -252,37 +258,45 @@ class AssistantDAO:
             detail=f"Did not receive a response from the assistant within {timeout_seconds} seconds.",
         )
 
+        # ---------------------------------------------------------------------------
+
     def create_assistant(
         self,
         user_id: str,
-        first_name: str,
-        surname: str,
-        age: int,
-        region: str,
-        about: str,
-        weekly_limit: Decimal,
-        max_parallel: int,
+        first_name: Optional[str],
+        surname: Optional[str],
+        age: Optional[int],
+        nationality: Optional[str],
+        about: Optional[str],
+        weekly_limit: Optional[Decimal],
+        max_parallel: Optional[int],
         profile_photo: Optional[str] = None,
         profile_video: Optional[str] = None,
         desktop_url: Optional[str] = None,
         user_local_desktop: Optional[str] = None,
         phone: Optional[str] = None,
+        phone_country: Optional[str] = None,
         user_phone: Optional[str] = None,
         email: Optional[str] = None,
         user_whatsapp_number: Optional[str] = None,
         voice_id: Optional[str] = None,
         voice_provider: Optional[str] = None,
-        country: Optional[str] = None,
+        voice_mode: Optional[str] = None,
+        timezone: Optional[str] = None,
     ) -> Assistant:
         """
         Create a new Assistant for the given user.
         """
+
+        if timezone is not None and timezone not in VALID_TIMEZONES:
+            raise ValueError(f"'{timezone}' is not a valid IANA timezone.")
+
         assistant = Assistant(
             user_id=user_id,
             first_name=first_name,
             surname=surname,
             age=age,
-            region=region,
+            nationality=nationality,
             profile_photo=profile_photo,
             profile_video=profile_video,
             desktop_url=desktop_url,
@@ -296,7 +310,9 @@ class AssistantDAO:
             user_whatsapp_number=user_whatsapp_number,
             voice_id=voice_id,
             voice_provider=voice_provider,
-            country=country,
+            voice_mode=voice_mode,
+            phone_country=phone_country,
+            timezone=timezone,
         )
         self.session.add(assistant)
         self.session.flush()
@@ -358,21 +374,7 @@ class AssistantDAO:
         self,
         user_id: str,
         agent_id: int,
-        weekly_limit: Optional[Decimal] = None,
-        max_parallel: Optional[int] = None,
-        about: Optional[str] = None,
-        desktop_url: Optional[str] = None,
-        user_local_desktop: Optional[str] = None,
-        phone: Optional[str] = None,
-        user_phone: Optional[str] = None,
-        email: Optional[str] = None,
-        user_whatsapp_number: Optional[str] = None,
-        assistant_whatsapp_number: Optional[str] = None,
-        voice_id: Optional[str] = None,
-        voice_provider: Optional[str] = None,
-        country: Optional[str] = None,
-        profile_photo: Optional[str] = None,
-        profile_video: Optional[str] = None,
+        update_data: Dict[str, Any],
     ) -> Optional[Assistant]:
         """
         Update configuration for an existing Assistant.
@@ -380,36 +382,15 @@ class AssistantDAO:
         assistant = self.get_assistant_by_id(user_id, agent_id)
         if not assistant:
             return None
-        if weekly_limit is not None:
-            assistant.weekly_limit = weekly_limit
-        if max_parallel is not None:
-            assistant.max_parallel = max_parallel
-        if about is not None:
-            assistant.about = about
-        if desktop_url is not None:
-            assistant.desktop_url = desktop_url
-        if user_local_desktop is not None:
-            assistant.user_local_desktop = user_local_desktop
-        if phone is not None:
-            assistant.phone = phone
-        if user_phone is not None:
-            assistant.user_phone = user_phone
-        if email is not None:
-            assistant.email = email
-        if user_whatsapp_number is not None:
-            assistant.user_whatsapp_number = user_whatsapp_number
-        if assistant_whatsapp_number is not None:
-            assistant.assistant_whatsapp_number = assistant_whatsapp_number
-        if voice_id is not None:
-            assistant.voice_id = voice_id
-        if voice_provider is not None:
-            assistant.voice_provider = voice_provider
-        if country is not None:
-            assistant.country = country
-        if profile_photo is not None:
-            assistant.profile_photo = profile_photo
-        if profile_video is not None:
-            assistant.profile_video = profile_video
+
+        if "timezone" in update_data:
+            tz = update_data["timezone"]
+            if tz is not None and tz not in VALID_TIMEZONES:
+                raise ValueError(f"'{tz}' is not a valid IANA timezone.")
+
+        for key, value in update_data.items():
+            setattr(assistant, key, value)
+
         self.session.add(assistant)
         return assistant
 

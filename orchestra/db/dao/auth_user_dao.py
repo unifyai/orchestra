@@ -1,4 +1,5 @@
 from typing import List, Optional
+from zoneinfo import available_timezones
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -13,6 +14,8 @@ ASSISTANT_HIRING_APPROVAL_STATUSES = [
     "revoked",
 ]
 
+VALID_TIMEZONES = available_timezones()
+
 
 class AuthUserDAO:
     def __init__(self, session: Session):
@@ -25,6 +28,7 @@ class AuthUserDAO:
         last_name: Optional[str] = None,
         job_title: Optional[str] = None,
         image: Optional[str] = None,
+        timezone: Optional[str] = None,
         account_type: Optional[str] = None,
         business_name: Optional[str] = None,
         tax_id: Optional[str] = None,
@@ -37,6 +41,9 @@ class AuthUserDAO:
         business_postal_code: Optional[str] = None,
         tax_exempt: Optional[bool] = None,
     ) -> None:
+        if timezone is not None and timezone not in VALID_TIMEZONES:
+            raise ValueError(f"'{timezone}' is not a valid IANA timezone.")
+
         # Validate account_type if provided
         if account_type is not None and account_type not in ["individual", "business"]:
             raise ValueError("account_type must be 'individual' or 'business'")
@@ -57,6 +64,7 @@ class AuthUserDAO:
                 last_name=last_name,
                 job_title=job_title,
                 image=image,
+                timezone=timezone,
                 account_type=account_type or "individual",
                 business_name=business_name,
                 tax_id=tax_id,
@@ -123,6 +131,7 @@ class AuthUserDAO:
         last_name: Optional[str] = ...,
         job_title: Optional[str] = ...,
         image: Optional[str] = ...,
+        timezone: Optional[str] = ...,
         tier: Optional[str] = ...,
         queries_enabled: Optional[bool] = ...,
         evaluations_enabled: Optional[bool] = ...,
@@ -156,6 +165,10 @@ class AuthUserDAO:
                 setattr(entry, "job_title", job_title)
             if image is not ...:
                 setattr(entry, "image", image)
+            if timezone is not ...:
+                if timezone is not None and timezone not in VALID_TIMEZONES:
+                    raise ValueError(f"'{timezone}' is not a valid IANA timezone.")
+                setattr(entry, "timezone", timezone)
             if tier is not ...:
                 setattr(entry, "tier", tier)
             if queries_enabled is not ...:

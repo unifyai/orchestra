@@ -18,6 +18,7 @@ from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.tab_dao import TabDAO
 from orchestra.db.dao.tile_dao import TileDAO
 from orchestra.db.dependencies import get_db_session
@@ -35,6 +36,7 @@ from orchestra.db.models.orchestra_models import (
     LogEventLog,
     Organization,
     Project,
+    ResourceAccess,
 )
 from orchestra.settings import settings
 from orchestra.web.api.interface.schema import (
@@ -63,6 +65,8 @@ from orchestra.web.api.project.schema import (
     ProjectUpdate,
     ShareProjectRequest,
     TabInfo,
+    TransferResponse,
+    TransferToOrganizationRequest,
 )
 from orchestra.web.api.utils.http_responses import not_found
 
@@ -942,6 +946,248 @@ def update_project(
         raise HTTPException(status_code=422, detail=str(e))
     except Exception:
         raise not_found(f"Project {project.name}")
+
+
+@router.post(
+    "/project/{project_id}/transfer-to-organization",
+    response_model=TransferResponse,
+    responses={
+        200: {
+            "description": "Project transferred successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "success": True,
+                        "project_id": 123,
+                        "project_name": "my-project",
+                        "from_type": "personal",
+                        "to_type": "organization",
+                        "message": "Project successfully transferred to organization 'My Org'",
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Bad Request - Project already in organization or invalid state",
+        },
+        403: {
+            "description": "Forbidden - User doesn't have required permissions",
+        },
+        404: {
+            "description": "Project or Organization Not Found",
+        },
+    },
+)
+def transfer_project_to_organization(
+    request_fastapi: Request,
+    project_id: int,
+    transfer_request: TransferToOrganizationRequest,
+    session: Session = Depends(get_db_session),
+) -> TransferResponse:
+    """
+    Transfer a personal project to an organization.
+
+    Requirements:
+    - User must own the personal project (project.user_id == user_id)
+    - User must have org:write permission on target organization
+    - Project must be personal (organization_id = NULL)
+
+    Process:
+    - Sets project.organization_id = target org
+    - Sets project.user_id = NULL (org-owned)
+    - No ResourceAccess entries created (implicit membership handles access)
+    """
+    user_id = request_fastapi.state.user_id
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    org_dao = OrganizationDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    # Get project
+    project = session.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project with id {project_id} not found",
+        )
+
+    # Verify project is personal
+    if project.organization_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Project is already associated with an organization. "
+            "Use transfer-to-personal first if you want to move it to a different organization.",
+        )
+
+    # Verify user owns the project
+    if project.user_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not own this project",
+        )
+
+    # Get target organization
+    org = org_dao.get(transfer_request.organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {transfer_request.organization_id} not found",
+        )
+
+    # Verify user has project:write permission in target organization
+    # This checks if the user's role in the org includes project:write
+    has_permission = resource_access_dao.check_user_has_permission_in_org(
+        user_id,
+        transfer_request.organization_id,
+        "project:write",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"You do not have permission to add projects to organization '{org.name}'. "
+            "You must be a member with project:write permission.",
+        )
+
+    try:
+        # Transfer the project (direct SQLAlchemy update to ensure None is set)
+        project.organization_id = transfer_request.organization_id
+        project.user_id = None  # Org-owned projects don't have user_id
+        session.commit()
+
+        return TransferResponse(
+            success=True,
+            project_id=project_id,
+            project_name=project.name,
+            from_type="personal",
+            to_type="organization",
+            message=f"Project '{project.name}' successfully transferred to organization '{org.name}'",
+        )
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to transfer project: {str(e)}",
+        )
+
+
+@router.post(
+    "/project/{project_id}/transfer-to-personal",
+    response_model=TransferResponse,
+    responses={
+        200: {
+            "description": "Project transferred successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "success": True,
+                        "project_id": 123,
+                        "project_name": "my-project",
+                        "from_type": "organization",
+                        "to_type": "personal",
+                        "message": "Project successfully transferred to personal ownership",
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Bad Request - Project is already personal",
+        },
+        403: {
+            "description": "Forbidden - User doesn't have required permissions",
+        },
+        404: {
+            "description": "Project Not Found",
+        },
+    },
+)
+def transfer_project_to_personal(
+    request_fastapi: Request,
+    project_id: int,
+    session: Session = Depends(get_db_session),
+) -> TransferResponse:
+    """
+    Transfer an organizational project to personal ownership.
+
+    Requirements:
+    - Project must be organizational (organization_id IS NOT NULL)
+    - User must have project:delete permission OR be org owner
+
+    Process:
+    - Sets project.user_id = requesting user
+    - Sets project.organization_id = NULL
+    - Deletes all ResourceAccess entries for this project
+    - Deletes all team shares for this project
+
+    Warning: This is a destructive operation that removes team sharing.
+    """
+    user_id = request_fastapi.state.user_id
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    org_dao = OrganizationDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    # Get project
+    project = session.query(Project).filter(Project.id == project_id).first()
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project with id {project_id} not found",
+        )
+
+    # Verify project is organizational
+    if project.organization_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Project is already personal",
+        )
+
+    # Get organization
+    org = org_dao.get(project.organization_id)
+
+    # Verify user has project:write permission
+    has_write_permission = resource_access_dao.check_user_permission(
+        user_id,
+        "project",
+        project_id,
+        "project:write",
+    )
+
+    if not has_write_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to transfer this project to personal ownership. "
+            "You need project:write permission.",
+        )
+
+    try:
+        # Delete all ResourceAccess entries for this project
+        session.query(ResourceAccess).filter(
+            ResourceAccess.resource_type == "project",
+            ResourceAccess.resource_id == project_id,
+        ).delete()
+
+        # Transfer the project to personal ownership (direct SQLAlchemy update to ensure None is set)
+        project.user_id = user_id
+        project.organization_id = None
+        session.commit()
+
+        return TransferResponse(
+            success=True,
+            project_id=project_id,
+            project_name=project.name,
+            from_type="organization",
+            to_type="personal",
+            message=f"Project '{project.name}' successfully transferred to personal ownership. "
+            "All team shares have been removed.",
+        )
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to transfer project: {str(e)}",
+        )
 
 
 @router.get(

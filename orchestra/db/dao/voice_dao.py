@@ -1,7 +1,7 @@
 from typing import List, Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy import select, update
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import Assistant, Voice
@@ -43,7 +43,10 @@ class VoiceDAO:
         return voice
 
     def get_voice_by_id(
-        self, user_id: str, voice_id: str, provider: str
+        self,
+        user_id: str,
+        voice_id: str,
+        provider: str,
     ) -> Optional[Voice]:
         """
         Retrieve a Voice by user and its TTS provider voice_id.
@@ -67,22 +70,30 @@ class VoiceDAO:
     def delete_voice(self, user_id: str, voice_id: str, provider: str) -> None:
         """
         Delete a Voice by user and its TTS provider voice_id.
+        Prevents deletion if the voice is in use by any assistant for that user.
         """
         voice = self.get_voice_by_id(user_id, voice_id, provider=provider)
-        if voice:
-            # Manually nullify voice_id in referencing assistants for this user.
-            stmt = (
-                update(Assistant)
-                .where(Assistant.user_id == user_id)
-                .where(Assistant.voice_id == voice_id)
-                .where(Assistant.voice_provider == provider)
-                .values(voice_id=None, voice_provider=None)
-            )
-            self.session.execute(stmt)
-
-            self.session.delete(voice)
-        else:
+        if not voice:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Voice not found.",
             )
+
+        # Check if any assistant is using this voice for the given user.
+        stmt = (
+            select(Assistant.agent_id)
+            .where(Assistant.user_id == user_id)
+            .where(Assistant.voice_id == voice_id)
+            .where(Assistant.voice_provider == provider)
+            .limit(1)
+        )
+        assistant_using_voice = self.session.execute(stmt).first()
+
+        if assistant_using_voice:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Cannot delete voice. It is currently in use by at least one assistant.",
+            )
+
+        # If not in use, proceed with deletion.
+        self.session.delete(voice)
