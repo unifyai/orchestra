@@ -16,6 +16,7 @@ from orchestra.web.api.teams.schema import (
     ResourceAccessListResponse,
     ResourceAccessResponse,
     ResourceAccessRevoke,
+    ResourceAccessUpdate,
     TeamCreate,
     TeamMemberAdd,
     TeamResponse,
@@ -694,6 +695,118 @@ async def revoke_resource_access(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to revoke access: {str(e)}",
+        )
+
+
+@router.patch(
+    "/resources/{resource_type}/{resource_id}/access/{access_id}",
+    response_model=ResourceAccessResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def update_resource_access(
+    request_fastapi: Request,
+    resource_type: str,
+    resource_id: int,
+    access_id: int,
+    update_data: ResourceAccessUpdate,
+    session: Session = Depends(get_db_session),
+) -> ResourceAccessResponse:
+    """
+    Update an existing resource access grant (change role).
+
+    This is a more atomic alternative to revoking and re-granting access.
+    Preserves the access ID and created_at timestamp.
+
+    User must have write permission on the resource.
+
+    :param request_fastapi: FastAPI request object.
+    :param resource_type: Type of resource ("project" or "org").
+    :param resource_id: Resource ID.
+    :param access_id: ResourceAccess ID to update.
+    :param update_data: Update data containing new role_id.
+    :param session: Database session.
+    :return: Updated access entry.
+    """
+    # Validate resource type
+    if resource_type not in ("project", "org"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid resource type: {resource_type}. Only 'project' and 'org' are supported.",
+        )
+
+    user_id = request_fastapi.state.user_id
+    resource_access_dao = ResourceAccessDAO(session)
+    role_dao = RoleDAO(session)
+
+    # Verify the access entry exists and belongs to this resource
+    existing_access = resource_access_dao.get(access_id)
+    if not existing_access:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Access grant with id {access_id} not found",
+        )
+
+    if (
+        existing_access.resource_type != resource_type
+        or existing_access.resource_id != resource_id
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Access grant {access_id} does not belong to this resource",
+        )
+
+    # Check if user has write permission on the resource
+    has_permission = resource_access_dao.check_user_permission(
+        user_id,
+        resource_type,
+        resource_id,
+        f"{resource_type}:write",
+    )
+
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to modify access for this resource",
+        )
+
+    # Verify the new role exists
+    new_role = role_dao.get(update_data.role_id)
+    if not new_role:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Role with id {update_data.role_id} not found",
+        )
+
+    try:
+        # Update the role
+        updated_access = resource_access_dao.update_role(
+            access_id=access_id,
+            new_role_id=update_data.role_id,
+        )
+        session.commit()
+
+        return ResourceAccessResponse(
+            id=updated_access.id,
+            resource_type=updated_access.resource_type,
+            resource_id=updated_access.resource_id,
+            role_id=updated_access.role_id,
+            role_name=new_role.name,
+            grantee_type=updated_access.grantee_type,
+            grantee_id=updated_access.grantee_id,
+            created_at=updated_access.created_at,
+        )
+    except ValueError as e:
+        # Unique constraint violation
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(e),
+        )
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to update access: {str(e)}",
         )
 
 
