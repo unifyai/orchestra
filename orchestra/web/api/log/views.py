@@ -1470,6 +1470,21 @@ def update_logs(
                     error_msg = format_fk_violation_error(violations)
                     raise HTTPException(status_code=400, detail=error_msg)
 
+                # Apply CASCADE, SET NULL, and SET DEFAULT actions
+                # Extract new values for CASCADE UPDATE
+                new_values = {}
+                if body.entries:
+                    if isinstance(body.entries, dict):
+                        new_values.update(body.entries)
+
+                context_dao.apply_fk_actions(
+                    project_id=project_id,
+                    context_id=ctx_id,
+                    columns_values=columns_values_map,
+                    action="UPDATE",
+                    new_values=new_values,
+                )
+
     # Prepare collections for bulk operations
     all_flat_updates = []
     # Create a separate list for nested updates (using dot or bracket notation)
@@ -2141,6 +2156,14 @@ def delete_logs(
             if violations:
                 error_msg = format_fk_violation_error(violations)
                 raise HTTPException(status_code=400, detail=error_msg)
+
+            # Apply CASCADE, SET NULL, and SET DEFAULT actions
+            context_dao.apply_fk_actions(
+                project_id=project_id,
+                context_id=context_id,
+                columns_values=columns_values_to_delete,
+                action="DELETE",
+            )
 
     # Track if we need to update the versioned context
     context_obj = None
