@@ -1410,6 +1410,66 @@ def update_logs(
             detail=f"Failed to retrieve field types for project {project_id}: {e}",
         )
 
+    # Check RESTRICT constraints before update
+    if ctx_id:
+        from .fk_utils import format_fk_violation_error
+
+        # Determine which columns are being updated
+        columns_being_updated = set()
+        if body.entries:
+            if isinstance(body.entries, dict):
+                columns_being_updated.update(body.entries.keys())
+            elif isinstance(body.entries, list) and body.entries:
+                # Take union of all keys from all entries
+                for entry in body.entries:
+                    if isinstance(entry, dict):
+                        columns_being_updated.update(entry.keys())
+
+        if body.params:
+            if isinstance(body.params, dict):
+                columns_being_updated.update(body.params.keys())
+            elif isinstance(body.params, list) and body.params:
+                for param in body.params:
+                    if isinstance(param, dict):
+                        columns_being_updated.update(param.keys())
+
+        # Remove metadata keys
+        columns_being_updated.discard("explicit_types")
+
+        if columns_being_updated:
+            # Get OLD values for these columns from logs being updated
+            from orchestra.db.models.orchestra_models import Log, LogEventLog
+
+            columns_values_map = {}  # {column_name: [old_values...]}
+
+            for log_id in ids_to_update:
+                # Query current log values for columns being updated
+                old_values_query = (
+                    session.query(Log.key, Log.value)
+                    .join(LogEventLog, LogEventLog.log_id == Log.id)
+                    .filter(
+                        LogEventLog.log_event_id == log_id,
+                        Log.key.in_(columns_being_updated),
+                    )
+                )
+
+                for key, value in old_values_query.all():
+                    if value is not None:
+                        columns_values_map.setdefault(key, []).append(value)
+
+            # Check for RESTRICT constraint violations
+            if columns_values_map:
+                violations = context_dao.check_restrict_constraints(
+                    project_id=project_id,
+                    context_id=ctx_id,
+                    columns_values=columns_values_map,
+                    action="UPDATE",
+                )
+
+                if violations:
+                    error_msg = format_fk_violation_error(violations)
+                    raise HTTPException(status_code=400, detail=error_msg)
+
     # Prepare collections for bulk operations
     all_flat_updates = []
     # Create a separate list for nested updates (using dot or bracket notation)
@@ -2000,6 +2060,87 @@ def delete_logs(
 
     # Use the processed list instead of the original
     ids_and_fields = _flatten_fields(processed_ids_and_fields)
+
+    # Check RESTRICT constraints before deletion
+    if body.source_type in ("all", "base"):
+        from orchestra.db.models.orchestra_models import (
+            Log,
+            LogEvent,
+            LogEventContext,
+            LogEventLog,
+        )
+
+        from .fk_utils import format_fk_violation_error
+
+        # Extract column-value pairs being deleted
+        columns_values_to_delete = {}  # {column_name: [values...]}
+
+        # Handle global field deletions (log_id is None)
+        global_fields = ids_and_fields.get(None, [])
+        if global_fields:
+            # Get all values for these fields in the context
+            for field in global_fields:
+                values_query = (
+                    session.query(Log.value)
+                    .join(LogEventLog, LogEventLog.log_id == Log.id)
+                    .join(LogEvent, LogEvent.id == LogEventLog.log_event_id)
+                    .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
+                    .filter(
+                        LogEvent.project_id == project_id,
+                        LogEventContext.context_id == context_id,
+                        Log.key == field,
+                    )
+                    .distinct()
+                )
+                values = [row[0] for row in values_query.all() if row[0] is not None]
+                if values:
+                    columns_values_to_delete[field] = values
+
+        # Handle specific log deletions
+        specific_log_ids = [k for k in ids_and_fields.keys() if k is not None]
+        if specific_log_ids:
+            # Group fields by log_event_id for efficiency
+            for log_id, fields in ids_and_fields.items():
+                if log_id is None:
+                    continue
+
+                # If no fields specified, we're deleting the entire log event
+                if not fields:
+                    # Get all fields for this log event
+                    all_fields_query = (
+                        session.query(Log.key, Log.value)
+                        .join(LogEventLog, LogEventLog.log_id == Log.id)
+                        .filter(LogEventLog.log_event_id == log_id)
+                    )
+                    for key, value in all_fields_query.all():
+                        if value is not None:
+                            columns_values_to_delete.setdefault(key, []).append(value)
+                else:
+                    # Get values for specific fields
+                    fields_values_query = (
+                        session.query(Log.key, Log.value)
+                        .join(LogEventLog, LogEventLog.log_id == Log.id)
+                        .filter(
+                            LogEventLog.log_event_id == log_id,
+                            Log.key.in_(fields),
+                        )
+                    )
+                    for key, value in fields_values_query.all():
+                        if value is not None:
+                            columns_values_to_delete.setdefault(key, []).append(value)
+
+        # Check for RESTRICT constraint violations
+        if columns_values_to_delete:
+            violations = context_dao.check_restrict_constraints(
+                project_id=project_id,
+                context_id=context_id,
+                columns_values=columns_values_to_delete,
+                action="DELETE",
+            )
+
+            if violations:
+                error_msg = format_fk_violation_error(violations)
+                raise HTTPException(status_code=400, detail=error_msg)
 
     # Track if we need to update the versioned context
     context_obj = None

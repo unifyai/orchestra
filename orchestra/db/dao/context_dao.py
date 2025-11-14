@@ -230,6 +230,133 @@ class ContextDAO:
                     f"{ref_context_name}.{ref_column_name}",
                 )
 
+    def check_restrict_constraints(
+        self,
+        project_id: int,
+        context_id: int,
+        columns_values: Dict[str, List[Any]],
+        action: str = "DELETE",
+    ) -> List[Dict[str, Any]]:
+        """Check if deleting/updating values would violate RESTRICT constraints.
+
+        Args:
+            project_id: The project ID
+            context_id: The context being modified (where values are being deleted/updated)
+            columns_values: Dict mapping column names to lists of values to check
+                           e.g., {"id": [1, 2, 3], "code": ["A", "B"]}
+            action: Either "DELETE" or "UPDATE"
+
+        Returns:
+            List of violations, each containing:
+            - context: The context being modified
+            - column: The column being deleted/updated
+            - value: The specific value
+            - referencing_context: Context with the FK
+            - fk_column: FK column name
+            - count: Number of referencing rows
+            - fk_action: The FK action type ("on_delete" or "on_update")
+        """
+        if not columns_values:
+            return []
+
+        violations = []
+
+        # Get the context name for the context being modified
+        context = self.session.query(Context).filter_by(id=context_id).one_or_none()
+        if not context:
+            return []
+        context_name = context.name
+
+        # Find all contexts in this project that have foreign keys
+        all_contexts = (
+            self.session.query(Context)
+            .filter(
+                Context.project_id == project_id,
+                Context.foreign_keys != None,  # noqa: E711
+                Context.foreign_keys != text("'[]'::jsonb"),
+            )
+            .all()
+        )
+
+        # Check each context for FKs that reference this context
+        for ref_context in all_contexts:
+            if not ref_context.foreign_keys:
+                continue
+
+            for fk in ref_context.foreign_keys:
+                # Parse the reference: "ContextName.column_name"
+                ref_parts = fk["references"].split(".")
+                if len(ref_parts) != 2:
+                    continue
+
+                ref_context_name, ref_column_name = ref_parts
+
+                # Check if this FK references our context
+                if ref_context_name != context_name:
+                    continue
+
+                # Check if the column being deleted/updated is referenced
+                if ref_column_name not in columns_values:
+                    continue
+
+                # Check the FK action
+                fk_action_type = "on_delete" if action == "DELETE" else "on_update"
+                fk_action = fk.get(fk_action_type, "NO ACTION")
+
+                # Only enforce RESTRICT and NO ACTION
+                if fk_action not in ("RESTRICT", "NO ACTION"):
+                    continue
+
+                # Get the FK column name
+                fk_column = fk["name"]
+
+                # For each value being deleted/updated, check if it's referenced
+                for value in columns_values[ref_column_name]:
+                    # Skip NULL values
+                    if value is None:
+                        continue
+
+                    # Convert value to JSON for comparison
+                    json_str = json.dumps(value)
+
+                    # Count how many rows reference this value
+                    query = text(
+                        """
+                        SELECT COUNT(*)
+                        FROM log l
+                        JOIN log_event_log lel ON l.id = lel.log_id
+                        JOIN log_event_context lec ON lel.log_event_id = lec.log_event_id
+                        WHERE lec.context_id = :context_id
+                          AND l.key = :fk_column
+                          AND l.value = CAST(:json_str AS jsonb)
+                    """,
+                    )
+
+                    result = self.session.execute(
+                        query,
+                        {
+                            "context_id": ref_context.id,
+                            "fk_column": fk_column,
+                            "json_str": json_str,
+                        },
+                    )
+                    count = result.scalar()
+
+                    if count > 0:
+                        violations.append(
+                            {
+                                "context": context_name,
+                                "column": ref_column_name,
+                                "value": value,
+                                "referencing_context": ref_context.name,
+                                "fk_column": fk_column,
+                                "count": count,
+                                "fk_action": fk_action,
+                            },
+                        )
+
+        return violations
+
     def create(
         self,
         project_id: int,
