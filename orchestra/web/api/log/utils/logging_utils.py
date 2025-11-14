@@ -1284,7 +1284,12 @@ def _get_logs_query(
         from_fields=from_fields,  # Still need to filter the actual fields returned
         exclude_fields=exclude_fields,  # Still need to filter the actual fields returned
     )
-    filtered_logs_subq = filtered_logs_q.subquery(name="filtered_logs_subq")
+    # Materialize as CTE to help PostgreSQL optimize the join with paginated_ids_subq
+    # This prevents PostgreSQL from treating filtered_logs_subq as a correlated subquery
+    # and encourages a hash join instead of a nested loop join
+    filtered_logs_subq = filtered_logs_q.cte("filtered_logs_subq").prefix_with(
+        "MATERIALIZED",
+    )
 
     # Get final logs - total_count already calculated in _paginate_events
     raw_rows = _get_final_logs(session, filtered_logs_subq, paginated_ids_subq)
