@@ -665,10 +665,18 @@ def _build_subquery_for_identifier(
         LogEventDerivedLog,
         name="log_event_derived_log_alias",
     )
+    # Determine filtering strategy based on log_event_ids type
+    # When log_event_ids is a Subquery, use JOIN for better index usage.
+    # This allows PostgreSQL to use idx_log_event_log_event_id efficiently by joining with
+    # the filtered event_ids_subq first, rather than scanning all log_event_log rows and
+    # filtering with IN. This is critical for performance on staging/prod with many projects.
+    use_join = isinstance(log_event_ids, Subquery)
+
     if log_event_ids is None:
         # TODO(yusha): figure out why empty ids were passed and remove this check once we have a better way to handle it
         log_id_condition = True
         derived_log_id_condition = True
+        log_event_condition = True
     elif isinstance(log_event_ids, list):
         # For derived logs, we pass reference logs as list of ids
         log_id_condition = log_event_log_alias.log_event_id.in_(log_event_ids)
@@ -677,16 +685,14 @@ def _build_subquery_for_identifier(
         )
         log_event_condition = log_event_alias.id.in_(log_event_ids)
     else:
-        # assert that log_event_ids is a subquery
-        assert isinstance(log_event_ids, Subquery)
-        log_id_condition = log_event_log_alias.log_event_id.in_(select(log_event_ids))
-        derived_log_id_condition = log_event_derived_log_alias.log_event_id.in_(
-            select(log_event_ids),
-        )
-        log_event_condition = log_event_alias.id.in_(select(log_event_ids))
+        # log_event_ids is a Subquery - will use JOIN instead of WHERE conditions
+        log_id_condition = None
+        derived_log_id_condition = None
+        log_event_condition = None
+
     # Special handling for log_id field
     if key == "log_id":
-        subq = select(
+        log_id_select_cols = [
             log_event_alias.id.label("log_event_id"),
             literal(None).label("vector_value"),
             literal(None).label("jsonb_value"),
@@ -699,7 +705,12 @@ def _build_subquery_for_identifier(
             literal(None).label("float_value"),
             literal(None).label("bool_value"),
             literal("int").label("inferred_type"),
-        ).where(log_event_condition)
+        ]
+        subq = select(*log_id_select_cols).select_from(log_event_alias)
+        if use_join:
+            subq = subq.join(log_event_ids, log_event_ids.c.id == log_event_alias.id)
+        else:
+            subq = subq.where(log_event_condition)
         return alias_utils.subquery_with_unique_alias(
             subq,
             prefix=safe_alias or "log_id",
@@ -707,7 +718,7 @@ def _build_subquery_for_identifier(
 
     # Special handling for created_at and updated_at fields from LogEvent table
     if key in ("created_at", "updated_at"):
-        subq = select(
+        timestamp_select_cols = [
             log_event_alias.id.label("log_event_id"),
             literal(None).label("jsonb_value"),
             literal(None).label("vector_value"),
@@ -723,184 +734,203 @@ def _build_subquery_for_identifier(
             literal(None).label("float_value"),
             literal(None).label("bool_value"),
             literal("datetime").label("inferred_type"),
-        ).where(log_event_condition)
+        ]
+        subq = select(*timestamp_select_cols).select_from(log_event_alias)
+        if use_join:
+            subq = subq.join(log_event_ids, log_event_ids.c.id == log_event_alias.id)
+        else:
+            subq = subq.where(log_event_condition)
         return alias_utils.subquery_with_unique_alias(subq, prefix=safe_alias or key)
 
     # Build base logs subquery
+    base_select_cols = [
+        log_event_log_alias.log_event_id.label("log_event_id"),
+        literal(None).label("vector_value"),
+        case(
+            (
+                or_(
+                    log_alias.inferred_type == "list",
+                    log_alias.inferred_type == "dict",
+                    log_alias.inferred_type == "tuple",
+                    log_alias.inferred_type == "set",
+                    log_alias.inferred_type == "union",
+                    log_alias.inferred_type == "Any",
+                    log_alias.inferred_type.ilike("List%"),
+                    log_alias.inferred_type.ilike("Dict%"),
+                    log_alias.inferred_type.ilike("Tuple%"),
+                    log_alias.inferred_type.ilike("Set%"),
+                    log_alias.inferred_type.ilike("Union%"),
+                    log_alias.inferred_type.like("{%"),
+                ),
+                cast(log_alias.value, JSONB),
+            ),
+            else_=None,
+        ).label("jsonb_value"),
+        case(
+            (log_alias.inferred_type == "datetime", cast(log_alias.value, JSONB)),
+            else_=None,
+        ).label("timestamp_value"),
+        case(
+            (log_alias.inferred_type == "time", cast(log_alias.value, JSONB)),
+            else_=None,
+        ).label("time_value"),
+        case(
+            (log_alias.inferred_type == "date", cast(log_alias.value, JSONB)),
+            else_=None,
+        ).label("date_value"),
+        case(
+            (log_alias.inferred_type == "timedelta", cast(log_alias.value, JSONB)),
+            else_=None,
+        ).label("timedelta_value"),
+        case(
+            (log_alias.inferred_type == "str", extract_json_text(log_alias.value)),
+            (log_alias.inferred_type == "image", extract_json_text(log_alias.value)),
+            (log_alias.inferred_type == "audio", extract_json_text(log_alias.value)),
+            else_=None,
+        ).label("str_value"),
+        case(
+            (log_alias.inferred_type == "int", _safe_float(log_alias.value)),
+            else_=None,
+        ).label("int_value"),
+        case(
+            (log_alias.inferred_type == "float", _safe_float(log_alias.value)),
+            else_=None,
+        ).label("float_value"),
+        case(
+            (log_alias.inferred_type == "bool", cast(log_alias.value, Boolean)),
+            else_=None,
+        ).label("bool_value"),
+        log_alias.inferred_type.label("inferred_type"),
+    ]
+
     base_subq = (
-        select(
-            log_event_log_alias.log_event_id.label("log_event_id"),
-            literal(None).label("vector_value"),
-            case(
-                (
-                    or_(
-                        log_alias.inferred_type == "list",
-                        log_alias.inferred_type == "dict",
-                        log_alias.inferred_type == "tuple",
-                        log_alias.inferred_type == "set",
-                        log_alias.inferred_type == "union",
-                        log_alias.inferred_type == "Any",
-                        log_alias.inferred_type.ilike("List%"),
-                        log_alias.inferred_type.ilike("Dict%"),
-                        log_alias.inferred_type.ilike("Tuple%"),
-                        log_alias.inferred_type.ilike("Set%"),
-                        log_alias.inferred_type.ilike("Union%"),
-                        # NEW: when inferred_type stores a JSON schema string, it will typically
-                        # start with '{' and end with '}'. Treat it as JSON-family for casting.
-                        log_alias.inferred_type.like("{%"),
-                    ),
-                    cast(log_alias.value, JSONB),
-                ),
-                else_=None,
-            ).label("jsonb_value"),
-            case(
-                (log_alias.inferred_type == "datetime", cast(log_alias.value, JSONB)),
-                else_=None,
-            ).label("timestamp_value"),
-            case(
-                (log_alias.inferred_type == "time", cast(log_alias.value, JSONB)),
-                else_=None,
-            ).label("time_value"),
-            case(
-                (log_alias.inferred_type == "date", cast(log_alias.value, JSONB)),
-                else_=None,
-            ).label("date_value"),
-            case(
-                (log_alias.inferred_type == "timedelta", cast(log_alias.value, JSONB)),
-                else_=None,
-            ).label("timedelta_value"),
-            case(
-                (log_alias.inferred_type == "str", extract_json_text(log_alias.value)),
-                (
-                    log_alias.inferred_type == "image",
-                    extract_json_text(log_alias.value),
-                ),
-                (
-                    log_alias.inferred_type == "audio",
-                    extract_json_text(log_alias.value),
-                ),
-                else_=None,
-            ).label("str_value"),
-            case(
-                (log_alias.inferred_type == "int", _safe_float(log_alias.value)),
-                else_=None,
-            ).label("int_value"),
-            case(
-                (log_alias.inferred_type == "float", _safe_float(log_alias.value)),
-                else_=None,
-            ).label("float_value"),
-            case(
-                (log_alias.inferred_type == "bool", cast(log_alias.value, Boolean)),
-                else_=None,
-            ).label("bool_value"),
-            log_alias.inferred_type.label("inferred_type"),
-        )
-        .select_from(log_alias, log_event_log_alias)
-        .where(
+        select(*base_select_cols)
+        .select_from(log_alias)
+        .join(
+            log_event_log_alias,
             log_event_log_alias.log_id == log_alias.id,
-            log_id_condition,
-            log_alias.key == key,
         )
     )
+    if use_join:
+        # Use JOIN to leverage idx_log_event_log_event_id index efficiently
+        base_subq = base_subq.join(
+            log_event_ids,
+            log_event_ids.c.id == log_event_log_alias.log_event_id,
+        )
+    base_subq = base_subq.where(log_alias.key == key)
+    if not use_join:
+        # Add IN condition for list or None
+        base_subq = base_subq.where(log_id_condition)
 
     # Build derived logs subquery
+    derived_select_cols = [
+        log_event_derived_log_alias.log_event_id.label("log_event_id"),
+        literal(None).label("vector_value"),
+        case(
+            (
+                or_(
+                    derived_log_alias.inferred_type == "list",
+                    derived_log_alias.inferred_type == "dict",
+                    derived_log_alias.inferred_type == "tuple",
+                    derived_log_alias.inferred_type == "set",
+                    derived_log_alias.inferred_type == "union",
+                    derived_log_alias.inferred_type == "Any",
+                    derived_log_alias.inferred_type.ilike("List[%"),
+                    derived_log_alias.inferred_type.ilike("Dict[%"),
+                    derived_log_alias.inferred_type.ilike("Tuple[%"),
+                    derived_log_alias.inferred_type.ilike("Set[%"),
+                    derived_log_alias.inferred_type.ilike("Union[%"),
+                    derived_log_alias.inferred_type.like("{%"),
+                ),
+                cast(derived_log_alias.value, JSONB),
+            ),
+            else_=None,
+        ).label("jsonb_value"),
+        case(
+            (
+                derived_log_alias.inferred_type == "datetime",
+                cast(derived_log_alias.value, JSONB),
+            ),
+            else_=None,
+        ).label("timestamp_value"),
+        case(
+            (
+                derived_log_alias.inferred_type == "time",
+                cast(derived_log_alias.value, JSONB),
+            ),
+            else_=None,
+        ).label("time_value"),
+        case(
+            (
+                derived_log_alias.inferred_type == "date",
+                cast(derived_log_alias.value, JSONB),
+            ),
+            else_=None,
+        ).label("date_value"),
+        case(
+            (
+                derived_log_alias.inferred_type == "timedelta",
+                cast(derived_log_alias.value, JSONB),
+            ),
+            else_=None,
+        ).label("timedelta_value"),
+        case(
+            (
+                derived_log_alias.inferred_type == "str",
+                extract_json_text(derived_log_alias.value),
+            ),
+            (
+                derived_log_alias.inferred_type == "image",
+                extract_json_text(derived_log_alias.value),
+            ),
+            (
+                derived_log_alias.inferred_type == "audio",
+                extract_json_text(derived_log_alias.value),
+            ),
+            else_=None,
+        ).label("str_value"),
+        case(
+            (
+                derived_log_alias.inferred_type == "int",
+                _safe_float(derived_log_alias.value),
+            ),
+            else_=None,
+        ).label("int_value"),
+        case(
+            (
+                derived_log_alias.inferred_type == "float",
+                _safe_float(derived_log_alias.value),
+            ),
+            else_=None,
+        ).label("float_value"),
+        case(
+            (
+                derived_log_alias.inferred_type == "bool",
+                cast(derived_log_alias.value, Boolean),
+            ),
+            else_=None,
+        ).label("bool_value"),
+        derived_log_alias.inferred_type.label("inferred_type"),
+    ]
+
     derived_subq = (
-        select(
-            log_event_derived_log_alias.log_event_id.label("log_event_id"),
-            literal(None).label("vector_value"),
-            case(
-                (
-                    or_(
-                        derived_log_alias.inferred_type == "list",
-                        derived_log_alias.inferred_type == "dict",
-                        derived_log_alias.inferred_type == "tuple",
-                        derived_log_alias.inferred_type == "set",
-                        derived_log_alias.inferred_type == "union",
-                        derived_log_alias.inferred_type == "Any",
-                        derived_log_alias.inferred_type.ilike("List[%"),
-                        derived_log_alias.inferred_type.ilike("Dict[%"),
-                        derived_log_alias.inferred_type.ilike("Tuple[%"),
-                        derived_log_alias.inferred_type.ilike("Set[%"),
-                        derived_log_alias.inferred_type.ilike("Union[%"),
-                        derived_log_alias.inferred_type.like("{%"),
-                    ),
-                    cast(derived_log_alias.value, JSONB),
-                ),
-                else_=None,
-            ).label("jsonb_value"),
-            case(
-                (
-                    derived_log_alias.inferred_type == "datetime",
-                    cast(derived_log_alias.value, JSONB),
-                ),
-                else_=None,
-            ).label("timestamp_value"),
-            case(
-                (
-                    derived_log_alias.inferred_type == "time",
-                    cast(derived_log_alias.value, JSONB),
-                ),
-                else_=None,
-            ).label("time_value"),
-            case(
-                (
-                    derived_log_alias.inferred_type == "date",
-                    cast(derived_log_alias.value, JSONB),
-                ),
-                else_=None,
-            ).label("date_value"),
-            case(
-                (
-                    derived_log_alias.inferred_type == "timedelta",
-                    cast(derived_log_alias.value, JSONB),
-                ),
-                else_=None,
-            ).label("timedelta_value"),
-            case(
-                (
-                    derived_log_alias.inferred_type == "str",
-                    extract_json_text(derived_log_alias.value),
-                ),
-                (
-                    derived_log_alias.inferred_type == "image",
-                    extract_json_text(derived_log_alias.value),
-                ),
-                (
-                    derived_log_alias.inferred_type == "audio",
-                    extract_json_text(derived_log_alias.value),
-                ),
-                else_=None,
-            ).label("str_value"),
-            case(
-                (
-                    derived_log_alias.inferred_type == "int",
-                    _safe_float(derived_log_alias.value),
-                ),
-                else_=None,
-            ).label("int_value"),
-            case(
-                (
-                    derived_log_alias.inferred_type == "float",
-                    _safe_float(derived_log_alias.value),
-                ),
-                else_=None,
-            ).label("float_value"),
-            case(
-                (
-                    derived_log_alias.inferred_type == "bool",
-                    cast(derived_log_alias.value, Boolean),
-                ),
-                else_=None,
-            ).label("bool_value"),
-            derived_log_alias.inferred_type.label("inferred_type"),
-        )
-        .select_from(derived_log_alias, log_event_derived_log_alias)
-        .where(
+        select(*derived_select_cols)
+        .select_from(derived_log_alias)
+        .join(
+            log_event_derived_log_alias,
             log_event_derived_log_alias.derived_log_id == derived_log_alias.id,
-            derived_log_id_condition,
-            derived_log_alias.key == key,
         )
     )
+    if use_join:
+        # Use JOIN to leverage index efficiently
+        derived_subq = derived_subq.join(
+            log_event_ids,
+            log_event_ids.c.id == log_event_derived_log_alias.log_event_id,
+        )
+    derived_subq = derived_subq.where(derived_log_alias.key == key)
+    if not use_join:
+        # Add IN condition for list or None
+        derived_subq = derived_subq.where(derived_log_id_condition)
     # Combine base and derived logs with union
     combined_subq = alias_utils.subquery_with_unique_alias(
         base_subq.union_all(derived_subq),
