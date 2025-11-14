@@ -357,6 +357,379 @@ class ContextDAO:
 
         return violations
 
+    def apply_fk_actions(
+        self,
+        project_id: int,
+        context_id: int,
+        columns_values: Dict[str, List[Any]],
+        action: str = "DELETE",
+        new_values: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Apply CASCADE, SET NULL, or SET DEFAULT actions for FK constraints.
+
+        Args:
+            project_id: The project ID
+            context_id: The context being modified (referenced context)
+            columns_values: Dict mapping column names to lists of old values
+                           e.g., {"id": [1, 2, 3], "code": ["A", "B"]}
+            action: Either "DELETE" or "UPDATE"
+            new_values: For UPDATE, the new values being set (optional)
+
+        Returns:
+            Statistics about actions taken: {
+                "cascaded_deletes": int,
+                "cascaded_updates": int,
+                "set_null": int,
+                "set_default": int,
+            }
+        """
+        if not columns_values:
+            return {
+                "cascaded_deletes": 0,
+                "cascaded_updates": 0,
+                "set_null": 0,
+                "set_default": 0,
+            }
+
+        stats = {
+            "cascaded_deletes": 0,
+            "cascaded_updates": 0,
+            "set_null": 0,
+            "set_default": 0,
+        }
+
+        # Get the context name for the context being modified
+        context = self.session.query(Context).filter_by(id=context_id).one_or_none()
+        if not context:
+            return stats
+        context_name = context.name
+
+        # Find all contexts in this project that have foreign keys
+        all_contexts = (
+            self.session.query(Context)
+            .filter(
+                Context.project_id == project_id,
+                Context.foreign_keys != None,  # noqa: E711
+                Context.foreign_keys != text("'[]'::jsonb"),
+            )
+            .all()
+        )
+
+        # Process each context for FKs that reference this context
+        for ref_context in all_contexts:
+            if not ref_context.foreign_keys:
+                continue
+
+            for fk in ref_context.foreign_keys:
+                # Parse the reference: "ContextName.column_name"
+                ref_parts = fk["references"].split(".")
+                if len(ref_parts) != 2:
+                    continue
+
+                ref_context_name, ref_column_name = ref_parts
+
+                # Check if this FK references our context
+                if ref_context_name != context_name:
+                    continue
+
+                # Check if the column being deleted/updated is referenced
+                if ref_column_name not in columns_values:
+                    continue
+
+                # Get the FK action
+                fk_action_type = "on_delete" if action == "DELETE" else "on_update"
+                fk_action = fk.get(fk_action_type, "NO ACTION")
+
+                # Skip RESTRICT and NO ACTION (already handled in check phase)
+                if fk_action in ("RESTRICT", "NO ACTION"):
+                    continue
+
+                # Get the FK column name
+                fk_column = fk["name"]
+
+                # Apply the appropriate action for each value
+                for old_value in columns_values[ref_column_name]:
+                    # Skip NULL values
+                    if old_value is None:
+                        continue
+
+                    # Convert value to JSON for comparison
+                    json_str = json.dumps(old_value)
+
+                    if fk_action == "CASCADE":
+                        if action == "DELETE":
+                            # CASCADE DELETE: Delete referencing log events
+                            stats["cascaded_deletes"] += self._cascade_delete(
+                                ref_context.id,
+                                fk_column,
+                                json_str,
+                            )
+                        else:  # UPDATE
+                            # CASCADE UPDATE: Update FK values to new value
+                            if new_values and ref_column_name in new_values:
+                                new_value = new_values[ref_column_name]
+                                stats["cascaded_updates"] += self._cascade_update(
+                                    ref_context.id,
+                                    fk_column,
+                                    json_str,
+                                    new_value,
+                                )
+
+                    elif fk_action == "SET NULL":
+                        # SET NULL: Delete the FK column entries (sets to NULL)
+                        stats["set_null"] += self._set_null(
+                            ref_context.id,
+                            fk_column,
+                            json_str,
+                        )
+
+                    elif fk_action == "SET DEFAULT":
+                        # SET DEFAULT: Update FK column to default value
+                        default_value = self._get_default_value(ref_context, fk_column)
+                        if default_value is not None:
+                            stats["set_default"] += self._set_default(
+                                ref_context.id,
+                                fk_column,
+                                json_str,
+                                default_value,
+                            )
+                        else:
+                            # If no default, treat as SET NULL
+                            stats["set_null"] += self._set_null(
+                                ref_context.id,
+                                fk_column,
+                                json_str,
+                            )
+
+        return stats
+
+    def _cascade_delete(
+        self,
+        context_id: int,
+        fk_column: str,
+        old_value_json: str,
+    ) -> int:
+        """Delete all log events where FK column matches old value."""
+        # Find all log_event_ids that reference this value
+        query = text(
+            """
+            SELECT DISTINCT lec.log_event_id, le.project_id
+            FROM log l
+            JOIN log_event_log lel ON l.id = lel.log_id
+            JOIN log_event_context lec ON lel.log_event_id = lec.log_event_id
+            JOIN log_event le ON le.id = lec.log_event_id
+            WHERE lec.context_id = :context_id
+              AND l.key = :fk_column
+              AND l.value = CAST(:json_str AS jsonb)
+        """,
+        )
+
+        result = self.session.execute(
+            query,
+            {
+                "context_id": context_id,
+                "fk_column": fk_column,
+                "json_str": old_value_json,
+            },
+        )
+        log_events_data = [(row[0], row[1]) for row in result.fetchall()]
+
+        if not log_events_data:
+            return 0
+
+        # Before deleting, collect all column values from these log events
+        # to trigger cascading deletes recursively
+        log_event_ids = [le_id for le_id, _ in log_events_data]
+        project_id = log_events_data[0][1]  # All should have same project_id
+
+        # Get all column values from the log events we're about to delete
+        columns_query = text(
+            """
+            SELECT DISTINCT l.key, l.value
+            FROM log l
+            JOIN log_event_log lel ON l.id = lel.log_id
+            WHERE lel.log_event_id = ANY(:log_event_ids)
+              AND l.value IS NOT NULL
+        """,
+        )
+
+        result = self.session.execute(
+            columns_query,
+            {"log_event_ids": log_event_ids},
+        )
+
+        # Group values by column
+        columns_values = {}
+        for key, value in result.fetchall():
+            if key not in columns_values:
+                columns_values[key] = []
+            columns_values[key].append(value)
+
+        # Recursively apply FK actions for the context being deleted
+        if columns_values:
+            self.apply_fk_actions(
+                project_id=project_id,
+                context_id=context_id,
+                columns_values=columns_values,
+                action="DELETE",
+            )
+
+        # Now delete the log events (this will cascade to logs via DB constraints)
+        from orchestra.db.dao.log_event_dao import LogEventDAO
+
+        log_event_dao = LogEventDAO(self.session)
+        log_event_dao.delete(log_event_ids)
+
+        return len(log_event_ids)
+
+    def _cascade_update(
+        self,
+        context_id: int,
+        fk_column: str,
+        old_value_json: str,
+        new_value: Any,
+    ) -> int:
+        """Update all FK column values from old to new."""
+        new_value_json = json.dumps(new_value)
+
+        # Update all Log rows where FK column = old value
+        query = text(
+            """
+            UPDATE log
+            SET value = CAST(:new_value AS jsonb)
+            WHERE id IN (
+                SELECT l.id
+                FROM log l
+                JOIN log_event_log lel ON l.id = lel.log_id
+                JOIN log_event_context lec ON lel.log_event_id = lec.log_event_id
+                WHERE lec.context_id = :context_id
+                  AND l.key = :fk_column
+                  AND l.value = CAST(:old_value AS jsonb)
+            )
+        """,
+        )
+
+        result = self.session.execute(
+            query,
+            {
+                "context_id": context_id,
+                "fk_column": fk_column,
+                "old_value": old_value_json,
+                "new_value": new_value_json,
+            },
+        )
+
+        # Also update corresponding JSONLog entries if they exist
+        json_query = text(
+            """
+            UPDATE json_log
+            SET value = CAST(:new_value AS json)
+            WHERE id IN (
+                SELECT jl.id
+                FROM json_log jl
+                JOIN log_event_json_log lejl ON jl.id = lejl.json_log_id
+                JOIN log_event_context lec ON lejl.log_event_id = lec.log_event_id
+                WHERE lec.context_id = :context_id
+                  AND jl.key = :fk_column
+                  AND jl.value::text = :old_value
+            )
+        """,
+        )
+
+        self.session.execute(
+            json_query,
+            {
+                "context_id": context_id,
+                "fk_column": fk_column,
+                "old_value": old_value_json,
+                "new_value": new_value_json,
+            },
+        )
+
+        return result.rowcount
+
+    def _set_null(self, context_id: int, fk_column: str, old_value_json: str) -> int:
+        """Delete FK column entries (effectively setting to NULL)."""
+        # Delete all Log rows where FK column = old value
+        query = text(
+            """
+            DELETE FROM log
+            WHERE id IN (
+                SELECT l.id
+                FROM log l
+                JOIN log_event_log lel ON l.id = lel.log_id
+                JOIN log_event_context lec ON lel.log_event_id = lec.log_event_id
+                WHERE lec.context_id = :context_id
+                  AND l.key = :fk_column
+                  AND l.value = CAST(:json_str AS jsonb)
+            )
+        """,
+        )
+
+        result = self.session.execute(
+            query,
+            {
+                "context_id": context_id,
+                "fk_column": fk_column,
+                "json_str": old_value_json,
+            },
+        )
+
+        # Also delete corresponding JSONLog entries
+        json_query = text(
+            """
+            DELETE FROM json_log
+            WHERE id IN (
+                SELECT jl.id
+                FROM json_log jl
+                JOIN log_event_json_log lejl ON jl.id = lejl.json_log_id
+                JOIN log_event_context lec ON lejl.log_event_id = lec.log_event_id
+                WHERE lec.context_id = :context_id
+                  AND jl.key = :fk_column
+                  AND jl.value::text = :json_str
+            )
+        """,
+        )
+
+        self.session.execute(
+            json_query,
+            {
+                "context_id": context_id,
+                "fk_column": fk_column,
+                "json_str": old_value_json,
+            },
+        )
+
+        return result.rowcount
+
+    def _set_default(
+        self,
+        context_id: int,
+        fk_column: str,
+        old_value_json: str,
+        default_value: Any,
+    ) -> int:
+        """Update FK column to default value."""
+        # This is similar to CASCADE UPDATE but uses default value
+        return self._cascade_update(
+            context_id,
+            fk_column,
+            old_value_json,
+            default_value,
+        )
+
+    def _get_default_value(self, context: Context, fk_column: str) -> Optional[Any]:
+        """Get default value for FK column from context definition."""
+        # Check if auto_counting has a default for this column
+        if context.auto_counting and fk_column in context.auto_counting:
+            default = context.auto_counting[fk_column]
+            if default is not None:
+                return default
+
+        # For now, return None if no default is defined
+        # This will cause SET DEFAULT to behave like SET NULL
+        return None
+
     def create(
         self,
         project_id: int,
