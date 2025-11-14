@@ -1528,6 +1528,25 @@ def create_logs_internal(
                             # Add to entries
                             current_entries[col_name] = col_value
 
+            # Validate foreign key references before creating logs
+            # Merge entries and params to check foreign keys
+            merged_data = {**current_params, **current_entries}
+            try:
+                context_dao.validate_foreign_key_references(
+                    project_id=project_id,
+                    context_id=context_id,
+                    entries=merged_data,
+                )
+            except ValueError as e:
+                # Add this log to failed logs and skip it
+                failed_logs.append(
+                    {
+                        "index": i,
+                        "error": str(e),
+                    },
+                )
+                continue
+
             # Extract explicit types - NOTE: This mutates entries/params dicts in-place
             # Callers should pass fresh copies if they need to reuse the original dicts
             entries_explicit_types = (

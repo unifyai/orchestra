@@ -6,6 +6,65 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, field_validator
 
 
+class ForeignKeyConfig(BaseModel):
+    """Foreign key configuration for referential integrity."""
+
+    name: str = Field(
+        ...,
+        description="Column name that references another context",
+        example="department_id",
+    )
+    references: str = Field(
+        ...,
+        description="Referenced context and column in format 'ContextName.column_name'",
+        example="Departments.id",
+    )
+    on_delete: Literal[
+        "CASCADE",
+        "SET NULL",
+        "SET DEFAULT",
+        "RESTRICT",
+        "NO ACTION",
+    ] = Field(
+        default="NO ACTION",
+        description="Action to perform when referenced row is deleted",
+    )
+    on_update: Literal[
+        "CASCADE",
+        "SET NULL",
+        "SET DEFAULT",
+        "RESTRICT",
+        "NO ACTION",
+    ] = Field(
+        default="NO ACTION",
+        description="Action to perform when referenced row is updated",
+    )
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v):
+        """Validate foreign key column name."""
+        if not isinstance(v, str):
+            raise ValueError("Foreign key name must be a string")
+        if not re.match(r"^[a-zA-Z0-9_]+$", v):
+            raise ValueError(
+                f"Foreign key name '{v}' must contain only alphanumeric characters and underscores",
+            )
+        return v
+
+    @field_validator("references")
+    @classmethod
+    def validate_references(cls, v):
+        """Validate reference format."""
+        if not isinstance(v, str):
+            raise ValueError("References must be a string")
+        if not re.match(r"^[a-zA-Z0-9_/-]+\.[a-zA-Z0-9_]+$", v):
+            raise ValueError(
+                f"References '{v}' must be in format 'ContextName.column_name'",
+            )
+        return v
+
+
 class ContextCreateRequest(BaseModel):
     """Request model for creating a new context within a project."""
 
@@ -49,6 +108,18 @@ class ContextCreateRequest(BaseModel):
             "department_id": None,
             "company_id": "department_id",
         },
+    )
+    foreign_keys: Optional[List[ForeignKeyConfig]] = Field(
+        default=None,
+        description="Foreign key definitions for referential integrity",
+        example=[
+            {
+                "name": "department_id",
+                "references": "Departments.id",
+                "on_delete": "CASCADE",
+                "on_update": "CASCADE",
+            },
+        ],
     )
 
     @field_validator("unique_keys")
@@ -130,6 +201,36 @@ class ContextCreateRequest(BaseModel):
             if has_cycle(col_name):
                 raise ValueError(
                     f"Circular dependency detected in auto_counting hierarchy involving '{col_name}'",
+                )
+
+        return v
+
+    @field_validator("foreign_keys")
+    @classmethod
+    def validate_foreign_keys(cls, v):
+        """Validate foreign keys configuration."""
+        if v is None:
+            return v
+
+        if not v:  # Empty list
+            raise ValueError(
+                "foreign_keys cannot be an empty list. Use None to disable foreign keys.",
+            )
+
+        # Check for duplicate foreign key names
+        fk_names = set()
+        for fk in v:
+            if fk.name in fk_names:
+                raise ValueError(
+                    f"Duplicate foreign key name '{fk.name}'. Each foreign key must have a unique name.",
+                )
+            fk_names.add(fk.name)
+
+            # Parse the reference to validate format
+            parts = fk.references.split(".")
+            if len(parts) != 2:
+                raise ValueError(
+                    f"Foreign key reference '{fk.references}' must be in format 'ContextName.column_name'",
                 )
 
         return v
