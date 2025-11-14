@@ -1,4 +1,5 @@
 import hashlib
+import json
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -128,6 +129,107 @@ class ContextDAO:
         if description is not None and len(description) > 256:
             raise ValueError("Description cannot exceed 256 characters")
 
+    def _validate_foreign_keys_config(
+        self,
+        project_id: int,
+        foreign_keys: List[Dict[str, Any]],
+    ) -> None:
+        """Validate foreign keys configuration at context creation time."""
+        for fk in foreign_keys:
+            # Parse the reference
+            ref_parts = fk["references"].split(".")
+            if len(ref_parts) != 2:
+                raise ValueError(
+                    f"Foreign key reference '{fk['references']}' must be in format 'ContextName.column_name'",
+                )
+
+            ref_context_name, ref_column_name = ref_parts
+
+            # Check if the referenced context exists in the same project
+            ref_context = self.filter(project_id=project_id, name=ref_context_name)
+            if not ref_context:
+                raise ValueError(
+                    f"Referenced context '{ref_context_name}' does not exist in this project",
+                )
+
+            # Note: We don't validate if the column exists yet because it might be created
+            # later. The actual validation happens when inserting/updating logs.
+
+    def validate_foreign_key_references(
+        self,
+        project_id: int,
+        context_id: int,
+        entries: Dict[str, Any],
+    ) -> None:
+        """Validate that foreign key values exist in referenced contexts.
+
+        This is called when creating or updating logs to ensure referential integrity.
+        """
+        # Get the context with its foreign keys
+        context = self.session.query(Context).filter_by(id=context_id).one_or_none()
+        if not context or not context.foreign_keys:
+            return  # No foreign keys to validate
+
+        for fk in context.foreign_keys:
+            fk_column = fk["name"]
+
+            # Skip if this foreign key column is not in the entries
+            if fk_column not in entries:
+                continue
+
+            fk_value = entries[fk_column]
+
+            # Skip NULL values (allowed unless we add NOT NULL constraint)
+            if fk_value is None:
+                continue
+
+            # Parse the reference
+            ref_parts = fk["references"].split(".")
+            ref_context_name, ref_column_name = ref_parts
+
+            # Get the referenced context
+            ref_context = self.filter(project_id=project_id, name=ref_context_name)
+            if not ref_context:
+                raise ValueError(
+                    f"Foreign key constraint violation: Referenced context '{ref_context_name}' does not exist",
+                )
+
+            ref_context_id = ref_context[0][0].id
+
+            # Check if the referenced value exists
+            # Query logs in the referenced context for the specific column and value
+            # json.dumps() converts Python value to JSON string, then CAST to jsonb
+            json_str = json.dumps(fk_value)
+
+            # Use CAST() for better parameter binding compatibility with SQLAlchemy
+            query = text(
+                """
+                SELECT COUNT(*)
+                FROM log l
+                JOIN log_event_log lel ON l.id = lel.log_id
+                JOIN log_event_context lec ON lel.log_event_id = lec.log_event_id
+                WHERE lec.context_id = :context_id
+                  AND l.key = :column_name
+                  AND l.value = CAST(:json_str AS jsonb)
+            """,
+            )
+
+            result = self.session.execute(
+                query,
+                {
+                    "context_id": ref_context_id,
+                    "column_name": ref_column_name,
+                    "json_str": json_str,
+                },
+            )
+            count = result.scalar()
+
+            if count == 0:
+                raise ValueError(
+                    f"Foreign key constraint violation: Value '{fk_value}' does not exist in "
+                    f"{ref_context_name}.{ref_column_name}",
+                )
+
     def create(
         self,
         project_id: int,
@@ -137,6 +239,7 @@ class ContextDAO:
         allow_duplicates: bool = True,
         unique_keys: Optional[Dict[str, str]] = None,
         auto_counting: Optional[Dict[str, Optional[str]]] = None,
+        foreign_keys: Optional[List[Dict[str, Any]]] = None,
     ) -> int:
         """Create a new context using upsert to handle race conditions."""
         from orchestra.db.dao.field_type_dao import FieldTypeDAO
@@ -145,9 +248,16 @@ class ContextDAO:
 
         self._validate_description(description)
 
+        # Validate foreign keys if provided
+        if foreign_keys:
+            self._validate_foreign_keys_config(project_id, foreign_keys)
+
         # Extract names and types from unique_keys dict
         unique_key_names = list(unique_keys.keys()) if unique_keys else []
         unique_key_types = list(unique_keys.values()) if unique_keys else []
+
+        # Convert foreign_keys list to proper format for storage
+        foreign_keys_json = foreign_keys if foreign_keys else []
 
         stmt = pg_insert(Context).values(
             project_id=project_id,
@@ -160,6 +270,7 @@ class ContextDAO:
             unique_key_names=unique_key_names,
             unique_key_types=unique_key_types,
             auto_counting=auto_counting or {},
+            foreign_keys=foreign_keys_json,
         )
 
         # On conflict, do nothing and return the existing context's id
@@ -334,6 +445,7 @@ class ContextDAO:
                         allow_duplicates=context_data.get("allow_duplicates", True),
                         unique_keys=context_data.get("unique_keys"),
                         auto_counting=context_data.get("auto_counting"),
+                        foreign_keys=context_data.get("foreign_keys"),
                     )
                     created_contexts.append(name)
 
@@ -382,6 +494,9 @@ class ContextDAO:
                                         unique_keys=matching_context.get("unique_keys"),
                                         auto_counting=matching_context.get(
                                             "auto_counting",
+                                        ),
+                                        foreign_keys=matching_context.get(
+                                            "foreign_keys",
                                         ),
                                     )
                         except:
@@ -486,6 +601,7 @@ class ContextDAO:
         allow_duplicates: bool = True,
         unique_keys: Optional[Dict[str, str]] = None,
         auto_counting: Optional[Dict[str, Optional[str]]] = None,
+        foreign_keys: Optional[List[Dict[str, Any]]] = None,
     ) -> int:
         """
         Get or create a context using upsert.
@@ -522,6 +638,9 @@ class ContextDAO:
             unique_key_names = list(unique_keys.keys()) if unique_keys else []
             unique_key_types = list(unique_keys.values()) if unique_keys else []
 
+            # Convert foreign_keys list to proper format for storage
+            foreign_keys_json = foreign_keys if foreign_keys else []
+
             # Create the context
             stmt = pg_insert(Context).values(
                 project_id=project_id,
@@ -534,6 +653,7 @@ class ContextDAO:
                 unique_key_names=unique_key_names,
                 unique_key_types=unique_key_types,
                 auto_counting=auto_counting or {},
+                foreign_keys=foreign_keys_json,
             )
 
             # On conflict, do nothing and return the existing context's id
@@ -565,6 +685,7 @@ class ContextDAO:
                             unique_key_names=unique_key_names,
                             unique_key_types=unique_key_types,
                             auto_counting=auto_counting or {},
+                            foreign_keys=foreign_keys_json,
                         )
                         .returning(Context.id)
                     )
