@@ -17,7 +17,6 @@ from sqlalchemy import (
     case,
     cast,
     desc,
-    exists,
     func,
     literal,
     or_,
@@ -829,8 +828,15 @@ def _get_logs_query(
                             validate_filter_dict.parent = fd
                             validate_filter_dict(v)
 
-            # Define a subquery for event IDs to pass to the query builder
-            event_ids_subq = log_event_query.subquery(name="event_ids_subq")
+            # # Define a subquery for event IDs to pass to the query builder
+            # event_ids_subq = log_event_query.subquery(name="event_ids_subq")
+
+            # Materialize as CTE to prevent re-execution within EXISTS clauses
+            # This is critical when multiple filter conditions create multiple EXISTS clauses,
+            # each of which would otherwise re-execute the event_ids_subq subquery
+            event_ids_subq = log_event_query.cte("event_ids_subq").prefix_with(
+                "MATERIALIZED",
+            )
 
             try:
                 # --- OPTIMIZATION FOR 'OR' ---
@@ -882,16 +888,18 @@ def _get_logs_query(
                                 condition_sql,
                                 session,
                             )
+                            # Use IN subquery instead of EXISTS to avoid correlated execution
+                            # Materialize as CTE so PostgreSQL can see actual row counts and choose
+                            # hash join instead of nested loop join
+                            matching_ids_subq = (
+                                select(condition_sql.c.log_event_id)
+                                .where(truthiness_clause)
+                                .cte(f"matching_ids_{i}")
+                                .prefix_with("MATERIALIZED")
+                            )
                             log_event_query = log_event_query.filter(
-                                exists(
-                                    select(1)
-                                    .select_from(condition_sql)
-                                    .where(
-                                        and_(
-                                            condition_sql.c.log_event_id == LogEvent.id,
-                                            truthiness_clause,
-                                        ),
-                                    ),
+                                LogEvent.id.in_(
+                                    select(matching_ids_subq.c.log_event_id),
                                 ),
                             )
                         else:
@@ -911,17 +919,17 @@ def _get_logs_query(
                             condition_sql,
                             session,
                         )
+                        # Use IN subquery instead of EXISTS to avoid correlated execution
+                        # Materialize as CTE so PostgreSQL can see actual row counts and choose
+                        # hash join instead of nested loop join
+                        matching_ids_subq = (
+                            select(condition_sql.c.log_event_id)
+                            .where(truthiness_clause)
+                            .cte("matching_ids_single")
+                            .prefix_with("MATERIALIZED")
+                        )
                         log_event_query = log_event_query.filter(
-                            exists(
-                                select(1)
-                                .select_from(condition_sql)
-                                .where(
-                                    and_(
-                                        condition_sql.c.log_event_id == LogEvent.id,
-                                        truthiness_clause,
-                                    ),
-                                ),
-                            ),
+                            LogEvent.id.in_(select(matching_ids_subq.c.log_event_id)),
                         )
                     else:
                         log_event_query = log_event_query.filter(condition_sql)
