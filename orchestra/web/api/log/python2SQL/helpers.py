@@ -41,7 +41,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql.elements import ColumnClause
-from sqlalchemy.sql.selectable import Subquery
+from sqlalchemy.sql.selectable import CTE, Subquery
 
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.models.orchestra_models import (
@@ -654,6 +654,25 @@ def _build_subquery_for_identifier(
     else:
         safe_alias = None
 
+    # Sanitize key for use in CTE names and generate unique CTE name prefix
+    safe_key = re.sub(r"[^a-zA-Z0-9_]", "_", str(key))
+    if not safe_key:
+        safe_key = "key"
+
+    # Generate unique CTE names to avoid collisions when same key is used multiple times
+    # (e.g., multiple date comparisons on the same key)
+    # Generate unique names for both stage1 and stage2 CTEs to prevent collisions
+    base_logs_stage1_cte_name = alias_utils.unique_alias(
+        f"filtered_logs_by_key_{safe_key}_stage1",
+    )
+    base_logs_cte_name = alias_utils.unique_alias(f"filtered_logs_by_key_{safe_key}")
+    derived_logs_stage1_cte_name = alias_utils.unique_alias(
+        f"filtered_derived_logs_by_key_{safe_key}_stage1",
+    )
+    derived_logs_cte_name = alias_utils.unique_alias(
+        f"filtered_derived_logs_by_key_{safe_key}",
+    )
+
     def extract_json_text(col):
         # This uses the PostgreSQL operator ->> to extract the JSON scalar as text.
         return col.op("#>>")(literal_column("'{}'"))
@@ -666,11 +685,11 @@ def _build_subquery_for_identifier(
         name="log_event_derived_log_alias",
     )
     # Determine filtering strategy based on log_event_ids type
-    # When log_event_ids is a Subquery, use JOIN for better index usage.
+    # When log_event_ids is a Subquery or CTE, use JOIN for better index usage.
     # This allows PostgreSQL to use idx_log_event_log_event_id efficiently by joining with
     # the filtered event_ids_subq first, rather than scanning all log_event_log rows and
     # filtering with IN. This is critical for performance on staging/prod with many projects.
-    use_join = isinstance(log_event_ids, Subquery)
+    use_join = isinstance(log_event_ids, Subquery) or isinstance(log_event_ids, CTE)
 
     if log_event_ids is None:
         # TODO(yusha): figure out why empty ids were passed and remove this check once we have a better way to handle it
@@ -685,7 +704,7 @@ def _build_subquery_for_identifier(
         )
         log_event_condition = log_event_alias.id.in_(log_event_ids)
     else:
-        # log_event_ids is a Subquery - will use JOIN instead of WHERE conditions
+        # log_event_ids is a Subquery or CTE - will use JOIN instead of WHERE conditions
         log_id_condition = None
         derived_log_id_condition = None
         log_event_condition = None
@@ -742,195 +761,366 @@ def _build_subquery_for_identifier(
             subq = subq.where(log_event_condition)
         return alias_utils.subquery_with_unique_alias(subq, prefix=safe_alias or key)
 
-    # Build base logs subquery
-    base_select_cols = [
-        log_event_log_alias.log_event_id.label("log_event_id"),
-        literal(None).label("vector_value"),
-        case(
-            (
-                or_(
-                    log_alias.inferred_type == "list",
-                    log_alias.inferred_type == "dict",
-                    log_alias.inferred_type == "tuple",
-                    log_alias.inferred_type == "set",
-                    log_alias.inferred_type == "union",
-                    log_alias.inferred_type == "Any",
-                    log_alias.inferred_type.ilike("List%"),
-                    log_alias.inferred_type.ilike("Dict%"),
-                    log_alias.inferred_type.ilike("Tuple%"),
-                    log_alias.inferred_type.ilike("Set%"),
-                    log_alias.inferred_type.ilike("Union%"),
-                    log_alias.inferred_type.like("{%"),
-                ),
-                cast(log_alias.value, JSONB),
-            ),
-            else_=None,
-        ).label("jsonb_value"),
-        case(
-            (log_alias.inferred_type == "datetime", cast(log_alias.value, JSONB)),
-            else_=None,
-        ).label("timestamp_value"),
-        case(
-            (log_alias.inferred_type == "time", cast(log_alias.value, JSONB)),
-            else_=None,
-        ).label("time_value"),
-        case(
-            (log_alias.inferred_type == "date", cast(log_alias.value, JSONB)),
-            else_=None,
-        ).label("date_value"),
-        case(
-            (log_alias.inferred_type == "timedelta", cast(log_alias.value, JSONB)),
-            else_=None,
-        ).label("timedelta_value"),
-        case(
-            (log_alias.inferred_type == "str", extract_json_text(log_alias.value)),
-            (log_alias.inferred_type == "image", extract_json_text(log_alias.value)),
-            (log_alias.inferred_type == "audio", extract_json_text(log_alias.value)),
-            else_=None,
-        ).label("str_value"),
-        case(
-            (log_alias.inferred_type == "int", _safe_float(log_alias.value)),
-            else_=None,
-        ).label("int_value"),
-        case(
-            (log_alias.inferred_type == "float", _safe_float(log_alias.value)),
-            else_=None,
-        ).label("float_value"),
-        case(
-            (log_alias.inferred_type == "bool", cast(log_alias.value, Boolean)),
-            else_=None,
-        ).label("bool_value"),
-        log_alias.inferred_type.label("inferred_type"),
-    ]
+    def _build_log_select_cols(log_alias_ref, log_event_id_col, use_list_pattern=False):
+        """Build select columns for log/derived_log subquery."""
+        list_pattern = "List[%" if use_list_pattern else "List%"
+        dict_pattern = "Dict[%" if use_list_pattern else "Dict%"
+        tuple_pattern = "Tuple[%" if use_list_pattern else "Tuple%"
+        set_pattern = "Set[%" if use_list_pattern else "Set%"
+        union_pattern = "Union[%" if use_list_pattern else "Union%"
 
-    base_subq = (
-        select(*base_select_cols)
-        .select_from(log_alias)
-        .join(
-            log_event_log_alias,
-            log_event_log_alias.log_id == log_alias.id,
+        return [
+            log_event_id_col.label("log_event_id"),
+            literal(None).label("vector_value"),
+            case(
+                (
+                    or_(
+                        log_alias_ref.inferred_type == "list",
+                        log_alias_ref.inferred_type == "dict",
+                        log_alias_ref.inferred_type == "tuple",
+                        log_alias_ref.inferred_type == "set",
+                        log_alias_ref.inferred_type == "union",
+                        log_alias_ref.inferred_type == "Any",
+                        log_alias_ref.inferred_type.ilike(list_pattern),
+                        log_alias_ref.inferred_type.ilike(dict_pattern),
+                        log_alias_ref.inferred_type.ilike(tuple_pattern),
+                        log_alias_ref.inferred_type.ilike(set_pattern),
+                        log_alias_ref.inferred_type.ilike(union_pattern),
+                        log_alias_ref.inferred_type.like("{%"),
+                    ),
+                    cast(log_alias_ref.value, JSONB),
+                ),
+                else_=None,
+            ).label("jsonb_value"),
+            case(
+                (
+                    log_alias_ref.inferred_type == "datetime",
+                    cast(log_alias_ref.value, JSONB),
+                ),
+                else_=None,
+            ).label("timestamp_value"),
+            case(
+                (
+                    log_alias_ref.inferred_type == "time",
+                    cast(log_alias_ref.value, JSONB),
+                ),
+                else_=None,
+            ).label("time_value"),
+            case(
+                (
+                    log_alias_ref.inferred_type == "date",
+                    cast(log_alias_ref.value, JSONB),
+                ),
+                else_=None,
+            ).label("date_value"),
+            case(
+                (
+                    log_alias_ref.inferred_type == "timedelta",
+                    cast(log_alias_ref.value, JSONB),
+                ),
+                else_=None,
+            ).label("timedelta_value"),
+            case(
+                (
+                    log_alias_ref.inferred_type == "str",
+                    extract_json_text(log_alias_ref.value),
+                ),
+                (
+                    log_alias_ref.inferred_type == "image",
+                    extract_json_text(log_alias_ref.value),
+                ),
+                (
+                    log_alias_ref.inferred_type == "audio",
+                    extract_json_text(log_alias_ref.value),
+                ),
+                else_=None,
+            ).label("str_value"),
+            case(
+                (
+                    log_alias_ref.inferred_type == "int",
+                    _safe_float(log_alias_ref.value),
+                ),
+                else_=None,
+            ).label("int_value"),
+            case(
+                (
+                    log_alias_ref.inferred_type == "float",
+                    _safe_float(log_alias_ref.value),
+                ),
+                else_=None,
+            ).label("float_value"),
+            case(
+                (
+                    log_alias_ref.inferred_type == "bool",
+                    cast(log_alias_ref.value, Boolean),
+                ),
+                else_=None,
+            ).label("bool_value"),
+            log_alias_ref.inferred_type.label("inferred_type"),
+        ]
+
+    def _build_log_subquery_without_cte(
+        log_alias_ref,
+        log_event_log_alias_ref,
+        log_id_col_ref,
+        select_cols,
+        key,
+        id_condition,
+    ):
+        """Build log subquery without CTE (for list/None case)."""
+        return (
+            select(*select_cols)
+            .select_from(log_alias_ref)
+            .where(log_alias_ref.key == key)
+            .join(
+                log_event_log_alias_ref,
+                log_id_col_ref == log_alias_ref.id,
+            )
+            .where(id_condition)
         )
+
+    def _build_log_subquery_with_cte(
+        log_alias_ref,
+        log_event_log_alias_ref,
+        log_id_col_ref,
+        stage1_cte_name,
+        stage2_cte_name,
+        key,
+        use_list_pattern=False,
+    ):
+        """
+        Build log subquery using two-stage CTE approach.
+
+        This optimization dramatically reduces the working set by filtering by key FIRST
+        before joining, allowing PostgreSQL to use index efficiently (idx_log_key or
+        ix_derived_log_key) and only scan logs with the matching key, rather than scanning
+        all log_event_log/log_event_derived_log rows for all event_ids_subq rows and then
+        filtering by key.
+
+        Stage 1 (MATERIALIZED): Filter log by key FIRST (no joins) - forces key filter to
+        happen first. This ensures PostgreSQL uses the key index efficiently before any joins.
+        MATERIALIZED ensures this filter happens first, regardless of planner estimates.
+
+        Stage 2 (not MATERIALIZED): Join filtered logs to log_event_log/log_event_derived_log
+        and event_ids_subq. This ensures we only materialize logs for the relevant project/context,
+        not all logs with that key across the entire database. Not MATERIALIZED to allow planner
+        flexibility in join ordering.
+        """
+        list_pattern = "List[%" if use_list_pattern else "List%"
+        dict_pattern = "Dict[%" if use_list_pattern else "Dict%"
+        tuple_pattern = "Tuple[%" if use_list_pattern else "Tuple%"
+        set_pattern = "Set[%" if use_list_pattern else "Set%"
+        union_pattern = "Union[%" if use_list_pattern else "Union%"
+
+        # Stage 1: Filter log/derived_log by key FIRST (no joins) - forces key filter to happen first
+        # This ensures PostgreSQL uses idx_log_key/ix_derived_log_key index efficiently before any joins
+        # MATERIALIZED ensures this filter happens first, regardless of planner estimates
+        logs_for_key_cte = (
+            select(
+                log_alias_ref.id,
+                log_alias_ref.value,
+                log_alias_ref.inferred_type,
+            )
+            .select_from(log_alias_ref)
+            .where(log_alias_ref.key == key)
+            .cte(stage1_cte_name)
+            .prefix_with("MATERIALIZED")
+        )
+
+        # Stage 2: Join filtered logs/derived_logs to log_event_log/log_event_derived_log and event_ids_subq
+        # This ensures we only materialize logs/derived_logs for the relevant project/context,
+        # not all logs/derived_logs with that key across the entire database
+        # Not MATERIALIZED to allow planner flexibility in join ordering
+        filtered_logs_by_key_cte = (
+            select(
+                logs_for_key_cte.c.id,
+                logs_for_key_cte.c.value,
+                logs_for_key_cte.c.inferred_type,
+                log_event_log_alias_ref.log_event_id,
+            )
+            .select_from(logs_for_key_cte)
+            .join(
+                log_event_log_alias_ref,
+                log_id_col_ref == logs_for_key_cte.c.id,
+            )
+            .join(
+                log_event_ids,
+                log_event_ids.c.id == log_event_log_alias_ref.log_event_id,
+            )
+            .cte(stage2_cte_name)
+        )
+
+        # Build subquery using CTE columns directly (no join back needed)
+        return select(
+            filtered_logs_by_key_cte.c.log_event_id.label("log_event_id"),
+            literal(None).label("vector_value"),
+            case(
+                (
+                    or_(
+                        filtered_logs_by_key_cte.c.inferred_type == "list",
+                        filtered_logs_by_key_cte.c.inferred_type == "dict",
+                        filtered_logs_by_key_cte.c.inferred_type == "tuple",
+                        filtered_logs_by_key_cte.c.inferred_type == "set",
+                        filtered_logs_by_key_cte.c.inferred_type == "union",
+                        filtered_logs_by_key_cte.c.inferred_type == "Any",
+                        filtered_logs_by_key_cte.c.inferred_type.ilike(list_pattern),
+                        filtered_logs_by_key_cte.c.inferred_type.ilike(dict_pattern),
+                        filtered_logs_by_key_cte.c.inferred_type.ilike(tuple_pattern),
+                        filtered_logs_by_key_cte.c.inferred_type.ilike(set_pattern),
+                        filtered_logs_by_key_cte.c.inferred_type.ilike(union_pattern),
+                        filtered_logs_by_key_cte.c.inferred_type.like("{%"),
+                    ),
+                    cast(filtered_logs_by_key_cte.c.value, JSONB),
+                ),
+                else_=None,
+            ).label("jsonb_value"),
+            case(
+                (
+                    filtered_logs_by_key_cte.c.inferred_type == "datetime",
+                    cast(filtered_logs_by_key_cte.c.value, JSONB),
+                ),
+                else_=None,
+            ).label("timestamp_value"),
+            case(
+                (
+                    filtered_logs_by_key_cte.c.inferred_type == "time",
+                    cast(filtered_logs_by_key_cte.c.value, JSONB),
+                ),
+                else_=None,
+            ).label("time_value"),
+            case(
+                (
+                    filtered_logs_by_key_cte.c.inferred_type == "date",
+                    cast(filtered_logs_by_key_cte.c.value, JSONB),
+                ),
+                else_=None,
+            ).label("date_value"),
+            case(
+                (
+                    filtered_logs_by_key_cte.c.inferred_type == "timedelta",
+                    cast(filtered_logs_by_key_cte.c.value, JSONB),
+                ),
+                else_=None,
+            ).label("timedelta_value"),
+            case(
+                (
+                    filtered_logs_by_key_cte.c.inferred_type == "str",
+                    extract_json_text(filtered_logs_by_key_cte.c.value),
+                ),
+                (
+                    filtered_logs_by_key_cte.c.inferred_type == "image",
+                    extract_json_text(filtered_logs_by_key_cte.c.value),
+                ),
+                (
+                    filtered_logs_by_key_cte.c.inferred_type == "audio",
+                    extract_json_text(filtered_logs_by_key_cte.c.value),
+                ),
+                else_=None,
+            ).label("str_value"),
+            case(
+                (
+                    filtered_logs_by_key_cte.c.inferred_type == "int",
+                    _safe_float(filtered_logs_by_key_cte.c.value),
+                ),
+                else_=None,
+            ).label("int_value"),
+            case(
+                (
+                    filtered_logs_by_key_cte.c.inferred_type == "float",
+                    _safe_float(filtered_logs_by_key_cte.c.value),
+                ),
+                else_=None,
+            ).label("float_value"),
+            case(
+                (
+                    filtered_logs_by_key_cte.c.inferred_type == "bool",
+                    cast(filtered_logs_by_key_cte.c.value, Boolean),
+                ),
+                else_=None,
+            ).label("bool_value"),
+            filtered_logs_by_key_cte.c.inferred_type.label("inferred_type"),
+        ).select_from(filtered_logs_by_key_cte)
+
+    # Build base logs subquery
+    base_select_cols = _build_log_select_cols(
+        log_alias,
+        log_event_log_alias.log_event_id,
+        use_list_pattern=False,
     )
+
+    # Filter by key FIRST before joining to dramatically reduce the working set
+    # This allows PostgreSQL to use idx_log_key index efficiently and only scan
+    # logs with the matching key, rather than scanning all log_event_log rows
+    # for all event_ids_subq rows and then filtering by key
     if use_join:
-        # Use JOIN to leverage idx_log_event_log_event_id index efficiently
-        base_subq = base_subq.join(
-            log_event_ids,
-            log_event_ids.c.id == log_event_log_alias.log_event_id,
+        # Stage 1: Filter log by key FIRST (no joins) - forces key filter to happen first
+        # This ensures PostgreSQL uses idx_log_key index efficiently before any joins
+        # MATERIALIZED ensures this filter happens first, regardless of planner estimates
+        #
+        # Stage 2: Join filtered logs to log_event_log and event_ids_subq
+        # This ensures we only materialize logs for the relevant project/context,
+        # not all logs with that key across the entire database
+        # Not MATERIALIZED to allow planner flexibility in join ordering
+        base_subq = _build_log_subquery_with_cte(
+            log_alias,
+            log_event_log_alias,
+            log_event_log_alias.log_id,
+            base_logs_stage1_cte_name,
+            base_logs_cte_name,
+            key,
+            use_list_pattern=False,
         )
-    base_subq = base_subq.where(log_alias.key == key)
-    if not use_join:
-        # Add IN condition for list or None
-        base_subq = base_subq.where(log_id_condition)
+    else:
+        # For list/None case, use original approach without CTE
+        base_subq = _build_log_subquery_without_cte(
+            log_alias,
+            log_event_log_alias,
+            log_event_log_alias.log_id,
+            base_select_cols,
+            key,
+            log_id_condition,
+        )
 
     # Build derived logs subquery
-    derived_select_cols = [
-        log_event_derived_log_alias.log_event_id.label("log_event_id"),
-        literal(None).label("vector_value"),
-        case(
-            (
-                or_(
-                    derived_log_alias.inferred_type == "list",
-                    derived_log_alias.inferred_type == "dict",
-                    derived_log_alias.inferred_type == "tuple",
-                    derived_log_alias.inferred_type == "set",
-                    derived_log_alias.inferred_type == "union",
-                    derived_log_alias.inferred_type == "Any",
-                    derived_log_alias.inferred_type.ilike("List[%"),
-                    derived_log_alias.inferred_type.ilike("Dict[%"),
-                    derived_log_alias.inferred_type.ilike("Tuple[%"),
-                    derived_log_alias.inferred_type.ilike("Set[%"),
-                    derived_log_alias.inferred_type.ilike("Union[%"),
-                    derived_log_alias.inferred_type.like("{%"),
-                ),
-                cast(derived_log_alias.value, JSONB),
-            ),
-            else_=None,
-        ).label("jsonb_value"),
-        case(
-            (
-                derived_log_alias.inferred_type == "datetime",
-                cast(derived_log_alias.value, JSONB),
-            ),
-            else_=None,
-        ).label("timestamp_value"),
-        case(
-            (
-                derived_log_alias.inferred_type == "time",
-                cast(derived_log_alias.value, JSONB),
-            ),
-            else_=None,
-        ).label("time_value"),
-        case(
-            (
-                derived_log_alias.inferred_type == "date",
-                cast(derived_log_alias.value, JSONB),
-            ),
-            else_=None,
-        ).label("date_value"),
-        case(
-            (
-                derived_log_alias.inferred_type == "timedelta",
-                cast(derived_log_alias.value, JSONB),
-            ),
-            else_=None,
-        ).label("timedelta_value"),
-        case(
-            (
-                derived_log_alias.inferred_type == "str",
-                extract_json_text(derived_log_alias.value),
-            ),
-            (
-                derived_log_alias.inferred_type == "image",
-                extract_json_text(derived_log_alias.value),
-            ),
-            (
-                derived_log_alias.inferred_type == "audio",
-                extract_json_text(derived_log_alias.value),
-            ),
-            else_=None,
-        ).label("str_value"),
-        case(
-            (
-                derived_log_alias.inferred_type == "int",
-                _safe_float(derived_log_alias.value),
-            ),
-            else_=None,
-        ).label("int_value"),
-        case(
-            (
-                derived_log_alias.inferred_type == "float",
-                _safe_float(derived_log_alias.value),
-            ),
-            else_=None,
-        ).label("float_value"),
-        case(
-            (
-                derived_log_alias.inferred_type == "bool",
-                cast(derived_log_alias.value, Boolean),
-            ),
-            else_=None,
-        ).label("bool_value"),
-        derived_log_alias.inferred_type.label("inferred_type"),
-    ]
-
-    derived_subq = (
-        select(*derived_select_cols)
-        .select_from(derived_log_alias)
-        .join(
-            log_event_derived_log_alias,
-            log_event_derived_log_alias.derived_log_id == derived_log_alias.id,
-        )
+    derived_select_cols = _build_log_select_cols(
+        derived_log_alias,
+        log_event_derived_log_alias.log_event_id,
+        use_list_pattern=True,
     )
+
+    # Filter by key FIRST before joining to dramatically reduce the working set
+    # This allows PostgreSQL to use ix_derived_log_key index efficiently and only scan
+    # derived logs with the matching key, rather than scanning all log_event_derived_log rows
+    # for all event_ids_subq rows and then filtering by key
     if use_join:
-        # Use JOIN to leverage index efficiently
-        derived_subq = derived_subq.join(
-            log_event_ids,
-            log_event_ids.c.id == log_event_derived_log_alias.log_event_id,
+        # Stage 1: Filter derived_log by key FIRST (no joins) - forces key filter to happen first
+        # This ensures PostgreSQL uses ix_derived_log_key index efficiently before any joins
+        # MATERIALIZED ensures this filter happens first, regardless of planner estimates
+        #
+        # Stage 2: Join filtered derived logs to log_event_derived_log and event_ids_subq
+        # This ensures we only materialize derived logs for the relevant project/context,
+        # not all derived logs with that key across the entire database
+        # Not MATERIALIZED to allow planner flexibility in join ordering
+        derived_subq = _build_log_subquery_with_cte(
+            derived_log_alias,
+            log_event_derived_log_alias,
+            log_event_derived_log_alias.derived_log_id,
+            derived_logs_stage1_cte_name,
+            derived_logs_cte_name,
+            key,
+            use_list_pattern=True,
         )
-    derived_subq = derived_subq.where(derived_log_alias.key == key)
-    if not use_join:
-        # Add IN condition for list or None
-        derived_subq = derived_subq.where(derived_log_id_condition)
+    else:
+        # For list/None case, use original approach without CTE
+        derived_subq = _build_log_subquery_without_cte(
+            derived_log_alias,
+            log_event_derived_log_alias,
+            log_event_derived_log_alias.derived_log_id,
+            derived_select_cols,
+            key,
+            derived_log_id_condition,
+        )
+
     # Combine base and derived logs with union
     combined_subq = alias_utils.subquery_with_unique_alias(
         base_subq.union_all(derived_subq),
