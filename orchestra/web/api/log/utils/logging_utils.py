@@ -863,9 +863,15 @@ def _get_logs_query(
                             matching_id_subqueries.append(matching_ids)
 
                     if matching_id_subqueries:
-                        unioned_ids_subq = union_all(*matching_id_subqueries).subquery()
+                        # Materialize the union_all CTE to prevent re-execution
+                        # This is similar to the MATERIALIZED CTEs used in AND optimization
+                        unioned_ids_subq = (
+                            union_all(*matching_id_subqueries)
+                            .cte("unioned_matching_ids")
+                            .prefix_with("MATERIALIZED")
+                        )
                         log_event_query = log_event_query.filter(
-                            LogEvent.id.in_(select(unioned_ids_subq)),
+                            LogEvent.id.in_(select(unioned_ids_subq.c.log_event_id)),
                         )
 
                 # --- OPTIMIZATION FOR 'AND' ---
