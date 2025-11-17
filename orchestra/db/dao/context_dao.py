@@ -132,6 +132,7 @@ class ContextDAO:
     def _validate_foreign_keys_config(
         self,
         project_id: int,
+        context_name: str,
         foreign_keys: List[Dict[str, Any]],
     ) -> None:
         """Validate foreign keys configuration at context creation time."""
@@ -146,11 +147,13 @@ class ContextDAO:
             ref_context_name, ref_column_name = ref_parts
 
             # Check if the referenced context exists in the same project
-            ref_context = self.filter(project_id=project_id, name=ref_context_name)
-            if not ref_context:
-                raise ValueError(
-                    f"Referenced context '{ref_context_name}' does not exist in this project",
-                )
+            # Allow self-reference (will be checked for cycles later)
+            if ref_context_name != context_name:
+                ref_context = self.filter(project_id=project_id, name=ref_context_name)
+                if not ref_context:
+                    raise ValueError(
+                        f"Referenced context '{ref_context_name}' does not exist in this project",
+                    )
 
             # Validate SET DEFAULT has a default value
             # DISABLED: SET DEFAULT is not currently supported
@@ -168,6 +171,204 @@ class ContextDAO:
 
             # Note: We don't validate if the column exists yet because it might be created
             # later. The actual validation happens when inserting/updating logs.
+
+        # Check for circular CASCADE dependencies
+        cycle = self._detect_circular_references(
+            project_id=project_id,
+            new_context_name=context_name,
+            new_foreign_keys=foreign_keys,
+        )
+
+        if cycle:
+            cycle_path = " → ".join(cycle)
+            raise ValueError(
+                f"Circular foreign key dependency detected: {cycle_path}. "
+                f"CASCADE actions would cause an infinite loop when deleting or updating records. "
+                f"Use SET NULL for one of the relationships to break the cycle.",
+            )
+
+    def _build_fk_graph(
+        self,
+        project_id: int,
+        new_context_name: str,
+        new_foreign_keys: List[Dict[str, Any]],
+    ) -> Dict[str, List[str]]:
+        """Build a directed graph of CASCADE propagation dependencies.
+
+        The graph represents CASCADE propagation direction, NOT FK reference direction.
+        If ContextA has FK to ContextB with CASCADE:
+        - FK direction: A → B (A references B)
+        - CASCADE propagation: B → A (deleting B cascades to A)
+
+        Graph represents CASCADE propagation: edge B → A means deleting B will cascade to A.
+
+        Args:
+            project_id: The project ID
+            new_context_name: Name of the context being created
+            new_foreign_keys: Foreign keys for the new context
+
+        Returns:
+            Graph as adjacency list: {context_name: [contexts_that_cascade_from_it]}
+            Only includes CASCADE relationships (SET NULL doesn't cause cycles)
+        """
+        graph = {}
+
+        # Get all existing contexts with foreign keys in this project
+        existing_contexts = (
+            self.session.query(Context)
+            .filter(
+                Context.project_id == project_id,
+                Context.foreign_keys != None,  # noqa: E711
+                Context.foreign_keys != text("'[]'::jsonb"),
+            )
+            .all()
+        )
+
+        # Initialize graph with all existing contexts
+        for context in existing_contexts:
+            graph[context.name] = []
+
+        # Add edges representing CASCADE propagation from existing contexts
+        for context in existing_contexts:
+            context_name = context.name
+
+            if context.foreign_keys:
+                for fk in context.foreign_keys:
+                    # Only CASCADE actions can cause infinite loops
+                    on_delete = fk.get("on_delete", "NO ACTION")
+                    on_update = fk.get("on_update", "NO ACTION")
+
+                    if on_delete == "CASCADE" or on_update == "CASCADE":
+                        # Parse reference: "ContextName.column_name"
+                        ref_parts = fk["references"].split(".")
+                        if len(ref_parts) == 2:
+                            ref_context_name = ref_parts[0]
+                            # CASCADE propagation: deleting ref_context cascades to context
+                            # So add edge: ref_context → context
+                            if ref_context_name not in graph:
+                                graph[ref_context_name] = []
+                            graph[ref_context_name].append(context_name)
+
+        # Add new context to graph
+        graph[new_context_name] = []
+
+        # Add edges representing CASCADE propagation from new context's FKs
+        for fk in new_foreign_keys:
+            on_delete = fk.get("on_delete", "NO ACTION")
+            on_update = fk.get("on_update", "NO ACTION")
+
+            if on_delete == "CASCADE" or on_update == "CASCADE":
+                ref_parts = fk["references"].split(".")
+                if len(ref_parts) == 2:
+                    ref_context_name = ref_parts[0]
+                    # CASCADE propagation: deleting ref_context cascades to new_context
+                    # So add edge: ref_context → new_context
+                    if ref_context_name not in graph:
+                        graph[ref_context_name] = []
+                    graph[ref_context_name].append(new_context_name)
+
+        # Ensure all referenced contexts are in the graph (even if they have no outgoing edges)
+        all_contexts = (
+            self.session.query(Context)
+            .filter(
+                Context.project_id == project_id,
+            )
+            .all()
+        )
+        for context in all_contexts:
+            if context.name not in graph:
+                graph[context.name] = []
+
+        return graph
+
+    def _dfs_detect_cycle(
+        self,
+        graph: Dict[str, List[str]],
+        start_node: str,
+    ) -> Optional[List[str]]:
+        """Use DFS with color tracking to detect cycles in FK graph.
+
+        Args:
+            graph: Adjacency list of FK dependencies
+            start_node: Context to start search from
+
+        Returns:
+            None if no cycle, or list of context names forming the cycle path
+        """
+        # Color states for cycle detection
+        WHITE = 0  # Not visited
+        GRAY = 1  # Currently exploring (on recursion stack)
+        BLACK = 2  # Fully explored
+
+        colors = {node: WHITE for node in graph}
+
+        def dfs(node: str, path: List[str]) -> Optional[List[str]]:
+            """Recursive DFS helper."""
+            if node not in graph:
+                # Node doesn't exist in graph (shouldn't happen, but handle gracefully)
+                return None
+
+            if colors[node] == GRAY:
+                # Back edge detected - cycle found!
+                # Reconstruct the cycle from where we've seen this node before
+                try:
+                    cycle_start_idx = path.index(node)
+                    return path[cycle_start_idx:] + [node]
+                except ValueError:
+                    # Node not in path (shouldn't happen)
+                    return [node, node]
+
+            if colors[node] == BLACK:
+                # Already fully explored this node
+                return None
+
+            # Mark as currently exploring
+            colors[node] = GRAY
+            current_path = path + [node]
+
+            # Visit all neighbors
+            for neighbor in graph[node]:
+                cycle = dfs(neighbor, current_path)
+                if cycle:
+                    return cycle
+
+            # Mark as fully explored
+            colors[node] = BLACK
+            return None
+
+        return dfs(start_node, [])
+
+    def _detect_circular_references(
+        self,
+        project_id: int,
+        new_context_name: str,
+        new_foreign_keys: List[Dict[str, Any]],
+    ) -> Optional[List[str]]:
+        """Detect circular CASCADE dependencies that would cause infinite loops.
+
+        Args:
+            project_id: The project ID
+            new_context_name: Name of context being created
+            new_foreign_keys: Foreign keys for the new context
+
+        Returns:
+            None if no cycle detected, or list of context names forming the cycle
+        """
+        if not new_foreign_keys:
+            return None
+
+        # Build the FK dependency graph
+        graph = self._build_fk_graph(project_id, new_context_name, new_foreign_keys)
+
+        # Check for cycles from ALL nodes, since adding the new context might
+        # complete a cycle that doesn't necessarily start from the new context
+        for node in graph:
+            if graph[node]:  # Only check nodes with outgoing edges
+                cycle = self._dfs_detect_cycle(graph, node)
+                if cycle:
+                    return cycle
+
+        return None
 
     def validate_foreign_key_references(
         self,
@@ -774,7 +975,7 @@ class ContextDAO:
 
         # Validate foreign keys if provided
         if foreign_keys:
-            self._validate_foreign_keys_config(project_id, foreign_keys)
+            self._validate_foreign_keys_config(project_id, name, foreign_keys)
 
         # Extract names and types from unique_keys dict
         unique_key_names = list(unique_keys.keys()) if unique_keys else []
