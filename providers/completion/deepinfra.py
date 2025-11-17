@@ -93,11 +93,6 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 0.4, "completion": 0.4},
     },
-    "llama-3.1-nemotron-70b-chat": {
-        "endpoint": "deepinfra/nvidia/Llama-3.1-Nemotron-70B-Instruct",
-        "context_window": 128000,
-        "cost": {"prompt": 0.6, "completion": 0.6},
-    },
     "llama-3-8b-chat": {
         "endpoint": "deepinfra/meta-llama/Meta-Llama-3-8B-Instruct",
         "context_window": 8000,

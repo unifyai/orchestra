@@ -73,7 +73,7 @@ def test_valid_performance_based_routing(  # type: ignore[return]
     provider, threshold = test_case
 
     metrics_and_thresholds = Router(
-        f"claude-3.7-sonnet@{provider}",
+        f"claude-4.5-sonnet@{provider}",
         "",
         endpoint_dao,
         benchmark_run_dao,
