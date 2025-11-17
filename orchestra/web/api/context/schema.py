@@ -11,7 +11,14 @@ class ForeignKeyConfig(BaseModel):
 
     name: str = Field(
         ...,
-        description="Column name that references another context",
+        description=(
+            "Column name or path to nested field that references another context. "
+            "Supports:\n"
+            "  - Simple column: 'department_id'\n"
+            "  - Array elements: 'images[*].image_id'\n"
+            "  - Nested object: 'metadata.user.user_id'\n"
+            "  - Mixed nesting: 'teams[*].members[*].user_id'"
+        ),
         example="department_id",
     )
     references: str = Field(
@@ -45,16 +52,38 @@ class ForeignKeyConfig(BaseModel):
         example=0,
     )
 
+    # Auto-populated fields for nested path support
+    is_nested: Optional[bool] = Field(
+        default=None,
+        description="Auto-set: True if this FK uses a nested path (contains . or [])",
+    )
+    path_segments: Optional[List[Dict[str, Any]]] = Field(
+        default=None,
+        description="Auto-set: Parsed path structure for nested FKs",
+    )
+
     @field_validator("name")
     @classmethod
     def validate_name(cls, v):
-        """Validate foreign key column name."""
+        """Validate foreign key column name or path."""
         if not isinstance(v, str):
             raise ValueError("Foreign key name must be a string")
-        if not re.match(r"^[a-zA-Z0-9_]+$", v):
-            raise ValueError(
-                f"Foreign key name '{v}' must contain only alphanumeric characters and underscores",
-            )
+
+        # For nested paths, use the path parser for validation
+        from orchestra.db.utils.fk_path_parser import FKPathParser
+
+        if FKPathParser.is_nested_path(v):
+            # Validate nested path syntax
+            try:
+                FKPathParser.validate_path_syntax(v)
+            except ValueError as e:
+                raise ValueError(f"Invalid nested path: {e}")
+        else:
+            # Simple column - use existing validation
+            if not re.match(r"^[a-zA-Z0-9_]+$", v):
+                raise ValueError(
+                    f"Foreign key name '{v}' must contain only alphanumeric characters and underscores",
+                )
         return v
 
     @field_validator("references")
@@ -87,6 +116,28 @@ class ForeignKeyConfig(BaseModel):
                 )
 
         return v
+
+    def model_post_init(self, __context):
+        """Auto-populate nested path metadata after validation."""
+        from orchestra.db.utils.fk_path_parser import FKPathParser
+
+        # Check if this is a nested path
+        self.is_nested = FKPathParser.is_nested_path(self.name)
+
+        if self.is_nested:
+            # Parse the path and store segments
+            segments = FKPathParser.parse(self.name)
+            self.path_segments = [
+                {
+                    "name": s.name,
+                    "is_array": s.is_array,
+                    "is_wildcard": s.is_wildcard,
+                    "array_index": s.array_index,
+                }
+                for s in segments
+            ]
+        else:
+            self.path_segments = None
 
 
 class ContextCreateRequest(BaseModel):
