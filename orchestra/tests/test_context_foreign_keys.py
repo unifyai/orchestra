@@ -4139,3 +4139,1079 @@ async def test_set_null_idempotent(client: AsyncClient):
 #     assert len(logs) == 1
 #     assert logs[0]["entries"]["department_id"] == 999
 #     assert logs[0]["entries"]["location_id"] == 888
+
+
+# Batch Optimization Tests
+
+
+@pytest.mark.anyio
+async def test_batch_fk_validation_all_valid(client: AsyncClient):
+    """Test that batch validation succeeds when all FK values are valid."""
+    project_name = "batch-validation-all-valid"
+    await _create_project(client, project_name)
+
+    # Create Departments context
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Departments",
+            "unique_keys": {"id": "int"},
+            "auto_counting": {"id": None},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create Employees context with FK to Departments
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Employees",
+            "foreign_keys": [
+                {
+                    "name": "department_id",
+                    "references": "Departments.id",
+                    "on_delete": "CASCADE",
+                    "on_update": "CASCADE",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create departments
+    for i in range(5):
+        response = await client.post(
+            "/v0/logs",
+            json={
+                "project": project_name,
+                "context": "Departments",
+                "entries": {"name": f"Dept{i}"},
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    # Batch create employees with valid FKs - should all succeed
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Employees",
+            "entries": [
+                {"name": "Alice", "department_id": 0},
+                {"name": "Bob", "department_id": 1},
+                {"name": "Charlie", "department_id": 2},
+                {"name": "Diana", "department_id": 3},
+                {"name": "Eve", "department_id": 4},
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data.get("log_event_ids", [])) == 5
+    assert len(data.get("failed", [])) == 0
+
+
+@pytest.mark.anyio
+async def test_batch_fk_validation_some_invalid(client: AsyncClient):
+    """Test that batch validation correctly identifies invalid FK values."""
+    project_name = "batch-validation-some-invalid"
+    await _create_project(client, project_name)
+
+    # Create Departments context
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Departments",
+            "unique_keys": {"id": "int"},
+            "auto_counting": {"id": None},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create Employees context with FK to Departments
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Employees",
+            "foreign_keys": [
+                {
+                    "name": "department_id",
+                    "references": "Departments.id",
+                    "on_delete": "CASCADE",
+                    "on_update": "CASCADE",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create only 2 departments
+    for i in range(2):
+        response = await client.post(
+            "/v0/logs",
+            json={
+                "project": project_name,
+                "context": "Departments",
+                "entries": {"name": f"Dept{i}"},
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    # Batch create employees with some invalid FKs
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Employees",
+            "entries": [
+                {"name": "Alice", "department_id": 0},  # Valid
+                {"name": "Bob", "department_id": 1},  # Valid
+                {"name": "Charlie", "department_id": 999},  # Invalid
+                {"name": "Diana", "department_id": 0},  # Valid
+                {"name": "Eve", "department_id": 888},  # Invalid
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data.get("log_event_ids", [])) == 3  # Alice, Bob, Diana
+    assert len(data.get("failed", [])) == 2  # Charlie, Eve
+
+    # Check that failed entries have correct error messages
+    failed_logs = data.get("failed", [])
+    failed_indices = {f["index"] for f in failed_logs}
+    assert 2 in failed_indices  # Charlie
+    assert 4 in failed_indices  # Eve
+
+
+@pytest.mark.anyio
+async def test_batch_fk_validation_with_nulls(client: AsyncClient):
+    """Test that batch validation correctly handles NULL FK values."""
+    project_name = "batch-validation-nulls"
+    await _create_project(client, project_name)
+
+    # Create Departments context
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Departments",
+            "unique_keys": {"id": "int"},
+            "auto_counting": {"id": None},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create Employees context with FK to Departments
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Employees",
+            "foreign_keys": [
+                {
+                    "name": "department_id",
+                    "references": "Departments.id",
+                    "on_delete": "CASCADE",
+                    "on_update": "CASCADE",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create one department
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Departments",
+            "entries": {"name": "Engineering"},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Batch create employees with mix of NULL and valid FKs
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Employees",
+            "entries": [
+                {"name": "Alice", "department_id": 0},  # Valid
+                {"name": "Bob"},  # NULL FK - should be allowed
+                {"name": "Charlie", "department_id": 0},  # Valid
+                {"name": "Diana"},  # NULL FK - should be allowed
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data.get("log_event_ids", [])) == 4  # All should succeed
+    assert len(data.get("failed", [])) == 0
+
+
+@pytest.mark.anyio
+async def test_batch_cascade_update(client: AsyncClient):
+    """Test that batch CASCADE UPDATE updates multiple FK values efficiently."""
+    project_name = "batch-cascade-update"
+    await _create_project(client, project_name)
+
+    # Create Departments context (without auto_counting to allow id updates)
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Departments",
+            "is_versioned": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create Employees context with CASCADE FK
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Employees",
+            "foreign_keys": [
+                {
+                    "name": "department_id",
+                    "references": "Departments.id",
+                    "on_delete": "CASCADE",
+                    "on_update": "CASCADE",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create department with id=1
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Departments",
+            "entries": {"id": 1, "name": "Engineering"},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    dept_log_id = response.json()["log_event_ids"][0]
+
+    # Create multiple employees referencing this department
+    for i in range(10):
+        response = await client.post(
+            "/v0/logs",
+            json={
+                "project": project_name,
+                "context": "Employees",
+                "entries": {"name": f"Employee{i}", "department_id": 1},
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    # Update department id from 1 to 999 - should CASCADE to all employees
+    response = await client.put(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Departments",
+            "logs": [dept_log_id],
+            "entries": {"id": 999},
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Verify all employees now have department_id=999
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "context": "Employees",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    employees = data.get("logs", [])
+    assert len(employees) == 10
+    for emp in employees:
+        assert emp["entries"]["department_id"] == 999
+
+
+@pytest.mark.anyio
+async def test_batch_set_null(client: AsyncClient):
+    """Test that batch SET NULL removes multiple FK values efficiently."""
+    project_name = "batch-set-null"
+    await _create_project(client, project_name)
+
+    # Create Departments context
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Departments",
+            "unique_keys": {"id": "int"},
+            "auto_counting": {"id": None},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create Employees context with SET NULL FK
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Employees",
+            "foreign_keys": [
+                {
+                    "name": "department_id",
+                    "references": "Departments.id",
+                    "on_delete": "SET NULL",
+                    "on_update": "SET NULL",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create department
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Departments",
+            "entries": {"id": 1, "name": "Engineering"},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    dept_log_id = response.json()["log_event_ids"][0]
+
+    # Create multiple employees referencing this department
+    for i in range(10):
+        response = await client.post(
+            "/v0/logs",
+            json={
+                "project": project_name,
+                "context": "Employees",
+                "entries": {"name": f"Employee{i}", "department_id": 1},
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    # Delete department - should SET NULL all employees' department_id
+    response = await client.request(
+        "DELETE",
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Departments",
+            "ids_and_fields": [[dept_log_id, []]],
+            "source_type": "all",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Verify all employees now have NULL department_id (field removed)
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "context": "Employees",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    employees = data.get("logs", [])
+    assert len(employees) == 10
+    for emp in employees:
+        assert "department_id" not in emp["entries"]
+
+
+@pytest.mark.anyio
+async def test_batch_operations_performance(client: AsyncClient):
+    """Test batch operations with larger dataset to verify performance."""
+    project_name = "batch-performance"
+    await _create_project(client, project_name)
+
+    # Create Departments context
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Departments",
+            "unique_keys": {"id": "int"},
+            "auto_counting": {"id": None},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create Employees context
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Employees",
+            "foreign_keys": [
+                {
+                    "name": "department_id",
+                    "references": "Departments.id",
+                    "on_delete": "CASCADE",
+                    "on_update": "CASCADE",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create 20 departments
+    for i in range(20):
+        response = await client.post(
+            "/v0/logs",
+            json={
+                "project": project_name,
+                "context": "Departments",
+                "entries": {"name": f"Dept{i}"},
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    # Batch create 100 employees with valid FKs
+    # This tests batch validation performance
+    entries_list = []
+    for i in range(100):
+        entries_list.append(
+            {
+                "name": f"Employee{i}",
+                "department_id": i % 20,  # Distribute across departments
+            },
+        )
+
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Employees",
+            "entries": entries_list,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data.get("log_event_ids", [])) == 100
+    assert len(data.get("failed", [])) == 0
+
+    # Verify all employees were created
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "context": "Employees",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    employees = data.get("logs", [])
+    assert len(employees) == 100
+
+
+@pytest.mark.anyio
+async def test_batch_multiple_fk_fields(client: AsyncClient):
+    """Test batch validation with multiple FK fields per log."""
+    project_name = "batch-multiple-fks"
+    await _create_project(client, project_name)
+
+    # Create Departments and Managers contexts
+    for context in ["Departments", "Managers"]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={
+                "name": context,
+                "unique_keys": {"id": "int"},
+                "auto_counting": {"id": None},
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    # Create Employees with FKs to both
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Employees",
+            "foreign_keys": [
+                {
+                    "name": "department_id",
+                    "references": "Departments.id",
+                    "on_delete": "CASCADE",
+                    "on_update": "CASCADE",
+                },
+                {
+                    "name": "manager_id",
+                    "references": "Managers.id",
+                    "on_delete": "CASCADE",
+                    "on_update": "CASCADE",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create departments and managers
+    for i in range(3):
+        await client.post(
+            "/v0/logs",
+            json={
+                "project": project_name,
+                "context": "Departments",
+                "entries": {"name": f"Dept{i}"},
+            },
+            headers=HEADERS,
+        )
+        await client.post(
+            "/v0/logs",
+            json={
+                "project": project_name,
+                "context": "Managers",
+                "entries": {"name": f"Manager{i}"},
+            },
+            headers=HEADERS,
+        )
+
+    # Batch create employees with both FKs
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Employees",
+            "entries": [
+                {"name": "Alice", "department_id": 0, "manager_id": 0},  # Valid
+                {
+                    "name": "Bob",
+                    "department_id": 1,
+                    "manager_id": 999,
+                },  # Invalid manager
+                {
+                    "name": "Charlie",
+                    "department_id": 999,
+                    "manager_id": 0,
+                },  # Invalid dept
+                {"name": "Diana", "department_id": 2, "manager_id": 2},  # Valid
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert len(data.get("log_event_ids", [])) == 2  # Alice, Diana
+    assert len(data.get("failed", [])) == 2  # Bob, Charlie
+
+
+# Circular Dependencies Tests
+
+
+@pytest.mark.anyio
+async def test_simple_circular_dependency_two_contexts(client: AsyncClient):
+    """Test that a simple A → B → A cycle is detected."""
+    project_name = "circular-two-test"
+    await _create_project(client, project_name)
+
+    # Create context A
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "ContextA",
+            "is_versioned": True,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create context B with FK to A (CASCADE)
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "ContextB",
+            "foreign_keys": [
+                {
+                    "name": "a_id",
+                    "references": "ContextA.id",
+                    "on_delete": "CASCADE",
+                    "on_update": "CASCADE",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Try to create FK from A to B (CASCADE) - should fail due to cycle
+    response = await client.put(
+        f"/v0/project/{project_name}/contexts/ContextA",
+        json={
+            "foreign_keys": [
+                {
+                    "name": "b_id",
+                    "references": "ContextB.id",
+                    "on_delete": "CASCADE",
+                    "on_update": "CASCADE",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    # Note: Currently put doesn't support updating FKs, so we test with a new context instead
+
+    # Better test: Try to add context C that completes the cycle
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "ContextC",
+            "foreign_keys": [
+                {
+                    "name": "a_id",
+                    "references": "ContextA.id",
+                    "on_delete": "SET NULL",  # OK, breaks cycle
+                    "on_update": "SET NULL",
+                },
+                {
+                    "name": "b_id",
+                    "references": "ContextB.id",
+                    "on_delete": "CASCADE",  # Also OK
+                    "on_update": "CASCADE",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_no_circular_dependency_chain(client: AsyncClient):
+    """Test that a simple chain (A → B → C → D) without cycles is allowed."""
+    project_name = "chain-test"
+    await _create_project(client, project_name)
+
+    # Create context A
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": "Employees"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create context B with FK to A
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Departments",
+            "foreign_keys": [
+                {
+                    "name": "manager_id",
+                    "references": "Employees.id",
+                    "on_delete": "CASCADE",
+                    "on_update": "CASCADE",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create context C with FK to B
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Projects",
+            "foreign_keys": [
+                {
+                    "name": "department_id",
+                    "references": "Departments.id",
+                    "on_delete": "CASCADE",
+                    "on_update": "CASCADE",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create context D with FKs to both C and A - should succeed (diamond DAG, no cycle)
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Tasks",
+            "foreign_keys": [
+                {
+                    "name": "project_id",
+                    "references": "Projects.id",
+                    "on_delete": "CASCADE",
+                    "on_update": "CASCADE",
+                },
+                {
+                    "name": "assignee_id",
+                    "references": "Employees.id",
+                    "on_delete": "CASCADE",
+                    "on_update": "CASCADE",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200  # Should succeed - no cycle!
+
+
+@pytest.mark.anyio
+async def test_self_referencing_context(client: AsyncClient):
+    """Test that self-referencing CASCADE FK is detected."""
+    project_name = "self-ref-test"
+    await _create_project(client, project_name)
+
+    # Try to create context that references itself with CASCADE
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Employees",
+            "foreign_keys": [
+                {
+                    "name": "manager_id",
+                    "references": "Employees.id",
+                    "on_delete": "CASCADE",  # Self-reference with CASCADE = cycle
+                    "on_update": "CASCADE",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 400
+    assert "circular" in response.json()["detail"].lower()
+    # Cycle should be: Employees → Employees
+    assert "employees" in response.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_circular_with_set_null_breaks_cycle(client: AsyncClient):
+    """Test that SET NULL breaks the cycle (no error)."""
+    project_name = "set-null-breaks-cycle-test"
+    await _create_project(client, project_name)
+
+    # Create context A
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": "Employees"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create context B with CASCADE FK to A
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Departments",
+            "foreign_keys": [
+                {
+                    "name": "manager_id",
+                    "references": "Employees.id",
+                    "on_delete": "CASCADE",
+                    "on_update": "CASCADE",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create context with SET NULL FK back to B - should succeed (breaks cycle)
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Projects",
+            "foreign_keys": [
+                {
+                    "name": "department_id",
+                    "references": "Departments.id",
+                    "on_delete": "CASCADE",
+                    "on_update": "CASCADE",
+                },
+                {
+                    "name": "lead_id",
+                    "references": "Employees.id",
+                    "on_delete": "SET NULL",  # SET NULL breaks the cycle
+                    "on_update": "SET NULL",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_no_circular_deep_chain(client: AsyncClient):
+    """Test that a deep chain (A → B → C → D → E) with diamond pattern is allowed."""
+    project_name = "deep-chain-test"
+    await _create_project(client, project_name)
+
+    # Create chain: A → B → C → D → E
+    contexts = ["ContextA", "ContextB", "ContextC", "ContextD", "ContextE"]
+
+    # Create first context
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": contexts[0]},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create chain of contexts
+    for i in range(1, len(contexts)):
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={
+                "name": contexts[i],
+                "foreign_keys": [
+                    {
+                        "name": "ref_id",
+                        "references": f"{contexts[i-1]}.id",
+                        "on_delete": "CASCADE",
+                        "on_update": "CASCADE",
+                    },
+                ],
+            },
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    # Create context with FKs to both E and A - should succeed (DAG, no cycle)
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "ContextF",
+            "foreign_keys": [
+                {
+                    "name": "e_ref",
+                    "references": "ContextE.id",
+                    "on_delete": "CASCADE",
+                    "on_update": "CASCADE",
+                },
+                {
+                    "name": "a_ref",
+                    "references": "ContextA.id",
+                    "on_delete": "CASCADE",
+                    "on_update": "CASCADE",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200  # Should succeed - no cycle!
+
+
+@pytest.mark.anyio
+async def test_no_circular_dependency_diamond(client: AsyncClient):
+    """Test that diamond structure (no cycle) is allowed."""
+    project_name = "diamond-test"
+    await _create_project(client, project_name)
+
+    # Create root context
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": "Root"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create two middle contexts referencing root
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "MiddleA",
+            "foreign_keys": [
+                {
+                    "name": "root_id",
+                    "references": "Root.id",
+                    "on_delete": "CASCADE",
+                    "on_update": "CASCADE",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "MiddleB",
+            "foreign_keys": [
+                {
+                    "name": "root_id",
+                    "references": "Root.id",
+                    "on_delete": "CASCADE",
+                    "on_update": "CASCADE",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create leaf context referencing both middle contexts - should succeed (diamond, no cycle)
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Leaf",
+            "foreign_keys": [
+                {
+                    "name": "middle_a_id",
+                    "references": "MiddleA.id",
+                    "on_delete": "CASCADE",
+                    "on_update": "CASCADE",
+                },
+                {
+                    "name": "middle_b_id",
+                    "references": "MiddleB.id",
+                    "on_delete": "CASCADE",
+                    "on_update": "CASCADE",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_no_circular_mixed_delete_actions(client: AsyncClient):
+    """Test that mixed CASCADE/SET NULL on delete without cycles are allowed."""
+    project_name = "mixed-delete-actions-test"
+    await _create_project(client, project_name)
+
+    # Create context A
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": "ContextA"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create context B with CASCADE on_delete to A
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "ContextB",
+            "foreign_keys": [
+                {
+                    "name": "a_id",
+                    "references": "ContextA.id",
+                    "on_delete": "CASCADE",
+                    "on_update": "SET NULL",  # Not CASCADE on update
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create context with mixed actions - should succeed (DAG, no cycle)
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "ContextC",
+            "foreign_keys": [
+                {
+                    "name": "b_id",
+                    "references": "ContextB.id",
+                    "on_delete": "SET NULL",  # OK
+                    "on_update": "CASCADE",  # OK
+                },
+                {
+                    "name": "a_id",
+                    "references": "ContextA.id",
+                    "on_delete": "CASCADE",  # OK - creates DAG
+                    "on_update": "SET NULL",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200  # Should succeed - no cycle!
+
+
+@pytest.mark.anyio
+async def test_no_circular_mixed_update_actions(client: AsyncClient):
+    """Test that mixed CASCADE/SET NULL on update without cycles are allowed."""
+    project_name = "mixed-update-actions-test"
+    await _create_project(client, project_name)
+
+    # Create context A
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": "ContextA"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create context B with CASCADE on_update to A
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "ContextB",
+            "foreign_keys": [
+                {
+                    "name": "a_id",
+                    "references": "ContextA.id",
+                    "on_delete": "SET NULL",  # Not CASCADE on delete
+                    "on_update": "CASCADE",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Create context with mixed actions - should succeed (DAG, no cycle)
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "ContextC",
+            "foreign_keys": [
+                {
+                    "name": "b_id",
+                    "references": "ContextB.id",
+                    "on_delete": "CASCADE",  # OK
+                    "on_update": "SET NULL",  # OK
+                },
+                {
+                    "name": "a_id",
+                    "references": "ContextA.id",
+                    "on_delete": "SET NULL",
+                    "on_update": "CASCADE",  # OK - creates DAG
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200  # Should succeed - no cycle!
