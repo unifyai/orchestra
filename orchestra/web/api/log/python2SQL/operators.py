@@ -171,6 +171,49 @@ def _value_or_coalesce_subq(
     )
 
 
+def _can_combine_and_conditions(lhs_node, rhs_node):
+    """
+    Check if two filter nodes can be combined into a single subquery.
+    Returns (can_combine, identifier_key) if both are comparison operators
+    (excluding 'is'/'is not') on the same identifier, else (False, None).
+    """
+    if not isinstance(lhs_node, dict) or not isinstance(rhs_node, dict):
+        return False, None
+
+    lhs_op = lhs_node.get("operand")
+    rhs_op = rhs_node.get("operand")
+
+    # Both must be comparison operators, but NOT 'is' or 'is not'
+    # (those are handled specially and shouldn't be combined)
+    if lhs_op not in ("==", "!=", "<", ">", "<=", ">=") or rhs_op not in (
+        "==",
+        "!=",
+        "<",
+        ">",
+        "<=",
+        ">=",
+    ):
+        return False, None
+
+    # Both LHS must be identifiers
+    lhs_lhs = lhs_node.get("lhs")
+    rhs_lhs = rhs_node.get("lhs")
+
+    if not isinstance(lhs_lhs, dict) or lhs_lhs.get("type") != "identifier":
+        return False, None
+    if not isinstance(rhs_lhs, dict) or rhs_lhs.get("type") != "identifier":
+        return False, None
+
+    lhs_key = lhs_lhs.get("value")
+    rhs_key = rhs_lhs.get("value")
+
+    # Both must reference the same identifier
+    if lhs_key != rhs_key:
+        return False, None
+
+    return True, lhs_key
+
+
 # Helper function for logical operators (and, or, not)
 def _create_truthiness_condition(subq_or_literal, session):
     """
@@ -267,9 +310,116 @@ def _handle_logical_operator(
         else:
             return not_(rhs)
 
-    # Build LHS and RHS expressions for 'and' / 'or'
+    # OPTIMIZATION: For AND conditions on the same identifier, combine into single subquery
+    # This avoids cartesian products when joining two subqueries for the same identifier
+    lhs_node = filter_dict.get("lhs")
+    rhs_node = filter_dict.get("rhs")
+
+    if operand == "and":
+        can_combine, identifier_key = _can_combine_and_conditions(lhs_node, rhs_node)
+        if can_combine:
+            # Build the identifier subquery once
+            from .helpers import _build_subquery_for_identifier, _select_value
+
+            identifier_subq = _build_subquery_for_identifier(
+                identifier_key,
+                log_event_alias,
+                alias=f"combined_{identifier_key}",
+                log_event_ids=log_event_ids,
+                session=session,
+                is_derived=is_derived,
+                is_vector=is_vector,
+            )
+
+            # Extract value column and type from the identifier subquery
+            identifier_val, identifier_type = _select_value(identifier_subq, session)
+
+            # Get the RHS values (literals) from the filter dict
+            lhs_rhs_node = lhs_node.get("rhs")
+            rhs_rhs_node = rhs_node.get("rhs")
+
+            # Build RHS expressions for comparison
+            lhs_rhs_expr = build_sql_query(
+                lhs_rhs_node,
+                log_event_alias,
+                session,
+                log_event_ids=log_event_ids,
+                is_derived=is_derived,
+                local_scope=local_scope,
+                is_vector=is_vector,
+            )
+            rhs_rhs_expr = build_sql_query(
+                rhs_rhs_node,
+                log_event_alias,
+                session,
+                log_event_ids=log_event_ids,
+                is_derived=is_derived,
+                local_scope=local_scope,
+                is_vector=is_vector,
+            )
+
+            # Get RHS values and types
+            lhs_rhs_val, lhs_rhs_type = _select_value(lhs_rhs_expr, session)
+            rhs_rhs_val, rhs_rhs_type = _select_value(rhs_rhs_expr, session)
+
+            # Build comparison expressions using the same logic as _handle_comparison_operator
+            lhs_op = lhs_node.get("operand")
+            rhs_op = rhs_node.get("operand")
+
+            # Build comparison expressions using the same logic as _handle_comparison_operator
+            # Use cast_expr and unify_inferred_types to handle all type conversions generically
+            def _build_comparison_expr(op, lhs_val, lhs_type, rhs_val, rhs_type):
+                """Build a comparison expression using standard type unification and casting."""
+                final_type = unify_inferred_types(lhs_type, rhs_type)
+                lhs_casted = cast_expr(lhs_val, lhs_type, final_type)
+                rhs_casted = cast_expr(rhs_val, rhs_type, final_type)
+
+                op_map = {
+                    "==": lambda a, b: a == b,
+                    "!=": lambda a, b: a != b,
+                    "<": lambda a, b: a < b,
+                    ">": lambda a, b: a > b,
+                    "<=": lambda a, b: a <= b,
+                    ">=": lambda a, b: a >= b,
+                }
+                op_func = op_map.get(op)
+                if op_func is None:
+                    raise ValueError(f"Unknown comparison operand: {op}")
+                return op_func(lhs_casted, rhs_casted)
+
+            lhs_comp_expr = _build_comparison_expr(
+                lhs_op,
+                identifier_val,
+                identifier_type,
+                lhs_rhs_val,
+                lhs_rhs_type,
+            )
+            rhs_comp_expr = _build_comparison_expr(
+                rhs_op,
+                identifier_val,
+                identifier_type,
+                rhs_rhs_val,
+                rhs_rhs_type,
+            )
+
+            # Combine both conditions with AND
+            combined_condition = and_(lhs_comp_expr, rhs_comp_expr)
+
+            # Create single subquery with both conditions
+            return alias_utils.subquery_with_unique_alias(
+                select(
+                    identifier_subq.c.log_event_id.label("log_event_id"),
+                    combined_condition.label("value"),
+                    literal("bool").label("inferred_type"),
+                )
+                .select_from(identifier_subq)
+                .where(combined_condition),
+                prefix="combined_and",
+            )
+
+    # Build LHS and RHS expressions for 'and' / 'or' (original logic)
     lhs = build_sql_query(
-        filter_dict.get("lhs"),
+        lhs_node,
         log_event_alias,
         session,
         log_event_ids=log_event_ids,
@@ -278,7 +428,7 @@ def _handle_logical_operator(
         is_vector=is_vector,
     )
     rhs = build_sql_query(
-        filter_dict.get("rhs"),
+        rhs_node,
         log_event_alias,
         session,
         log_event_ids=log_event_ids,
