@@ -152,6 +152,20 @@ class ContextDAO:
                     f"Referenced context '{ref_context_name}' does not exist in this project",
                 )
 
+            # Validate SET DEFAULT has a default value
+            # DISABLED: SET DEFAULT is not currently supported
+            # on_delete = fk.get("on_delete", "NO ACTION")
+            # on_update = fk.get("on_update", "NO ACTION")
+            # default = fk.get("default")
+            #
+            # if on_delete == "SET DEFAULT" or on_update == "SET DEFAULT":
+            #     if default is None:
+            #         raise ValueError(
+            #             f"Foreign key '{fk['name']}' uses SET DEFAULT action "
+            #             f"but no default value is specified. "
+            #             f"Add a 'default' field with the value to use or change the action to SET NULL.",
+            #         )
+
             # Note: We don't validate if the column exists yet because it might be created
             # later. The actual validation happens when inserting/updating logs.
 
@@ -230,132 +244,133 @@ class ContextDAO:
                     f"{ref_context_name}.{ref_column_name}",
                 )
 
-    def check_restrict_constraints(
-        self,
-        project_id: int,
-        context_id: int,
-        columns_values: Dict[str, List[Any]],
-        action: str = "DELETE",
-    ) -> List[Dict[str, Any]]:
-        """Check if deleting/updating values would violate RESTRICT constraints.
-
-        Args:
-            project_id: The project ID
-            context_id: The context being modified (where values are being deleted/updated)
-            columns_values: Dict mapping column names to lists of values to check
-                           e.g., {"id": [1, 2, 3], "code": ["A", "B"]}
-            action: Either "DELETE" or "UPDATE"
-
-        Returns:
-            List of violations, each containing:
-            - context: The context being modified
-            - column: The column being deleted/updated
-            - value: The specific value
-            - referencing_context: Context with the FK
-            - fk_column: FK column name
-            - count: Number of referencing rows
-            - fk_action: The FK action type ("on_delete" or "on_update")
-        """
-        if not columns_values:
-            return []
-
-        violations = []
-
-        # Get the context name for the context being modified
-        context = self.session.query(Context).filter_by(id=context_id).one_or_none()
-        if not context:
-            return []
-        context_name = context.name
-
-        # Find all contexts in this project that have foreign keys
-        all_contexts = (
-            self.session.query(Context)
-            .filter(
-                Context.project_id == project_id,
-                Context.foreign_keys != None,  # noqa: E711
-                Context.foreign_keys != text("'[]'::jsonb"),
-            )
-            .all()
-        )
-
-        # Check each context for FKs that reference this context
-        for ref_context in all_contexts:
-            if not ref_context.foreign_keys:
-                continue
-
-            for fk in ref_context.foreign_keys:
-                # Parse the reference: "ContextName.column_name"
-                ref_parts = fk["references"].split(".")
-                if len(ref_parts) != 2:
-                    continue
-
-                ref_context_name, ref_column_name = ref_parts
-
-                # Check if this FK references our context
-                if ref_context_name != context_name:
-                    continue
-
-                # Check if the column being deleted/updated is referenced
-                if ref_column_name not in columns_values:
-                    continue
-
-                # Check the FK action
-                fk_action_type = "on_delete" if action == "DELETE" else "on_update"
-                fk_action = fk.get(fk_action_type, "NO ACTION")
-
-                # Only enforce RESTRICT and NO ACTION
-                if fk_action not in ("RESTRICT", "NO ACTION"):
-                    continue
-
-                # Get the FK column name
-                fk_column = fk["name"]
-
-                # For each value being deleted/updated, check if it's referenced
-                for value in columns_values[ref_column_name]:
-                    # Skip NULL values
-                    if value is None:
-                        continue
-
-                    # Convert value to JSON for comparison
-                    json_str = json.dumps(value)
-
-                    # Count how many rows reference this value
-                    query = text(
-                        """
-                        SELECT COUNT(*)
-                        FROM log l
-                        JOIN log_event_log lel ON l.id = lel.log_id
-                        JOIN log_event_context lec ON lel.log_event_id = lec.log_event_id
-                        WHERE lec.context_id = :context_id
-                          AND l.key = :fk_column
-                          AND l.value = CAST(:json_str AS jsonb)
-                    """,
-                    )
-
-                    result = self.session.execute(
-                        query,
-                        {
-                            "context_id": ref_context.id,
-                            "fk_column": fk_column,
-                            "json_str": json_str,
-                        },
-                    )
-                    count = result.scalar()
-
-                    if count > 0:
-                        violations.append(
-                            {
-                                "context": context_name,
-                                "column": ref_column_name,
-                                "value": value,
-                                "referencing_context": ref_context.name,
-                                "fk_column": fk_column,
-                                "count": count,
-                                "fk_action": fk_action,
-                            },
-                        )
-
-        return violations
+    # DISABLED: RESTRICT and NO ACTION are not currently supported
+    # def check_restrict_constraints(
+    #     self,
+    #     project_id: int,
+    #     context_id: int,
+    #     columns_values: Dict[str, List[Any]],
+    #     action: str = "DELETE",
+    # ) -> List[Dict[str, Any]]:
+    #     """Check if deleting/updating values would violate RESTRICT constraints.
+    #
+    #     Args:
+    #         project_id: The project ID
+    #         context_id: The context being modified (where values are being deleted/updated)
+    #         columns_values: Dict mapping column names to lists of values to check
+    #                        e.g., {"id": [1, 2, 3], "code": ["A", "B"]}
+    #         action: Either "DELETE" or "UPDATE"
+    #
+    #     Returns:
+    #         List of violations, each containing:
+    #         - context: The context being modified
+    #         - column: The column being deleted/updated
+    #         - value: The specific value
+    #         - referencing_context: Context with the FK
+    #         - fk_column: FK column name
+    #         - count: Number of referencing rows
+    #         - fk_action: The FK action type ("on_delete" or "on_update")
+    #     """
+    #     if not columns_values:
+    #         return []
+    #
+    #     violations = []
+    #
+    #     # Get the context name for the context being modified
+    #     context = self.session.query(Context).filter_by(id=context_id).one_or_none()
+    #     if not context:
+    #         return []
+    #     context_name = context.name
+    #
+    #     # Find all contexts in this project that have foreign keys
+    #     all_contexts = (
+    #         self.session.query(Context)
+    #         .filter(
+    #             Context.project_id == project_id,
+    #             Context.foreign_keys != None,  # noqa: E711
+    #             Context.foreign_keys != text("'[]'::jsonb"),
+    #         )
+    #         .all()
+    #     )
+    #
+    #     # Check each context for FKs that reference this context
+    #     for ref_context in all_contexts:
+    #         if not ref_context.foreign_keys:
+    #             continue
+    #
+    #         for fk in ref_context.foreign_keys:
+    #             # Parse the reference: "ContextName.column_name"
+    #             ref_parts = fk["references"].split(".")
+    #             if len(ref_parts) != 2:
+    #                 continue
+    #
+    #             ref_context_name, ref_column_name = ref_parts
+    #
+    #             # Check if this FK references our context
+    #             if ref_context_name != context_name:
+    #                 continue
+    #
+    #             # Check if the column being deleted/updated is referenced
+    #             if ref_column_name not in columns_values:
+    #                 continue
+    #
+    #             # Check the FK action
+    #             fk_action_type = "on_delete" if action == "DELETE" else "on_update"
+    #             fk_action = fk.get(fk_action_type, "NO ACTION")
+    #
+    #             # Only enforce RESTRICT and NO ACTION
+    #             if fk_action not in ("RESTRICT", "NO ACTION"):
+    #                 continue
+    #
+    #             # Get the FK column name
+    #             fk_column = fk["name"]
+    #
+    #             # For each value being deleted/updated, check if it's referenced
+    #             for value in columns_values[ref_column_name]:
+    #                 # Skip NULL values
+    #                 if value is None:
+    #                     continue
+    #
+    #                 # Convert value to JSON for comparison
+    #                 json_str = json.dumps(value)
+    #
+    #                 # Count how many rows reference this value
+    #                 query = text(
+    #                     """
+    #                     SELECT COUNT(*)
+    #                     FROM log l
+    #                     JOIN log_event_log lel ON l.id = lel.log_id
+    #                     JOIN log_event_context lec ON lel.log_event_id = lec.log_event_id
+    #                     WHERE lec.context_id = :context_id
+    #                       AND l.key = :fk_column
+    #                       AND l.value = CAST(:json_str AS jsonb)
+    #                 """,
+    #                 )
+    #
+    #                 result = self.session.execute(
+    #                     query,
+    #                     {
+    #                         "context_id": ref_context.id,
+    #                         "fk_column": fk_column,
+    #                         "json_str": json_str,
+    #                     },
+    #                 )
+    #                 count = result.scalar()
+    #
+    #                 if count > 0:
+    #                     violations.append(
+    #                         {
+    #                             "context": context_name,
+    #                             "column": ref_column_name,
+    #                             "value": value,
+    #                             "referencing_context": ref_context.name,
+    #                             "fk_column": fk_column,
+    #                             "count": count,
+    #                             "fk_action": fk_action,
+    #                         },
+    #                     )
+    #
+    #     return violations
 
     def apply_fk_actions(
         self,
@@ -483,23 +498,25 @@ class ContextDAO:
                             json_str,
                         )
 
-                    elif fk_action == "SET DEFAULT":
-                        # SET DEFAULT: Update FK column to default value
-                        default_value = self._get_default_value(ref_context, fk_column)
-                        if default_value is not None:
-                            stats["set_default"] += self._set_default(
-                                ref_context.id,
-                                fk_column,
-                                json_str,
-                                default_value,
-                            )
-                        else:
-                            # If no default, treat as SET NULL
-                            stats["set_null"] += self._set_null(
-                                ref_context.id,
-                                fk_column,
-                                json_str,
-                            )
+                    # DISABLED: SET DEFAULT is not currently supported
+                    # elif fk_action == "SET DEFAULT":
+                    #     # SET DEFAULT: Update FK column to default value from FK definition
+                    #     default_value = fk.get("default")
+                    #
+                    #     if default_value is None:
+                    #         # Raise error instead of falling back to SET NULL
+                    #         raise ValueError(
+                    #             f"Foreign key '{fk_column}' in context '{ref_context.name}' "
+                    #             f"has SET DEFAULT action but no default value specified. "
+                    #             f"Add a 'default' field to the foreign key definition or use SET NULL action.",
+                    #         )
+                    #
+                    #     stats["set_default"] += self._set_default(
+                    #         ref_context.id,
+                    #         fk_column,
+                    #         json_str,
+                    #         default_value,
+                    #     )
 
         return stats
 
@@ -702,33 +719,40 @@ class ContextDAO:
 
         return result.rowcount
 
-    def _set_default(
-        self,
-        context_id: int,
-        fk_column: str,
-        old_value_json: str,
-        default_value: Any,
-    ) -> int:
-        """Update FK column to default value."""
-        # This is similar to CASCADE UPDATE but uses default value
-        return self._cascade_update(
-            context_id,
-            fk_column,
-            old_value_json,
-            default_value,
-        )
-
-    def _get_default_value(self, context: Context, fk_column: str) -> Optional[Any]:
-        """Get default value for FK column from context definition."""
-        # Check if auto_counting has a default for this column
-        if context.auto_counting and fk_column in context.auto_counting:
-            default = context.auto_counting[fk_column]
-            if default is not None:
-                return default
-
-        # For now, return None if no default is defined
-        # This will cause SET DEFAULT to behave like SET NULL
-        return None
+    # DISABLED: SET DEFAULT is not currently supported
+    # def _set_default(
+    #     self,
+    #     context_id: int,
+    #     fk_column: str,
+    #     old_value_json: str,
+    #     default_value: Any,
+    # ) -> int:
+    #     """Update FK column to default value."""
+    #     # This is similar to CASCADE UPDATE but uses default value
+    #     return self._cascade_update(
+    #         context_id,
+    #         fk_column,
+    #         old_value_json,
+    #         default_value,
+    #     )
+    #
+    # def _get_default_value(self, context: Context, fk_column: str) -> Optional[Any]:
+    #     """
+    #     DEPRECATED: Get default value for FK column from context definition.
+    #
+    #     This method is deprecated. Default values should now be specified
+    #     in the foreign key definition's 'default' field.
+    #
+    #     Args:
+    #         context: The context object
+    #         fk_column: The foreign key column name
+    #
+    #     Returns:
+    #         None (deprecated functionality)
+    #     """
+    #     # This method is no longer used as of the new FK default field implementation
+    #     # Kept for backwards compatibility but returns None
+    #     return None
 
     def create(
         self,
