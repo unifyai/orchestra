@@ -1412,7 +1412,7 @@ def update_logs(
 
     # Check RESTRICT constraints before update
     if ctx_id:
-        from .fk_utils import format_fk_violation_error
+        pass
 
         # Determine which columns are being updated
         columns_being_updated = set()
@@ -1458,20 +1458,22 @@ def update_logs(
                         columns_values_map.setdefault(key, []).append(value)
 
             # Check for RESTRICT constraint violations
+            # DISABLED: RESTRICT and NO ACTION are not currently supported
+            # if columns_values_map:
+            #     violations = context_dao.check_restrict_constraints(
+            #         project_id=project_id,
+            #         context_id=ctx_id,
+            #         columns_values=columns_values_map,
+            #         action="UPDATE",
+            #     )
+            #
+            #     if violations:
+            #         error_msg = format_fk_violation_error(violations)
+            #         raise HTTPException(status_code=400, detail=error_msg)
+
+            # Apply CASCADE and SET NULL actions
+            # Extract new values for CASCADE UPDATE
             if columns_values_map:
-                violations = context_dao.check_restrict_constraints(
-                    project_id=project_id,
-                    context_id=ctx_id,
-                    columns_values=columns_values_map,
-                    action="UPDATE",
-                )
-
-                if violations:
-                    error_msg = format_fk_violation_error(violations)
-                    raise HTTPException(status_code=400, detail=error_msg)
-
-                # Apply CASCADE, SET NULL, and SET DEFAULT actions
-                # Extract new values for CASCADE UPDATE
                 new_values = {}
                 if body.entries:
                     if isinstance(body.entries, dict):
@@ -2085,8 +2087,6 @@ def delete_logs(
             LogEventLog,
         )
 
-        from .fk_utils import format_fk_violation_error
-
         # Extract column-value pairs being deleted
         columns_values_to_delete = {}  # {column_name: [values...]}
 
@@ -2145,19 +2145,21 @@ def delete_logs(
                             columns_values_to_delete.setdefault(key, []).append(value)
 
         # Check for RESTRICT constraint violations
+        # DISABLED: RESTRICT and NO ACTION are not currently supported
+        # if columns_values_to_delete:
+        #     violations = context_dao.check_restrict_constraints(
+        #         project_id=project_id,
+        #         context_id=context_id,
+        #         columns_values=columns_values_to_delete,
+        #         action="DELETE",
+        #     )
+        #
+        #     if violations:
+        #         error_msg = format_fk_violation_error(violations)
+        #         raise HTTPException(status_code=400, detail=error_msg)
+
+        # Apply CASCADE and SET NULL actions
         if columns_values_to_delete:
-            violations = context_dao.check_restrict_constraints(
-                project_id=project_id,
-                context_id=context_id,
-                columns_values=columns_values_to_delete,
-                action="DELETE",
-            )
-
-            if violations:
-                error_msg = format_fk_violation_error(violations)
-                raise HTTPException(status_code=400, detail=error_msg)
-
-            # Apply CASCADE, SET NULL, and SET DEFAULT actions
             context_dao.apply_fk_actions(
                 project_id=project_id,
                 context_id=context_id,

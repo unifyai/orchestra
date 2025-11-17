@@ -26,7 +26,7 @@ class ForeignKeyConfig(BaseModel):
         "RESTRICT",
         "NO ACTION",
     ] = Field(
-        default="NO ACTION",
+        default="CASCADE",
         description="Action to perform when referenced row is deleted",
     )
     on_update: Literal[
@@ -36,8 +36,13 @@ class ForeignKeyConfig(BaseModel):
         "RESTRICT",
         "NO ACTION",
     ] = Field(
-        default="NO ACTION",
+        default="CASCADE",
         description="Action to perform when referenced row is updated",
+    )
+    default: Optional[Any] = Field(
+        default=None,
+        description="Default value to use for SET DEFAULT action. Required when on_delete or on_update is SET DEFAULT.",
+        example=0,
     )
 
     @field_validator("name")
@@ -62,6 +67,25 @@ class ForeignKeyConfig(BaseModel):
             raise ValueError(
                 f"References '{v}' must be in format 'ContextName.column_name'",
             )
+        return v
+
+    @field_validator("default")
+    @classmethod
+    def validate_default_for_set_default_action(cls, v, info):
+        """Validate that default is provided when SET DEFAULT action is used."""
+        # Get on_delete and on_update from the model data
+        data = info.data
+        on_delete = data.get("on_delete", "NO ACTION")
+        on_update = data.get("on_update", "NO ACTION")
+
+        # If either action is SET DEFAULT, default must NOT be None
+        if on_delete == "SET DEFAULT" or on_update == "SET DEFAULT":
+            if v is None:
+                raise ValueError(
+                    "The 'default' field is required when using SET DEFAULT action. "
+                    "Specify a default value or use SET NULL instead.",
+                )
+
         return v
 
 
@@ -116,8 +140,9 @@ class ContextCreateRequest(BaseModel):
             {
                 "name": "department_id",
                 "references": "Departments.id",
-                "on_delete": "CASCADE",
+                "on_delete": "SET DEFAULT",
                 "on_update": "CASCADE",
+                "default": 0,
             },
         ],
     )
