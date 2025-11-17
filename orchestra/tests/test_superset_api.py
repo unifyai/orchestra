@@ -54,14 +54,14 @@ async def test_extra_headers_anthropic(client: AsyncClient):
     # Anthropic allows this now...
     # with pytest.raises(Exception):
     #     res = await oai_client.chat.completions.create(
-    #         model="claude-3.7-sonnet@anthropic",
+    #         model="claude-4.5-sonnet@anthropic",
     #         messages=[{"role": "user", "content": "What is 1+1? Answer concisely"}],
     #         max_tokens=8192,
     #     )
 
     # now with the added header
     res = await oai_client.chat.completions.create(
-        model="claude-3.7-sonnet@anthropic",
+        model="claude-4.5-sonnet@anthropic",
         messages=[{"role": "user", "content": "What is 1+1? Answer concisely"}],
         max_tokens=8192,  # The extra header makes this sequence length possible
         extra_body={

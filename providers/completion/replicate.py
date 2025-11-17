@@ -118,6 +118,11 @@ supported_models = {
         "context_window": 131072,
         "cost": {"prompt": 0.18, "completion": 0.72},
     },
+    "gpt-5.1": {
+        "endpoint": "replicate/openai/gpt-5.1",
+        "context_window": 400000,
+        "cost": {"prompt": 1.25, "completion": 10},
+    },
     "claude-4.5-haiku": {
         "endpoint": "replicate/anthropic/claude-4.5-haiku",
         "context_window": 200000,
@@ -130,11 +135,6 @@ supported_models = {
     },
     "claude-4-sonnet": {
         "endpoint": "replicate/anthropic/claude-4-sonnet",
-        "context_window": 200000,
-        "cost": {"prompt": 3, "completion": 15},
-    },
-    "claude-3.7-sonnet": {
-        "endpoint": "replicate/anthropic/claude-3.7-sonnet",
         "context_window": 200000,
         "cost": {"prompt": 3, "completion": 15},
     },

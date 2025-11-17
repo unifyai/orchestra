@@ -42,11 +42,6 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 0.8, "completion": 4},
     },
-    "claude-3.7-sonnet": {
-        "endpoint": "anthropic/claude-3-7-sonnet-20250219",
-        "context_window": 200000,
-        "cost": {"prompt": 3, "completion": 15},
-    },
     "claude-4-sonnet": {
         "endpoint": "anthropic/claude-sonnet-4-20250514",
         "context_window": 200000,
