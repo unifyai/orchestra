@@ -445,6 +445,177 @@ class ContextDAO:
                     f"{ref_context_name}.{ref_column_name}",
                 )
 
+    def batch_validate_foreign_key_references(
+        self,
+        project_id: int,
+        context_id: int,
+        batch_entries: List[Dict[str, Any]],
+    ) -> Dict[int, str]:
+        """Validate FK references for multiple logs in a single batch.
+
+        This method optimizes FK validation by collecting all FK values across
+        all logs and validating them with a single query per unique FK, rather
+        than one query per log per FK.
+
+        Args:
+            project_id: The project ID
+            context_id: The context ID
+            batch_entries: List of entry dictionaries, one per log
+
+        Returns:
+            Dict mapping log index to error message for failed validations.
+            Empty dict if all validations pass.
+
+        Example:
+            failed = context_dao.batch_validate_foreign_key_references(
+                project_id=1,
+                context_id=2,
+                batch_entries=[
+                    {"department_id": 1, "name": "Alice"},
+                    {"department_id": 2, "name": "Bob"},
+                    {"department_id": 999, "name": "Charlie"},  # Invalid
+                ]
+            )
+            # Returns: {2: "Foreign key constraint violation: ..."}
+        """
+        from collections import defaultdict
+
+        # Get the context with its foreign keys
+        context = self.session.query(Context).filter_by(id=context_id).one_or_none()
+        if not context or not context.foreign_keys:
+            return {}  # No foreign keys to validate
+
+        # Phase 1: Collect all FK values grouped by FK definition
+        # Structure: {(ref_context_name, ref_column, fk_column): {values}}
+        fk_values_by_ref = defaultdict(set)
+
+        for entries in batch_entries:
+            for fk in context.foreign_keys:
+                fk_column = fk["name"]
+
+                if fk_column not in entries:
+                    continue
+
+                value = entries[fk_column]
+
+                # Skip NULL values (allowed)
+                if value is None:
+                    continue
+
+                # Parse the reference
+                ref_parts = fk["references"].split(".")
+                if len(ref_parts) != 2:
+                    continue
+
+                ref_context_name, ref_column = ref_parts
+                key = (ref_context_name, ref_column, fk_column)
+                fk_values_by_ref[key].add(value)
+
+        # If no FK values to validate, return early
+        if not fk_values_by_ref:
+            return {}
+
+        # Phase 2: Query valid values for each unique FK in a single query
+        # Structure: {(ref_context_name, ref_column, fk_column): set of valid values}
+        valid_fk_values = {}
+
+        for (
+            ref_context_name,
+            ref_column,
+            fk_column,
+        ), values in fk_values_by_ref.items():
+            # Get the referenced context
+            ref_context = self.filter(project_id=project_id, name=ref_context_name)
+            if not ref_context:
+                # Referenced context doesn't exist - mark all logs using this FK as failed
+                valid_fk_values[(ref_context_name, ref_column, fk_column)] = set()
+                continue
+
+            ref_context_id = ref_context[0][0].id
+
+            # Convert values to JSON strings for query
+            json_values = [json.dumps(v) for v in values]
+
+            # Build SQL with proper parameter binding for array
+            # Create placeholders for each value
+            placeholders = ", ".join([f":val_{i}" for i in range(len(json_values))])
+
+            query_str = f"""
+                SELECT DISTINCT l.value
+                FROM log l
+                JOIN log_event_log lel ON l.id = lel.log_id
+                JOIN log_event_context lec ON lel.log_event_id = lec.log_event_id
+                WHERE lec.context_id = :context_id
+                  AND l.key = :column_name
+                  AND l.value::text IN ({placeholders})
+            """
+
+            query = text(query_str)
+
+            # Build parameters dict with all values
+            params = {
+                "context_id": ref_context_id,
+                "column_name": ref_column,
+            }
+            for i, json_val in enumerate(json_values):
+                params[f"val_{i}"] = json_val
+
+            result = self.session.execute(query, params)
+
+            # Store set of valid values (convert from jsonb back to Python objects)
+            valid_values = set()
+            for row in result.fetchall():
+                try:
+                    # row[0] is already a Python object from jsonb
+                    valid_values.add(row[0])
+                except (TypeError, ValueError):
+                    # If conversion fails, skip this value
+                    pass
+
+            valid_fk_values[(ref_context_name, ref_column, fk_column)] = valid_values
+
+        # Phase 3: Check each log's FK values against valid sets
+        failed_validations = {}
+
+        for idx, entries in enumerate(batch_entries):
+            for fk in context.foreign_keys:
+                fk_column = fk["name"]
+
+                if fk_column not in entries:
+                    continue
+
+                value = entries[fk_column]
+
+                # Skip NULL values
+                if value is None:
+                    continue
+
+                # Parse the reference
+                ref_parts = fk["references"].split(".")
+                if len(ref_parts) != 2:
+                    continue
+
+                ref_context_name, ref_column = ref_parts
+                key = (ref_context_name, ref_column, fk_column)
+
+                # Check if this FK was validated
+                if key not in valid_fk_values:
+                    # Referenced context doesn't exist
+                    failed_validations[
+                        idx
+                    ] = f"Foreign key constraint violation: Referenced context '{ref_context_name}' does not exist"
+                    break  # Stop checking this log's other FKs
+
+                # Check if value is in valid set
+                if value not in valid_fk_values[key]:
+                    failed_validations[idx] = (
+                        f"Foreign key constraint violation: Value '{value}' does not exist in "
+                        f"{ref_context_name}.{ref_column}"
+                    )
+                    break  # Stop checking this log's other FKs
+
+        return failed_validations
+
     # DISABLED: RESTRICT and NO ACTION are not currently supported
     # def check_restrict_constraints(
     #     self,
@@ -663,41 +834,44 @@ class ContextDAO:
                 # Get the FK column name
                 fk_column = fk["name"]
 
-                # Apply the appropriate action for each value
-                for old_value in columns_values[ref_column_name]:
-                    # Skip NULL values
-                    if old_value is None:
-                        continue
+                # OPTIMIZATION: Batch processing - collect non-NULL values and process together
+                non_null_values = [
+                    v for v in columns_values[ref_column_name] if v is not None
+                ]
 
-                    # Convert value to JSON for comparison
-                    json_str = json.dumps(old_value)
+                if not non_null_values:
+                    continue  # No values to process
 
-                    if fk_action == "CASCADE":
-                        if action == "DELETE":
-                            # CASCADE DELETE: Delete referencing log events
-                            stats["cascaded_deletes"] += self._cascade_delete(
-                                ref_context.id,
-                                fk_column,
-                                json_str,
-                            )
-                        else:  # UPDATE
-                            # CASCADE UPDATE: Update FK values to new value
-                            if new_values and ref_column_name in new_values:
-                                new_value = new_values[ref_column_name]
-                                stats["cascaded_updates"] += self._cascade_update(
-                                    ref_context.id,
-                                    fk_column,
-                                    json_str,
-                                    new_value,
-                                )
-
-                    elif fk_action == "SET NULL":
-                        # SET NULL: Delete the FK column entries (sets to NULL)
-                        stats["set_null"] += self._set_null(
+                # For CASCADE DELETE, we need to process per-value due to recursion
+                # For other actions, we can batch process
+                if fk_action == "CASCADE" and action == "DELETE":
+                    # CASCADE DELETE requires per-value processing for recursive cascading
+                    for old_value in non_null_values:
+                        json_str = json.dumps(old_value)
+                        stats["cascaded_deletes"] += self._cascade_delete(
                             ref_context.id,
                             fk_column,
                             json_str,
                         )
+                elif fk_action == "CASCADE" and action == "UPDATE":
+                    # CASCADE UPDATE: Batch update all values at once
+                    if new_values and ref_column_name in new_values:
+                        new_value = new_values[ref_column_name]
+                        json_values = [json.dumps(v) for v in non_null_values]
+                        stats["cascaded_updates"] += self._cascade_update_batch(
+                            ref_context.id,
+                            fk_column,
+                            json_values,
+                            new_value,
+                        )
+                elif fk_action == "SET NULL":
+                    # SET NULL: Batch delete all FK column entries at once
+                    json_values = [json.dumps(v) for v in non_null_values]
+                    stats["set_null"] += self._set_null_batch(
+                        ref_context.id,
+                        fk_column,
+                        json_values,
+                    )
 
                     # DISABLED: SET DEFAULT is not currently supported
                     # elif fk_action == "SET DEFAULT":
@@ -919,6 +1093,163 @@ class ContextDAO:
         )
 
         return result.rowcount
+
+    def _cascade_update_batch(
+        self,
+        context_id: int,
+        fk_column: str,
+        old_values_json: List[str],
+        new_value: Any,
+    ) -> int:
+        """Update FK column values for multiple old values in a single query.
+
+        This is an optimized version that processes multiple values at once
+        using a CTE to update both log and json_log tables in a single query.
+
+        Args:
+            context_id: Context ID where FKs are defined
+            fk_column: FK column name to update
+            old_values_json: List of JSON-serialized old values to find
+            new_value: New value to set
+
+        Returns:
+            Total number of rows updated across both tables
+        """
+        if not old_values_json:
+            return 0
+
+        new_value_json = json.dumps(new_value)
+
+        # Build placeholders for IN clause
+        placeholders = ", ".join([f":old_val_{i}" for i in range(len(old_values_json))])
+
+        # Use CTE to update both tables in a single query (Priority 4 optimization)
+        query_str = f"""
+            WITH updated_logs AS (
+                UPDATE log
+                SET value = CAST(:new_value AS jsonb)
+                WHERE id IN (
+                    SELECT l.id
+                    FROM log l
+                    JOIN log_event_log lel ON l.id = lel.log_id
+                    JOIN log_event_context lec ON lel.log_event_id = lec.log_event_id
+                    WHERE lec.context_id = :context_id
+                      AND l.key = :fk_column
+                      AND l.value::text IN ({placeholders})
+                )
+                RETURNING id
+            ),
+            updated_json_logs AS (
+                UPDATE json_log
+                SET value = CAST(:new_value AS json)
+                WHERE id IN (
+                    SELECT jl.id
+                    FROM json_log jl
+                    JOIN log_event_json_log lejl ON jl.id = lejl.json_log_id
+                    JOIN log_event_context lec ON lejl.log_event_id = lec.log_event_id
+                    WHERE lec.context_id = :context_id
+                      AND jl.key = :fk_column
+                      AND jl.value::text IN ({placeholders})
+                )
+                RETURNING id
+            )
+            SELECT
+                (SELECT COUNT(*) FROM updated_logs) AS log_count,
+                (SELECT COUNT(*) FROM updated_json_logs) AS json_log_count
+        """
+
+        query = text(query_str)
+
+        # Build parameters dict
+        params = {
+            "context_id": context_id,
+            "fk_column": fk_column,
+            "new_value": new_value_json,
+        }
+        for i, old_val in enumerate(old_values_json):
+            params[f"old_val_{i}"] = old_val
+
+        result = self.session.execute(query, params)
+
+        row = result.fetchone()
+        if row:
+            return row[0] + row[1]  # Total updated rows
+        return 0
+
+    def _set_null_batch(
+        self,
+        context_id: int,
+        fk_column: str,
+        old_values_json: List[str],
+    ) -> int:
+        """Delete FK column entries for multiple values in a single query.
+
+        This is an optimized version that processes multiple values at once
+        using a CTE to delete from both log and json_log tables in a single query.
+
+        Args:
+            context_id: Context ID where FKs are defined
+            fk_column: FK column name to delete
+            old_values_json: List of JSON-serialized old values to find
+
+        Returns:
+            Total number of rows deleted across both tables
+        """
+        if not old_values_json:
+            return 0
+
+        # Build placeholders for IN clause
+        placeholders = ", ".join([f":old_val_{i}" for i in range(len(old_values_json))])
+
+        # Use CTE to delete from both tables in a single query (Priority 4 optimization)
+        query_str = f"""
+            WITH deleted_logs AS (
+                DELETE FROM log
+                WHERE id IN (
+                    SELECT l.id
+                    FROM log l
+                    JOIN log_event_log lel ON l.id = lel.log_id
+                    JOIN log_event_context lec ON lel.log_event_id = lec.log_event_id
+                    WHERE lec.context_id = :context_id
+                      AND l.key = :fk_column
+                      AND l.value::text IN ({placeholders})
+                )
+                RETURNING id
+            ),
+            deleted_json_logs AS (
+                DELETE FROM json_log
+                WHERE id IN (
+                    SELECT jl.id
+                    FROM json_log jl
+                    JOIN log_event_json_log lejl ON jl.id = lejl.json_log_id
+                    JOIN log_event_context lec ON lejl.log_event_id = lec.log_event_id
+                    WHERE lec.context_id = :context_id
+                      AND jl.key = :fk_column
+                      AND jl.value::text IN ({placeholders})
+                )
+                RETURNING id
+            )
+            SELECT
+                (SELECT COUNT(*) FROM deleted_logs) AS log_count,
+                (SELECT COUNT(*) FROM deleted_json_logs) AS json_log_count
+        """
+
+        query = text(query_str)
+
+        # Build parameters dict
+        params = {
+            "context_id": context_id,
+            "fk_column": fk_column,
+        }
+        for i, old_val in enumerate(old_values_json):
+            params[f"old_val_{i}"] = old_val
+
+        result = self.session.execute(query, params)
+
+        row = result.fetchone()
+        if row:
+            return row[0] + row[1]  # Total deleted rows
+        return 0
 
     # DISABLED: SET DEFAULT is not currently supported
     # def _set_default(
