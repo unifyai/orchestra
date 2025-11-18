@@ -18,14 +18,10 @@ from sqlalchemy import (
     TIMESTAMP,
     BindParameter,
     Boolean,
-    Date,
-    DateTime,
     Float,
     Integer,
-    Interval,
     String,
     Text,
-    Time,
     and_,
     case,
     cast,
@@ -616,13 +612,26 @@ def cast_expr(expr, from_type: str, to_type: str):
     elif final_type == "bool":
         return cast(expr, Boolean)
     elif final_type == "datetime":
-        return cast(func.replace(cast(expr, Text), '"', ""), DateTime(timezone=True))
+        # Use custom PostgreSQL function that safely casts, returning NULL on error
+        # This works for all PostgreSQL versions and handles any invalid format generically
+        # Requires safe_cast_to_timestamptz() function to be created in the database
+        cleaned_expr = func.replace(cast(expr, Text), '"', "")
+        return func.safe_cast_to_timestamptz(cleaned_expr)
     elif final_type == "time":
-        return cast(func.replace(cast(expr, Text), '"', ""), Time)
+        # Use custom PostgreSQL function that safely casts time values
+        # Requires safe_cast_to_time() function to be created in the database
+        cleaned_expr = func.replace(cast(expr, Text), '"', "")
+        return func.safe_cast_to_time(cleaned_expr)
     elif final_type == "date":
-        return cast(func.replace(cast(expr, Text), '"', ""), Date)
+        # Use custom PostgreSQL function that safely casts date values
+        # Requires safe_cast_to_date() function to be created in the database
+        cleaned_expr = func.replace(cast(expr, Text), '"', "")
+        return func.safe_cast_to_date(cleaned_expr)
     elif final_type == "timedelta":
-        return cast(func.replace(cast(expr, Text), '"', ""), Interval)
+        # Use custom PostgreSQL function that safely casts interval values
+        # Requires safe_cast_to_interval() function to be created in the database
+        cleaned_expr = func.replace(cast(expr, Text), '"', "")
+        return func.safe_cast_to_interval(cleaned_expr)
     elif final_type == "vector":
         return expr
     else:
