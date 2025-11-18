@@ -214,6 +214,43 @@ def _can_combine_and_conditions(lhs_node, rhs_node):
     return True, lhs_key
 
 
+# Helper function for NULL-safe equality comparisons
+def _null_safe_eq(a, b):
+    """
+    NULL-safe equality comparison: returns True if both are NULL, False if one is NULL,
+    otherwise performs normal equality comparison.
+
+    This ensures that NULL == NULL evaluates to True (they are equal),
+    and NULL == value evaluates to False (they are not equal).
+    """
+    return case(
+        (a.is_(None) & b.is_(None), literal(True)),  # NULL == NULL → True
+        (
+            a.is_(None) | b.is_(None),
+            literal(False),
+        ),  # NULL == value or value == NULL → False
+        else_=(a == b),  # Normal comparison when neither is NULL
+    )
+
+
+def _null_safe_ne(a, b):
+    """
+    NULL-safe inequality comparison: returns False if both are NULL, True if one is NULL,
+    otherwise performs normal inequality comparison.
+
+    This ensures that NULL != NULL evaluates to False (they are equal),
+    and NULL != value evaluates to True (they are different).
+    """
+    return case(
+        (a.is_(None) & b.is_(None), literal(False)),  # NULL != NULL → False
+        (
+            a.is_(None) | b.is_(None),
+            literal(True),
+        ),  # NULL != value or value != NULL → True
+        else_=(a != b),  # Normal comparison when neither is NULL
+    )
+
+
 # Helper function for logical operators (and, or, not)
 def _create_truthiness_condition(subq_or_literal, session):
     """
@@ -375,8 +412,8 @@ def _handle_logical_operator(
                 rhs_casted = cast_expr(rhs_val, rhs_type, final_type)
 
                 op_map = {
-                    "==": lambda a, b: a == b,
-                    "!=": lambda a, b: a != b,
+                    "==": lambda a, b: _null_safe_eq(a, b),
+                    "!=": lambda a, b: _null_safe_ne(a, b),
                     "<": lambda a, b: a < b,
                     ">": lambda a, b: a > b,
                     "<=": lambda a, b: a <= b,
@@ -823,8 +860,8 @@ def _handle_comparison_operator(
         rval = cast_expr(rval, rval_type, final_type)
 
         op_map = {
-            "==": lambda a, b: a == b,
-            "!=": lambda a, b: a != b,
+            "==": lambda a, b: _null_safe_eq(a, b),
+            "!=": lambda a, b: _null_safe_ne(a, b),
             "<": lambda a, b: a < b,
             ">": lambda a, b: a > b,
             "<=": lambda a, b: a <= b,
