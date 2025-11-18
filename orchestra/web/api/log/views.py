@@ -21,6 +21,7 @@ from fastapi import (
 )
 from fastapi.responses import JSONResponse
 from sqlalchemy import and_, exists, or_, select, update
+from sqlalchemy.exc import DataError, SQLAlchemyError
 from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.dao.context_dao import ContextDAO
@@ -91,6 +92,36 @@ router = APIRouter()
 
 # Admin router for protected endpoints
 admin_router = APIRouter()
+
+
+def _sanitize_sql_error(error: Exception) -> str:
+    """
+    Extract a clean error message from SQLAlchemy exceptions, removing SQL traces.
+
+    Args:
+        error: The SQLAlchemy exception
+
+    Returns:
+        A clean error message without SQL statements
+    """
+    error_msg = str(error.orig) if hasattr(error, "orig") and error.orig else str(error)
+
+    # Remove SQL statement and parameters from error if present
+    if "[SQL:" in error_msg:
+        error_msg = error_msg.split("[SQL:")[0].strip()
+
+    # Extract just the PostgreSQL error message (remove psycopg2 wrapper)
+    if "psycopg2.errors." in error_msg:
+        # Format: "psycopg2.errors.InvalidDatetimeFormat: invalid input syntax..."
+        parts = error_msg.split(":", 1)
+        if len(parts) > 1:
+            error_msg = parts[1].strip()
+
+    # Remove any remaining traceback-like content
+    if "Traceback" in error_msg:
+        error_msg = error_msg.split("Traceback")[0].strip()
+
+    return error_msg
 
 
 ###########################
@@ -2825,215 +2856,255 @@ def get_logs(
     # Stage 1: Monolithic (non-grouped) Case
     # -----------------------------------------------------------
     if not group_by:
-        all_rows, context_len, total_count = _get_logs_query(
-            request_fastapi,
-            project=project,
-            column_context=column_context,
-            context=context,
-            filter_expr=filter_expr,
-            sorting=sorting,
-            from_ids=from_ids,
-            exclude_ids=exclude_ids,
-            from_fields=from_fields,
-            exclude_fields=exclude_fields,
-            limit=limit,
-            offset=offset,
-            project_dao=project_dao,
-            field_type_dao=field_type_dao,
-            context_dao=context_dao,
-            session=session,
-            randomize=randomize,
-            seed=seed,
-        )
-        if return_ids_only:
-            return list(
-                dict.fromkeys(row[7] for row in all_rows),
-            )  # Return unique log_event_ids
+        try:
+            all_rows, context_len, total_count = _get_logs_query(
+                request_fastapi,
+                project=project,
+                column_context=column_context,
+                context=context,
+                filter_expr=filter_expr,
+                sorting=sorting,
+                from_ids=from_ids,
+                exclude_ids=exclude_ids,
+                from_fields=from_fields,
+                exclude_fields=exclude_fields,
+                limit=limit,
+                offset=offset,
+                project_dao=project_dao,
+                field_type_dao=field_type_dao,
+                context_dao=context_dao,
+                session=session,
+                randomize=randomize,
+                seed=seed,
+            )
+            if return_ids_only:
+                return list(
+                    dict.fromkeys(row[7] for row in all_rows),
+                )  # Return unique log_event_ids
 
-        # Format logs into flat structure.
-        field_order_map = field_type_dao.get_ordered_field_names(
-            project_id,
-            context_id=context_id,
-        )
-        logs_out, params_out = _format_flat_logs(
-            all_rows,
-            context_len,
-            value_limit,
-            field_order_map,
-        )
+            # Format logs into flat structure.
+            field_order_map = field_type_dao.get_ordered_field_names(
+                project_id,
+                context_id=context_id,
+            )
+            logs_out, params_out = _format_flat_logs(
+                all_rows,
+                context_len,
+                value_limit,
+                field_order_map,
+            )
 
-        # Apply grouping of repeated fields if group_threshold is set.
-        grouped_entries = {}
-        if group_threshold is not None and group_threshold > 0:
-            logs_out, grouped_entries = apply_group_threshold(logs_out, group_threshold)
+            # Apply grouping of repeated fields if group_threshold is set.
+            grouped_entries = {}
+            if group_threshold is not None and group_threshold > 0:
+                logs_out, grouped_entries = apply_group_threshold(
+                    logs_out,
+                    group_threshold,
+                )
 
-        response = {
-            "params": params_out,
-            "logs": logs_out,
-            "count": total_count,
-        }
-        if grouped_entries:
-            response["grouped_entries"] = grouped_entries
+            response = {
+                "params": params_out,
+                "logs": logs_out,
+                "count": total_count,
+            }
+            if grouped_entries:
+                response["grouped_entries"] = grouped_entries
 
-        return response
+            return response
+        except DataError as e:
+            # Handle data format errors (e.g., invalid datetime casts)
+            error_msg = _sanitize_sql_error(e)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid data format in filter: {error_msg}",
+            )
+        except SQLAlchemyError as e:
+            # Handle other SQLAlchemy errors
+            error_msg = _sanitize_sql_error(e)
+            raise HTTPException(
+                status_code=500,
+                detail=f"Database error: {error_msg}",
+            )
 
     # -----------------------------------------------------------
     # Stage 2: Grouping Case
     #   (a) Retrieve all matching log event IDs (ignoring limit/offset)
     # -----------------------------------------------------------
-    event_ids_subq, total_count = _get_all_filtered_log_event_ids(
-        request_fastapi=request_fastapi,
-        project=project,
-        context=context,
-        filter_expr=filter_expr,
-        from_ids=from_ids,
-        exclude_ids=exclude_ids,
-        project_dao=project_dao,
-        context_dao=context_dao,
-        field_type_dao=field_type_dao,
-        session=session,
-        as_subquery=True,  # Keep IDs as a subquery to avoid materializing large lists
-    )
-    field_order_map = field_type_dao.get_ordered_field_names(
-        project_id,
-        context_id=context_id,
-    )
-    field_map = field_type_dao.get_field_types(
-        project_id,
-        context_id=context_id,
-    )
-    if return_ids_only:
-        all_ids = session.query(event_ids_subq).all()  # each row is a tuple (id,)
-        event_ids = [r[0] for r in all_ids]
-        return list(dict.fromkeys(event_ids))
-
-    # -----------------------------------------------------------
-    # Stage 3: Get Parameter Versions for the Log Events
-    # -----------------------------------------------------------
-    params_out = _get_params_for_log_events(event_ids_subq, session)
-
-    # -----------------------------------------------------------
-    # Stage 4: Build Grouped Structure
-    # -----------------------------------------------------------
-    if nested_groups:
-        grouped_result = _build_grouped_data(
+    try:
+        event_ids_subq, total_count = _get_all_filtered_log_event_ids(
             request_fastapi=request_fastapi,
-            project_id=project_id,
-            log_event_ids=event_ids_subq,
-            field_order_map=field_order_map,
-            field_types=field_map,
-            group_by=group_by,
-            group_depth=group_depth,
-            group_limit=group_limit,
-            group_offset=group_offset,
-            group_sorting=group_sorting,
-            level=0,
-            limit=limit,
-            offset=offset,
-            column_context=column_context,
+            project=project,
             context=context,
-            from_fields=from_fields,
-            exclude_fields=exclude_fields,
-            sorting=sorting,
+            filter_expr=filter_expr,
+            from_ids=from_ids,
+            exclude_ids=exclude_ids,
             project_dao=project_dao,
-            field_type_dao=field_type_dao,
             context_dao=context_dao,
-            session=session,
-            value_limit=value_limit,
-            groups_only=groups_only,
-            return_timestamps=return_timestamps,
-        )
-
-        final_result = {
-            "params": params_out,
-            "logs": grouped_result,
-            "count": total_count,
-        }
-
-    else:
-        # -----------------------------------------------------------
-        # Stage 4B: Flat Groups Mode for the View Pane.
-        #   (a) Fetch flat logs.
-        #   (b) Build per-field grouping structure.
-        # -----------------------------------------------------------
-        rows, context_len, _ = _fetch_logs_for_event_ids(
-            request_fastapi=request_fastapi,
-            event_ids=event_ids_subq,
-            project_id=project_id,
-            column_context=column_context,
-            context=context,
-            from_fields=from_fields,
-            exclude_fields=exclude_fields,
-            sorting=sorting,
-            limit=limit,
-            offset=offset,
-            parent_fields="",
-            project_dao=project_dao,
             field_type_dao=field_type_dao,
-            context_dao=context_dao,
             session=session,
+            as_subquery=True,  # Keep IDs as a subquery to avoid materializing large lists
         )
-        logs_out, _ = _format_flat_logs(rows, context_len, value_limit, field_order_map)
+        field_order_map = field_type_dao.get_ordered_field_names(
+            project_id,
+            context_id=context_id,
+        )
+        field_map = field_type_dao.get_field_types(
+            project_id,
+            context_id=context_id,
+        )
+        if return_ids_only:
+            all_ids = session.query(event_ids_subq).all()  # each row is a tuple (id,)
+            event_ids = [r[0] for r in all_ids]
+            return list(dict.fromkeys(event_ids))
 
-        groups = {}
+        # -----------------------------------------------------------
+        # Stage 3: Get Parameter Versions for the Log Events
+        # -----------------------------------------------------------
+        params_out = _get_params_for_log_events(event_ids_subq, session)
 
-        def parse_group_key(key: str) -> Tuple[str, str]:
-            parts = key.split("/", 1)
-            return (parts[0], parts[1]) if len(parts) == 2 else ("", key)
-
-        for group_field in group_by:
-            prefix, raw_key = parse_group_key(group_field)
-            is_param = prefix == "params"
-            distinct_values = _get_distinct_group_values(
+        # -----------------------------------------------------------
+        # Stage 4: Build Grouped Structure
+        # -----------------------------------------------------------
+        if nested_groups:
+            grouped_result = _build_grouped_data(
+                request_fastapi=request_fastapi,
+                project_id=project_id,
                 log_event_ids=event_ids_subq,
-                group_key=raw_key,
+                field_order_map=field_order_map,
+                field_types=field_map,
+                group_by=group_by,
+                group_depth=group_depth,
+                group_limit=group_limit,
+                group_offset=group_offset,
+                group_sorting=group_sorting,
+                level=0,
+                limit=limit,
+                offset=offset,
+                column_context=column_context,
+                context=context,
+                from_fields=from_fields,
+                exclude_fields=exclude_fields,
+                sorting=sorting,
+                project_dao=project_dao,
+                field_type_dao=field_type_dao,
+                context_dao=context_dao,
                 session=session,
-                is_param=is_param,
+                value_limit=value_limit,
+                groups_only=groups_only,
+                return_timestamps=return_timestamps,
             )
-            value_to_ids = {}
-            used_ids = set()
-            for val in distinct_values:
-                subset_ids = _get_log_event_ids_for_group_value(
+
+            final_result = {
+                "params": params_out,
+                "logs": grouped_result,
+                "count": total_count,
+            }
+
+        else:
+            # -----------------------------------------------------------
+            # Stage 4B: Flat Groups Mode for the View Pane.
+            #   (a) Fetch flat logs.
+            #   (b) Build per-field grouping structure.
+            # -----------------------------------------------------------
+            rows, context_len, _ = _fetch_logs_for_event_ids(
+                request_fastapi=request_fastapi,
+                event_ids=event_ids_subq,
+                project_id=project_id,
+                column_context=column_context,
+                context=context,
+                from_fields=from_fields,
+                exclude_fields=exclude_fields,
+                sorting=sorting,
+                limit=limit,
+                offset=offset,
+                parent_fields="",
+                project_dao=project_dao,
+                field_type_dao=field_type_dao,
+                context_dao=context_dao,
+                session=session,
+            )
+            logs_out, _ = _format_flat_logs(
+                rows,
+                context_len,
+                value_limit,
+                field_order_map,
+            )
+
+            groups = {}
+
+            def parse_group_key(key: str) -> Tuple[str, str]:
+                parts = key.split("/", 1)
+                return (parts[0], parts[1]) if len(parts) == 2 else ("", key)
+
+            for group_field in group_by:
+                prefix, raw_key = parse_group_key(group_field)
+                is_param = prefix == "params"
+                distinct_values = _get_distinct_group_values(
                     log_event_ids=event_ids_subq,
                     group_key=raw_key,
-                    group_value=val,
                     session=session,
                     is_param=is_param,
                 )
-                value_to_ids[val] = subset_ids
-                used_ids.update(subset_ids)
-            all_ids = session.query(event_ids_subq).all()
-            event_ids = [r[0] for r in all_ids]
-            missing_ids = list(set(event_ids) - used_ids)
-            if missing_ids:
-                value_to_ids["null"] = missing_ids
+                value_to_ids = {}
+                used_ids = set()
+                for val in distinct_values:
+                    subset_ids = _get_log_event_ids_for_group_value(
+                        log_event_ids=event_ids_subq,
+                        group_key=raw_key,
+                        group_value=val,
+                        session=session,
+                        is_param=is_param,
+                    )
+                    value_to_ids[val] = subset_ids
+                    used_ids.update(subset_ids)
+                all_ids = session.query(event_ids_subq).all()
+                event_ids = [r[0] for r in all_ids]
+                missing_ids = list(set(event_ids) - used_ids)
+                if missing_ids:
+                    value_to_ids["null"] = missing_ids
 
-            all_keys = list(value_to_ids.keys())
-            total_distinct = len(all_keys)
-            all_keys_sorted = sorted(all_keys, key=lambda x: (x is None, x))
-            if group_limit is not None:
-                paged_keys = all_keys_sorted[group_offset : group_offset + group_limit]
-            else:
-                paged_keys = all_keys_sorted
-            paged_mapping = {k: value_to_ids[k] for k in paged_keys}
-            field_total = sum(len(ids) for ids in value_to_ids.values())
-            groups[group_field] = {
-                **paged_mapping,
-                "group_count": total_distinct,
-                "count": field_total,
+                all_keys = list(value_to_ids.keys())
+                total_distinct = len(all_keys)
+                all_keys_sorted = sorted(all_keys, key=lambda x: (x is None, x))
+                if group_limit is not None:
+                    paged_keys = all_keys_sorted[
+                        group_offset : group_offset + group_limit
+                    ]
+                else:
+                    paged_keys = all_keys_sorted
+                paged_mapping = {k: value_to_ids[k] for k in paged_keys}
+                field_total = sum(len(ids) for ids in value_to_ids.values())
+                groups[group_field] = {
+                    **paged_mapping,
+                    "group_count": total_distinct,
+                    "count": field_total,
+                }
+
+            final_result = {
+                "params": params_out,
+                "groups": groups,
+                "logs": logs_out,
+                "count": total_count,
             }
 
-        final_result = {
-            "params": params_out,
-            "groups": groups,
-            "logs": logs_out,
-            "count": total_count,
-        }
-
-    # -----------------------------------------------------------
-    # Stage 5: Return the Final Result.
-    # -----------------------------------------------------------
-    return final_result
+        # -----------------------------------------------------------
+        # Stage 5: Return the Final Result.
+        # -----------------------------------------------------------
+        return final_result
+    except DataError as e:
+        # Handle data format errors (e.g., invalid datetime casts)
+        error_msg = _sanitize_sql_error(e)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid data format in filter: {error_msg}",
+        )
+    except SQLAlchemyError as e:
+        # Handle other SQLAlchemy errors
+        error_msg = _sanitize_sql_error(e)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Database error: {error_msg}",
+        )
 
 
 @router.post(
