@@ -1,4 +1,5 @@
 import hashlib
+import json
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -128,6 +129,1925 @@ class ContextDAO:
         if description is not None and len(description) > 256:
             raise ValueError("Description cannot exceed 256 characters")
 
+    def _validate_foreign_keys_config(
+        self,
+        project_id: int,
+        context_name: str,
+        foreign_keys: List[Dict[str, Any]],
+    ) -> None:
+        """Validate foreign keys configuration at context creation time."""
+        for fk in foreign_keys:
+            # Parse the reference
+            ref_parts = fk["references"].split(".")
+            if len(ref_parts) != 2:
+                raise ValueError(
+                    f"Foreign key reference '{fk['references']}' must be in format 'ContextName.column_name'",
+                )
+
+            ref_context_name, ref_column_name = ref_parts
+
+            # Check if the referenced context exists in the same project
+            # Allow self-reference (will be checked for cycles later)
+            if ref_context_name != context_name:
+                ref_context = self.filter(project_id=project_id, name=ref_context_name)
+                if not ref_context:
+                    raise ValueError(
+                        f"Referenced context '{ref_context_name}' does not exist in this project",
+                    )
+
+            # Validate SET DEFAULT has a default value
+            # DISABLED: SET DEFAULT is not currently supported
+            # on_delete = fk.get("on_delete", "NO ACTION")
+            # on_update = fk.get("on_update", "NO ACTION")
+            # default = fk.get("default")
+            #
+            # if on_delete == "SET DEFAULT" or on_update == "SET DEFAULT":
+            #     if default is None:
+            #         raise ValueError(
+            #             f"Foreign key '{fk['name']}' uses SET DEFAULT action "
+            #             f"but no default value is specified. "
+            #             f"Add a 'default' field with the value to use or change the action to SET NULL.",
+            #         )
+
+            # Note: We don't validate if the column exists yet because it might be created
+            # later. The actual validation happens when inserting/updating logs.
+
+        # Check for circular CASCADE dependencies
+        cycle = self._detect_circular_references(
+            project_id=project_id,
+            new_context_name=context_name,
+            new_foreign_keys=foreign_keys,
+        )
+
+        if cycle:
+            cycle_path = " → ".join(cycle)
+            raise ValueError(
+                f"Circular foreign key dependency detected: {cycle_path}. "
+                f"CASCADE actions would cause an infinite loop when deleting or updating records. "
+                f"Use SET NULL for one of the relationships to break the cycle.",
+            )
+
+    def _build_fk_graph(
+        self,
+        project_id: int,
+        new_context_name: str,
+        new_foreign_keys: List[Dict[str, Any]],
+    ) -> Dict[str, List[str]]:
+        """Build a directed graph of CASCADE propagation dependencies.
+
+        The graph represents CASCADE propagation direction, NOT FK reference direction.
+        If ContextA has FK to ContextB with CASCADE:
+        - FK direction: A → B (A references B)
+        - CASCADE propagation: B → A (deleting B cascades to A)
+
+        Graph represents CASCADE propagation: edge B → A means deleting B will cascade to A.
+
+        Args:
+            project_id: The project ID
+            new_context_name: Name of the context being created
+            new_foreign_keys: Foreign keys for the new context
+
+        Returns:
+            Graph as adjacency list: {context_name: [contexts_that_cascade_from_it]}
+            Only includes CASCADE relationships (SET NULL doesn't cause cycles)
+        """
+        graph = {}
+
+        # Get all existing contexts with foreign keys in this project
+        existing_contexts = (
+            self.session.query(Context)
+            .filter(
+                Context.project_id == project_id,
+                Context.foreign_keys != None,  # noqa: E711
+                Context.foreign_keys != text("'[]'::jsonb"),
+            )
+            .all()
+        )
+
+        # Initialize graph with all existing contexts
+        for context in existing_contexts:
+            graph[context.name] = []
+
+        # Add edges representing CASCADE propagation from existing contexts
+        for context in existing_contexts:
+            context_name = context.name
+
+            if context.foreign_keys:
+                for fk in context.foreign_keys:
+                    # Only CASCADE actions can cause infinite loops
+                    on_delete = fk.get("on_delete", "NO ACTION")
+                    on_update = fk.get("on_update", "NO ACTION")
+
+                    if on_delete == "CASCADE" or on_update == "CASCADE":
+                        # Parse reference: "ContextName.column_name"
+                        ref_parts = fk["references"].split(".")
+                        if len(ref_parts) == 2:
+                            ref_context_name = ref_parts[0]
+                            # CASCADE propagation: deleting ref_context cascades to context
+                            # So add edge: ref_context → context
+                            if ref_context_name not in graph:
+                                graph[ref_context_name] = []
+                            graph[ref_context_name].append(context_name)
+
+        # Add new context to graph
+        graph[new_context_name] = []
+
+        # Add edges representing CASCADE propagation from new context's FKs
+        for fk in new_foreign_keys:
+            on_delete = fk.get("on_delete", "NO ACTION")
+            on_update = fk.get("on_update", "NO ACTION")
+
+            if on_delete == "CASCADE" or on_update == "CASCADE":
+                ref_parts = fk["references"].split(".")
+                if len(ref_parts) == 2:
+                    ref_context_name = ref_parts[0]
+                    # CASCADE propagation: deleting ref_context cascades to new_context
+                    # So add edge: ref_context → new_context
+                    if ref_context_name not in graph:
+                        graph[ref_context_name] = []
+                    graph[ref_context_name].append(new_context_name)
+
+        # Ensure all referenced contexts are in the graph (even if they have no outgoing edges)
+        all_contexts = (
+            self.session.query(Context)
+            .filter(
+                Context.project_id == project_id,
+            )
+            .all()
+        )
+        for context in all_contexts:
+            if context.name not in graph:
+                graph[context.name] = []
+
+        return graph
+
+    def _dfs_detect_cycle(
+        self,
+        graph: Dict[str, List[str]],
+        start_node: str,
+    ) -> Optional[List[str]]:
+        """Use DFS with color tracking to detect cycles in FK graph.
+
+        Args:
+            graph: Adjacency list of FK dependencies
+            start_node: Context to start search from
+
+        Returns:
+            None if no cycle, or list of context names forming the cycle path
+        """
+        # Color states for cycle detection
+        WHITE = 0  # Not visited
+        GRAY = 1  # Currently exploring (on recursion stack)
+        BLACK = 2  # Fully explored
+
+        colors = {node: WHITE for node in graph}
+
+        def dfs(node: str, path: List[str]) -> Optional[List[str]]:
+            """Recursive DFS helper."""
+            if node not in graph:
+                # Node doesn't exist in graph (shouldn't happen, but handle gracefully)
+                return None
+
+            if colors[node] == GRAY:
+                # Back edge detected - cycle found!
+                # Reconstruct the cycle from where we've seen this node before
+                try:
+                    cycle_start_idx = path.index(node)
+                    return path[cycle_start_idx:] + [node]
+                except ValueError:
+                    # Node not in path (shouldn't happen)
+                    return [node, node]
+
+            if colors[node] == BLACK:
+                # Already fully explored this node
+                return None
+
+            # Mark as currently exploring
+            colors[node] = GRAY
+            current_path = path + [node]
+
+            # Visit all neighbors
+            for neighbor in graph[node]:
+                cycle = dfs(neighbor, current_path)
+                if cycle:
+                    return cycle
+
+            # Mark as fully explored
+            colors[node] = BLACK
+            return None
+
+        return dfs(start_node, [])
+
+    def _detect_circular_references(
+        self,
+        project_id: int,
+        new_context_name: str,
+        new_foreign_keys: List[Dict[str, Any]],
+    ) -> Optional[List[str]]:
+        """Detect circular CASCADE dependencies that would cause infinite loops.
+
+        Args:
+            project_id: The project ID
+            new_context_name: Name of context being created
+            new_foreign_keys: Foreign keys for the new context
+
+        Returns:
+            None if no cycle detected, or list of context names forming the cycle
+        """
+        if not new_foreign_keys:
+            return None
+
+        # Build the FK dependency graph
+        graph = self._build_fk_graph(project_id, new_context_name, new_foreign_keys)
+
+        # Check for cycles from ALL nodes, since adding the new context might
+        # complete a cycle that doesn't necessarily start from the new context
+        for node in graph:
+            if graph[node]:  # Only check nodes with outgoing edges
+                cycle = self._dfs_detect_cycle(graph, node)
+                if cycle:
+                    return cycle
+
+        return None
+
+    def validate_foreign_key_references(
+        self,
+        project_id: int,
+        context_id: int,
+        entries: Dict[str, Any],
+    ) -> None:
+        """Validate that foreign key values exist in referenced contexts.
+
+        This is called when creating or updating logs to ensure referential integrity.
+        Supports both simple column FKs and nested path FKs.
+        """
+        # Get the context with its foreign keys
+        context = self.session.query(Context).filter_by(id=context_id).one_or_none()
+        if not context or not context.foreign_keys:
+            return  # No foreign keys to validate
+
+        for fk in context.foreign_keys:
+            # Check if this is a nested FK
+            is_nested = fk.get("is_nested", False)
+
+            if is_nested:
+                # Handle nested path FK
+                self._validate_nested_fk_reference(
+                    fk=fk,
+                    entries=entries,
+                    project_id=project_id,
+                )
+            else:
+                # Handle simple column FK (existing logic)
+                self._validate_simple_fk_reference(
+                    fk=fk,
+                    entries=entries,
+                    project_id=project_id,
+                )
+
+    def _validate_simple_fk_reference(
+        self,
+        fk: Dict[str, Any],
+        entries: Dict[str, Any],
+        project_id: int,
+    ) -> None:
+        """Validate a simple column FK reference (existing logic)."""
+        fk_column = fk["name"]
+
+        # Skip if this foreign key column is not in the entries
+        if fk_column not in entries:
+            return
+
+        fk_value = entries[fk_column]
+
+        # Skip NULL values (allowed unless we add NOT NULL constraint)
+        if fk_value is None:
+            return
+
+        # Parse the reference
+        ref_parts = fk["references"].split(".")
+        ref_context_name, ref_column_name = ref_parts
+
+        # Get the referenced context
+        ref_context = self.filter(project_id=project_id, name=ref_context_name)
+        if not ref_context:
+            raise ValueError(
+                f"Foreign key constraint violation: Referenced context '{ref_context_name}' does not exist",
+            )
+
+        ref_context_id = ref_context[0][0].id
+
+        # Check if the referenced value exists
+        json_str = json.dumps(fk_value)
+
+        query = text(
+            """
+            SELECT COUNT(*)
+            FROM log l
+            JOIN log_event_log lel ON l.id = lel.log_id
+            JOIN log_event_context lec ON lel.log_event_id = lec.log_event_id
+            WHERE lec.context_id = :context_id
+              AND l.key = :column_name
+              AND l.value = CAST(:json_str AS jsonb)
+        """,
+        )
+
+        result = self.session.execute(
+            query,
+            {
+                "context_id": ref_context_id,
+                "column_name": ref_column_name,
+                "json_str": json_str,
+            },
+        )
+        count = result.scalar()
+
+        if count == 0:
+            raise ValueError(
+                f"Foreign key constraint violation: Value '{fk_value}' does not exist in "
+                f"{ref_context_name}.{ref_column_name}",
+            )
+
+    def _validate_nested_fk_reference(
+        self,
+        fk: Dict[str, Any],
+        entries: Dict[str, Any],
+        project_id: int,
+    ) -> None:
+        """Validate a nested path FK reference (new logic for nested FKs)."""
+        from orchestra.db.utils import FKPathParser, PathSegment
+
+        fk_path = fk["name"]
+        path_segments_data = fk.get("path_segments", [])
+
+        # Reconstruct PathSegment objects
+        path_segments = [
+            PathSegment(
+                name=s["name"],
+                is_array=s["is_array"],
+                is_wildcard=s["is_wildcard"],
+                array_index=s.get("array_index"),
+            )
+            for s in path_segments_data
+        ]
+
+        # Get root field name
+        root_field = FKPathParser.get_root_field(fk_path)
+
+        # Skip if root field is not in entries
+        if root_field not in entries:
+            return
+
+        # Extract all values at the nested path
+        values = FKPathParser.extract_values(entries, path_segments)
+
+        # Filter out None values
+        values = [v for v in values if v is not None]
+
+        if not values:
+            return  # No non-null values to validate
+
+        # Parse the reference
+        ref_parts = fk["references"].split(".")
+        ref_context_name, ref_column_name = ref_parts
+
+        # Get the referenced context
+        ref_context = self.filter(project_id=project_id, name=ref_context_name)
+        if not ref_context:
+            raise ValueError(
+                f"Foreign key constraint violation: Referenced context '{ref_context_name}' does not exist",
+            )
+
+        ref_context_id = ref_context[0][0].id
+
+        # Validate all extracted values exist in referenced table
+        json_values = [json.dumps(v) for v in values]
+        placeholders = ", ".join([f":val_{i}" for i in range(len(json_values))])
+
+        query = text(
+            f"""
+            SELECT DISTINCT l.value
+            FROM log l
+            JOIN log_event_log lel ON l.id = lel.log_id
+            JOIN log_event_context lec ON lel.log_event_id = lec.log_event_id
+            WHERE lec.context_id = :context_id
+              AND l.key = :column_name
+              AND l.value::text IN ({placeholders})
+        """,
+        )
+
+        params = {
+            "context_id": ref_context_id,
+            "column_name": ref_column_name,
+        }
+        for i, json_val in enumerate(json_values):
+            params[f"val_{i}"] = json_val
+
+        result = self.session.execute(query, params)
+        valid_values = set(row[0] for row in result.fetchall())
+
+        # Check for invalid values
+        invalid_values = set(values) - valid_values
+        if invalid_values:
+            # Format invalid values for error message
+            invalid_str = ", ".join([str(v) for v in list(invalid_values)[:3]])
+            if len(invalid_values) > 3:
+                invalid_str += f" (and {len(invalid_values) - 3} more)"
+
+            raise ValueError(
+                f"Foreign key constraint violation at path '{fk_path}': "
+                f"Values [{invalid_str}] do not exist in {ref_context_name}.{ref_column_name}",
+            )
+
+    def batch_validate_foreign_key_references(
+        self,
+        project_id: int,
+        context_id: int,
+        batch_entries: List[Dict[str, Any]],
+    ) -> Dict[int, str]:
+        """Validate FK references for multiple logs in a single batch.
+
+        This method optimizes FK validation by collecting all FK values across
+        all logs and validating them with a single query per unique FK, rather
+        than one query per log per FK.
+
+        Now supports both simple column FKs and nested path FKs.
+
+        Args:
+            project_id: The project ID
+            context_id: The context ID
+            batch_entries: List of entry dictionaries, one per log
+
+        Returns:
+            Dict mapping log index to error message for failed validations.
+            Empty dict if all validations pass.
+
+        Example:
+            failed = context_dao.batch_validate_foreign_key_references(
+                project_id=1,
+                context_id=2,
+                batch_entries=[
+                    {"department_id": 1, "name": "Alice"},
+                    {"department_id": 2, "name": "Bob"},
+                    {"department_id": 999, "name": "Charlie"},  # Invalid
+                ]
+            )
+            # Returns: {2: "Foreign key constraint violation: ..."}
+        """
+        from collections import defaultdict
+
+        # Get the context with its foreign keys
+        context = self.session.query(Context).filter_by(id=context_id).one_or_none()
+        if not context or not context.foreign_keys:
+            return {}  # No foreign keys to validate
+
+        # Phase 1: Collect all FK values grouped by FK definition
+        # Structure: {(ref_context_name, ref_column, fk_path, is_nested): {values}}
+        fk_values_by_ref = defaultdict(set)
+
+        for entries in batch_entries:
+            for fk in context.foreign_keys:
+                fk_path = fk["name"]
+                is_nested = fk.get("is_nested", False)
+
+                if is_nested:
+                    # Extract values from nested path
+                    from orchestra.db.utils import FKPathParser, PathSegment
+
+                    path_segments_data = fk.get("path_segments", [])
+                    path_segments = [
+                        PathSegment(
+                            name=s["name"],
+                            is_array=s["is_array"],
+                            is_wildcard=s["is_wildcard"],
+                            array_index=s.get("array_index"),
+                        )
+                        for s in path_segments_data
+                    ]
+
+                    root_field = FKPathParser.get_root_field(fk_path)
+                    if root_field not in entries:
+                        continue
+
+                    values = FKPathParser.extract_values(entries, path_segments)
+                    # Filter out None values
+                    values = [v for v in values if v is not None]
+
+                    # Parse the reference
+                    ref_parts = fk["references"].split(".")
+                    if len(ref_parts) != 2:
+                        continue
+
+                    ref_context_name, ref_column = ref_parts
+                    key = (ref_context_name, ref_column, fk_path, True)
+
+                    for value in values:
+                        fk_values_by_ref[key].add(value)
+                else:
+                    # Simple column FK (existing logic)
+                    if fk_path not in entries:
+                        continue
+
+                    value = entries[fk_path]
+
+                    # Skip NULL values (allowed)
+                    if value is None:
+                        continue
+
+                    # Parse the reference
+                    ref_parts = fk["references"].split(".")
+                    if len(ref_parts) != 2:
+                        continue
+
+                    ref_context_name, ref_column = ref_parts
+                    key = (ref_context_name, ref_column, fk_path, False)
+                    fk_values_by_ref[key].add(value)
+
+        # If no FK values to validate, return early
+        if not fk_values_by_ref:
+            return {}
+
+        # Phase 2: Query valid values for each unique FK in a single query
+        # Structure: {(ref_context_name, ref_column, fk_path, is_nested): set of valid values}
+        valid_fk_values = {}
+
+        for (
+            ref_context_name,
+            ref_column,
+            fk_path,
+            is_nested,
+        ), values in fk_values_by_ref.items():
+            # Get the referenced context
+            ref_context = self.filter(project_id=project_id, name=ref_context_name)
+            if not ref_context:
+                # Referenced context doesn't exist - mark all logs using this FK as failed
+                valid_fk_values[
+                    (ref_context_name, ref_column, fk_path, is_nested)
+                ] = set()
+                continue
+
+            ref_context_id = ref_context[0][0].id
+
+            # Convert values to JSON strings for query
+            json_values = [json.dumps(v) for v in values]
+
+            # Build SQL with proper parameter binding for array
+            # Create placeholders for each value
+            placeholders = ", ".join([f":val_{i}" for i in range(len(json_values))])
+
+            query_str = f"""
+                SELECT DISTINCT l.value
+                FROM log l
+                JOIN log_event_log lel ON l.id = lel.log_id
+                JOIN log_event_context lec ON lel.log_event_id = lec.log_event_id
+                WHERE lec.context_id = :context_id
+                  AND l.key = :column_name
+                  AND l.value::text IN ({placeholders})
+            """
+
+            query = text(query_str)
+
+            # Build parameters dict with all values
+            params = {
+                "context_id": ref_context_id,
+                "column_name": ref_column,
+            }
+            for i, json_val in enumerate(json_values):
+                params[f"val_{i}"] = json_val
+
+            result = self.session.execute(query, params)
+
+            # Store set of valid values (convert from jsonb back to Python objects)
+            valid_values = set()
+            for row in result.fetchall():
+                try:
+                    # row[0] is already a Python object from jsonb
+                    valid_values.add(row[0])
+                except (TypeError, ValueError):
+                    # If conversion fails, skip this value
+                    pass
+
+            valid_fk_values[
+                (ref_context_name, ref_column, fk_path, is_nested)
+            ] = valid_values
+
+        # Phase 3: Check each log's FK values against valid sets
+        failed_validations = {}
+
+        for idx, entries in enumerate(batch_entries):
+            for fk in context.foreign_keys:
+                fk_path = fk["name"]
+                is_nested = fk.get("is_nested", False)
+
+                # For nested FKs, extract values to check
+                if is_nested:
+                    from orchestra.db.utils import FKPathParser, PathSegment
+
+                    path_segments_data = fk.get("path_segments", [])
+                    path_segments = [
+                        PathSegment(
+                            name=s["name"],
+                            is_array=s["is_array"],
+                            is_wildcard=s["is_wildcard"],
+                            array_index=s.get("array_index"),
+                        )
+                        for s in path_segments_data
+                    ]
+
+                    root_field = FKPathParser.get_root_field(fk_path)
+                    if root_field not in entries:
+                        continue
+
+                    values_to_check = FKPathParser.extract_values(
+                        entries,
+                        path_segments,
+                    )
+                    # Filter out None values
+                    values_to_check = [v for v in values_to_check if v is not None]
+                else:
+                    # Simple column FK
+                    if fk_path not in entries:
+                        continue
+
+                    value = entries[fk_path]
+
+                    # Skip NULL values
+                    if value is None:
+                        continue
+
+                    values_to_check = [value]
+
+                # Parse the reference
+                ref_parts = fk["references"].split(".")
+                if len(ref_parts) != 2:
+                    continue
+
+                ref_context_name, ref_column = ref_parts
+                key = (ref_context_name, ref_column, fk_path, is_nested)
+
+                # Check if this FK was validated
+                if key not in valid_fk_values:
+                    # Referenced context doesn't exist
+                    failed_validations[
+                        idx
+                    ] = f"Foreign key constraint violation: Referenced context '{ref_context_name}' does not exist"
+                    break  # Stop checking this log's other FKs
+
+                # Check if all values are in valid set
+                invalid_values = [
+                    v for v in values_to_check if v not in valid_fk_values[key]
+                ]
+                if invalid_values:
+                    if is_nested:
+                        invalid_str = ", ".join([str(v) for v in invalid_values[:3]])
+                        if len(invalid_values) > 3:
+                            invalid_str += f" (and {len(invalid_values) - 3} more)"
+                        failed_validations[idx] = (
+                            f"Foreign key constraint violation at path '{fk_path}': "
+                            f"Values [{invalid_str}] do not exist in {ref_context_name}.{ref_column}"
+                        )
+                    else:
+                        failed_validations[idx] = (
+                            f"Foreign key constraint violation: Value '{invalid_values[0]}' does not exist in "
+                            f"{ref_context_name}.{ref_column}"
+                        )
+                    break  # Stop checking this log's other FKs
+
+        return failed_validations
+
+    # DISABLED: RESTRICT and NO ACTION are not currently supported
+    # def check_restrict_constraints(
+    #     self,
+    #     project_id: int,
+    #     context_id: int,
+    #     columns_values: Dict[str, List[Any]],
+    #     action: str = "DELETE",
+    # ) -> List[Dict[str, Any]]:
+    #     """Check if deleting/updating values would violate RESTRICT constraints.
+    #
+    #     Args:
+    #         project_id: The project ID
+    #         context_id: The context being modified (where values are being deleted/updated)
+    #         columns_values: Dict mapping column names to lists of values to check
+    #                        e.g., {"id": [1, 2, 3], "code": ["A", "B"]}
+    #         action: Either "DELETE" or "UPDATE"
+    #
+    #     Returns:
+    #         List of violations, each containing:
+    #         - context: The context being modified
+    #         - column: The column being deleted/updated
+    #         - value: The specific value
+    #         - referencing_context: Context with the FK
+    #         - fk_column: FK column name
+    #         - count: Number of referencing rows
+    #         - fk_action: The FK action type ("on_delete" or "on_update")
+    #     """
+    #     if not columns_values:
+    #         return []
+    #
+    #     violations = []
+    #
+    #     # Get the context name for the context being modified
+    #     context = self.session.query(Context).filter_by(id=context_id).one_or_none()
+    #     if not context:
+    #         return []
+    #     context_name = context.name
+    #
+    #     # Find all contexts in this project that have foreign keys
+    #     all_contexts = (
+    #         self.session.query(Context)
+    #         .filter(
+    #             Context.project_id == project_id,
+    #             Context.foreign_keys != None,  # noqa: E711
+    #             Context.foreign_keys != text("'[]'::jsonb"),
+    #         )
+    #         .all()
+    #     )
+    #
+    #     # Check each context for FKs that reference this context
+    #     for ref_context in all_contexts:
+    #         if not ref_context.foreign_keys:
+    #             continue
+    #
+    #         for fk in ref_context.foreign_keys:
+    #             # Parse the reference: "ContextName.column_name"
+    #             ref_parts = fk["references"].split(".")
+    #             if len(ref_parts) != 2:
+    #                 continue
+    #
+    #             ref_context_name, ref_column_name = ref_parts
+    #
+    #             # Check if this FK references our context
+    #             if ref_context_name != context_name:
+    #                 continue
+    #
+    #             # Check if the column being deleted/updated is referenced
+    #             if ref_column_name not in columns_values:
+    #                 continue
+    #
+    #             # Check the FK action
+    #             fk_action_type = "on_delete" if action == "DELETE" else "on_update"
+    #             fk_action = fk.get(fk_action_type, "NO ACTION")
+    #
+    #             # Only enforce RESTRICT and NO ACTION
+    #             if fk_action not in ("RESTRICT", "NO ACTION"):
+    #                 continue
+    #
+    #             # Get the FK column name
+    #             fk_column = fk["name"]
+    #
+    #             # For each value being deleted/updated, check if it's referenced
+    #             for value in columns_values[ref_column_name]:
+    #                 # Skip NULL values
+    #                 if value is None:
+    #                     continue
+    #
+    #                 # Convert value to JSON for comparison
+    #                 json_str = json.dumps(value)
+    #
+    #                 # Count how many rows reference this value
+    #                 query = text(
+    #                     """
+    #                     SELECT COUNT(*)
+    #                     FROM log l
+    #                     JOIN log_event_log lel ON l.id = lel.log_id
+    #                     JOIN log_event_context lec ON lel.log_event_id = lec.log_event_id
+    #                     WHERE lec.context_id = :context_id
+    #                       AND l.key = :fk_column
+    #                       AND l.value = CAST(:json_str AS jsonb)
+    #                 """,
+    #                 )
+    #
+    #                 result = self.session.execute(
+    #                     query,
+    #                     {
+    #                         "context_id": ref_context.id,
+    #                         "fk_column": fk_column,
+    #                         "json_str": json_str,
+    #                     },
+    #                 )
+    #                 count = result.scalar()
+    #
+    #                 if count > 0:
+    #                     violations.append(
+    #                         {
+    #                             "context": context_name,
+    #                             "column": ref_column_name,
+    #                             "value": value,
+    #                             "referencing_context": ref_context.name,
+    #                             "fk_column": fk_column,
+    #                             "count": count,
+    #                             "fk_action": fk_action,
+    #                         },
+    #                     )
+    #
+    #     return violations
+
+    def apply_fk_actions(
+        self,
+        project_id: int,
+        context_id: int,
+        columns_values: Dict[str, List[Any]],
+        action: str = "DELETE",
+        new_values: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Apply CASCADE, SET NULL, or SET DEFAULT actions for FK constraints.
+
+        Args:
+            project_id: The project ID
+            context_id: The context being modified (referenced context)
+            columns_values: Dict mapping column names to lists of old values
+                           e.g., {"id": [1, 2, 3], "code": ["A", "B"]}
+            action: Either "DELETE" or "UPDATE"
+            new_values: For UPDATE, the new values being set (optional)
+
+        Returns:
+            Statistics about actions taken: {
+                "cascaded_deletes": int,
+                "cascaded_updates": int,
+                "set_null": int,
+                "set_default": int,
+            }
+        """
+        if not columns_values:
+            return {
+                "cascaded_deletes": 0,
+                "cascaded_updates": 0,
+                "set_null": 0,
+                "set_default": 0,
+            }
+
+        stats = {
+            "cascaded_deletes": 0,
+            "cascaded_updates": 0,
+            "set_null": 0,
+            "set_default": 0,
+        }
+
+        # Get the context name for the context being modified
+        context = self.session.query(Context).filter_by(id=context_id).one_or_none()
+        if not context:
+            return stats
+        context_name = context.name
+
+        # Find all contexts in this project that have foreign keys
+        all_contexts = (
+            self.session.query(Context)
+            .filter(
+                Context.project_id == project_id,
+                Context.foreign_keys != None,  # noqa: E711
+                Context.foreign_keys != text("'[]'::jsonb"),
+            )
+            .all()
+        )
+
+        # Process each context for FKs that reference this context
+        for ref_context in all_contexts:
+            if not ref_context.foreign_keys:
+                continue
+
+            for fk in ref_context.foreign_keys:
+                # Parse the reference: "ContextName.column_name"
+                ref_parts = fk["references"].split(".")
+                if len(ref_parts) != 2:
+                    continue
+
+                ref_context_name, ref_column_name = ref_parts
+
+                # Check if this FK references our context
+                if ref_context_name != context_name:
+                    continue
+
+                # Check if the column being deleted/updated is referenced
+                if ref_column_name not in columns_values:
+                    continue
+
+                # Get the FK action
+                fk_action_type = "on_delete" if action == "DELETE" else "on_update"
+                fk_action = fk.get(fk_action_type, "NO ACTION")
+
+                # Skip RESTRICT and NO ACTION (already handled in check phase)
+                if fk_action in ("RESTRICT", "NO ACTION"):
+                    continue
+
+                # Get the FK column name or path
+                fk_column = fk["name"]
+                is_nested = fk.get("is_nested", False)
+
+                # OPTIMIZATION: Batch processing - collect non-NULL values and process together
+                non_null_values = [
+                    v for v in columns_values[ref_column_name] if v is not None
+                ]
+
+                if not non_null_values:
+                    continue  # No values to process
+
+                # Branch logic based on whether FK is nested or simple
+                if is_nested:
+                    # Nested FK: Use JSONB path operations
+                    from orchestra.db.utils import PathSegment
+
+                    path_segments_data = fk.get("path_segments", [])
+                    path_segments = [
+                        PathSegment(
+                            name=s["name"],
+                            is_array=s["is_array"],
+                            is_wildcard=s["is_wildcard"],
+                            array_index=s.get("array_index"),
+                        )
+                        for s in path_segments_data
+                    ]
+
+                    if fk_action == "CASCADE" and action == "DELETE":
+                        # CASCADE DELETE: Delete entire log events containing the nested FK value
+                        for old_value in non_null_values:
+                            json_str = json.dumps(old_value)
+                            stats["cascaded_deletes"] += self._cascade_delete_nested(
+                                ref_context.id,
+                                fk_column,
+                                path_segments,
+                                json_str,
+                            )
+                    elif fk_action == "CASCADE" and action == "UPDATE":
+                        # CASCADE UPDATE: Update nested values
+                        if new_values and ref_column_name in new_values:
+                            new_value = new_values[ref_column_name]
+                            json_values = [json.dumps(v) for v in non_null_values]
+                            update_count = self._cascade_update_nested_batch(
+                                ref_context.id,
+                                fk_column,
+                                path_segments,
+                                json_values,
+                                new_value,
+                            )
+                            stats["cascaded_updates"] += update_count
+                    elif fk_action == "SET NULL":
+                        # SET NULL: Set nested values to null
+                        json_values = [json.dumps(v) for v in non_null_values]
+                        stats["set_null"] += self._set_null_nested_batch(
+                            ref_context.id,
+                            fk_column,
+                            path_segments,
+                            json_values,
+                        )
+                else:
+                    # Simple FK: Use existing methods
+                    if fk_action == "CASCADE" and action == "DELETE":
+                        # CASCADE DELETE requires per-value processing for recursive cascading
+                        for old_value in non_null_values:
+                            json_str = json.dumps(old_value)
+                            stats["cascaded_deletes"] += self._cascade_delete(
+                                ref_context.id,
+                                fk_column,
+                                json_str,
+                            )
+                    elif fk_action == "CASCADE" and action == "UPDATE":
+                        # CASCADE UPDATE: Batch update all values at once
+                        if new_values and ref_column_name in new_values:
+                            new_value = new_values[ref_column_name]
+                            json_values = [json.dumps(v) for v in non_null_values]
+                            stats["cascaded_updates"] += self._cascade_update_batch(
+                                ref_context.id,
+                                fk_column,
+                                json_values,
+                                new_value,
+                            )
+                    elif fk_action == "SET NULL":
+                        # SET NULL: Batch delete all FK column entries at once
+                        json_values = [json.dumps(v) for v in non_null_values]
+                        stats["set_null"] += self._set_null_batch(
+                            ref_context.id,
+                            fk_column,
+                            json_values,
+                        )
+
+                    # DISABLED: SET DEFAULT is not currently supported
+                    # elif fk_action == "SET DEFAULT":
+                    #     # SET DEFAULT: Update FK column to default value from FK definition
+                    #     default_value = fk.get("default")
+                    #
+                    #     if default_value is None:
+                    #         # Raise error instead of falling back to SET NULL
+                    #         raise ValueError(
+                    #             f"Foreign key '{fk_column}' in context '{ref_context.name}' "
+                    #             f"has SET DEFAULT action but no default value specified. "
+                    #             f"Add a 'default' field to the foreign key definition or use SET NULL action.",
+                    #         )
+                    #
+                    #     stats["set_default"] += self._set_default(
+                    #         ref_context.id,
+                    #         fk_column,
+                    #         json_str,
+                    #         default_value,
+                    #     )
+
+        return stats
+
+    def _cascade_delete(
+        self,
+        context_id: int,
+        fk_column: str,
+        old_value_json: str,
+    ) -> int:
+        """Delete all log events where FK column matches old value."""
+        # Find all log_event_ids that reference this value
+        query = text(
+            """
+            SELECT DISTINCT lec.log_event_id, le.project_id
+            FROM log l
+            JOIN log_event_log lel ON l.id = lel.log_id
+            JOIN log_event_context lec ON lel.log_event_id = lec.log_event_id
+            JOIN log_event le ON le.id = lec.log_event_id
+            WHERE lec.context_id = :context_id
+              AND l.key = :fk_column
+              AND l.value = CAST(:json_str AS jsonb)
+        """,
+        )
+
+        result = self.session.execute(
+            query,
+            {
+                "context_id": context_id,
+                "fk_column": fk_column,
+                "json_str": old_value_json,
+            },
+        )
+        log_events_data = [(row[0], row[1]) for row in result.fetchall()]
+
+        if not log_events_data:
+            return 0
+
+        # Before deleting, collect all column values from these log events
+        # to trigger cascading deletes recursively
+        log_event_ids = [le_id for le_id, _ in log_events_data]
+        project_id = log_events_data[0][1]  # All should have same project_id
+
+        # Get all column values from the log events we're about to delete
+        columns_query = text(
+            """
+            SELECT DISTINCT l.key, l.value
+            FROM log l
+            JOIN log_event_log lel ON l.id = lel.log_id
+            WHERE lel.log_event_id = ANY(:log_event_ids)
+              AND l.value IS NOT NULL
+        """,
+        )
+
+        result = self.session.execute(
+            columns_query,
+            {"log_event_ids": log_event_ids},
+        )
+
+        # Group values by column
+        columns_values = {}
+        for key, value in result.fetchall():
+            if key not in columns_values:
+                columns_values[key] = []
+            columns_values[key].append(value)
+
+        # Recursively apply FK actions for the context being deleted
+        if columns_values:
+            self.apply_fk_actions(
+                project_id=project_id,
+                context_id=context_id,
+                columns_values=columns_values,
+                action="DELETE",
+            )
+
+        # Now delete the log events (this will cascade to logs via DB constraints)
+        from orchestra.db.dao.log_event_dao import LogEventDAO
+
+        log_event_dao = LogEventDAO(self.session)
+        log_event_dao.delete(log_event_ids)
+
+        return len(log_event_ids)
+
+    def _cascade_update(
+        self,
+        context_id: int,
+        fk_column: str,
+        old_value_json: str,
+        new_value: Any,
+    ) -> int:
+        """Update all FK column values from old to new."""
+        new_value_json = json.dumps(new_value)
+
+        # Update all Log rows where FK column = old value
+        query = text(
+            """
+            UPDATE log
+            SET value = CAST(:new_value AS jsonb)
+            WHERE id IN (
+                SELECT l.id
+                FROM log l
+                JOIN log_event_log lel ON l.id = lel.log_id
+                JOIN log_event_context lec ON lel.log_event_id = lec.log_event_id
+                WHERE lec.context_id = :context_id
+                  AND l.key = :fk_column
+                  AND l.value = CAST(:old_value AS jsonb)
+            )
+        """,
+        )
+
+        result = self.session.execute(
+            query,
+            {
+                "context_id": context_id,
+                "fk_column": fk_column,
+                "old_value": old_value_json,
+                "new_value": new_value_json,
+            },
+        )
+
+        # Also update corresponding JSONLog entries if they exist
+        json_query = text(
+            """
+            UPDATE json_log
+            SET value = CAST(:new_value AS json)
+            WHERE id IN (
+                SELECT jl.id
+                FROM json_log jl
+                JOIN log_event_json_log lejl ON jl.id = lejl.json_log_id
+                JOIN log_event_context lec ON lejl.log_event_id = lec.log_event_id
+                WHERE lec.context_id = :context_id
+                  AND jl.key = :fk_column
+                  AND jl.value::text = :old_value
+            )
+        """,
+        )
+
+        self.session.execute(
+            json_query,
+            {
+                "context_id": context_id,
+                "fk_column": fk_column,
+                "old_value": old_value_json,
+                "new_value": new_value_json,
+            },
+        )
+
+        return result.rowcount
+
+    def _set_null(self, context_id: int, fk_column: str, old_value_json: str) -> int:
+        """Delete FK column entries (effectively setting to NULL)."""
+        # Delete all Log rows where FK column = old value
+        query = text(
+            """
+            DELETE FROM log
+            WHERE id IN (
+                SELECT l.id
+                FROM log l
+                JOIN log_event_log lel ON l.id = lel.log_id
+                JOIN log_event_context lec ON lel.log_event_id = lec.log_event_id
+                WHERE lec.context_id = :context_id
+                  AND l.key = :fk_column
+                  AND l.value = CAST(:json_str AS jsonb)
+            )
+        """,
+        )
+
+        result = self.session.execute(
+            query,
+            {
+                "context_id": context_id,
+                "fk_column": fk_column,
+                "json_str": old_value_json,
+            },
+        )
+
+        # Also delete corresponding JSONLog entries
+        json_query = text(
+            """
+            DELETE FROM json_log
+            WHERE id IN (
+                SELECT jl.id
+                FROM json_log jl
+                JOIN log_event_json_log lejl ON jl.id = lejl.json_log_id
+                JOIN log_event_context lec ON lejl.log_event_id = lec.log_event_id
+                WHERE lec.context_id = :context_id
+                  AND jl.key = :fk_column
+                  AND jl.value::text = :json_str
+            )
+        """,
+        )
+
+        self.session.execute(
+            json_query,
+            {
+                "context_id": context_id,
+                "fk_column": fk_column,
+                "json_str": old_value_json,
+            },
+        )
+
+        return result.rowcount
+
+    def _cascade_update_batch(
+        self,
+        context_id: int,
+        fk_column: str,
+        old_values_json: List[str],
+        new_value: Any,
+    ) -> int:
+        """Update FK column values for multiple old values in a single query.
+
+        This is an optimized version that processes multiple values at once
+        using a CTE to update both log and json_log tables in a single query.
+
+        Args:
+            context_id: Context ID where FKs are defined
+            fk_column: FK column name to update
+            old_values_json: List of JSON-serialized old values to find
+            new_value: New value to set
+
+        Returns:
+            Total number of rows updated across both tables
+        """
+        if not old_values_json:
+            return 0
+
+        new_value_json = json.dumps(new_value)
+
+        # Build placeholders for IN clause
+        placeholders = ", ".join([f":old_val_{i}" for i in range(len(old_values_json))])
+
+        # Use CTE to update both tables in a single query (Priority 4 optimization)
+        query_str = f"""
+            WITH updated_logs AS (
+                UPDATE log
+                SET value = CAST(:new_value AS jsonb)
+                WHERE id IN (
+                    SELECT l.id
+                    FROM log l
+                    JOIN log_event_log lel ON l.id = lel.log_id
+                    JOIN log_event_context lec ON lel.log_event_id = lec.log_event_id
+                    WHERE lec.context_id = :context_id
+                      AND l.key = :fk_column
+                      AND l.value::text IN ({placeholders})
+                )
+                RETURNING id
+            ),
+            updated_json_logs AS (
+                UPDATE json_log
+                SET value = CAST(:new_value AS json)
+                WHERE id IN (
+                    SELECT jl.id
+                    FROM json_log jl
+                    JOIN log_event_json_log lejl ON jl.id = lejl.json_log_id
+                    JOIN log_event_context lec ON lejl.log_event_id = lec.log_event_id
+                    WHERE lec.context_id = :context_id
+                      AND jl.key = :fk_column
+                      AND jl.value::text IN ({placeholders})
+                )
+                RETURNING id
+            )
+            SELECT
+                (SELECT COUNT(*) FROM updated_logs) AS log_count,
+                (SELECT COUNT(*) FROM updated_json_logs) AS json_log_count
+        """
+
+        query = text(query_str)
+
+        # Build parameters dict
+        params = {
+            "context_id": context_id,
+            "fk_column": fk_column,
+            "new_value": new_value_json,
+        }
+        for i, old_val in enumerate(old_values_json):
+            params[f"old_val_{i}"] = old_val
+
+        result = self.session.execute(query, params)
+
+        row = result.fetchone()
+        if row:
+            return row[0] + row[1]  # Total updated rows
+        return 0
+
+    def _set_null_batch(
+        self,
+        context_id: int,
+        fk_column: str,
+        old_values_json: List[str],
+    ) -> int:
+        """Delete FK column entries for multiple values in a single query.
+
+        This is an optimized version that processes multiple values at once
+        using a CTE to delete from both log and json_log tables in a single query.
+
+        Args:
+            context_id: Context ID where FKs are defined
+            fk_column: FK column name to delete
+            old_values_json: List of JSON-serialized old values to find
+
+        Returns:
+            Total number of rows deleted across both tables
+        """
+        if not old_values_json:
+            return 0
+
+        # Build placeholders for IN clause
+        placeholders = ", ".join([f":old_val_{i}" for i in range(len(old_values_json))])
+
+        # Use CTE to delete from both tables in a single query (Priority 4 optimization)
+        query_str = f"""
+            WITH deleted_logs AS (
+                DELETE FROM log
+                WHERE id IN (
+                    SELECT l.id
+                    FROM log l
+                    JOIN log_event_log lel ON l.id = lel.log_id
+                    JOIN log_event_context lec ON lel.log_event_id = lec.log_event_id
+                    WHERE lec.context_id = :context_id
+                      AND l.key = :fk_column
+                      AND l.value::text IN ({placeholders})
+                )
+                RETURNING id
+            ),
+            deleted_json_logs AS (
+                DELETE FROM json_log
+                WHERE id IN (
+                    SELECT jl.id
+                    FROM json_log jl
+                    JOIN log_event_json_log lejl ON jl.id = lejl.json_log_id
+                    JOIN log_event_context lec ON lejl.log_event_id = lec.log_event_id
+                    WHERE lec.context_id = :context_id
+                      AND jl.key = :fk_column
+                      AND jl.value::text IN ({placeholders})
+                )
+                RETURNING id
+            )
+            SELECT
+                (SELECT COUNT(*) FROM deleted_logs) AS log_count,
+                (SELECT COUNT(*) FROM deleted_json_logs) AS json_log_count
+        """
+
+        query = text(query_str)
+
+        # Build parameters dict
+        params = {
+            "context_id": context_id,
+            "fk_column": fk_column,
+        }
+        for i, old_val in enumerate(old_values_json):
+            params[f"old_val_{i}"] = old_val
+
+        result = self.session.execute(query, params)
+
+        row = result.fetchone()
+        if row:
+            return row[0] + row[1]  # Total deleted rows
+        return 0
+
+    def _cascade_delete_nested(
+        self,
+        context_id: int,
+        fk_path: str,
+        path_segments: List,
+        old_value_json: str,
+    ) -> int:
+        """Delete all log events where a nested path contains the old value.
+
+        This handles nested FKs like 'images[*].image_id' where we need to find
+        all logs that have the old value at the nested path and delete the entire
+        log event.
+
+        Args:
+            context_id: Context ID where FKs are defined
+            fk_path: Full path string (e.g., 'images[*].image_id')
+            path_segments: Parsed path segments from FKPathParser
+            old_value_json: JSON-serialized value to find
+
+        Returns:
+            Number of log events deleted
+        """
+        from orchestra.db.utils import FKPathParser
+
+        # Get root field name
+        root_field = FKPathParser.get_root_field(fk_path)
+
+        # Find all log_event_ids that have this value at the nested path
+        # Strategy: Get the root field data and use Python to check nested values
+        # This is more reliable than complex JSONB queries
+
+        # First, get all log entries for the root field in this context
+        query = text(
+            """
+            SELECT DISTINCT lec.log_event_id, l.value, le.project_id
+            FROM log l
+            JOIN log_event_log lel ON l.id = lel.log_id
+            JOIN log_event_context lec ON lel.log_event_id = lec.log_event_id
+            JOIN log_event le ON le.id = lec.log_event_id
+            WHERE lec.context_id = :context_id
+              AND l.key = :root_field
+              AND l.value IS NOT NULL
+        """,
+        )
+
+        result = self.session.execute(
+            query,
+            {
+                "context_id": context_id,
+                "root_field": root_field,
+            },
+        )
+
+        # Parse the old value
+        old_value = json.loads(old_value_json)
+
+        # Check each log's root field data to see if it contains the target value
+        matching_log_event_ids = []
+        project_id = None
+
+        for row in result.fetchall():
+            log_event_id = row[0]
+            root_data = row[1]  # JSONB value, already Python object
+            if project_id is None:
+                project_id = row[2]
+
+            # Extract values from this log's data
+            try:
+                extracted_values = FKPathParser.extract_values(
+                    {root_field: root_data},
+                    path_segments,
+                )
+                # Check if our target value is in the extracted values
+                if old_value in extracted_values:
+                    matching_log_event_ids.append(log_event_id)
+            except Exception:
+                # If extraction fails, skip this log
+                continue
+
+        if not matching_log_event_ids:
+            return 0
+
+        # Before deleting, collect all column values from these log events
+        # to trigger cascading deletes recursively
+        columns_query = text(
+            """
+            SELECT DISTINCT l.key, l.value
+            FROM log l
+            JOIN log_event_log lel ON l.id = lel.log_id
+            WHERE lel.log_event_id = ANY(:log_event_ids)
+              AND l.value IS NOT NULL
+        """,
+        )
+
+        result = self.session.execute(
+            columns_query,
+            {"log_event_ids": matching_log_event_ids},
+        )
+
+        # Group values by column
+        columns_values = {}
+        for key, value in result.fetchall():
+            if key not in columns_values:
+                columns_values[key] = []
+            columns_values[key].append(value)
+
+        # Recursively apply FK actions for the context being deleted
+        if columns_values:
+            self.apply_fk_actions(
+                project_id=project_id,
+                context_id=context_id,
+                columns_values=columns_values,
+                action="DELETE",
+            )
+
+        # Now delete the log events (this will cascade to logs via DB constraints)
+        from orchestra.db.dao.log_event_dao import LogEventDAO
+
+        log_event_dao = LogEventDAO(self.session)
+        log_event_dao.delete(matching_log_event_ids)
+
+        return len(matching_log_event_ids)
+
+    def _cascade_update_nested_batch(
+        self,
+        context_id: int,
+        fk_path: str,
+        path_segments: List,
+        old_values_json: List[str],
+        new_value: Any,
+    ) -> int:
+        """Update nested FK values in multiple logs.
+
+        This handles nested FKs like 'images[*].image_id' where we need to find
+        all logs that have any of the old values at the nested path and update
+        them to the new value.
+
+        For array paths with [*], this updates ALL matching occurrences within each array.
+
+        Args:
+            context_id: Context ID where FKs are defined
+            fk_path: Full path string (e.g., 'images[*].image_id')
+            path_segments: Parsed path segments from FKPathParser
+            old_values_json: List of JSON-serialized old values to find
+            new_value: New value to set
+
+        Returns:
+            Number of log entries updated (log + json_log)
+        """
+        from orchestra.db.utils import FKPathParser
+
+        if not old_values_json:
+            return 0
+
+        # Parse old values
+        old_values = [json.loads(v) for v in old_values_json]
+        old_values_set = set(old_values)
+
+        # Get root field name
+        root_field = FKPathParser.get_root_field(fk_path)
+
+        # Find all logs that need updating
+        query = text(
+            """
+            SELECT l.id, l.value, lec.log_event_id
+            FROM log l
+            JOIN log_event_log lel ON l.id = lel.log_id
+            JOIN log_event_context lec ON lel.log_event_id = lec.log_event_id
+            WHERE lec.context_id = :context_id
+              AND l.key = :root_field
+              AND l.value IS NOT NULL
+        """,
+        )
+
+        result = self.session.execute(
+            query,
+            {
+                "context_id": context_id,
+                "root_field": root_field,
+            },
+        )
+
+        # Process each log and update nested values
+        updates_log = []  # (log_id, new_jsonb_value)
+        updates_json_log = []  # (log_event_id, new_json_value)
+
+        all_rows = result.fetchall()
+
+        for row in all_rows:
+            log_id = row[0]
+            root_data = row[1]  # JSONB value, already Python object
+            log_event_id = row[2]
+
+            # Make a deep copy to modify
+            import copy
+
+            modified_data = copy.deepcopy(root_data)
+
+            # CRITICAL: Wrap root_data in a dict with the root field name
+            # The path segments expect {"images": [...]} not just [...]
+            wrapped_data = {root_field: modified_data}
+
+            # Update nested values
+            updated = self._update_nested_value(
+                wrapped_data,
+                path_segments,
+                old_values_set,
+                new_value,
+            )
+
+            if updated:
+                # Extract the updated root field value
+                updated_root_data = wrapped_data[root_field]
+                updates_log.append((log_id, updated_root_data))
+                updates_json_log.append((log_event_id, updated_root_data))
+
+        if not updates_log:
+            return 0
+
+        # OPTIMIZATION: Perform bulk updates using PostgreSQL unnest
+        # Instead of N individual UPDATE queries, we use a single query
+        # that updates all rows at once by joining with the new values
+        update_count = 0
+
+        # Bulk update log table (1 query instead of N)
+        log_ids = [log_id for log_id, _ in updates_log]
+        log_values = [json.dumps(new_data) for _, new_data in updates_log]
+
+        bulk_log_update = text(
+            """
+            UPDATE log l
+            SET value = CAST(v.new_value AS jsonb)
+            FROM (
+                SELECT unnest(CAST(:log_ids AS bigint[])) as id,
+                       unnest(CAST(:new_values AS text[])) as new_value
+            ) v
+            WHERE l.id = v.id
+        """,
+        )
+        result = self.session.execute(
+            bulk_log_update,
+            {
+                "log_ids": log_ids,
+                "new_values": log_values,
+            },
+        )
+        update_count += result.rowcount
+
+        # Bulk update json_log table (1 query instead of N)
+        json_log_event_ids = [log_event_id for log_event_id, _ in updates_json_log]
+        json_log_values = [json.dumps(new_data) for _, new_data in updates_json_log]
+
+        bulk_json_log_update = text(
+            """
+            UPDATE json_log jl
+            SET value = CAST(v.new_value AS json)
+            FROM (
+                SELECT unnest(CAST(:log_event_ids AS bigint[])) as log_event_id,
+                       unnest(CAST(:new_values AS text[])) as new_value
+            ) v
+            JOIN log_event_json_log lejl ON lejl.log_event_id = v.log_event_id
+            WHERE jl.id = lejl.json_log_id
+              AND jl.key = :root_field
+        """,
+        )
+        result = self.session.execute(
+            bulk_json_log_update,
+            {
+                "log_event_ids": json_log_event_ids,
+                "new_values": json_log_values,
+                "root_field": root_field,
+            },
+        )
+        update_count += result.rowcount
+
+        return update_count
+
+    def _set_null_nested_batch(
+        self,
+        context_id: int,
+        fk_path: str,
+        path_segments: List,
+        old_values_json: List[str],
+    ) -> int:
+        """Set nested FK values to null in multiple logs.
+
+        This handles nested FKs like 'images[*].image_id' where we need to find
+        all logs that have any of the old values at the nested path and set
+        them to null.
+
+        For array paths with [*], this sets ALL matching occurrences to null.
+
+        Args:
+            context_id: Context ID where FKs are defined
+            fk_path: Full path string (e.g., 'images[*].image_id')
+            path_segments: Parsed path segments from FKPathParser
+            old_values_json: List of JSON-serialized old values to find
+
+        Returns:
+            Number of log entries updated (log + json_log)
+        """
+        from orchestra.db.utils import FKPathParser
+
+        if not old_values_json:
+            return 0
+
+        # Parse old values
+        old_values = [json.loads(v) for v in old_values_json]
+        old_values_set = set(old_values)
+
+        # Get root field name
+        root_field = FKPathParser.get_root_field(fk_path)
+
+        # Find all logs that need updating
+        query = text(
+            """
+            SELECT l.id, l.value, lec.log_event_id
+            FROM log l
+            JOIN log_event_log lel ON l.id = lel.log_id
+            JOIN log_event_context lec ON lel.log_event_id = lec.log_event_id
+            WHERE lec.context_id = :context_id
+              AND l.key = :root_field
+              AND l.value IS NOT NULL
+        """,
+        )
+
+        result = self.session.execute(
+            query,
+            {
+                "context_id": context_id,
+                "root_field": root_field,
+            },
+        )
+
+        # Process each log and set nested values to null
+        updates_log = []  # (log_id, new_jsonb_value)
+        updates_json_log = []  # (log_event_id, new_json_value)
+
+        for row in result.fetchall():
+            log_id = row[0]
+            root_data = row[1]  # JSONB value, already Python object
+            log_event_id = row[2]
+
+            # Make a deep copy to modify
+            import copy
+
+            modified_data = copy.deepcopy(root_data)
+
+            # CRITICAL: Wrap root_data in a dict with the root field name
+            # The path segments expect {"images": [...]} not just [...]
+            wrapped_data = {root_field: modified_data}
+
+            # Set nested values to null
+            updated = self._update_nested_value(
+                wrapped_data,
+                path_segments,
+                old_values_set,
+                None,  # Set to null
+            )
+
+            if updated:
+                # Extract the updated root field value
+                updated_root_data = wrapped_data[root_field]
+                updates_log.append((log_id, updated_root_data))
+                updates_json_log.append((log_event_id, updated_root_data))
+
+        if not updates_log:
+            return 0
+
+        # OPTIMIZATION: Perform bulk updates using PostgreSQL unnest
+        # Instead of N individual UPDATE queries, we use a single query
+        # that updates all rows at once by joining with the new values
+        update_count = 0
+
+        # Bulk update log table (1 query instead of N)
+        log_ids = [log_id for log_id, _ in updates_log]
+        log_values = [json.dumps(new_data) for _, new_data in updates_log]
+
+        bulk_log_update = text(
+            """
+            UPDATE log l
+            SET value = CAST(v.new_value AS jsonb)
+            FROM (
+                SELECT unnest(CAST(:log_ids AS bigint[])) as id,
+                       unnest(CAST(:new_values AS text[])) as new_value
+            ) v
+            WHERE l.id = v.id
+        """,
+        )
+        result = self.session.execute(
+            bulk_log_update,
+            {
+                "log_ids": log_ids,
+                "new_values": log_values,
+            },
+        )
+        update_count += result.rowcount
+
+        # Bulk update json_log table (1 query instead of N)
+        json_log_event_ids = [log_event_id for log_event_id, _ in updates_json_log]
+        json_log_values = [json.dumps(new_data) for _, new_data in updates_json_log]
+
+        bulk_json_log_update = text(
+            """
+            UPDATE json_log jl
+            SET value = CAST(v.new_value AS json)
+            FROM (
+                SELECT unnest(CAST(:log_event_ids AS bigint[])) as log_event_id,
+                       unnest(CAST(:new_values AS text[])) as new_value
+            ) v
+            JOIN log_event_json_log lejl ON lejl.log_event_id = v.log_event_id
+            WHERE jl.id = lejl.json_log_id
+              AND jl.key = :root_field
+        """,
+        )
+        result = self.session.execute(
+            bulk_json_log_update,
+            {
+                "log_event_ids": json_log_event_ids,
+                "new_values": json_log_values,
+                "root_field": root_field,
+            },
+        )
+        update_count += result.rowcount
+
+        return update_count
+
+    def _update_nested_value(
+        self,
+        data: Any,
+        path_segments: List,
+        old_values_set: set,
+        new_value: Any,
+    ) -> bool:
+        """Recursively update nested values in a data structure.
+
+        This helper method traverses a data structure following the path segments
+        and replaces any values in old_values_set with new_value.
+
+        Args:
+            data: The data structure to modify (dict or list)
+            path_segments: List of PathSegment objects defining the path
+            old_values_set: Set of old values to replace
+            new_value: New value to set (can be None for SET NULL)
+
+        Returns:
+            True if any values were updated, False otherwise
+        """
+        if not path_segments:
+            return False
+
+        updated = False
+        segment = path_segments[0]
+        remaining = path_segments[1:]
+
+        if segment.is_array:
+            # Handle array segment
+            if not isinstance(data, dict) or segment.name not in data:
+                return False
+
+            arr = data[segment.name]
+            if not isinstance(arr, list):
+                return False
+
+            if segment.is_wildcard:
+                # Process all array elements
+                for item in arr:
+                    if remaining:
+                        # Recurse into nested structure
+                        if self._update_nested_value(
+                            item,
+                            remaining,
+                            old_values_set,
+                            new_value,
+                        ):
+                            updated = True
+                    else:
+                        # This shouldn't happen (wildcard at end of path is invalid)
+                        pass
+            else:
+                # Process specific index
+                idx = segment.array_index
+                if idx is not None and 0 <= idx < len(arr):
+                    if remaining:
+                        if self._update_nested_value(
+                            arr[idx],
+                            remaining,
+                            old_values_set,
+                            new_value,
+                        ):
+                            updated = True
+        else:
+            # Handle dict segment
+            if not isinstance(data, dict) or segment.name not in data:
+                return False
+
+            if remaining:
+                # Recurse deeper
+                if self._update_nested_value(
+                    data[segment.name],
+                    remaining,
+                    old_values_set,
+                    new_value,
+                ):
+                    updated = True
+            else:
+                # Final segment - check and update value
+                current_value = data[segment.name]
+                if current_value in old_values_set:
+                    data[segment.name] = new_value
+                    updated = True
+
+        return updated
+
+    # DISABLED: SET DEFAULT is not currently supported
+    # def _set_default(
+    #     self,
+    #     context_id: int,
+    #     fk_column: str,
+    #     old_value_json: str,
+    #     default_value: Any,
+    # ) -> int:
+    #     """Update FK column to default value."""
+    #     # This is similar to CASCADE UPDATE but uses default value
+    #     return self._cascade_update(
+    #         context_id,
+    #         fk_column,
+    #         old_value_json,
+    #         default_value,
+    #     )
+    #
+    # def _get_default_value(self, context: Context, fk_column: str) -> Optional[Any]:
+    #     """
+    #     DEPRECATED: Get default value for FK column from context definition.
+    #
+    #     This method is deprecated. Default values should now be specified
+    #     in the foreign key definition's 'default' field.
+    #
+    #     Args:
+    #         context: The context object
+    #         fk_column: The foreign key column name
+    #
+    #     Returns:
+    #         None (deprecated functionality)
+    #     """
+    #     # This method is no longer used as of the new FK default field implementation
+    #     # Kept for backwards compatibility but returns None
+    #     return None
+
     def create(
         self,
         project_id: int,
@@ -137,6 +2057,7 @@ class ContextDAO:
         allow_duplicates: bool = True,
         unique_keys: Optional[Dict[str, str]] = None,
         auto_counting: Optional[Dict[str, Optional[str]]] = None,
+        foreign_keys: Optional[List[Dict[str, Any]]] = None,
     ) -> int:
         """Create a new context using upsert to handle race conditions."""
         from orchestra.db.dao.field_type_dao import FieldTypeDAO
@@ -145,9 +2066,16 @@ class ContextDAO:
 
         self._validate_description(description)
 
+        # Validate foreign keys if provided
+        if foreign_keys:
+            self._validate_foreign_keys_config(project_id, name, foreign_keys)
+
         # Extract names and types from unique_keys dict
         unique_key_names = list(unique_keys.keys()) if unique_keys else []
         unique_key_types = list(unique_keys.values()) if unique_keys else []
+
+        # Convert foreign_keys list to proper format for storage
+        foreign_keys_json = foreign_keys if foreign_keys else []
 
         stmt = pg_insert(Context).values(
             project_id=project_id,
@@ -160,6 +2088,7 @@ class ContextDAO:
             unique_key_names=unique_key_names,
             unique_key_types=unique_key_types,
             auto_counting=auto_counting or {},
+            foreign_keys=foreign_keys_json,
         )
 
         # On conflict, do nothing and return the existing context's id
@@ -334,6 +2263,7 @@ class ContextDAO:
                         allow_duplicates=context_data.get("allow_duplicates", True),
                         unique_keys=context_data.get("unique_keys"),
                         auto_counting=context_data.get("auto_counting"),
+                        foreign_keys=context_data.get("foreign_keys"),
                     )
                     created_contexts.append(name)
 
@@ -382,6 +2312,9 @@ class ContextDAO:
                                         unique_keys=matching_context.get("unique_keys"),
                                         auto_counting=matching_context.get(
                                             "auto_counting",
+                                        ),
+                                        foreign_keys=matching_context.get(
+                                            "foreign_keys",
                                         ),
                                     )
                         except:
@@ -486,6 +2419,7 @@ class ContextDAO:
         allow_duplicates: bool = True,
         unique_keys: Optional[Dict[str, str]] = None,
         auto_counting: Optional[Dict[str, Optional[str]]] = None,
+        foreign_keys: Optional[List[Dict[str, Any]]] = None,
     ) -> int:
         """
         Get or create a context using upsert.
@@ -522,6 +2456,9 @@ class ContextDAO:
             unique_key_names = list(unique_keys.keys()) if unique_keys else []
             unique_key_types = list(unique_keys.values()) if unique_keys else []
 
+            # Convert foreign_keys list to proper format for storage
+            foreign_keys_json = foreign_keys if foreign_keys else []
+
             # Create the context
             stmt = pg_insert(Context).values(
                 project_id=project_id,
@@ -534,6 +2471,7 @@ class ContextDAO:
                 unique_key_names=unique_key_names,
                 unique_key_types=unique_key_types,
                 auto_counting=auto_counting or {},
+                foreign_keys=foreign_keys_json,
             )
 
             # On conflict, do nothing and return the existing context's id
@@ -565,6 +2503,7 @@ class ContextDAO:
                             unique_key_names=unique_key_names,
                             unique_key_types=unique_key_types,
                             auto_counting=auto_counting or {},
+                            foreign_keys=foreign_keys_json,
                         )
                         .returning(Context.id)
                     )
