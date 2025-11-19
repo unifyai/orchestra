@@ -2080,13 +2080,6 @@ def delete_logs(
 
     # Check RESTRICT constraints before deletion
     if body.source_type in ("all", "base"):
-        from orchestra.db.models.orchestra_models import (
-            Log,
-            LogEvent,
-            LogEventContext,
-            LogEventLog,
-        )
-
         # Extract column-value pairs being deleted
         columns_values_to_delete = {}  # {column_name: [values...]}
 
