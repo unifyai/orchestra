@@ -167,12 +167,19 @@ def create_context(
                         "allow_duplicates": True,
                         "unique_keys": None,
                         "auto_counting": None,
+                        "foreign_keys": None,
                     },
                 )
             elif isinstance(context_request, dict):
                 # Handle dictionary input - validate it as ContextCreateRequest
                 try:
                     validated_request = ContextCreateRequest(**context_request)
+                    # Convert foreign_keys from Pydantic models to dicts
+                    foreign_keys_data = None
+                    if validated_request.foreign_keys:
+                        foreign_keys_data = [
+                            fk.model_dump() for fk in validated_request.foreign_keys
+                        ]
                     context_data_list.append(
                         {
                             "name": validated_request.name,
@@ -181,6 +188,7 @@ def create_context(
                             "allow_duplicates": validated_request.allow_duplicates,
                             "unique_keys": validated_request.unique_keys,
                             "auto_counting": validated_request.auto_counting,
+                            "foreign_keys": foreign_keys_data,
                         },
                     )
                 except Exception as e:
@@ -188,6 +196,12 @@ def create_context(
                     context_data_list.append(context_request)
             else:
                 # Handle ContextCreateRequest object
+                # Convert foreign_keys from Pydantic models to dicts
+                foreign_keys_data = None
+                if context_request.foreign_keys:
+                    foreign_keys_data = [
+                        fk.model_dump() for fk in context_request.foreign_keys
+                    ]
                 context_data_list.append(
                     {
                         "name": context_request.name,
@@ -196,6 +210,7 @@ def create_context(
                         "allow_duplicates": context_request.allow_duplicates,
                         "unique_keys": context_request.unique_keys,
                         "auto_counting": context_request.auto_counting,
+                        "foreign_keys": foreign_keys_data,
                     },
                 )
 
@@ -310,6 +325,7 @@ def get_contexts(
                 "allow_duplicates": context[0].allow_duplicates,
                 "unique_keys": context[0].unique_key_names or [],
                 "auto_counting": context[0].auto_counting or {},
+                "foreign_keys": context[0].foreign_keys or [],
             }
             for context in existing_contexts
             if context[0].name != ""
@@ -435,6 +451,7 @@ def get_context(
             "allow_duplicates": context[0][0].allow_duplicates,
             "unique_keys": context[0][0].unique_key_names or [],
             "auto_counting": context[0][0].auto_counting or {},
+            "foreign_keys": context[0][0].foreign_keys or [],
         }
     except IndexError as e:
         raise not_found(str(e))
