@@ -1412,8 +1412,6 @@ def update_logs(
 
     # Check RESTRICT constraints before update
     if ctx_id:
-        pass
-
         # Determine which columns are being updated
         columns_being_updated = set()
         if body.entries:
