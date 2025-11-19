@@ -1492,6 +1492,42 @@ def create_logs_internal(
     failed_logs = []
     successful_indices = []
 
+    # OPTIMIZATION: Batch FK validation - validate all logs at once before processing
+    # Merge entries and params for each log to prepare for batch validation
+    batch_merged_data = []
+    for i in range(total_logs):
+        current_entries = dict(entries_list[min(i, entries_len - 1)] or {})
+        current_params = dict(params_list[min(i, params_len - 1)] or {})
+
+        # Add auto-incremented values if applicable
+        if context_obj and context_obj.auto_counting and row_ids and i < len(row_ids):
+            row_id_dict = row_ids[i] if isinstance(row_ids[i], dict) else {}
+            unique_keys = context_obj.unique_keys or {}
+
+            for col_name, col_value in row_id_dict.items():
+                if (
+                    col_name in context_obj.auto_counting
+                    and col_name not in unique_keys
+                ):
+                    if (
+                        col_name not in current_entries
+                        and col_name not in current_params
+                    ):
+                        current_entries[col_name] = col_value
+
+        merged_data = {**current_params, **current_entries}
+        batch_merged_data.append(merged_data)
+
+    # Batch validate all FK references at once (single query per unique FK)
+    if context_obj and context_obj.foreign_keys:
+        failed_fk_validations = context_dao.batch_validate_foreign_key_references(
+            project_id=project_id,
+            context_id=context_id,
+            batch_entries=batch_merged_data,
+        )
+    else:
+        failed_fk_validations = {}
+
     # Process all logs in the batch
     for i in range(total_logs):
         log_event_id = log_event_ids[i]
@@ -1499,6 +1535,16 @@ def create_logs_internal(
         # Per-log staging to isolate failures
         perlog_field_types = []
         perlog_records = []
+
+        # Check if this log failed FK validation
+        if i in failed_fk_validations:
+            failed_logs.append(
+                {
+                    "index": i,
+                    "error": failed_fk_validations[i],
+                },
+            )
+            continue
 
         # Get current entries and params (clone to avoid in-place mutations leaking)
         current_entries = dict(entries_list[min(i, entries_len - 1)] or {})
