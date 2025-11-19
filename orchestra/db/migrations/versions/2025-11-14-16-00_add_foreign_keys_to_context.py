@@ -11,7 +11,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision = "add_foreign_keys_to_context"
-down_revision = "2b35f76ca925"
+down_revision = "add_safe_temporal_cast_functions"
 branch_labels = None
 depends_on = None
 
