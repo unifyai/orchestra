@@ -11,7 +11,7 @@ for nested foreign keys with various path patterns:
 import pytest
 from httpx import AsyncClient
 
-from orchestra.db.utils.fk_path_parser import FKPathParser
+from orchestra.db.utils import FKPathParser
 from orchestra.tests.test_log import HEADERS, _create_project
 
 

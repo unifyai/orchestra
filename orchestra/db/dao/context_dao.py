@@ -475,7 +475,7 @@ class ContextDAO:
         project_id: int,
     ) -> None:
         """Validate a nested path FK reference (new logic for nested FKs)."""
-        from orchestra.db.utils.fk_path_parser import FKPathParser, PathSegment
+        from orchestra.db.utils import FKPathParser, PathSegment
 
         fk_path = fk["name"]
         path_segments_data = fk.get("path_segments", [])
@@ -612,10 +612,7 @@ class ContextDAO:
 
                 if is_nested:
                     # Extract values from nested path
-                    from orchestra.db.utils.fk_path_parser import (
-                        FKPathParser,
-                        PathSegment,
-                    )
+                    from orchestra.db.utils import FKPathParser, PathSegment
 
                     path_segments_data = fk.get("path_segments", [])
                     path_segments = [
@@ -744,10 +741,7 @@ class ContextDAO:
 
                 # For nested FKs, extract values to check
                 if is_nested:
-                    from orchestra.db.utils.fk_path_parser import (
-                        FKPathParser,
-                        PathSegment,
-                    )
+                    from orchestra.db.utils import FKPathParser, PathSegment
 
                     path_segments_data = fk.get("path_segments", [])
                     path_segments = [
@@ -1051,7 +1045,7 @@ class ContextDAO:
                 # Branch logic based on whether FK is nested or simple
                 if is_nested:
                     # Nested FK: Use JSONB path operations
-                    from orchestra.db.utils.fk_path_parser import PathSegment
+                    from orchestra.db.utils import PathSegment
 
                     path_segments_data = fk.get("path_segments", [])
                     path_segments = [
@@ -1527,7 +1521,7 @@ class ContextDAO:
         Returns:
             Number of log events deleted
         """
-        from orchestra.db.utils.fk_path_parser import FKPathParser
+        from orchestra.db.utils import FKPathParser
 
         # Get root field name
         root_field = FKPathParser.get_root_field(fk_path)
@@ -1654,7 +1648,7 @@ class ContextDAO:
         Returns:
             Number of log entries updated (log + json_log)
         """
-        from orchestra.db.utils.fk_path_parser import FKPathParser
+        from orchestra.db.utils import FKPathParser
 
         if not old_values_json:
             return 0
@@ -1806,7 +1800,7 @@ class ContextDAO:
         Returns:
             Number of log entries updated (log + json_log)
         """
-        from orchestra.db.utils.fk_path_parser import FKPathParser
+        from orchestra.db.utils import FKPathParser
 
         if not old_values_json:
             return 0
