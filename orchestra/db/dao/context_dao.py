@@ -146,14 +146,9 @@ class ContextDAO:
 
             ref_context_name, ref_column_name = ref_parts
 
-            # Check if the referenced context exists in the same project
-            # Allow self-reference (will be checked for cycles later)
-            if ref_context_name != context_name:
-                ref_context = self.filter(project_id=project_id, name=ref_context_name)
-                if not ref_context:
-                    raise ValueError(
-                        f"Referenced context '{ref_context_name}' does not exist in this project",
-                    )
+            # Note: No referenced context existence check to allow mutually-referencing contexts.
+            # (e.g., FunctionManager references GuidanceManager and vice versa).
+            # FK validation in place when inserting/updating logs.
 
             # Validate SET DEFAULT has a default value
             # DISABLED: SET DEFAULT is not currently supported
