@@ -1499,6 +1499,154 @@ class ContextDAO:
             return row[0] + row[1]  # Total deleted rows
         return 0
 
+    def _cascade_delete_nested_remove_elements(
+        self,
+        context_id: int,
+        fk_path: str,
+        path_segments: List,
+        old_values_json: List[str],
+    ) -> int:
+        """Remove matching elements from nested arrays (wildcard paths).
+
+        This handles CASCADE DELETE for wildcard paths like:
+        - image_ids[*]: Remove matching primitive values from array
+        - images[*].image_id: Remove matching objects from array
+        - teams[*].members[*].user_id: Remove matching nested objects
+
+        Args:
+            context_id: Context ID where FKs are defined
+            fk_path: Full path string (e.g., 'image_ids[*]')
+            path_segments: Parsed path segments from FKPathParser
+            old_values_json: List of JSON-serialized values to remove
+
+        Returns:
+            Number of log entries updated
+        """
+        from orchestra.db.utils import FKPathParser
+
+        if not old_values_json:
+            return 0
+
+        # Parse old values
+        old_values = [json.loads(v) for v in old_values_json]
+        old_values_set = set(old_values)
+
+        # Get root field name
+        root_field = FKPathParser.get_root_field(fk_path)
+
+        # Find all logs that need updating
+        query = text(
+            """
+            SELECT l.id, l.value, lec.log_event_id
+            FROM log l
+            JOIN log_event_log lel ON l.id = lel.log_id
+            JOIN log_event_context lec ON lel.log_event_id = lec.log_event_id
+            WHERE lec.context_id = :context_id
+              AND l.key = :root_field
+              AND l.value IS NOT NULL
+        """,
+        )
+
+        result = self.session.execute(
+            query,
+            {
+                "context_id": context_id,
+                "root_field": root_field,
+            },
+        )
+
+        # Process each log and remove matching array elements
+        updates_log = []  # (log_id, new_jsonb_value)
+        updates_json_log = []  # (log_event_id, new_json_value)
+
+        all_rows = result.fetchall()
+        for row in all_rows:
+            log_id = row[0]
+            root_data = row[1]  # JSONB value, already Python object
+            log_event_id = row[2]
+
+            # Make a deep copy to modify
+            import copy
+
+            modified_data = copy.deepcopy(root_data)
+
+            # CRITICAL: Wrap root_data in a dict with the root field name
+            # The path segments expect {"images": [...]} not just [...]
+            wrapped_data = {root_field: modified_data}
+
+            # Remove matching array elements
+            removed = self._remove_matching_array_elements(
+                wrapped_data,
+                path_segments,
+                old_values_set,
+            )
+
+            if removed:
+                # Extract the updated root field value
+                updated_root_data = wrapped_data[root_field]
+                updates_log.append((log_id, updated_root_data))
+                updates_json_log.append((log_event_id, updated_root_data))
+
+        if not updates_log:
+            return 0
+
+        # OPTIMIZATION: Perform bulk updates using PostgreSQL unnest
+        # Instead of N individual UPDATE queries, we use 2 bulk queries
+        update_count = 0
+
+        # Bulk update log table (1 query instead of N)
+        log_ids = [log_id for log_id, _ in updates_log]
+        log_values = [json.dumps(new_data) for _, new_data in updates_log]
+
+        bulk_log_update = text(
+            """
+            UPDATE log l
+            SET value = CAST(v.new_value AS jsonb)
+            FROM (
+                SELECT unnest(CAST(:log_ids AS bigint[])) as id,
+                       unnest(CAST(:new_values AS text[])) as new_value
+            ) v
+            WHERE l.id = v.id
+        """,
+        )
+        result = self.session.execute(
+            bulk_log_update,
+            {
+                "log_ids": log_ids,
+                "new_values": log_values,
+            },
+        )
+        update_count += result.rowcount
+
+        # Bulk update json_log table (1 query instead of N)
+        json_log_event_ids = [log_event_id for log_event_id, _ in updates_json_log]
+        json_log_values = [json.dumps(new_data) for _, new_data in updates_json_log]
+
+        bulk_json_log_update = text(
+            """
+            UPDATE json_log jl
+            SET value = CAST(v.new_value AS json)
+            FROM (
+                SELECT unnest(CAST(:log_event_ids AS bigint[])) as log_event_id,
+                       unnest(CAST(:new_values AS text[])) as new_value
+            ) v
+            JOIN log_event_json_log lejl ON lejl.log_event_id = v.log_event_id
+            WHERE jl.id = lejl.json_log_id
+              AND jl.key = :root_field
+        """,
+        )
+        result = self.session.execute(
+            bulk_json_log_update,
+            {
+                "log_event_ids": json_log_event_ids,
+                "new_values": json_log_values,
+                "root_field": root_field,
+            },
+        )
+        update_count += result.rowcount
+
+        return update_count
+
     def _cascade_delete_nested(
         self,
         context_id: int,
@@ -1506,11 +1654,15 @@ class ContextDAO:
         path_segments: List,
         old_value_json: str,
     ) -> int:
-        """Delete all log events where a nested path contains the old value.
+        """Handle CASCADE DELETE for nested paths.
 
-        This handles nested FKs like 'images[*].image_id' where we need to find
-        all logs that have the old value at the nested path and delete the entire
-        log event.
+        Behavior depends on whether the path contains wildcards:
+
+        - Wildcard paths (image_ids[*], images[*].image_id):
+          Remove matching elements from arrays, keep the log
+
+        - Non-wildcard paths (metadata.author.user_id):
+          Delete the entire log event (standard CASCADE behavior)
 
         Args:
             context_id: Context ID where FKs are defined
@@ -1519,9 +1671,23 @@ class ContextDAO:
             old_value_json: JSON-serialized value to find
 
         Returns:
-            Number of log events deleted
+            Number of log events deleted or updated
         """
         from orchestra.db.utils import FKPathParser
+
+        # Check if path has wildcard - determines CASCADE behavior
+        has_wildcard = FKPathParser.has_wildcard(path_segments)
+
+        if has_wildcard:
+            # Wildcard path: Remove matching elements from arrays
+            return self._cascade_delete_nested_remove_elements(
+                context_id,
+                fk_path,
+                path_segments,
+                [old_value_json],  # Wrap in list for batch method
+            )
+
+        # Non-wildcard nested path: Delete entire log (standard CASCADE)
 
         # Get root field name
         root_field = FKPathParser.get_root_field(fk_path)
@@ -1925,6 +2091,162 @@ class ContextDAO:
         update_count += result.rowcount
 
         return update_count
+
+    def _remove_matching_array_elements(
+        self,
+        data: Any,
+        path_segments: List,
+        values_to_remove: set,
+    ) -> bool:
+        """Remove matching elements from arrays in nested structure.
+
+        This handles CASCADE DELETE for wildcard paths by removing array elements
+        rather than deleting the entire log.
+
+        Examples:
+            Flat arrays (image_ids[*]):
+                [1, 2, 3] → [1, 3] (removes 2)
+
+            Nested arrays (images[*].image_id):
+                [{id:1}, {id:2}, {id:3}] → [{id:1}, {id:3}]
+
+            Deep nesting (teams[*].members[*].user_id):
+                Removes member objects where user_id matches
+
+        Args:
+            data: Root data structure (dict)
+            path_segments: Path to traverse
+            values_to_remove: Set of values to remove
+
+        Returns:
+            True if any elements were removed
+        """
+        if not path_segments:
+            return False
+
+        removed = False
+        segment = path_segments[0]
+        remaining = path_segments[1:]
+
+        if segment.is_array:
+            # Handle array segment
+            if not isinstance(data, dict) or segment.name not in data:
+                return False
+
+            arr = data[segment.name]
+            if not isinstance(arr, list):
+                return False
+
+            if segment.is_wildcard:
+                # Wildcard array - need to check if this is the final wildcard
+                if not remaining:
+                    # Final wildcard - flat array of primitives (e.g., image_ids[*])
+                    # Remove matching primitive values
+                    original_len = len(arr)
+                    arr[:] = [item for item in arr if item not in values_to_remove]
+                    removed = len(arr) < original_len
+                else:
+                    # More segments after wildcard - check if next segment is also wildcard
+                    # Need to determine if we should remove entire objects or recurse deeper
+
+                    # Check if any remaining segment has a wildcard
+                    has_nested_wildcard = any(s.is_wildcard for s in remaining)
+
+                    if has_nested_wildcard:
+                        # Deep nesting (e.g., teams[*].members[*].user_id)
+                        # Recurse into each array element
+                        for item in arr:
+                            if self._remove_matching_array_elements(
+                                item,
+                                remaining,
+                                values_to_remove,
+                            ):
+                                removed = True
+                    else:
+                        # Single wildcard with nested field (e.g., images[*].image_id)
+                        # Remove entire objects where nested value matches
+                        original_len = len(arr)
+                        arr[:] = [
+                            item
+                            for item in arr
+                            if not self._object_contains_value(
+                                item,
+                                remaining,
+                                values_to_remove,
+                            )
+                        ]
+                        removed = len(arr) < original_len
+            else:
+                # Specific index
+                idx = segment.array_index
+                if idx is not None and 0 <= idx < len(arr):
+                    if remaining:
+                        if self._remove_matching_array_elements(
+                            arr[idx],
+                            remaining,
+                            values_to_remove,
+                        ):
+                            removed = True
+        else:
+            # Handle dict segment
+            if not isinstance(data, dict) or segment.name not in data:
+                return False
+
+            if remaining:
+                # Recurse deeper
+                if self._remove_matching_array_elements(
+                    data[segment.name],
+                    remaining,
+                    values_to_remove,
+                ):
+                    removed = True
+
+        return removed
+
+    def _object_contains_value(
+        self,
+        obj: Any,
+        path_segments: List,
+        values_to_check: set,
+    ) -> bool:
+        """Check if an object contains a specific value at a given path.
+
+        Used by _remove_matching_array_elements to determine which array
+        elements should be removed.
+
+        Args:
+            obj: Object to check (dict or primitive)
+            path_segments: Remaining path segments to traverse
+            values_to_check: Set of values to look for
+
+        Returns:
+            True if the object contains any of the values at the path
+        """
+        if not path_segments:
+            return False
+
+        segment = path_segments[0]
+        remaining = path_segments[1:]
+
+        if segment.is_array:
+            # Shouldn't happen in this context, but handle gracefully
+            return False
+
+        if not isinstance(obj, dict) or segment.name not in obj:
+            return False
+
+        current_value = obj[segment.name]
+
+        if not remaining:
+            # Final segment - check the value
+            return current_value in values_to_check
+        else:
+            # Recurse deeper
+            return self._object_contains_value(
+                current_value,
+                remaining,
+                values_to_check,
+            )
 
     def _update_nested_value(
         self,

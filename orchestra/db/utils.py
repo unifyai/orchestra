@@ -183,6 +183,31 @@ class FKPathParser:
         return segments
 
     @classmethod
+    def has_wildcard(cls, segments: List[PathSegment]) -> bool:
+        """Check if any segment in the path has a wildcard.
+
+        Args:
+            segments: List of PathSegment objects from parse()
+
+        Returns:
+            True if path contains [*], False otherwise
+
+        Examples:
+            >>> segments = parse("image_ids[*]")
+            >>> has_wildcard(segments)
+            True
+
+            >>> segments = parse("metadata.author.user_id")
+            >>> has_wildcard(segments)
+            False
+
+            >>> segments = parse("teams[*].members[*].user_id")
+            >>> has_wildcard(segments)
+            True
+        """
+        return any(seg.is_wildcard for seg in segments)
+
+    @classmethod
     def extract_values(
         cls,
         data: Any,
