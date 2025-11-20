@@ -120,6 +120,60 @@ class ResourceAccessDAO:
             .all()
         )
 
+    def get(self, access_id: int) -> Optional[ResourceAccess]:
+        """
+        Get a single resource access entry by ID.
+
+        :param access_id: ResourceAccess ID.
+        :return: ResourceAccess object or None.
+        """
+        return self.session.query(ResourceAccess).filter_by(id=access_id).first()
+
+    def update_role(self, access_id: int, new_role_id: int) -> Optional[ResourceAccess]:
+        """
+        Update the role of an existing resource access grant.
+
+        Clears the permission cache since permissions have changed.
+
+        :param access_id: ResourceAccess ID.
+        :param new_role_id: New role ID to assign.
+        :return: Updated ResourceAccess object or None if not found.
+        :raises ValueError: If the update would violate unique constraint.
+        """
+        access = self.get(access_id)
+        if not access:
+            return None
+
+        # Check if the new combination would violate unique constraint
+        # (same resource + same role + same grantee = duplicate)
+        existing = (
+            self.session.query(ResourceAccess)
+            .filter(
+                ResourceAccess.resource_type == access.resource_type,
+                ResourceAccess.resource_id == access.resource_id,
+                ResourceAccess.role_id == new_role_id,
+                ResourceAccess.grantee_type == access.grantee_type,
+                ResourceAccess.grantee_id == access.grantee_id,
+                ResourceAccess.id != access_id,  # Exclude current record
+            )
+            .first()
+        )
+
+        if existing:
+            raise ValueError(
+                f"Cannot update: {access.grantee_type} '{access.grantee_id}' "
+                f"already has role {new_role_id} on this resource",
+            )
+
+        # Update role
+        access.role_id = new_role_id
+        self.session.flush()
+
+        # Clear cache since permissions changed
+        self.clear_permission_cache()
+
+        return access
+
     def get_user_access(
         self,
         user_id: str,

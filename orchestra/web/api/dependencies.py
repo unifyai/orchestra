@@ -62,16 +62,7 @@ def auth_api_key(
             request_fastapi.state.user_email = db_response[0][1]
             request_fastapi.state.first_name = db_response[0][2]
             request_fastapi.state.last_name = db_response[0][3]
-
-            # Get the organization_id from the API key (if it's an org key)
-            # This is used for organization billing and context
-            api_keys = api_key_dao.filter(key=apikey)
-            if api_keys:
-                api_key = api_keys[0][0]  # Row object, access first element
-                # Set organization_id (None for personal API keys)
-                request_fastapi.state.organization_id = api_key.organization_id
-            else:
-                request_fastapi.state.organization_id = None
+            request_fastapi.state.organization_id = db_response[0][4]
 
             # Update the user context for logging/tracing
             set_user_context(

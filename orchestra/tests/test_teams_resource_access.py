@@ -1046,3 +1046,582 @@ async def test_only_project_org_resource_types_allowed(client: AsyncClient, dbse
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert "Invalid resource type" in response.json()["detail"]
         assert "Only 'project' and 'org' are supported" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_update_resource_access_role(client: AsyncClient, dbsession):
+    """Test updating a resource access grant's role (happy path)."""
+    owner = await create_test_user(client, "update_access_owner@test.com")
+    member = await create_test_user(client, "update_access_member@test.com")
+
+    # Create org
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Update Access Test Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Add member to org
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"], "level": "user"},
+        headers=owner["headers"],
+    )
+
+    # Create project
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
+
+    project_dao.create(
+        name="Test_Update_Project",
+        user_id=None,
+        organization_id=org_id,
+    )
+    dbsession.commit()
+    projects = project_dao.filter(organization_id=org_id, name="Test_Update_Project")
+    project = projects[0][0]
+
+    # Grant Viewer role to member
+    viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
+    access = resource_access_dao.grant_access(
+        resource_type="project",
+        resource_id=project.id,
+        role_id=viewer_role.id,
+        grantee_type="user",
+        grantee_id=member["id"],
+    )
+    dbsession.commit()
+    access_id = access.id
+    original_created_at = access.created_at
+
+    # Verify member has only read access
+    assert resource_access_dao.check_user_permission(
+        member["id"],
+        "project",
+        project.id,
+        "project:read",
+    ), "Member should have read permission with Viewer role"
+    assert not resource_access_dao.check_user_permission(
+        member["id"],
+        "project",
+        project.id,
+        "project:write",
+    ), "Member should not have write permission with Viewer role"
+
+    # Update to Member role (has write permission)
+    member_role = role_dao.get_by_name("Member", organization_id=None)
+
+    update_response = await client.patch(
+        f"/v0/resources/project/{project.id}/access/{access_id}",
+        json={"role_id": member_role.id},
+        headers=owner["headers"],
+    )
+    assert (
+        update_response.status_code == 200
+    ), f"Update failed: {update_response.json()}"
+
+    updated_data = update_response.json()
+    assert updated_data["id"] == access_id, "Access ID should be preserved"
+    assert updated_data["role_id"] == member_role.id, "Role ID should be updated"
+    assert updated_data["role_name"] == "Member", "Role name should be 'Member'"
+    assert updated_data["grantee_id"] == member["id"], "Grantee should remain the same"
+    assert (
+        updated_data["created_at"] == original_created_at.isoformat()
+    ), "created_at should be preserved"
+
+    # Verify member now has write access
+    dbsession.expire_all()  # Clear SQLAlchemy cache
+    resource_access_dao.clear_permission_cache()  # Clear permission cache
+
+    assert resource_access_dao.check_user_permission(
+        member["id"],
+        "project",
+        project.id,
+        "project:read",
+    ), "Member should still have read permission"
+    assert resource_access_dao.check_user_permission(
+        member["id"],
+        "project",
+        project.id,
+        "project:write",
+    ), "Member should now have write permission"
+
+
+@pytest.mark.anyio
+async def test_update_resource_access_team(client: AsyncClient, dbsession):
+    """Test updating a team's resource access role."""
+    owner = await create_test_user(client, "update_team_access_owner@test.com")
+    member = await create_test_user(client, "update_team_access_member@test.com")
+
+    # Create org
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Update Team Access Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Add member to org
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"], "level": "user"},
+        headers=owner["headers"],
+    )
+
+    # Create team and add member
+    team_response = await client.post(
+        f"/v0/organizations/{org_id}/teams",
+        json={"name": "Engineering Team"},
+        headers=owner["headers"],
+    )
+    team_id = team_response.json()["id"]
+
+    await client.post(
+        f"/v0/organizations/{org_id}/teams/{team_id}/members",
+        json={"user_ids": [member["id"]]},
+        headers=owner["headers"],
+    )
+
+    # Create project
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
+
+    project_dao.create(
+        name="Team_Access_Project",
+        user_id=None,
+        organization_id=org_id,
+    )
+    dbsession.commit()
+    projects = project_dao.filter(organization_id=org_id, name="Team_Access_Project")
+    project = projects[0][0]
+
+    # Grant Viewer role to team
+    viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
+    access = resource_access_dao.grant_access(
+        resource_type="project",
+        resource_id=project.id,
+        role_id=viewer_role.id,
+        grantee_type="team",
+        grantee_id=str(team_id),
+    )
+    dbsession.commit()
+    access_id = access.id
+
+    # Verify team member has only read access
+    assert resource_access_dao.check_user_permission(
+        member["id"],
+        "project",
+        project.id,
+        "project:read",
+    )
+    assert not resource_access_dao.check_user_permission(
+        member["id"],
+        "project",
+        project.id,
+        "project:write",
+    )
+
+    # Update team to Admin role
+    admin_role = role_dao.get_by_name("Admin", organization_id=None)
+
+    update_response = await client.patch(
+        f"/v0/resources/project/{project.id}/access/{access_id}",
+        json={"role_id": admin_role.id},
+        headers=owner["headers"],
+    )
+    assert update_response.status_code == 200
+
+    # Verify team member now has write and delete access
+    dbsession.expire_all()
+    resource_access_dao.clear_permission_cache()
+
+    assert resource_access_dao.check_user_permission(
+        member["id"],
+        "project",
+        project.id,
+        "project:write",
+    ), "Team member should have write permission via team's Admin role"
+    assert resource_access_dao.check_user_permission(
+        member["id"],
+        "project",
+        project.id,
+        "project:delete",
+    ), "Team member should have delete permission via team's Admin role"
+
+
+@pytest.mark.anyio
+async def test_update_resource_access_invalid_id(client: AsyncClient, dbsession):
+    """Test updating a non-existent access grant returns 404."""
+    owner = await create_test_user(client, "invalid_update_owner@test.com")
+
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Invalid Update Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    role_dao = RoleDAO(dbsession)
+    viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
+
+    # Try to update non-existent access grant
+    response = await client.patch(
+        f"/v0/resources/org/{org_id}/access/99999",
+        json={"role_id": viewer_role.id},
+        headers=owner["headers"],
+    )
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_update_resource_access_wrong_resource(client: AsyncClient, dbsession):
+    """Test updating an access grant with mismatched resource returns 404."""
+    owner = await create_test_user(client, "wrong_resource_owner@test.com")
+
+    # Create two orgs
+    org1_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Wrong Resource Org 1"},
+        headers=owner["headers"],
+    )
+    org1_id = org1_response.json()["id"]
+
+    org2_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Wrong Resource Org 2"},
+        headers=owner["headers"],
+    )
+    org2_id = org2_response.json()["id"]
+
+    # Grant access to org1
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
+    viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
+
+    access = resource_access_dao.grant_access(
+        resource_type="org",
+        resource_id=org1_id,
+        role_id=viewer_role.id,
+        grantee_type="user",
+        grantee_id=owner["id"],
+    )
+    dbsession.commit()
+
+    # Try to update via org2's access endpoint (wrong resource)
+    member_role = role_dao.get_by_name("Member", organization_id=None)
+    response = await client.patch(
+        f"/v0/resources/org/{org2_id}/access/{access.id}",
+        json={"role_id": member_role.id},
+        headers=owner["headers"],
+    )
+    assert response.status_code == 404
+    assert "does not belong to this resource" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_update_resource_access_requires_permission(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test that updating access requires write permission."""
+    owner = await create_test_user(client, "update_perm_owner@test.com")
+    viewer_user = await create_test_user(client, "update_perm_viewer@test.com")
+
+    # Create org
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Update Permission Test"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Add viewer_user with Viewer role (no write permission)
+    role_dao = RoleDAO(dbsession)
+    viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
+
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": viewer_user["id"], "level": "user"},
+        headers=owner["headers"],
+    )
+
+    # Update viewer's role to actual Viewer role
+    await client.patch(
+        f"/v0/organizations/{org_id}/members/{viewer_user['id']}/role",
+        json={"role_id": viewer_role.id},
+        headers=owner["headers"],
+    )
+
+    # Create project and grant owner some access
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+    resource_access_dao = ResourceAccessDAO(dbsession)
+
+    project_dao.create(
+        name="Permission_Test_Project",
+        user_id=None,
+        organization_id=org_id,
+    )
+    dbsession.commit()
+    projects = project_dao.filter(
+        organization_id=org_id,
+        name="Permission_Test_Project",
+    )
+    project = projects[0][0]
+
+    access = resource_access_dao.grant_access(
+        resource_type="project",
+        resource_id=project.id,
+        role_id=viewer_role.id,
+        grantee_type="user",
+        grantee_id=viewer_user["id"],
+    )
+    dbsession.commit()
+
+    # Viewer tries to update access → should fail (no write permission)
+    member_role = role_dao.get_by_name("Member", organization_id=None)
+    response = await client.patch(
+        f"/v0/resources/project/{project.id}/access/{access.id}",
+        json={"role_id": member_role.id},
+        headers=viewer_user["headers"],
+    )
+    assert response.status_code == 403
+    assert "permission" in response.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_update_resource_access_duplicate_constraint(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test that updating to a duplicate grant returns 409 Conflict."""
+    owner = await create_test_user(client, "duplicate_update_owner@test.com")
+    member = await create_test_user(client, "duplicate_update_member@test.com")
+
+    # Create org
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Duplicate Update Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Add member to org
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"], "level": "user"},
+        headers=owner["headers"],
+    )
+
+    # Create project
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
+
+    project_dao.create(
+        name="Duplicate_Test_Project",
+        user_id=None,
+        organization_id=org_id,
+    )
+    dbsession.commit()
+    projects = project_dao.filter(organization_id=org_id, name="Duplicate_Test_Project")
+    project = projects[0][0]
+
+    # Grant member BOTH Viewer and Member roles (two separate grants)
+    viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
+    member_role = role_dao.get_by_name("Member", organization_id=None)
+
+    viewer_access = resource_access_dao.grant_access(
+        resource_type="project",
+        resource_id=project.id,
+        role_id=viewer_role.id,
+        grantee_type="user",
+        grantee_id=member["id"],
+    )
+
+    resource_access_dao.grant_access(
+        resource_type="project",
+        resource_id=project.id,
+        role_id=member_role.id,
+        grantee_type="user",
+        grantee_id=member["id"],
+    )
+    dbsession.commit()
+
+    # Try to update Viewer grant to Member role (which already exists) → should fail
+    response = await client.patch(
+        f"/v0/resources/project/{project.id}/access/{viewer_access.id}",
+        json={"role_id": member_role.id},
+        headers=owner["headers"],
+    )
+    assert response.status_code == 409
+    assert "already has" in response.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_update_resource_access_invalid_role(client: AsyncClient, dbsession):
+    """Test that updating with non-existent role returns 404."""
+    owner = await create_test_user(client, "invalid_role_owner@test.com")
+
+    # Create org
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Invalid Role Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Create project and grant
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
+
+    project_dao.create(
+        name="Invalid_Role_Project",
+        user_id=None,
+        organization_id=org_id,
+    )
+    dbsession.commit()
+    projects = project_dao.filter(organization_id=org_id, name="Invalid_Role_Project")
+    project = projects[0][0]
+
+    viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
+    access = resource_access_dao.grant_access(
+        resource_type="project",
+        resource_id=project.id,
+        role_id=viewer_role.id,
+        grantee_type="user",
+        grantee_id=owner["id"],
+    )
+    dbsession.commit()
+
+    # Try to update with non-existent role ID
+    response = await client.patch(
+        f"/v0/resources/project/{project.id}/access/{access.id}",
+        json={"role_id": 99999},
+        headers=owner["headers"],
+    )
+    assert response.status_code == 404
+    assert "role" in response.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_update_resource_access_invalid_resource_type(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test that updating with invalid resource type returns 400."""
+    owner = await create_test_user(client, "invalid_type_owner@test.com")
+
+    # Try to update access for invalid resource type
+    response = await client.patch(
+        "/v0/resources/interface/123/access/1",
+        json={"role_id": 1},
+        headers=owner["headers"],
+    )
+    assert response.status_code == 400
+    assert "Invalid resource type" in response.json()["detail"]
+    assert "Only 'project' and 'org' are supported" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_update_resource_access_preserves_grantee(client: AsyncClient, dbsession):
+    """Test that updating only changes role, not grantee."""
+    owner = await create_test_user(client, "preserve_grantee_owner@test.com")
+    member1 = await create_test_user(client, "preserve_member1@test.com")
+    member2 = await create_test_user(client, "preserve_member2@test.com")
+
+    # Create org and add members
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Preserve Grantee Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member1["id"], "level": "user"},
+        headers=owner["headers"],
+    )
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member2["id"], "level": "user"},
+        headers=owner["headers"],
+    )
+
+    # Create project
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
+
+    project_dao.create(
+        name="Preserve_Grantee_Project",
+        user_id=None,
+        organization_id=org_id,
+    )
+    dbsession.commit()
+    projects = project_dao.filter(
+        organization_id=org_id,
+        name="Preserve_Grantee_Project",
+    )
+    project = projects[0][0]
+
+    # Grant member1 Viewer role
+    viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
+    access = resource_access_dao.grant_access(
+        resource_type="project",
+        resource_id=project.id,
+        role_id=viewer_role.id,
+        grantee_type="user",
+        grantee_id=member1["id"],
+    )
+    dbsession.commit()
+
+    # Update role
+    member_role = role_dao.get_by_name("Member", organization_id=None)
+    update_response = await client.patch(
+        f"/v0/resources/project/{project.id}/access/{access.id}",
+        json={"role_id": member_role.id},
+        headers=owner["headers"],
+    )
+    assert update_response.status_code == 200
+
+    # Verify grantee is still member1, not changed to member2
+    updated_data = update_response.json()
+    assert (
+        updated_data["grantee_id"] == member1["id"]
+    ), "Grantee should not change during update"
+    assert updated_data["grantee_type"] == "user", "Grantee type should not change"
+
+    # Verify member1 has access, member2 does not
+    dbsession.expire_all()
+    resource_access_dao.clear_permission_cache()
+
+    assert resource_access_dao.check_user_permission(
+        member1["id"],
+        "project",
+        project.id,
+        "project:write",
+    ), "member1 should have write access"
+    assert not resource_access_dao.check_user_permission(
+        member2["id"],
+        "project",
+        project.id,
+        "project:write",
+    ), "member2 should not have access"
