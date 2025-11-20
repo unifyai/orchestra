@@ -436,7 +436,7 @@ async def test_nested_array_cascade_delete(client: AsyncClient):
     assert get_response.status_code == 200
     assert len(get_response.json()["logs"]) == 1
 
-    # Delete img_001 - should CASCADE DELETE the transcript
+    # Delete img_001 - should remove the matching object from images array (wildcard path)
     delete_response = await client.request(
         "DELETE",
         "/v0/logs",
@@ -450,7 +450,7 @@ async def test_nested_array_cascade_delete(client: AsyncClient):
     )
     assert delete_response.status_code == 200
 
-    # Verify transcript was cascade deleted
+    # Verify transcript still exists, but with first image removed from array
     get_after_response = await client.get(
         "/v0/logs",
         params={
@@ -460,7 +460,11 @@ async def test_nested_array_cascade_delete(client: AsyncClient):
         headers=HEADERS,
     )
     assert get_after_response.status_code == 200
-    assert len(get_after_response.json()["logs"]) == 0
+    results = get_after_response.json()["logs"]
+    assert len(results) == 1  # Log still exists
+    assert len(results[0]["entries"]["images"]) == 1  # Only one image remains
+    assert results[0]["entries"]["images"][0]["image_id"] == img2_id
+    assert results[0]["entries"]["images"][0]["caption"] == "Second image"
 
     # Verify img_002 still exists
     get_img2_response = await client.get(
@@ -1046,7 +1050,7 @@ async def test_deeply_nested_cascade_delete(client: AsyncClient):
     )
     assert org_response.status_code == 200
 
-    # Delete user_001 - should CASCADE DELETE the organization
+    # Delete user_001 - should remove Alice from all member arrays (wildcard path)
     delete_response = await client.request(
         "DELETE",
         "/v0/logs",
@@ -1060,7 +1064,7 @@ async def test_deeply_nested_cascade_delete(client: AsyncClient):
     )
     assert delete_response.status_code == 200
 
-    # Verify organization was cascade deleted
+    # Verify organization still exists, but with Alice removed from member arrays
     get_orgs_response = await client.get(
         "/v0/logs",
         params={
@@ -1070,7 +1074,21 @@ async def test_deeply_nested_cascade_delete(client: AsyncClient):
         headers=HEADERS,
     )
     assert get_orgs_response.status_code == 200
-    assert len(get_orgs_response.json()["logs"]) == 0
+    results = get_orgs_response.json()["logs"]
+    assert len(results) == 1  # Org still exists
+
+    teams = results[0]["entries"]["teams"]
+    assert len(teams) == 2  # Both teams still exist
+
+    # Engineering team should only have Bob now (Alice removed)
+    eng_team = next(t for t in teams if t["team_name"] == "Engineering")
+    assert len(eng_team["members"]) == 1
+    assert eng_team["members"][0]["user_id"] == user2_id
+    assert eng_team["members"][0]["role"] == "developer"
+
+    # Design team should be empty (Alice was the only member)
+    design_team = next(t for t in teams if t["team_name"] == "Design")
+    assert len(design_team["members"]) == 0
 
 
 @pytest.mark.anyio
@@ -1313,7 +1331,7 @@ async def test_nested_fk_no_cascade_if_value_not_present(client: AsyncClient):
     )
     assert t3_response.status_code == 200
 
-    # Delete img_001 - should only cascade delete t_001
+    # Delete img_001 - should remove img1_id from t_001's images array (wildcard path)
     delete_response = await client.request(
         "DELETE",
         "/v0/logs",
@@ -1327,7 +1345,7 @@ async def test_nested_fk_no_cascade_if_value_not_present(client: AsyncClient):
     )
     assert delete_response.status_code == 200
 
-    # Verify only t_001 was deleted
+    # Verify all 3 transcripts still exist, but t_001's images array is now empty
     get_transcripts_response = await client.get(
         "/v0/logs",
         params={
@@ -1338,10 +1356,24 @@ async def test_nested_fk_no_cascade_if_value_not_present(client: AsyncClient):
     )
     assert get_transcripts_response.status_code == 200
     results = get_transcripts_response.json()["logs"]
-    assert len(results) == 2
+    assert len(results) == 3  # All transcripts still exist
 
-    transcript_ids = {r["entries"]["transcript_id"] for r in results}
-    assert transcript_ids == {"t_002", "t_003"}
+    # Find each transcript by ID
+    t_001 = next(log for log in results if log["entries"]["transcript_id"] == "t_001")
+    t_002 = next(log for log in results if log["entries"]["transcript_id"] == "t_002")
+    t_003 = next(log for log in results if log["entries"]["transcript_id"] == "t_003")
+
+    # t_001 should have empty images array (img1_id removed)
+    assert "images" in t_001["entries"]
+    assert t_001["entries"]["images"] == []
+
+    # t_002 should still have img2
+    assert len(t_002["entries"]["images"]) == 1
+    assert t_002["entries"]["images"][0]["image_id"] == img2_id
+
+    # t_003 should not have images field (never had it)
+    assert "images" not in t_003["entries"]
+    assert t_003["entries"]["text"] == "No images here"
 
 
 @pytest.mark.anyio
@@ -1494,7 +1526,7 @@ async def test_flat_array_validation(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_flat_array_cascade_delete(client: AsyncClient):
-    """Test CASCADE DELETE with flat array FK."""
+    """Test CASCADE DELETE with flat array FK - removes array elements."""
     project_name = "test_flat_array_cascade_delete"
     await _create_project(client, project_name)
 
@@ -1503,7 +1535,6 @@ async def test_flat_array_cascade_delete(client: AsyncClient):
         f"/v0/project/{project_name}/contexts",
         json={
             "name": "Images",
-            "unique_keys": {"image_id": "int"},
             "is_versioned": True,
         },
         headers=HEADERS,
@@ -1587,7 +1618,7 @@ async def test_flat_array_cascade_delete(client: AsyncClient):
     )
     assert delete_response.status_code == 200
 
-    # Verify transcript was CASCADE deleted
+    # Verify transcript array was updated (wildcard path = remove elements)
     transcripts = await client.get(
         "/v0/logs",
         params={"project": project_name, "context": "Transcripts"},
@@ -1595,7 +1626,342 @@ async def test_flat_array_cascade_delete(client: AsyncClient):
     )
     assert transcripts.status_code == 200
     results = transcripts.json()["logs"]
-    assert len(results) == 0  # Transcript deleted
+    assert len(results) == 1  # Log still exists
+    # Should be [1, 3] - element 2 removed
+    assert results[0]["entries"]["image_ids"] == [1, 3]
+
+
+@pytest.mark.anyio
+async def test_nested_array_objects_cascade_delete(client: AsyncClient):
+    """Test CASCADE DELETE with nested array of objects - removes matching objects."""
+    project_name = "test_nested_array_cascade_delete"
+    await _create_project(client, project_name)
+
+    # Create contexts
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Images",
+            "is_versioned": True,
+        },
+        headers=HEADERS,
+    )
+
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Transcripts",
+            "unique_keys": {"transcript_id": "str"},
+            "is_versioned": True,
+            "foreign_keys": [
+                {
+                    "name": "images[*].image_id",
+                    "references": "Images.image_id",
+                    "on_delete": "CASCADE",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+
+    # Create images
+    await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Images",
+            "entries": {"image_id": 1, "url": "img1.jpg"},
+        },
+        headers=HEADERS,
+    )
+
+    img2_response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Images",
+            "entries": {"image_id": 2, "url": "img2.jpg"},
+        },
+        headers=HEADERS,
+    )
+    img2_log_id = img2_response.json()["log_event_ids"][0]
+
+    await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Images",
+            "entries": {"image_id": 3, "url": "img3.jpg"},
+        },
+        headers=HEADERS,
+    )
+
+    # Create transcript with images array
+    transcript_response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Transcripts",
+            "entries": {
+                "transcript_id": "t_001",
+                "images": [
+                    {"image_id": 1, "caption": "First"},
+                    {"image_id": 2, "caption": "Second"},
+                    {"image_id": 3, "caption": "Third"},
+                ],
+            },
+        },
+        headers=HEADERS,
+    )
+    assert transcript_response.status_code == 200
+
+    # Delete image 2
+    delete_response = await client.request(
+        "DELETE",
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Images",
+            "ids_and_fields": [[img2_log_id, []]],
+            "source_type": "all",
+        },
+        headers=HEADERS,
+    )
+    assert delete_response.status_code == 200
+
+    # Verify transcript images array was updated - object with image_id=2 removed
+    transcripts = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "context": "Transcripts"},
+        headers=HEADERS,
+    )
+    assert transcripts.status_code == 200
+    results = transcripts.json()["logs"]
+    assert len(results) == 1  # Log still exists
+    # Should have 2 images, excluding the one with image_id=2
+    assert len(results[0]["entries"]["images"]) == 2
+    assert results[0]["entries"]["images"][0]["image_id"] == 1
+    assert results[0]["entries"]["images"][1]["image_id"] == 3
+
+
+@pytest.mark.anyio
+async def test_nested_object_no_wildcard_cascade_delete(client: AsyncClient):
+    """Test CASCADE DELETE with non-wildcard nested path - deletes entire log."""
+    project_name = "test_nested_object_cascade"
+    await _create_project(client, project_name)
+
+    # Create contexts
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Users",
+            "is_versioned": True,
+        },
+        headers=HEADERS,
+    )
+
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Articles",
+            "unique_keys": {"article_id": "str"},
+            "is_versioned": True,
+            "foreign_keys": [
+                {
+                    "name": "metadata.author.user_id",
+                    "references": "Users.user_id",
+                    "on_delete": "CASCADE",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+
+    # Create user
+    user_response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Users",
+            "entries": {"user_id": 5, "name": "Alice"},
+        },
+        headers=HEADERS,
+    )
+    user_log_id = user_response.json()["log_event_ids"][0]
+
+    # Create article with nested metadata.author.user_id
+    article_response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Articles",
+            "entries": {
+                "article_id": "a_001",
+                "metadata": {
+                    "author": {
+                        "user_id": 5,
+                        "name": "Alice",
+                    },
+                    "published": "2024-01-01",
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert article_response.status_code == 200
+
+    # Delete user
+    delete_response = await client.request(
+        "DELETE",
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Users",
+            "ids_and_fields": [[user_log_id, []]],
+            "source_type": "all",
+        },
+        headers=HEADERS,
+    )
+    assert delete_response.status_code == 200
+
+    # Verify article was CASCADE deleted (no wildcard = delete entire log)
+    articles = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "context": "Articles"},
+        headers=HEADERS,
+    )
+    assert articles.status_code == 200
+    results = articles.json()["logs"]
+    assert len(results) == 0  # Entire log deleted
+
+
+@pytest.mark.anyio
+async def test_deep_nested_cascade_delete(client: AsyncClient):
+    """Test CASCADE DELETE with deep nesting - removes nested member objects."""
+    project_name = "test_deep_nested_cascade"
+    await _create_project(client, project_name)
+
+    # Create contexts
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Users",
+            "is_versioned": True,
+        },
+        headers=HEADERS,
+    )
+
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Organizations",
+            "unique_keys": {"org_id": "str"},
+            "is_versioned": True,
+            "foreign_keys": [
+                {
+                    "name": "teams[*].members[*].user_id",
+                    "references": "Users.user_id",
+                    "on_delete": "CASCADE",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+
+    # Create users
+    await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Users",
+            "entries": {"user_id": 1, "name": "Alice"},
+        },
+        headers=HEADERS,
+    )
+
+    user2_response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Users",
+            "entries": {"user_id": 2, "name": "Bob"},
+        },
+        headers=HEADERS,
+    )
+    user2_log_id = user2_response.json()["log_event_ids"][0]
+
+    await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Users",
+            "entries": {"user_id": 3, "name": "Charlie"},
+        },
+        headers=HEADERS,
+    )
+
+    # Create organization with teams containing members
+    org_response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Organizations",
+            "entries": {
+                "org_id": "org_001",
+                "teams": [
+                    {
+                        "team_name": "Engineering",
+                        "members": [
+                            {"user_id": 1, "role": "Lead"},
+                            {"user_id": 2, "role": "Developer"},
+                        ],
+                    },
+                    {
+                        "team_name": "Product",
+                        "members": [
+                            {"user_id": 2, "role": "Manager"},
+                            {"user_id": 3, "role": "Designer"},
+                        ],
+                    },
+                ],
+            },
+        },
+        headers=HEADERS,
+    )
+    assert org_response.status_code == 200
+
+    # Delete user 2 (Bob)
+    delete_response = await client.request(
+        "DELETE",
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Users",
+            "ids_and_fields": [[user2_log_id, []]],
+            "source_type": "all",
+        },
+        headers=HEADERS,
+    )
+    assert delete_response.status_code == 200
+
+    # Verify organization teams were updated - Bob removed from both teams
+    orgs = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "context": "Organizations"},
+        headers=HEADERS,
+    )
+    assert orgs.status_code == 200
+    results = orgs.json()["logs"]
+    assert len(results) == 1  # Org still exists
+
+    teams = results[0]["entries"]["teams"]
+    # Engineering team should have only Alice
+    assert len(teams[0]["members"]) == 1
+    assert teams[0]["members"][0]["user_id"] == 1
+
+    # Product team should have only Charlie
+    assert len(teams[1]["members"]) == 1
+    assert teams[1]["members"][0]["user_id"] == 3
 
 
 @pytest.mark.anyio
