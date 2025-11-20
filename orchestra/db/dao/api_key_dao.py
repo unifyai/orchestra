@@ -55,6 +55,7 @@ class ApiKeyDAO:
             AuthUser.email,
             AuthUser.name,
             AuthUser.last_name,
+            ApiKey.organization_id,
         )
         query = query.join(AuthUser, ApiKey.user_id == AuthUser.id)
         query = query.where(ApiKey.key == key)
