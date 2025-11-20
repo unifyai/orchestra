@@ -1406,5 +1406,625 @@ async def test_nested_fk_validation_prevents_invalid_reference(client: AsyncClie
     assert "999" in error_detail
 
 
+# =============================================================================
+# Flat Array Foreign Key Tests (e.g., image_ids[*])
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_flat_array_validation(client: AsyncClient):
+    """Test validation of flat array FK (e.g., image_ids[*])."""
+    project_name = "test_flat_array_validation"
+    await _create_project(client, project_name)
+
+    # Create Images context
+    images_context_response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Images",
+            "unique_keys": {"image_id": "int"},
+            "is_versioned": True,
+        },
+        headers=HEADERS,
+    )
+    assert images_context_response.status_code == 200
+
+    # Create Transcripts context with flat array FK
+    transcripts_context_response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Transcripts",
+            "unique_keys": {"transcript_id": "str"},
+            "is_versioned": True,
+            "foreign_keys": [
+                {
+                    "name": "image_ids[*]",
+                    "references": "Images.image_id",
+                    "on_delete": "CASCADE",
+                    "on_update": "CASCADE",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert transcripts_context_response.status_code == 200
+
+    # Create images
+    img1_response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Images",
+            "entries": {"image_id": 1, "url": "img1.jpg"},
+        },
+        headers=HEADERS,
+    )
+    assert img1_response.status_code == 200
+
+    img2_response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Images",
+            "entries": {"image_id": 2, "url": "img2.jpg"},
+        },
+        headers=HEADERS,
+    )
+    assert img2_response.status_code == 200
+
+    # Try to create transcript with invalid image_ids - should fail
+    transcript_response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Transcripts",
+            "entries": {
+                "transcript_id": "t_001",
+                "image_ids": [1, 2, 999],  # 999 doesn't exist
+            },
+        },
+        headers=HEADERS,
+    )
+    assert transcript_response.status_code == 400
+    error_detail = transcript_response.json()["detail"]
+    assert "foreign key constraint violation" in error_detail.lower()
+    assert "image_ids[*]" in error_detail
+    assert "999" in error_detail
+
+
+@pytest.mark.anyio
+async def test_flat_array_cascade_delete(client: AsyncClient):
+    """Test CASCADE DELETE with flat array FK."""
+    project_name = "test_flat_array_cascade_delete"
+    await _create_project(client, project_name)
+
+    # Create contexts
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Images",
+            "unique_keys": {"image_id": "int"},
+            "is_versioned": True,
+        },
+        headers=HEADERS,
+    )
+
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Transcripts",
+            "unique_keys": {"transcript_id": "str"},
+            "is_versioned": True,
+            "foreign_keys": [
+                {
+                    "name": "image_ids[*]",
+                    "references": "Images.image_id",
+                    "on_delete": "CASCADE",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+
+    # Create images
+    await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Images",
+            "entries": {"image_id": 1, "url": "img1.jpg"},
+        },
+        headers=HEADERS,
+    )
+
+    img2_response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Images",
+            "entries": {"image_id": 2, "url": "img2.jpg"},
+        },
+        headers=HEADERS,
+    )
+    img2_log_id = img2_response.json()["log_event_ids"][0]
+
+    await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Images",
+            "entries": {"image_id": 3, "url": "img3.jpg"},
+        },
+        headers=HEADERS,
+    )
+
+    # Create transcript with image_ids: [1, 2, 3]
+    transcript_response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Transcripts",
+            "entries": {
+                "transcript_id": "t_001",
+                "image_ids": [1, 2, 3],
+            },
+        },
+        headers=HEADERS,
+    )
+    assert transcript_response.status_code == 200
+
+    # Delete image 2
+    delete_response = await client.request(
+        "DELETE",
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Images",
+            "ids_and_fields": [[img2_log_id, []]],
+            "source_type": "all",
+        },
+        headers=HEADERS,
+    )
+    assert delete_response.status_code == 200
+
+    # Verify transcript was CASCADE deleted
+    transcripts = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "context": "Transcripts"},
+        headers=HEADERS,
+    )
+    assert transcripts.status_code == 200
+    results = transcripts.json()["logs"]
+    assert len(results) == 0  # Transcript deleted
+
+
+@pytest.mark.anyio
+async def test_flat_array_cascade_update(client: AsyncClient):
+    """Test CASCADE UPDATE with flat array FK."""
+    project_name = "test_flat_array_cascade_update"
+    await _create_project(client, project_name)
+
+    # Create contexts
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Images",
+            "is_versioned": True,
+        },
+        headers=HEADERS,
+    )
+
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Transcripts",
+            "unique_keys": {"transcript_id": "str"},
+            "is_versioned": True,
+            "foreign_keys": [
+                {
+                    "name": "image_ids[*]",
+                    "references": "Images.image_id",
+                    "on_update": "CASCADE",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+
+    # Create images
+    await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Images",
+            "entries": {"image_id": 1, "url": "img1.jpg"},
+        },
+        headers=HEADERS,
+    )
+
+    img2_response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Images",
+            "entries": {"image_id": 2, "url": "img2.jpg"},
+        },
+        headers=HEADERS,
+    )
+    img2_log_id = img2_response.json()["log_event_ids"][0]
+
+    await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Images",
+            "entries": {"image_id": 3, "url": "img3.jpg"},
+        },
+        headers=HEADERS,
+    )
+
+    # Create transcript with image_ids: [1, 2, 3]
+    await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Transcripts",
+            "entries": {
+                "transcript_id": "t_001",
+                "image_ids": [1, 2, 3],
+            },
+        },
+        headers=HEADERS,
+    )
+
+    # Update image 2 -> 99
+    update_response = await client.put(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Images",
+            "logs": [img2_log_id],
+            "entries": {"image_id": 99},
+            "overwrite": True,
+        },
+        headers=HEADERS,
+    )
+    assert update_response.status_code == 200
+
+    # Verify transcript was CASCADE updated
+    transcripts = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "context": "Transcripts"},
+        headers=HEADERS,
+    )
+    assert transcripts.status_code == 200
+    results = transcripts.json()["logs"]
+    assert len(results) == 1
+    # Should be [1, 99, 3]
+    assert results[0]["entries"]["image_ids"] == [1, 99, 3]
+
+
+@pytest.mark.anyio
+async def test_flat_array_set_null(client: AsyncClient):
+    """Test SET NULL with flat array FK."""
+    project_name = "test_flat_array_set_null"
+    await _create_project(client, project_name)
+
+    # Create contexts
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Images",
+            "unique_keys": {"image_id": "int"},
+            "is_versioned": True,
+        },
+        headers=HEADERS,
+    )
+
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Transcripts",
+            "unique_keys": {"transcript_id": "str"},
+            "is_versioned": True,
+            "foreign_keys": [
+                {
+                    "name": "image_ids[*]",
+                    "references": "Images.image_id",
+                    "on_delete": "SET NULL",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+
+    # Create images
+    await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Images",
+            "entries": {"image_id": 1, "url": "img1.jpg"},
+        },
+        headers=HEADERS,
+    )
+
+    img2_response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Images",
+            "entries": {"image_id": 2, "url": "img2.jpg"},
+        },
+        headers=HEADERS,
+    )
+    img2_log_id = img2_response.json()["log_event_ids"][0]
+
+    await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Images",
+            "entries": {"image_id": 3, "url": "img3.jpg"},
+        },
+        headers=HEADERS,
+    )
+
+    # Create transcript with image_ids: [1, 2, 3]
+    await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Transcripts",
+            "entries": {
+                "transcript_id": "t_001",
+                "image_ids": [1, 2, 3],
+            },
+        },
+        headers=HEADERS,
+    )
+
+    # Delete image 2
+    delete_response = await client.request(
+        "DELETE",
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Images",
+            "ids_and_fields": [[img2_log_id, []]],
+            "source_type": "all",
+        },
+        headers=HEADERS,
+    )
+    assert delete_response.status_code == 200
+
+    # Verify transcript was SET NULL
+    transcripts = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "context": "Transcripts"},
+        headers=HEADERS,
+    )
+    assert transcripts.status_code == 200
+    results = transcripts.json()["logs"]
+    assert len(results) == 1
+    # Should be [1, None, 3]
+    assert results[0]["entries"]["image_ids"] == [1, None, 3]
+
+
+@pytest.mark.anyio
+async def test_flat_array_multiple_occurrences(client: AsyncClient):
+    """Test SET NULL with multiple occurrences of the same value."""
+    project_name = "test_flat_array_multiple"
+    await _create_project(client, project_name)
+
+    # Create contexts
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Images",
+            "unique_keys": {"image_id": "int"},
+            "is_versioned": True,
+        },
+        headers=HEADERS,
+    )
+
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Transcripts",
+            "unique_keys": {"transcript_id": "str"},
+            "is_versioned": True,
+            "foreign_keys": [
+                {
+                    "name": "image_ids[*]",
+                    "references": "Images.image_id",
+                    "on_delete": "SET NULL",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+
+    # Create image
+    img_response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Images",
+            "entries": {"image_id": 2, "url": "img2.jpg"},
+        },
+        headers=HEADERS,
+    )
+    img_log_id = img_response.json()["log_event_ids"][0]
+
+    # Create transcript with repeated value: [2, 2, 2]
+    await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Transcripts",
+            "entries": {
+                "transcript_id": "t_001",
+                "image_ids": [2, 2, 2],
+            },
+        },
+        headers=HEADERS,
+    )
+
+    # Delete image 2
+    delete_response = await client.request(
+        "DELETE",
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Images",
+            "ids_and_fields": [[img_log_id, []]],
+            "source_type": "all",
+        },
+        headers=HEADERS,
+    )
+    assert delete_response.status_code == 200
+
+    # Verify all occurrences were SET NULL
+    transcripts = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "context": "Transcripts"},
+        headers=HEADERS,
+    )
+    assert transcripts.status_code == 200
+    results = transcripts.json()["logs"]
+    assert len(results) == 1
+    # Should be [None, None, None]
+    assert results[0]["entries"]["image_ids"] == [None, None, None]
+
+
+@pytest.mark.anyio
+async def test_flat_array_mixed_operations(client: AsyncClient):
+    """Test multiple SET NULL operations on the same array."""
+    project_name = "test_flat_array_mixed"
+    await _create_project(client, project_name)
+
+    # Create contexts
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Images",
+            "unique_keys": {"image_id": "int"},
+            "is_versioned": True,
+        },
+        headers=HEADERS,
+    )
+
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={
+            "name": "Transcripts",
+            "unique_keys": {"transcript_id": "str"},
+            "is_versioned": True,
+            "foreign_keys": [
+                {
+                    "name": "image_ids[*]",
+                    "references": "Images.image_id",
+                    "on_delete": "SET NULL",
+                },
+            ],
+        },
+        headers=HEADERS,
+    )
+
+    # Create images
+    img1_response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Images",
+            "entries": {"image_id": 1, "url": "img1.jpg"},
+        },
+        headers=HEADERS,
+    )
+    img1_log_id = img1_response.json()["log_event_ids"][0]
+
+    img2_response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Images",
+            "entries": {"image_id": 2, "url": "img2.jpg"},
+        },
+        headers=HEADERS,
+    )
+    img2_log_id = img2_response.json()["log_event_ids"][0]
+
+    await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Images",
+            "entries": {"image_id": 3, "url": "img3.jpg"},
+        },
+        headers=HEADERS,
+    )
+
+    # Create transcript with image_ids: [1, 2, 3]
+    await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Transcripts",
+            "entries": {
+                "transcript_id": "t_001",
+                "image_ids": [1, 2, 3],
+            },
+        },
+        headers=HEADERS,
+    )
+
+    # Delete image 2 first
+    await client.request(
+        "DELETE",
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Images",
+            "ids_and_fields": [[img2_log_id, []]],
+            "source_type": "all",
+        },
+        headers=HEADERS,
+    )
+
+    # Verify: [1, None, 3]
+    transcripts = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "context": "Transcripts"},
+        headers=HEADERS,
+    )
+    assert transcripts.status_code == 200
+    results = transcripts.json()["logs"]
+    assert results[0]["entries"]["image_ids"] == [1, None, 3]
+
+    # Delete image 1
+    await client.request(
+        "DELETE",
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "context": "Images",
+            "ids_and_fields": [[img1_log_id, []]],
+            "source_type": "all",
+        },
+        headers=HEADERS,
+    )
+
+    # Verify: [None, None, 3]
+    transcripts = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "context": "Transcripts"},
+        headers=HEADERS,
+    )
+    assert transcripts.status_code == 200
+    results = transcripts.json()["logs"]
+    assert results[0]["entries"]["image_ids"] == [None, None, 3]
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

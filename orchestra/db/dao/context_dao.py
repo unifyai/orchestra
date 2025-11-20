@@ -1965,9 +1965,9 @@ class ContextDAO:
 
             if segment.is_wildcard:
                 # Process all array elements
-                for item in arr:
+                for i, item in enumerate(arr):
                     if remaining:
-                        # Recurse into nested structure
+                        # Recurse into nested structure (e.g., images[*].image_id)
                         if self._update_nested_value(
                             item,
                             remaining,
@@ -1976,8 +1976,11 @@ class ContextDAO:
                         ):
                             updated = True
                     else:
-                        # This shouldn't happen (wildcard at end of path is invalid)
-                        pass
+                        # Flat array wildcard (e.g., image_ids[*])
+                        # Check if this primitive value matches and update in-place
+                        if item in old_values_set:
+                            arr[i] = new_value
+                            updated = True
             else:
                 # Process specific index
                 idx = segment.array_index
