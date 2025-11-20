@@ -206,6 +206,11 @@ class FKPathParser:
             >>> extract_values(data, segments)
             [1, 2]
 
+            >>> data = {"image_ids": [1, 2, 3]}
+            >>> segments = parse("image_ids[*]")
+            >>> extract_values(data, segments)
+            [1, 2, 3]
+
             >>> data = {"metadata": {"user": {"user_id": 5}}}
             >>> segments = parse("metadata.user.user_id")
             >>> extract_values(data, segments)
