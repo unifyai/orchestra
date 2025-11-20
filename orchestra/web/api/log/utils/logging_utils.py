@@ -2423,8 +2423,15 @@ def _construct_join_query(
             processed_join_expr,
         )
 
-        # 2. Build the local_scope dictionary mapping placeholders to column objects
-        local_scope = {"subq_a": subq_a, "subq_b": subq_b}
+        # 2. Build the local_scope dictionary mapping placeholders to column objects.
+        # Mark this expression as a JOIN comparison so the python2SQL layer can
+        # choose comparison semantics (e.g. plain equality vs NULL-safe) based
+        # on context.
+        local_scope = {
+            "subq_a": subq_a,
+            "subq_b": subq_b,
+            "__comparison_context__": "join",
+        }
         for col in subq_a.c.keys():
             if col in fields_a:
                 local_scope[f"__table_A_{col}"] = (getattr(subq_a.c, col), "column")

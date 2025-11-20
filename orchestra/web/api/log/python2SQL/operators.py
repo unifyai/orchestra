@@ -217,38 +217,32 @@ def _can_combine_and_conditions(lhs_node, rhs_node):
 # Helper function for NULL-safe equality comparisons
 def _null_safe_eq(a, b):
     """
-    NULL-safe equality comparison: returns True if both are NULL, False if one is NULL,
-    otherwise performs normal equality comparison.
+    NULL-safe equality comparison for SQLAlchemy expressions using PostgreSQL's
+    `IS NOT DISTINCT FROM` semantics:
 
-    This ensures that NULL == NULL evaluates to True (they are equal),
-    and NULL == value evaluates to False (they are not equal).
+    - NULL IS NOT DISTINCT FROM NULL  → True
+    - NULL IS NOT DISTINCT FROM value → False
+    - value IS NOT DISTINCT FROM NULL → False
+    - value IS NOT DISTINCT FROM value → True
+
+    This gives us the desired behavior where NULL == NULL evaluates to True,
+    while still being hash/merge-joinable for JOIN conditions.
     """
-    return case(
-        (a.is_(None) & b.is_(None), literal(True)),  # NULL == NULL → True
-        (
-            a.is_(None) | b.is_(None),
-            literal(False),
-        ),  # NULL == value or value == NULL → False
-        else_=(a == b),  # Normal comparison when neither is NULL
-    )
+    return a.op("IS NOT DISTINCT FROM")(b)
 
 
 def _null_safe_ne(a, b):
     """
-    NULL-safe inequality comparison: returns False if both are NULL, True if one is NULL,
-    otherwise performs normal inequality comparison.
+    NULL-safe inequality comparison for SQLAlchemy expressions using
+    PostgreSQL's `IS DISTINCT FROM` semantics, the logical inverse of
+    `_null_safe_eq`:
 
-    This ensures that NULL != NULL evaluates to False (they are equal),
-    and NULL != value evaluates to True (they are different).
+    - NULL IS DISTINCT FROM NULL  → False
+    - NULL IS DISTINCT FROM value → True
+    - value IS DISTINCT FROM NULL → True
+    - value IS DISTINCT FROM value → False
     """
-    return case(
-        (a.is_(None) & b.is_(None), literal(False)),  # NULL != NULL → False
-        (
-            a.is_(None) | b.is_(None),
-            literal(True),
-        ),  # NULL != value or value != NULL → True
-        else_=(a != b),  # Normal comparison when neither is NULL
-    )
+    return a.op("IS DISTINCT FROM")(b)
 
 
 # Helper function for logical operators (and, or, not)
@@ -859,9 +853,24 @@ def _handle_comparison_operator(
         lval = cast_expr(lval, lval_type, final_type)
         rval = cast_expr(rval, rval_type, final_type)
 
+        # Decide comparison semantics based on context: JOIN vs FILTER.
+        # For JOIN conditions we want a plain equality operator so that
+        # PostgreSQL can treat it as hash/merge-joinable (required for FULL JOIN).
+        # For filters/expressions we use NULL-safe equality/inequality.
+        comparison_context = None
+        if isinstance(local_scope, dict):
+            comparison_context = local_scope.get("__comparison_context__")
+
+        if comparison_context == "join":
+            eq_op = lambda a, b: a == b
+            ne_op = lambda a, b: a != b
+        else:
+            eq_op = _null_safe_eq
+            ne_op = _null_safe_ne
+
         op_map = {
-            "==": lambda a, b: _null_safe_eq(a, b),
-            "!=": lambda a, b: _null_safe_ne(a, b),
+            "==": eq_op,
+            "!=": ne_op,
             "<": lambda a, b: a < b,
             ">": lambda a, b: a > b,
             "<=": lambda a, b: a <= b,
