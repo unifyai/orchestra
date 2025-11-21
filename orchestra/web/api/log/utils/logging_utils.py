@@ -1518,15 +1518,8 @@ def create_logs_internal(
         merged_data = {**current_params, **current_entries}
         batch_merged_data.append(merged_data)
 
-    # Batch validate all FK references at once (single query per unique FK)
-    if context_obj and context_obj.foreign_keys:
-        failed_fk_validations = context_dao.batch_validate_foreign_key_references(
-            project_id=project_id,
-            context_id=context_id,
-            batch_entries=batch_merged_data,
-        )
-    else:
-        failed_fk_validations = {}
+    # FK validation disabled - allows creating logs with any FK values
+    failed_fk_validations = {}
 
     # Process all logs in the batch
     for i in range(total_logs):
