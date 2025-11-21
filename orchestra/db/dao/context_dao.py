@@ -759,6 +759,10 @@ class ContextDAO:
                     )
                     # Filter out None values
                     values_to_check = [v for v in values_to_check if v is not None]
+
+                    # Skip if no values to validate (e.g., empty arrays)
+                    if not values_to_check:
+                        continue
                 else:
                     # Simple column FK
                     if fk_path not in entries:
@@ -771,6 +775,10 @@ class ContextDAO:
                         continue
 
                     values_to_check = [value]
+
+                # Skip if no values to validate (defensive check)
+                if not values_to_check:
+                    continue
 
                 # Parse the reference
                 ref_parts = fk["references"].split(".")
