@@ -64,6 +64,12 @@ class VertexAI(BaseCompletionProvider):
 
 
 supported_models = {
+    "gemini-3-pro": {
+        "endpoint": "vertex_ai/gemini-3-pro-preview",
+        "region": "global",
+        "context_window": 200000,
+        "cost": {"prompt": 2, "completion": 12},
+    },
     "gemini-2.5-flash-lite": {
         "endpoint": "vertex_ai/gemini-2.5-flash-lite",
         "region": "us-central1",
