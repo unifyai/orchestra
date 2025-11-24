@@ -4130,14 +4130,24 @@ def get_fields(
     ),
     context: Optional[str] = Query(
         "",
-        description="Optional context name to filter fields types",
+        description=(
+            "Optional context name to filter field types. "
+            "Use '*' to return fields from all contexts in the project."
+        ),
         example="training",
     ),
     session=Depends(get_db_session),
 ):
     """
-    Returns a dictionary of fields names and their types for the specified project.
-    If a context is provided, returns only fields associated with that context.
+    Returns field definitions and their types for the specified project.
+
+    Context handling:
+    - If no context is provided (or an empty string), returns a flat mapping of field
+      name → metadata for the default context.
+    - If a specific context name is provided, returns a flat mapping of field
+      name → metadata for that context.
+    - If context is '*', returns a nested mapping of context_name → {field_name → metadata}
+      containing fields from all contexts in the project.
 
     Each field entry contains:
     - data_type: The data type of the field (int, str, etc)
@@ -4161,8 +4171,61 @@ def get_fields(
     except (IndexError, AttributeError):
         raise not_found(f"Project {project}")
 
-    # Get context_id if context is provided
+    # For derived entries, get their equations (project-wide)
+    derived_equations = {}
+    derived_fields = (
+        session.query(DerivedLog.key, DerivedLog.equation)
+        .join(LogEventDerivedLog, LogEventDerivedLog.derived_log_id == DerivedLog.id)
+        .join(LogEvent, LogEvent.id == LogEventDerivedLog.log_event_id)
+        .filter(LogEvent.project_id == project_obj.id)
+        .distinct()
+        .all()
+    )
+    for key, equation in derived_fields:
+        derived_equations[key] = equation
+
+    # Wildcard: return mapping of context_name -> fields
+    if context == "*":
+        all_contexts = context_dao.filter(project_id=project_obj.id)
+        result = {}
+
+        for ctx_row in all_contexts:
+            ctx = ctx_row[0]
+            ctx_id = ctx.id
+            ctx_name = ctx.name
+
+            types = field_type_dao.get_field_types(
+                project_obj.id,
+                context_id=ctx_id,
+                return_mutable=True,
+            )
+            if not types:
+                # Skip contexts with no fields
+                continue
+
+            result[ctx_name] = {
+                key: {
+                    "data_type": info[
+                        "field_type"
+                    ],  # Full type: "List[int]", "str", "Any", etc.
+                    "field_type": info["field_category"],
+                    "mutable": info["mutable"],
+                    "unique": info.get("unique", False),
+                    "enum_values": info["enum_values"],
+                    "restrict": info["restrict"],
+                    "created_at": info["created_at"],
+                    "artifacts": derived_equations.get(key, ""),
+                    "description": info.get("description", ""),
+                }
+                for key, info in types.items()
+            }
+
+        return result
+
+    # Non-wildcard: resolve a single context and return flat mapping
     context_id = None
+    context_obj = None
+
     if context:
         context_obj = context_dao.filter(project_id=project_obj.id, name=context)
     else:
@@ -4184,18 +4247,6 @@ def get_fields(
         context_id=context_id,
         return_mutable=True,
     )
-    # For derived entries, get their equations
-    derived_equations = {}
-    derived_fields = (
-        session.query(DerivedLog.key, DerivedLog.equation)
-        .join(LogEventDerivedLog, LogEventDerivedLog.derived_log_id == DerivedLog.id)
-        .join(LogEvent, LogEvent.id == LogEventDerivedLog.log_event_id)
-        .filter(LogEvent.project_id == project_obj.id)
-        .distinct()
-        .all()
-    )
-    for key, equation in derived_fields:
-        derived_equations[key] = equation
 
     # Build response
     return {
