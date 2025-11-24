@@ -27,6 +27,16 @@ class XAI(BaseCompletionProvider):
 
 
 supported_models = {
+    "grok-4.1-fast-reasoning": {
+        "endpoint": "xai/grok-4.1-fast-reasoning",
+        "context_window": 2000000,
+        "cost": {"prompt": 0.2, "completion": 0.5},
+    },
+    "grok-4.1-fast-non-reasoning": {
+        "endpoint": "xai/grok-4.1-fast-non-reasoning",
+        "context_window": 2000000,
+        "cost": {"prompt": 0.2, "completion": 0.5},
+    },
     "grok-code-fast": {
         "endpoint": "xai/grok-code-fast-1",
         "context_window": 256000,
