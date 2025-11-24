@@ -4872,11 +4872,21 @@ async def test_no_circular_dependency_chain(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_self_referencing_context(client: AsyncClient):
-    """Test that self-referencing CASCADE FK is detected."""
+    """Test that self-referencing CASCADE FK is now allowed (field-level detection).
+
+    With field-level cycle detection, a single self-referencing FK does NOT form
+    a cycle because:
+    - Edge: (Employees, id) → (Employees, manager_id)
+    - No edge FROM (Employees, manager_id) back to (Employees, id)
+    - Therefore, no cycle!
+
+    The CASCADE will propagate (e.g., deleting a manager cascades to their reports),
+    but it's not an infinite loop because each employee has a unique ID.
+    """
     project_name = "self-ref-test"
     await _create_project(client, project_name)
 
-    # Try to create context that references itself with CASCADE
+    # Create context that references itself with CASCADE - now allowed!
     response = await client.post(
         f"/v0/project/{project_name}/contexts",
         json={
@@ -4885,17 +4895,23 @@ async def test_self_referencing_context(client: AsyncClient):
                 {
                     "name": "manager_id",
                     "references": "Employees.id",
-                    "on_delete": "CASCADE",  # Self-reference with CASCADE = cycle
+                    "on_delete": "CASCADE",  # Self-reference with CASCADE
                     "on_update": "CASCADE",
                 },
             ],
         },
         headers=HEADERS,
     )
-    assert response.status_code == 400
-    assert "circular" in response.json()["detail"].lower()
-    # Cycle should be: Employees → Employees
-    assert "employees" in response.json()["detail"].lower()
+    assert response.status_code == 200  # Now succeeds!
+
+    # Verify context was created
+    contexts = await client.get(
+        f"/v0/project/{project_name}/contexts",
+        headers=HEADERS,
+    )
+    assert contexts.status_code == 200
+    context_names = [ctx["name"] for ctx in contexts.json()]
+    assert "Employees" in context_names
 
 
 @pytest.mark.anyio
