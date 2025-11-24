@@ -143,4 +143,9 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 1, "completion": 5},
     },
+    "gemini-3-pro": {
+        "endpoint": "replicate/google/gemini-3-pro",
+        "context_window": 200000,
+        "cost": {"prompt": 2, "completion": 12},
+    },
 }
