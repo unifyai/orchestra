@@ -881,6 +881,11 @@ def _get_logs_query(
                 ):
                     and_conditions = flatten_and_conditions(filter_dict)
 
+                    # Collect all matching_ids CTEs first, then intersect via JOINs
+                    # This allows PostgreSQL to use Hash Joins instead of Nested Loop Semi Joins
+                    matching_ids_ctes = []
+                    non_subquery_conditions = []
+
                     for i, condition_dict in enumerate(and_conditions):
                         validate_filter_dict(condition_dict)
                         condition_sql = build_sql_query(
@@ -894,22 +899,56 @@ def _get_logs_query(
                                 condition_sql,
                                 session,
                             )
-                            # Use IN subquery instead of EXISTS to avoid correlated execution
-                            # Materialize as CTE so PostgreSQL can see actual row counts and choose
-                            # hash join instead of nested loop join
+                            # Create materialized CTE for this condition
                             matching_ids_subq = (
                                 select(condition_sql.c.log_event_id)
                                 .where(truthiness_clause)
                                 .cte(f"matching_ids_{i}")
                                 .prefix_with("MATERIALIZED")
                             )
+                            matching_ids_ctes.append(matching_ids_subq)
+                        else:
+                            non_subquery_conditions.append(condition_sql)
+
+                    # Apply non-subquery conditions directly
+                    for cond in non_subquery_conditions:
+                        log_event_query = log_event_query.filter(cond)
+
+                    # Intersect all matching_ids CTEs using explicit JOINs
+                    # This enables Hash Join strategy instead of Nested Loop Semi Join
+                    if matching_ids_ctes:
+                        if len(matching_ids_ctes) == 1:
+                            # Single CTE - use directly
                             log_event_query = log_event_query.filter(
                                 LogEvent.id.in_(
-                                    select(matching_ids_subq.c.log_event_id),
+                                    select(matching_ids_ctes[0].c.log_event_id),
                                 ),
                             )
                         else:
-                            log_event_query = log_event_query.filter(condition_sql)
+                            # Multiple CTEs - JOIN them for intersection
+                            # Start with first CTE as base
+                            first_cte = matching_ids_ctes[0]
+                            intersected = select(
+                                first_cte.c.log_event_id,
+                            ).select_from(first_cte)
+
+                            # JOIN each subsequent CTE to compute intersection
+                            for cte in matching_ids_ctes[1:]:
+                                intersected = intersected.join(
+                                    cte,
+                                    first_cte.c.log_event_id == cte.c.log_event_id,
+                                )
+
+                            # Create CTE for intersected results (let planner decide materialization)
+                            intersected_cte = intersected.cte(
+                                "intersected_matching_ids",
+                            )
+
+                            log_event_query = log_event_query.filter(
+                                LogEvent.id.in_(
+                                    select(intersected_cte.c.log_event_id),
+                                ),
+                            )
 
                 # --- FALLBACK FOR SINGLE CONDITIONS OR OTHER OPERATORS ---
                 else:
