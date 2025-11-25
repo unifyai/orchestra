@@ -933,7 +933,6 @@ def _build_subquery_for_identifier(
             .select_from(log_alias_ref)
             .where(log_alias_ref.key == key)
             .cte(stage1_cte_name)
-            .prefix_with("MATERIALIZED")
         )
 
         # Stage 2: Join filtered logs/derived_logs to log_event_log/log_event_derived_log and event_ids_subq
