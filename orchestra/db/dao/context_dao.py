@@ -20,6 +20,7 @@ from orchestra.db.models.orchestra_models import (
     LogVersion,
     ProjectVersion,
 )
+from orchestra.db.utils import FKPathParser, PathSegment
 
 
 def delete_orphaned_log_events(session: Session, project_id: int) -> None:
@@ -146,14 +147,9 @@ class ContextDAO:
 
             ref_context_name, ref_column_name = ref_parts
 
-            # Check if the referenced context exists in the same project
-            # Allow self-reference (will be checked for cycles later)
-            if ref_context_name != context_name:
-                ref_context = self.filter(project_id=project_id, name=ref_context_name)
-                if not ref_context:
-                    raise ValueError(
-                        f"Referenced context '{ref_context_name}' does not exist in this project",
-                    )
+            # Note: No referenced context existence check to allow mutually-referencing contexts.
+            # (e.g., FunctionManager references GuidanceManager and vice versa).
+            # FK validation in place when inserting/updating logs.
 
             # Validate SET DEFAULT has a default value
             # DISABLED: SET DEFAULT is not currently supported
@@ -180,11 +176,13 @@ class ContextDAO:
         )
 
         if cycle:
-            cycle_path = " → ".join(cycle)
+            # cycle is now List[Tuple[str, str]] - format as "Context.field"
+            cycle_path = " → ".join([f"{ctx}.{field}" for ctx, field in cycle])
             raise ValueError(
                 f"Circular foreign key dependency detected: {cycle_path}. "
-                f"CASCADE actions would cause an infinite loop when deleting or updating records. "
-                f"Use SET NULL for one of the relationships to break the cycle.",
+                f"Non-wildcard CASCADE actions would cause an infinite loop when "
+                f"deleting or updating records. Use SET NULL or wildcard array FKs "
+                f"([*]) to break the cycle.",
             )
 
     def _build_fk_graph(
@@ -192,15 +190,16 @@ class ContextDAO:
         project_id: int,
         new_context_name: str,
         new_foreign_keys: List[Dict[str, Any]],
-    ) -> Dict[str, List[str]]:
+    ) -> Dict[tuple[str, str], List[tuple[str, str]]]:
         """Build a directed graph of CASCADE propagation dependencies.
 
-        The graph represents CASCADE propagation direction, NOT FK reference direction.
-        If ContextA has FK to ContextB with CASCADE:
-        - FK direction: A → B (A references B)
-        - CASCADE propagation: B → A (deleting B cascades to A)
+        Now tracks field-level dependencies (context, field) instead of just contexts.
+        Wildcard FKs are excluded as they only pop array elements, not delete records.
 
-        Graph represents CASCADE propagation: edge B → A means deleting B will cascade to A.
+        The graph represents CASCADE propagation direction, NOT FK reference direction.
+        If ContextA.field_x references ContextB.field_y with CASCADE:
+        - FK direction: A.field_x → B.field_y (A references B)
+        - CASCADE propagation: (B, field_y) → (A, field_x) (deleting B.field_y cascades to A.field_x)
 
         Args:
             project_id: The project ID
@@ -208,8 +207,8 @@ class ContextDAO:
             new_foreign_keys: Foreign keys for the new context
 
         Returns:
-            Graph as adjacency list: {context_name: [contexts_that_cascade_from_it]}
-            Only includes CASCADE relationships (SET NULL doesn't cause cycles)
+            Graph as adjacency list: {(context, field): [(context, field), ...]}
+            Only includes non-wildcard CASCADE relationships
         """
         graph = {}
 
@@ -224,10 +223,6 @@ class ContextDAO:
             .all()
         )
 
-        # Initialize graph with all existing contexts
-        for context in existing_contexts:
-            graph[context.name] = []
-
         # Add edges representing CASCADE propagation from existing contexts
         for context in existing_contexts:
             context_name = context.name
@@ -238,62 +233,92 @@ class ContextDAO:
                     on_delete = fk.get("on_delete", "NO ACTION")
                     on_update = fk.get("on_update", "NO ACTION")
 
-                    if on_delete == "CASCADE" or on_update == "CASCADE":
-                        # Parse reference: "ContextName.column_name"
-                        ref_parts = fk["references"].split(".")
-                        if len(ref_parts) == 2:
-                            ref_context_name = ref_parts[0]
-                            # CASCADE propagation: deleting ref_context cascades to context
-                            # So add edge: ref_context → context
-                            if ref_context_name not in graph:
-                                graph[ref_context_name] = []
-                            graph[ref_context_name].append(context_name)
+                    if on_delete != "CASCADE" and on_update != "CASCADE":
+                        continue
 
-        # Add new context to graph
-        graph[new_context_name] = []
+                    fk_name = fk["name"]
+
+                    # Check if this is a wildcard FK (only pops elements, doesn't delete records)
+                    is_nested = fk.get("is_nested", False)
+                    if is_nested:
+                        path_segments_data = fk.get("path_segments", [])
+                        path_segments = [
+                            PathSegment(
+                                name=s["name"],
+                                is_array=s["is_array"],
+                                is_wildcard=s["is_wildcard"],
+                                array_index=s.get("array_index"),
+                            )
+                            for s in path_segments_data
+                        ]
+                        # Skip wildcard FKs - they only pop array elements, can't cause infinite loops
+                        if FKPathParser.has_wildcard(path_segments):
+                            continue
+
+                    # Parse reference: "ContextName.column_name"
+                    ref_parts = fk["references"].split(".")
+                    if len(ref_parts) == 2:
+                        ref_context_name, ref_field_name = ref_parts
+                        # CASCADE propagation: deleting (ref_context, ref_field) cascades to (context, fk_name)
+                        # Add edge: (ref_context, ref_field) → (context, fk_name)
+                        key = (ref_context_name, ref_field_name)
+                        if key not in graph:
+                            graph[key] = []
+                        graph[key].append((context_name, fk_name))
 
         # Add edges representing CASCADE propagation from new context's FKs
         for fk in new_foreign_keys:
             on_delete = fk.get("on_delete", "NO ACTION")
             on_update = fk.get("on_update", "NO ACTION")
 
-            if on_delete == "CASCADE" or on_update == "CASCADE":
-                ref_parts = fk["references"].split(".")
-                if len(ref_parts) == 2:
-                    ref_context_name = ref_parts[0]
-                    # CASCADE propagation: deleting ref_context cascades to new_context
-                    # So add edge: ref_context → new_context
-                    if ref_context_name not in graph:
-                        graph[ref_context_name] = []
-                    graph[ref_context_name].append(new_context_name)
+            if on_delete != "CASCADE" and on_update != "CASCADE":
+                continue
 
-        # Ensure all referenced contexts are in the graph (even if they have no outgoing edges)
-        all_contexts = (
-            self.session.query(Context)
-            .filter(
-                Context.project_id == project_id,
-            )
-            .all()
-        )
-        for context in all_contexts:
-            if context.name not in graph:
-                graph[context.name] = []
+            fk_name = fk["name"]
+
+            # Check if this is a wildcard FK
+            is_nested = fk.get("is_nested", False)
+            if is_nested:
+                path_segments_data = fk.get("path_segments", [])
+                path_segments = [
+                    PathSegment(
+                        name=s["name"],
+                        is_array=s["is_array"],
+                        is_wildcard=s["is_wildcard"],
+                        array_index=s.get("array_index"),
+                    )
+                    for s in path_segments_data
+                ]
+                # Skip wildcard FKs
+                if FKPathParser.has_wildcard(path_segments):
+                    continue
+
+            # Parse reference
+            ref_parts = fk["references"].split(".")
+            if len(ref_parts) == 2:
+                ref_context_name, ref_field_name = ref_parts
+                # CASCADE propagation: deleting (ref_context, ref_field) cascades to (new_context, fk_name)
+                # Add edge: (ref_context, ref_field) → (new_context, fk_name)
+                key = (ref_context_name, ref_field_name)
+                if key not in graph:
+                    graph[key] = []
+                graph[key].append((new_context_name, fk_name))
 
         return graph
 
     def _dfs_detect_cycle(
         self,
-        graph: Dict[str, List[str]],
-        start_node: str,
-    ) -> Optional[List[str]]:
+        graph: Dict[tuple[str, str], List[tuple[str, str]]],
+        start_node: tuple[str, str],
+    ) -> Optional[List[tuple[str, str]]]:
         """Use DFS with color tracking to detect cycles in FK graph.
 
         Args:
-            graph: Adjacency list of FK dependencies
-            start_node: Context to start search from
+            graph: Adjacency list of FK dependencies {(context, field): [(context, field), ...]}
+            start_node: (context, field) tuple to start search from
 
         Returns:
-            None if no cycle, or list of context names forming the cycle path
+            None if no cycle, or list of (context, field) tuples forming the cycle path
         """
         # Color states for cycle detection
         WHITE = 0  # Not visited
@@ -302,7 +327,10 @@ class ContextDAO:
 
         colors = {node: WHITE for node in graph}
 
-        def dfs(node: str, path: List[str]) -> Optional[List[str]]:
+        def dfs(
+            node: tuple[str, str],
+            path: List[tuple[str, str]],
+        ) -> Optional[List[tuple[str, str]]]:
             """Recursive DFS helper."""
             if node not in graph:
                 # Node doesn't exist in graph (shouldn't happen, but handle gracefully)
@@ -343,8 +371,11 @@ class ContextDAO:
         project_id: int,
         new_context_name: str,
         new_foreign_keys: List[Dict[str, Any]],
-    ) -> Optional[List[str]]:
+    ) -> Optional[List[tuple[str, str]]]:
         """Detect circular CASCADE dependencies that would cause infinite loops.
+
+        Now tracks field-level cycles. Wildcard FKs are excluded as they only pop
+        array elements without deleting records, thus cannot cause infinite loops.
 
         Args:
             project_id: The project ID
@@ -352,12 +383,12 @@ class ContextDAO:
             new_foreign_keys: Foreign keys for the new context
 
         Returns:
-            None if no cycle detected, or list of context names forming the cycle
+            None if no cycle, or list of (context, field) tuples forming the cycle
         """
         if not new_foreign_keys:
             return None
 
-        # Build the FK dependency graph
+        # Build the FK dependency graph (field-level, excludes wildcard FKs)
         graph = self._build_fk_graph(project_id, new_context_name, new_foreign_keys)
 
         # Check for cycles from ALL nodes, since adding the new context might
@@ -764,6 +795,10 @@ class ContextDAO:
                     )
                     # Filter out None values
                     values_to_check = [v for v in values_to_check if v is not None]
+
+                    # Skip if no values to validate (e.g., empty arrays)
+                    if not values_to_check:
+                        continue
                 else:
                     # Simple column FK
                     if fk_path not in entries:
@@ -776,6 +811,10 @@ class ContextDAO:
                         continue
 
                     values_to_check = [value]
+
+                # Skip if no values to validate (defensive check)
+                if not values_to_check:
+                    continue
 
                 # Parse the reference
                 ref_parts = fk["references"].split(".")

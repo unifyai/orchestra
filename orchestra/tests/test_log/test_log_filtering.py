@@ -3694,3 +3694,456 @@ async def test_type_function_in_filter_expressions(
     data = response.json()
     assert len(data["logs"]) == 1, f"Expected 1 log for expression: {filter_expr}"
     assert data["logs"][0]["id"] == log_id
+
+
+@pytest.mark.anyio
+async def test_safe_temporal_casting_with_invalid_values(client: AsyncClient):
+    """
+    Test that safe temporal casting functions handle invalid values gracefully.
+
+    This test verifies that:
+    1. Invalid temporal values (like 'NULL', empty strings, garbage data) are cast to NULL
+    2. Queries don't fail with InvalidDatetimeFormat exceptions
+    3. Invalid rows are excluded from results when filtering
+    4. Valid temporal values still work correctly
+
+    If safe casting functions are removed, this test will fail with InvalidDatetimeFormat errors.
+    """
+    project_name = "test_safe_temporal_casting"
+    await _create_project(client, project_name)
+
+    # Create logs with various temporal values - some valid, some invalid
+    logs_data = [
+        # Valid date (using date format for consistency with range comparison)
+        {
+            "entries": {
+                "WorksOrderReportedCompletedDate": "2025-09-15",
+                "WorksOrderStatusDescription": "Complete",
+            },
+            "should_match": True,
+        },
+        # Invalid datetime - string 'NULL'
+        {
+            "entries": {
+                "WorksOrderReportedCompletedDate": "NULL",
+                "WorksOrderStatusDescription": "Complete",
+            },
+            "should_match": False,
+        },
+        # Invalid datetime - empty string
+        {
+            "entries": {
+                "WorksOrderReportedCompletedDate": "",
+                "WorksOrderStatusDescription": "Closed",
+            },
+            "should_match": False,
+        },
+        # Invalid datetime - garbage data
+        {
+            "entries": {
+                "WorksOrderReportedCompletedDate": "not-a-date",
+                "WorksOrderStatusDescription": "Complete",
+            },
+            "should_match": False,
+        },
+        # Valid date
+        {
+            "entries": {
+                "WorksOrderReportedCompletedDate": "2025-09-20",
+                "WorksOrderStatusDescription": "Closed",
+            },
+            "should_match": True,
+        },
+        # Invalid date - string 'NULL'
+        {
+            "entries": {
+                "WorksOrderReportedCompletedDate": "NULL",
+                "WorksOrderStatusDescription": "Closed",
+            },
+            "should_match": False,
+        },
+        # Valid time
+        {
+            "entries": {
+                "event_time": "14:30:00",
+                "event_name": "test_event",
+            },
+            "should_match": True,
+        },
+        # Invalid time - string 'NULL'
+        {
+            "entries": {
+                "event_time": "NULL",
+                "event_name": "test_event",
+            },
+            "should_match": False,
+        },
+        # Invalid time - garbage data
+        {
+            "entries": {
+                "event_time": "not-a-time",
+                "event_name": "test_event",
+            },
+            "should_match": False,
+        },
+        # Valid timedelta
+        {
+            "entries": {
+                "duration": "PT2H30M",
+                "task_name": "task1",
+            },
+            "should_match": True,
+        },
+        # Invalid timedelta - string 'NULL'
+        {
+            "entries": {
+                "duration": "NULL",
+                "task_name": "task2",
+            },
+            "should_match": False,
+        },
+        # Invalid timedelta - garbage data
+        {
+            "entries": {
+                "duration": "not-an-interval",
+                "task_name": "task3",
+            },
+            "should_match": False,
+        },
+    ]
+
+    created_log_ids = []
+    for log_data in logs_data:
+        response = await _create_log(
+            client,
+            project_name,
+            entries=log_data["entries"],
+        )
+        assert response.status_code == 200, response.text
+        log_id = response.json()["log_event_ids"][0]
+        created_log_ids.append((log_id, log_data["should_match"]))
+
+    # Test 1: Filter date column with valid date range, excluding invalid values
+    # This should only match logs with valid dates in the range
+    filter_expr = (
+        "WorksOrderStatusDescription in ('Complete','Closed') "
+        "and WorksOrderReportedCompletedDate != 'NULL' "
+        "and WorksOrderReportedCompletedDate >= '2025-09-01' "
+        "and WorksOrderReportedCompletedDate < '2025-10-01'"
+    )
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": filter_expr},
+        headers=HEADERS,
+    )
+    # Should not fail with InvalidDatetimeFormat error
+    assert (
+        response.status_code == 200
+    ), f"Query failed with status {response.status_code}: {response.text}"
+    data = response.json()
+    # Should only match logs with valid dates in range (first and fifth logs)
+    # Note: created_log_ids[0] is first log (2025-09-15), created_log_ids[4] is fifth log (2025-09-20)
+    matching_ids = {log["id"] for log in data["logs"]}
+    expected_ids = {created_log_ids[0][0], created_log_ids[4][0]}
+    assert matching_ids == expected_ids, (
+        f"Expected logs {expected_ids}, got {matching_ids}. "
+        f"Invalid temporal values should be excluded. "
+        f"Created log IDs: {[log_id for log_id, _ in created_log_ids]}"
+    )
+
+    # Test 2: Filter time column, excluding invalid values
+    filter_expr = "event_time != 'NULL' and event_time >= '12:00:00'"
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": filter_expr},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, f"Query failed: {response.text}"
+    data = response.json()
+    # Should only match log with valid time >= 12:00:00 (seventh log)
+    matching_ids = {log["id"] for log in data["logs"]}
+    expected_ids = {created_log_ids[6][0]}
+    assert matching_ids == expected_ids, (
+        f"Expected log {expected_ids}, got {matching_ids}. "
+        f"Invalid time values should be excluded."
+    )
+
+    # Test 3: Filter date column with != 'NULL', should exclude invalid dates
+    filter_expr = "WorksOrderReportedCompletedDate != 'NULL'"
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": filter_expr},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, f"Query failed: {response.text}"
+    data = response.json()
+    # Should match logs with valid dates (first and fifth logs - indices 0 and 4)
+    # Log at index 5 has "NULL" and should be excluded
+    matching_ids = {log["id"] for log in data["logs"]}
+    expected_ids = {created_log_ids[0][0], created_log_ids[4][0]}
+    assert matching_ids == expected_ids, (
+        f"Expected logs {expected_ids}, got {matching_ids}. "
+        f"Invalid date values (including 'NULL' strings) should be excluded."
+    )
+
+    # Test 4: Filter timedelta column, excluding invalid values
+    filter_expr = "duration != 'NULL' and duration > 'PT1H'"
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": filter_expr},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, f"Query failed: {response.text}"
+    data = response.json()
+    # Should only match log with valid timedelta > PT1H (ninth log: PT2H30M)
+    matching_ids = {log["id"] for log in data["logs"]}
+    expected_ids = {created_log_ids[9][0]}
+    assert matching_ids == expected_ids, (
+        f"Expected log {expected_ids}, got {matching_ids}. "
+        f"Invalid timedelta values should be excluded."
+    )
+
+    # Test 5: Verify that valid temporal values still work correctly
+    filter_expr = "WorksOrderReportedCompletedDate == '2025-09-15'"
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": filter_expr},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, f"Query failed: {response.text}"
+    data = response.json()
+    # Should match the first log with valid date
+    assert len(data["logs"]) == 1
+    assert data["logs"][0]["id"] == created_log_ids[0][0]
+
+    # Test 6: Test with empty string filter
+    # Note: Empty strings in data get cast to NULL, and NULL != '' evaluates to True with NULL-safe comparison
+    # However, invalid values like "NULL" string also cast to NULL, and the actual behavior
+    # is that only valid dates match this filter
+    filter_expr = "WorksOrderReportedCompletedDate != ''"
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": filter_expr},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, f"Query failed: {response.text}"
+    data = response.json()
+    # Should match logs with valid dates (indices 0 and 4)
+    # Logs with invalid values (including "NULL" strings and empty strings) cast to NULL
+    # and are excluded from != '' comparison results
+    matching_ids = {log["id"] for log in data["logs"]}
+    expected_ids = {created_log_ids[0][0], created_log_ids[4][0]}
+    assert matching_ids == expected_ids, (
+        f"Expected logs {expected_ids}, got {matching_ids}. "
+        f"Only valid dates should match != '' filter."
+    )
+
+
+@pytest.mark.anyio
+async def test_null_safe_equality_inequality_comparisons(client: AsyncClient):
+    """
+    Test that NULL-safe equality and inequality comparisons work correctly.
+
+    This test verifies that:
+    1. NULL == NULL evaluates to True (they are equal)
+    2. NULL != NULL evaluates to False (they are equal, so not different)
+    3. NULL == value evaluates to False (they are not equal)
+    4. NULL != value evaluates to True (they are different)
+    5. Filter expressions like column != 'NULL' work correctly when invalid temporal values are cast to NULL
+
+    If NULL-safe comparison functions are removed, this test will fail because
+    NULL comparisons will return NULL (falsy) instead of proper boolean values.
+    """
+    project_name = "test_null_safe_comparisons"
+    await _create_project(client, project_name)
+
+    # Create logs with temporal values that will be cast to NULL (invalid values)
+    # and some with valid values
+    logs_data = [
+        # Valid date (using date format for consistency)
+        {
+            "entries": {
+                "completion_date": "2025-09-15",
+                "status": "complete",
+            },
+            "log_id": None,  # Will be set after creation
+            "has_valid_date": True,
+        },
+        # Invalid datetime - string 'NULL' (will be cast to SQL NULL)
+        {
+            "entries": {
+                "completion_date": "NULL",
+                "status": "complete",
+            },
+            "log_id": None,
+            "has_valid_date": False,
+        },
+        # Invalid datetime - empty string (will be cast to SQL NULL)
+        {
+            "entries": {
+                "completion_date": "",
+                "status": "closed",
+            },
+            "log_id": None,
+            "has_valid_date": False,
+        },
+        # Invalid datetime - garbage data (will be cast to SQL NULL)
+        {
+            "entries": {
+                "completion_date": "garbage-data",
+                "status": "complete",
+            },
+            "log_id": None,
+            "has_valid_date": False,
+        },
+        # Valid date
+        {
+            "entries": {
+                "completion_date": "2025-09-20",
+                "status": "closed",
+            },
+            "log_id": None,
+            "has_valid_date": True,
+        },
+    ]
+
+    # Create logs and store their IDs
+    for log_data in logs_data:
+        response = await _create_log(
+            client,
+            project_name,
+            entries=log_data["entries"],
+        )
+        assert response.status_code == 200, response.text
+        log_data["log_id"] = response.json()["log_event_ids"][0]
+
+    valid_log_ids = {log["log_id"] for log in logs_data if log["has_valid_date"]}
+    invalid_log_ids = {log["log_id"] for log in logs_data if not log["has_valid_date"]}
+
+    # Test 1: NULL != 'NULL' should exclude rows where completion_date is NULL
+    # After safe casting, invalid values become NULL, so NULL != NULL evaluates to False
+    # This should only match logs with valid dates
+    filter_expr = "completion_date != 'NULL'"
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": filter_expr},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, f"Query failed: {response.text}"
+    data = response.json()
+    matching_ids = {log["id"] for log in data["logs"]}
+    assert matching_ids == valid_log_ids, (
+        f"Test 1 failed: Expected valid log IDs {valid_log_ids}, got {matching_ids}. "
+        f"NULL != 'NULL' should exclude rows where completion_date is NULL (invalid values)."
+    )
+
+    # Test 2: NULL == 'NULL' should only match rows where completion_date is NULL
+    # After safe casting, invalid values become NULL, so NULL == NULL evaluates to True
+    filter_expr = "completion_date == 'NULL'"
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": filter_expr},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, f"Query failed: {response.text}"
+    data = response.json()
+    matching_ids = {log["id"] for log in data["logs"]}
+    assert matching_ids == invalid_log_ids, (
+        f"Test 2 failed: Expected invalid log IDs {invalid_log_ids}, got {matching_ids}. "
+        f"NULL == 'NULL' should only match rows where completion_date is NULL (invalid values)."
+    )
+
+    # Test 3: Combined filter: != 'NULL' AND date range
+    # Should only match logs with valid dates in the range
+    filter_expr = (
+        "completion_date != 'NULL' "
+        "and completion_date >= '2025-09-01' "
+        "and completion_date < '2025-10-01'"
+    )
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": filter_expr},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, f"Query failed: {response.text}"
+    data = response.json()
+    matching_ids = {log["id"] for log in data["logs"]}
+    # Should match logs with valid dates in range (first and fifth logs)
+    expected_ids = {logs_data[0]["log_id"], logs_data[4]["log_id"]}
+    assert matching_ids == expected_ids, (
+        f"Test 3 failed: Expected log IDs {expected_ids}, got {matching_ids}. "
+        f"Combined filter should exclude NULL values and match valid dates in range."
+    )
+
+    # Test 4: Test with empty string comparison
+    # Empty string gets cast to NULL, so NULL != '' should exclude those rows
+    filter_expr = "completion_date != ''"
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": filter_expr},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, f"Query failed: {response.text}"
+    data = response.json()
+    matching_ids = {log["id"] for log in data["logs"]}
+    assert matching_ids == valid_log_ids, (
+        f"Test 4 failed: Expected valid log IDs {valid_log_ids}, got {matching_ids}. "
+        f"Empty string should be cast to NULL and excluded by != '' comparison."
+    )
+
+    # Test 5: Test equality with valid value - should work normally
+    filter_expr = "completion_date == '2025-09-15'"
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": filter_expr},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, f"Query failed: {response.text}"
+    data = response.json()
+    matching_ids = {log["id"] for log in data["logs"]}
+    expected_ids = {logs_data[0]["log_id"]}
+    assert matching_ids == expected_ids, (
+        f"Test 5 failed: Expected log ID {expected_ids}, got {matching_ids}. "
+        f"Equality with valid value should work normally."
+    )
+
+    # Test 6: Test inequality with valid value - should work normally
+    filter_expr = "completion_date != '2025-09-15'"
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": filter_expr},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, f"Query failed: {response.text}"
+    data = response.json()
+    matching_ids = {log["id"] for log in data["logs"]}
+    # Should match all other logs (both valid and invalid, but not the first one)
+    expected_ids = {
+        log["log_id"] for log in logs_data if log["log_id"] != logs_data[0]["log_id"]
+    }
+    assert matching_ids == expected_ids, (
+        f"Test 6 failed: Expected log IDs {expected_ids}, got {matching_ids}. "
+        f"Inequality with valid value should work normally and include NULL values "
+        f"(since NULL != value evaluates to True)."
+    )
+
+    # Test 7: Complex filter combining status and date with NULL exclusion
+    filter_expr = (
+        "status in ('complete','closed') "
+        "and completion_date != 'NULL' "
+        "and completion_date >= '2025-09-01'"
+    )
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": filter_expr},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, f"Query failed: {response.text}"
+    data = response.json()
+    matching_ids = {log["id"] for log in data["logs"]}
+    # Should match logs with valid dates >= 2025-09-01 and status in ('complete','closed')
+    expected_ids = {logs_data[0]["log_id"], logs_data[4]["log_id"]}
+    assert matching_ids == expected_ids, (
+        f"Test 7 failed: Expected log IDs {expected_ids}, got {matching_ids}. "
+        f"Complex filter should exclude NULL values and match valid dates with correct status."
+    )

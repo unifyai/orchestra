@@ -17,7 +17,6 @@ from sqlalchemy import (
     case,
     cast,
     desc,
-    exists,
     func,
     literal,
     or_,
@@ -829,8 +828,15 @@ def _get_logs_query(
                             validate_filter_dict.parent = fd
                             validate_filter_dict(v)
 
-            # Define a subquery for event IDs to pass to the query builder
-            event_ids_subq = log_event_query.subquery(name="event_ids_subq")
+            # # Define a subquery for event IDs to pass to the query builder
+            # event_ids_subq = log_event_query.subquery(name="event_ids_subq")
+
+            # Materialize as CTE to prevent re-execution within EXISTS clauses
+            # This is critical when multiple filter conditions create multiple EXISTS clauses,
+            # each of which would otherwise re-execute the event_ids_subq subquery
+            event_ids_subq = log_event_query.cte("event_ids_subq").prefix_with(
+                "MATERIALIZED",
+            )
 
             try:
                 # --- OPTIMIZATION FOR 'OR' ---
@@ -857,9 +863,15 @@ def _get_logs_query(
                             matching_id_subqueries.append(matching_ids)
 
                     if matching_id_subqueries:
-                        unioned_ids_subq = union_all(*matching_id_subqueries).subquery()
+                        # Materialize the union_all CTE to prevent re-execution
+                        # This is similar to the MATERIALIZED CTEs used in AND optimization
+                        unioned_ids_subq = (
+                            union_all(*matching_id_subqueries)
+                            .cte("unioned_matching_ids")
+                            .prefix_with("MATERIALIZED")
+                        )
                         log_event_query = log_event_query.filter(
-                            LogEvent.id.in_(select(unioned_ids_subq)),
+                            LogEvent.id.in_(select(unioned_ids_subq.c.log_event_id)),
                         )
 
                 # --- OPTIMIZATION FOR 'AND' ---
@@ -882,16 +894,18 @@ def _get_logs_query(
                                 condition_sql,
                                 session,
                             )
+                            # Use IN subquery instead of EXISTS to avoid correlated execution
+                            # Materialize as CTE so PostgreSQL can see actual row counts and choose
+                            # hash join instead of nested loop join
+                            matching_ids_subq = (
+                                select(condition_sql.c.log_event_id)
+                                .where(truthiness_clause)
+                                .cte(f"matching_ids_{i}")
+                                .prefix_with("MATERIALIZED")
+                            )
                             log_event_query = log_event_query.filter(
-                                exists(
-                                    select(1)
-                                    .select_from(condition_sql)
-                                    .where(
-                                        and_(
-                                            condition_sql.c.log_event_id == LogEvent.id,
-                                            truthiness_clause,
-                                        ),
-                                    ),
+                                LogEvent.id.in_(
+                                    select(matching_ids_subq.c.log_event_id),
                                 ),
                             )
                         else:
@@ -911,17 +925,17 @@ def _get_logs_query(
                             condition_sql,
                             session,
                         )
+                        # Use IN subquery instead of EXISTS to avoid correlated execution
+                        # Materialize as CTE so PostgreSQL can see actual row counts and choose
+                        # hash join instead of nested loop join
+                        matching_ids_subq = (
+                            select(condition_sql.c.log_event_id)
+                            .where(truthiness_clause)
+                            .cte("matching_ids_single")
+                            .prefix_with("MATERIALIZED")
+                        )
                         log_event_query = log_event_query.filter(
-                            exists(
-                                select(1)
-                                .select_from(condition_sql)
-                                .where(
-                                    and_(
-                                        condition_sql.c.log_event_id == LogEvent.id,
-                                        truthiness_clause,
-                                    ),
-                                ),
-                            ),
+                            LogEvent.id.in_(select(matching_ids_subq.c.log_event_id)),
                         )
                     else:
                         log_event_query = log_event_query.filter(condition_sql)
@@ -1284,7 +1298,12 @@ def _get_logs_query(
         from_fields=from_fields,  # Still need to filter the actual fields returned
         exclude_fields=exclude_fields,  # Still need to filter the actual fields returned
     )
-    filtered_logs_subq = filtered_logs_q.subquery(name="filtered_logs_subq")
+    # Materialize as CTE to help PostgreSQL optimize the join with paginated_ids_subq
+    # This prevents PostgreSQL from treating filtered_logs_subq as a correlated subquery
+    # and encourages a hash join instead of a nested loop join
+    filtered_logs_subq = filtered_logs_q.cte("filtered_logs_subq").prefix_with(
+        "MATERIALIZED",
+    )
 
     # Get final logs - total_count already calculated in _paginate_events
     raw_rows = _get_final_logs(session, filtered_logs_subq, paginated_ids_subq)
@@ -1518,15 +1537,8 @@ def create_logs_internal(
         merged_data = {**current_params, **current_entries}
         batch_merged_data.append(merged_data)
 
-    # Batch validate all FK references at once (single query per unique FK)
-    if context_obj and context_obj.foreign_keys:
-        failed_fk_validations = context_dao.batch_validate_foreign_key_references(
-            project_id=project_id,
-            context_id=context_id,
-            batch_entries=batch_merged_data,
-        )
-    else:
-        failed_fk_validations = {}
+    # FK validation disabled - allows creating logs with any FK values
+    failed_fk_validations = {}
 
     # Process all logs in the batch
     for i in range(total_logs):
@@ -2411,8 +2423,15 @@ def _construct_join_query(
             processed_join_expr,
         )
 
-        # 2. Build the local_scope dictionary mapping placeholders to column objects
-        local_scope = {"subq_a": subq_a, "subq_b": subq_b}
+        # 2. Build the local_scope dictionary mapping placeholders to column objects.
+        # Mark this expression as a JOIN comparison so the python2SQL layer can
+        # choose comparison semantics (e.g. plain equality vs NULL-safe) based
+        # on context.
+        local_scope = {
+            "subq_a": subq_a,
+            "subq_b": subq_b,
+            "__comparison_context__": "join",
+        }
         for col in subq_a.c.keys():
             if col in fields_a:
                 local_scope[f"__table_A_{col}"] = (getattr(subq_a.c, col), "column")

@@ -93,6 +93,67 @@ $$;
         """,
             ),
         )
+        # Create safe temporal casting functions for tests (from migration)
+        conn.execute(
+            text(
+                """
+            CREATE OR REPLACE FUNCTION safe_cast_to_timestamptz(input_text TEXT)
+            RETURNS TIMESTAMP WITH TIME ZONE AS $$
+            BEGIN
+                RETURN input_text::TIMESTAMP WITH TIME ZONE;
+            EXCEPTION
+                WHEN OTHERS THEN
+                    RETURN NULL;
+            END;
+            $$ LANGUAGE plpgsql IMMUTABLE;
+            """,
+            ),
+        )
+        conn.execute(
+            text(
+                """
+            CREATE OR REPLACE FUNCTION safe_cast_to_time(input_text TEXT)
+            RETURNS TIME AS $$
+            BEGIN
+                RETURN input_text::TIME;
+            EXCEPTION
+                WHEN OTHERS THEN
+                    RETURN NULL;
+            END;
+            $$ LANGUAGE plpgsql IMMUTABLE;
+            """,
+            ),
+        )
+        conn.execute(
+            text(
+                """
+            CREATE OR REPLACE FUNCTION safe_cast_to_date(input_text TEXT)
+            RETURNS DATE AS $$
+            BEGIN
+                RETURN input_text::DATE;
+            EXCEPTION
+                WHEN OTHERS THEN
+                    RETURN NULL;
+            END;
+            $$ LANGUAGE plpgsql IMMUTABLE;
+            """,
+            ),
+        )
+        conn.execute(
+            text(
+                """
+            CREATE OR REPLACE FUNCTION safe_cast_to_interval(input_text TEXT)
+            RETURNS INTERVAL AS $$
+            BEGIN
+                RETURN input_text::INTERVAL;
+            EXCEPTION
+                WHEN OTHERS THEN
+                    RETURN NULL;
+            END;
+            $$ LANGUAGE plpgsql IMMUTABLE;
+            """,
+            ),
+        )
 
         user_id = str(os.getenv("AUTH_ACCOUNT_USER_ID"))
         api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
@@ -465,6 +526,67 @@ $$;
 
 
         """,
+            ),
+        )
+        # Create safe temporal casting functions for tests (from migration)
+        conn.execute(
+            text(
+                """
+            CREATE OR REPLACE FUNCTION safe_cast_to_timestamptz(input_text TEXT)
+            RETURNS TIMESTAMP WITH TIME ZONE AS $$
+            BEGIN
+                RETURN input_text::TIMESTAMP WITH TIME ZONE;
+            EXCEPTION
+                WHEN OTHERS THEN
+                    RETURN NULL;
+            END;
+            $$ LANGUAGE plpgsql IMMUTABLE;
+            """,
+            ),
+        )
+        conn.execute(
+            text(
+                """
+            CREATE OR REPLACE FUNCTION safe_cast_to_time(input_text TEXT)
+            RETURNS TIME AS $$
+            BEGIN
+                RETURN input_text::TIME;
+            EXCEPTION
+                WHEN OTHERS THEN
+                    RETURN NULL;
+            END;
+            $$ LANGUAGE plpgsql IMMUTABLE;
+            """,
+            ),
+        )
+        conn.execute(
+            text(
+                """
+            CREATE OR REPLACE FUNCTION safe_cast_to_date(input_text TEXT)
+            RETURNS DATE AS $$
+            BEGIN
+                RETURN input_text::DATE;
+            EXCEPTION
+                WHEN OTHERS THEN
+                    RETURN NULL;
+            END;
+            $$ LANGUAGE plpgsql IMMUTABLE;
+            """,
+            ),
+        )
+        conn.execute(
+            text(
+                """
+            CREATE OR REPLACE FUNCTION safe_cast_to_interval(input_text TEXT)
+            RETURNS INTERVAL AS $$
+            BEGIN
+                RETURN input_text::INTERVAL;
+            EXCEPTION
+                WHEN OTHERS THEN
+                    RETURN NULL;
+            END;
+            $$ LANGUAGE plpgsql IMMUTABLE;
+            """,
             ),
         )
 
