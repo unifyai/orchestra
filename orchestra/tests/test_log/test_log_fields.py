@@ -1401,3 +1401,75 @@ async def test_explicit_type_overrides_in_fields(client: AsyncClient):
 
     # Should return "str", not "audio" or "Any"
     assert fields["recording_url"]["data_type"] == "str"
+
+
+@pytest.mark.anyio
+async def test_get_fields_all_contexts_with_wildcard(client: AsyncClient):
+    """Test that using context='*' returns fields from all contexts in the project."""
+    project_name = "test-get-fields-all-contexts"
+    context_name_1 = "ctx1"
+    context_name_2 = "ctx2"
+
+    # Create project and two contexts
+    await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name_1, "description": "First context"},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name_2, "description": "Second context"},
+        headers=HEADERS,
+    )
+
+    # Create multiple fields in each context via POST /logs/fields
+    resp_ctx1 = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project": project_name,
+            "context": context_name_1,
+            "fields": {
+                "accuracy_ctx1": "float",
+                "loss_ctx1": "float",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert resp_ctx1.status_code == 200, resp_ctx1.json()
+
+    resp_ctx2 = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project": project_name,
+            "context": context_name_2,
+            "fields": {
+                "accuracy_ctx2": "float",
+                "loss_ctx2": "float",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert resp_ctx2.status_code == 200, resp_ctx2.json()
+
+    # Fetch fields across all contexts using the wildcard
+    response = await client.get(
+        f"/v0/logs/fields?project={project_name}&context=*",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    fields_by_context = response.json()
+
+    # Both contexts should be present as top-level keys
+    assert context_name_1 in fields_by_context
+    assert context_name_2 in fields_by_context
+
+    # Each context should contain its respective fields
+    assert "accuracy_ctx1" in fields_by_context[context_name_1]
+    assert "loss_ctx1" in fields_by_context[context_name_1]
+    assert "accuracy_ctx2" in fields_by_context[context_name_2]
+    assert "loss_ctx2" in fields_by_context[context_name_2]

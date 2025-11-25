@@ -84,6 +84,7 @@ def write_data_to_db(data, engine, user_id, email_id, api_key):
             "id": 1,
             "owner_id": user_id,
             "name": "Orchestra Admin Organization",
+            "billing_user_id": user_id,
             "created_at": datetime.now(),
         },
     ]
