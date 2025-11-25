@@ -156,4 +156,9 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 1, "completion": 5},
     },
+    "claude-4.5-opus": {
+        "endpoint": "bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0",
+        "context_window": 200000,
+        "cost": {"prompt": 5, "completion": 25},
+    },
 }
