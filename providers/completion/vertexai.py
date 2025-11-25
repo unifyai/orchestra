@@ -142,6 +142,12 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 1, "completion": 5},
     },
+    "claude-4.5-opus": {
+        "endpoint": "vertex_ai/claude-opus-4-5@20251101",
+        "region": "global",
+        "context_window": 200000,
+        "cost": {"prompt": 5, "completion": 25},
+    },
     "llama-3.1-405b-chat": {
         "endpoint": "vertex_ai/meta/llama3-405b-instruct-maas",
         "region": "us-central1",
