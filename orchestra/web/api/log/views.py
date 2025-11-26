@@ -4,6 +4,7 @@ Includes endpoints related to Log API.
 """
 
 import json
+import logging
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
@@ -5040,37 +5041,45 @@ async def process_traffic_logs(
 
             try:
                 data = json.loads(received_message.message.data.decode("utf-8"))
+
+                for key in ("project_id", "context_id", "project_name"):
+                    data.pop(key, None)
+
+                entries.append(data)
             except json.JSONDecodeError:
-                # Malformed payload – acknowledge and skip so it doesn't poison the queue
+                # Malformed payload - skip but keep in ack_ids to remove from queue
                 continue
 
-            for key in ("project_id", "context_id", "project_name"):
-                data.pop(key, None)
-
-            entries.append(data)
-
         if not entries:
+            # Even if no valid entries, we might have bad JSON ones to ack
+            if ack_ids:
+                subscriber.acknowledge(
+                    request={"subscription": subscription_path, "ack_ids": ack_ids},
+                )
             return {"message": "No new traffic-log messages", "status": "success"}
 
-        # batch ingestion
-        create_logs_internal(
-            project_id=project_id,
-            context_id=context_id,
-            request=CreateLogConfig(
-                entries=entries,
-                project=PROJ_NAME,
-                context=None,
-            ),
-            project_dao=project_dao,
-            field_type_dao=field_type_dao,
-            log_event_dao=log_event_dao,
-            log_dao=log_dao,
-            context_dao=context_dao,
-            context_obj=context_obj,
-        )
+        try:
+            # batch ingestion
+            create_logs_internal(
+                project_id=project_id,
+                context_id=context_id,
+                request=CreateLogConfig(
+                    entries=entries,
+                    project=PROJ_NAME,
+                    context=None,
+                ),
+                project_dao=project_dao,
+                field_type_dao=field_type_dao,
+                log_event_dao=log_event_dao,
+                log_dao=log_dao,
+                context_dao=context_dao,
+                context_obj=context_obj,
+            )
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to insert batch of traffic logs: {e}")
 
         processed_count = len(entries)
-        # Acknowledge the processed messages
         if ack_ids:
             subscriber.acknowledge(
                 request={"subscription": subscription_path, "ack_ids": ack_ids},
@@ -5080,7 +5089,7 @@ async def process_traffic_logs(
         subscriber.close()
 
         return {
-            "message": f"Pulled and processed {processed_count} messages",
+            "message": f"Pulled {processed_count} messages (processed or skipped on error)",
             "status": "success",
         }
 
