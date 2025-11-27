@@ -43,6 +43,13 @@ def get_response_examples(route_config, schemas):
     responses = route_config["responses"]
     response_examples = []
     for code in responses:
+        # Handle 204 No Content and other responses without content
+        if "content" not in responses[code]:
+            if len(code) > 3:
+                code = code[:3] + f" ({code[-1]})"
+            response_examples.append({"code": code, "example": None})
+            continue
+
         content = list(responses[code]["content"].values())[0]
         if len(code) > 3:
             code = code[:3] + f" ({code[-1]})"
@@ -64,6 +71,8 @@ def get_response_examples(route_config, schemas):
                 schema_name = content["schema"]["items"].get("$ref", None)
                 if schema_name:
                     response = get_param_fields(schema_name, schemas)
+        else:
+            response = None
         response_examples.append({"code": code, "example": response})
     return response_examples
 
@@ -133,7 +142,11 @@ def get_request_details(path, route, route_config, schemas):
                 "<ResponseExample>",
                 *[
                     f'```json {example["code"]}\n'
-                    + json.dumps(example["example"], indent=4)
+                    + (
+                        json.dumps(example["example"], indent=4)
+                        if example["example"] is not None
+                        else "// No Content"
+                    )
                     + "\n```"
                     for example in response_examples
                 ],
