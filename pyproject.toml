@@ -111,6 +111,7 @@ filterwarnings = [
     "error",
     "ignore::DeprecationWarning",
     "ignore:.*unclosed.*:ResourceWarning",
+    "ignore::UserWarning",
 ]
 env = [
     "ORCHESTRA_ENVIRONMENT=pytest",
