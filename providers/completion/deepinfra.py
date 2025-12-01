@@ -51,7 +51,7 @@ supported_models = {
     "deepseek-v3-0324": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3-0324",
         "context_window": 160000,
-        "cost": {"prompt": 0.25, "completion": 0.88},
+        "cost": {"prompt": 0.20, "completion": 0.88},
     },
     "deepseek-r1": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-R1-0528",
