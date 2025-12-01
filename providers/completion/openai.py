@@ -53,16 +53,6 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 2.5, "completion": 10},
     },
-    "gpt-4o-2024-11-20": {
-        "endpoint": "gpt-4o-2024-11-20",
-        "context_window": 128000,
-        "cost": {"prompt": 2.5, "completion": 10},
-    },
-    "gpt-4o-2024-08-06": {
-        "endpoint": "gpt-4o-2024-08-06",
-        "context_window": 128000,
-        "cost": {"prompt": 2.5, "completion": 10},
-    },
     "gpt-4o-2024-05-13": {
         "endpoint": "gpt-4o-2024-05-13",
         "context_window": 128000,
