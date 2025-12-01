@@ -41,6 +41,10 @@ jobs:
   #       run: poetry run mypy --install-types --non-interactive .
   pytest:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
     environment: orchestra-testing
     services:
       orchestra-db:
@@ -76,7 +80,7 @@ jobs:
         POETRY_VIRTUALENVS_CREATE: false
 
     - name: Run pytest check
-      run: poetry run pytest -p no:warnings -vv --cov="orchestra" -n 4 . -m "not performance"
+      run: poetry run pytest -p no:warnings -vv --cov="orchestra" -n 4 --shard-id=${{ matrix.shard }} --num-shards=4 . -m "not performance"
       env:
         ORCHESTRA_HOST: "0.0.0.0"
         ORCHESTRA_DB_HOST: localhost
