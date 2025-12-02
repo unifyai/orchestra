@@ -547,6 +547,7 @@ def admin_list_assistants(
                     assistant_whatsapp_number=a.assistant_whatsapp_number,
                     voice_id=a.voice_id,
                     voice_provider=a.voice_provider,
+                    voice_mode=a.voice_mode,
                     api_key=api_keys[i],
                     user_first_name=auth_users[i].name,
                     user_last_name=auth_users[i].last_name,
@@ -673,6 +674,7 @@ def admin_update_assistant(
             assistant_whatsapp_number=updated.assistant_whatsapp_number,
             voice_id=updated.voice_id,
             voice_provider=updated.voice_provider,
+            voice_mode=updated.voice_mode,
         ),
     )
 
@@ -749,6 +751,7 @@ def admin_list_assistants_for_user(
                     assistant_whatsapp_number=a.assistant_whatsapp_number,
                     voice_id=a.voice_id,
                     voice_provider=a.voice_provider,
+                    voice_mode=a.voice_mode,
                 )
                 for a in assistants
             ],
