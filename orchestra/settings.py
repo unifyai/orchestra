@@ -170,7 +170,7 @@ class Settings(BaseSettings):
 
     # Assistant photo generation
     photo_generation_cost: float = (
-        0.5  # /img. See https://replicate.com/black-forest-labs/flux-1.1-pro
+        0.05  # /img. See https://replicate.com/black-forest-labs/flux-1.1-pro
     )
     video_generation_cost: float = (
         0.08  # /s. See https://replicate.com/wan-video/wan-2.5-i2v-fast
