@@ -942,27 +942,9 @@ class VideoAnimateRequest(BaseModel):
         None,
         description="Random seed for reproducible results. Leave blank for a random seed.",
     )
-    dynamic_scale: Optional[float] = Field(
-        1.0,
-        description="Controls movement intensity. Increase/decrease for more/less movement.",
-        ge=0.5,
-        le=2.0,
-    )
-    min_resolution: Optional[int] = Field(
-        512,
-        description="Minimum image resolution for processing. Lower values use less memory but may reduce quality.",
-        ge=256,
-        le=1024,
-    )
-    inference_steps: Optional[int] = Field(
-        25,
-        description="Number of diffusion steps. Higher values may improve quality but take longer.",
-        ge=5,
-        le=50,
-    )
-    keep_resolution: Optional[bool] = Field(
-        True,
-        description="If true, output video matches the original image resolution. Otherwise uses the min_resolution after cropping.",
+    duration: Optional[int] = Field(
+        None,
+        description="Duration of the generated video. Defaults to 5 sec.",
     )
 
     class Config:
@@ -970,8 +952,6 @@ class VideoAnimateRequest(BaseModel):
             "example": {
                 "image_url": "https://raw.githubusercontent.com/jixiaozhong/Sonic/main/examples/image/anime1.png",
                 "audio_url": "https://raw.githubusercontent.com/jixiaozhong/Sonic/main/examples/wav/talk_female_english_10s.MP3",
-                "dynamic_scale": 1.2,
-                "keep_resolution": True,
             },
         }
 

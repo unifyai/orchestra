@@ -2901,10 +2901,7 @@ async def animate_video_endpoint(
     audio_url: Optional[str] = Form(None),
     audio_file: Optional[UploadFile] = File(None),
     seed: Optional[int] = Form(None),
-    dynamic_scale: Optional[float] = Form(1.0),
-    min_resolution: Optional[int] = Form(512),
-    inference_steps: Optional[int] = Form(25),
-    keep_resolution: Optional[bool] = Form(True),
+    duration: Optional[int] = Form(None),
     _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[ReplicatePredictionResponse]:
     user_id = request.state.user_id
@@ -3038,7 +3035,9 @@ async def animate_video_endpoint(
         # Pre-check credits (assuming video_generation_cost is defined in settings)
         if not settings.is_staging:
             user = users_dao.get_user_with_id(user_id)
-            if user.credits < settings.video_generation_cost:
+            if user.credits < settings.video_generation_cost * (
+                duration if duration is not None else settings.default_video_duration
+            ):
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail="Insufficient credits to generate video.",
@@ -3048,10 +3047,7 @@ async def animate_video_endpoint(
             image_url=final_image_url_for_replicate,
             audio_url=final_audio_url_for_replicate,
             seed=seed,
-            dynamic_scale=dynamic_scale,
-            min_resolution=min_resolution,
-            inference_steps=inference_steps,
-            keep_resolution=keep_resolution,
+            duration=duration,
         )
 
         # Deduct credits after successful generation

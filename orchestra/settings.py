@@ -169,8 +169,15 @@ class Settings(BaseSettings):
     assistant_creation_cost: float = 10.0
 
     # Assistant photo generation
-    photo_generation_cost: float = 0.10
-    video_generation_cost: float = 0.25
+    photo_generation_cost: float = (
+        0.5  # /img. See https://replicate.com/black-forest-labs/flux-1.1-pro
+    )
+    video_generation_cost: float = (
+        0.08  # /s. See https://replicate.com/wan-video/wan-2.5-i2v-fast
+    )
+    default_video_duration: int = (
+        5  # Default. See See https://replicate.com/wan-video/wan-2.5-i2v-fast
+    )
     replicate_api_key: Optional[str] = None  # Populated by model_config below
 
     @property
