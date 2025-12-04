@@ -52,17 +52,6 @@ def mock_assistant_infra_calls(request):
 
 
 @pytest.mark.anyio
-@patch(
-    "orchestra.db.dao.assistant_dao.send_unify_message",
-    return_value={"status": "success"},
-)
-async def test_message_assistant_success(mock_send_message, client: AsyncClient):
-    # TODO: Add test when the endpoint logic is updated to avoid
-    # relying on the Transcripts to fetch the assistant response
-    pass
-
-
-@pytest.mark.anyio
 async def test_create_assistant_unapproved_user_fails(client: AsyncClient):
     """Test that a user who is not approved cannot create an assistant."""
     unapproved_user = await create_test_user(
