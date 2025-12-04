@@ -2195,7 +2195,7 @@ def delete_logs(
     # and "<AssistantName>/<SubContext>" contexts. Deleting from one should also
     # delete from the sibling context.
     is_assistants_dual_context = (
-        body.project in ("Assistants", "UnityTests")
+        (body.project == "Assistants" or "UnityTests" in body.project)
         and context_name
         and "/" in context_name
     )
