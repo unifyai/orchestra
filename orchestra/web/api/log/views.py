@@ -2191,11 +2191,13 @@ def delete_logs(
     context_id = context[0][0].id
 
     # Detect Assistants project dual-context pattern
-    # When project is "Assistants", logs exist in both "All/<SubContext>" and
-    # "<AssistantName>/<SubContext>" contexts. Deleting from one should also
+    # When project is "Assistants" or "UnityTests", logs exist in both "All/<SubContext>"
+    # and "<AssistantName>/<SubContext>" contexts. Deleting from one should also
     # delete from the sibling context.
     is_assistants_dual_context = (
-        body.project == "Assistants" and context_name and "/" in context_name
+        body.project in ("Assistants", "UnityTests")
+        and context_name
+        and "/" in context_name
     )
 
     # Preprocess ids_and_fields to handle dict-based selectors
