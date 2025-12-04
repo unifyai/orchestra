@@ -54,7 +54,6 @@ from orchestra.web.api.assistant.schema import (
     RecordingCreate,
     RecordingInfo,
     ReplicatePredictionResponse,
-    UnifyMessage,
     VoiceCreate,
     VoiceDesignCreateFromPreviewRequest,
     VoiceDesignGeneratePreviewsAPIResponse,
@@ -112,46 +111,6 @@ def check_assistant_hiring_approval(
 
 router = APIRouter()
 admin_router = APIRouter()
-
-
-@router.post(
-    "/assistant/message",
-    response_model=InfoResponse[str],
-    status_code=status.HTTP_200_OK,
-    summary="Send a message to an assistant and get a response",
-    description="Sends a message to a specified assistant and waits for the next reply from that assistant.",
-    tags=["Assistant Interaction"],
-)
-def message_assistant(
-    payload: UnifyMessage,
-    request: Request,
-    session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
-) -> InfoResponse[str]:
-    user_id = request.state.user_id
-    assistant_dao = AssistantDAO(session)
-
-    try:
-        response_content = assistant_dao.message_assistant(
-            user_id=user_id,
-            assistant_id=payload.assistant_id,
-            contact_id=payload.contact_id,
-            message=payload.message,
-        )
-        return InfoResponse(info=response_content)
-    except HTTPException as e:
-        # Re-raise HTTPExceptions raised from the DAO layer
-        raise e
-    except Exception as e:
-        # Catch any other unexpected errors
-        logging.error(
-            f"Unexpected error in message_assistant endpoint: {e}",
-            exc_info=True,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while processing the message.",
-        )
 
 
 @router.post(
