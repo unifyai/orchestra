@@ -3002,12 +3002,14 @@ async def animate_video_endpoint(
                     detail="Insufficient credits to generate video.",
                 )
 
-        prediction = replicate_service.create_video_animation(
-            image_url=final_image_url_for_replicate,
-            audio_url=final_audio_url_for_replicate,
-            seed=seed,
-            duration=duration,
-        )
+        animation_kwargs = {
+            "image_url": final_image_url_for_replicate,
+            "audio_url": final_audio_url_for_replicate,
+            "seed": seed,
+        }
+        if duration is not None:
+            animation_kwargs["duration"] = duration
+        prediction = replicate_service.create_video_animation(**animation_kwargs)
 
         # Deduct credits after successful generation
         if not settings.is_staging:
