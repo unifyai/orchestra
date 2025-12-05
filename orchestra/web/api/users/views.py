@@ -165,12 +165,34 @@ async def get_user_by_email(
     api_key = api_key_dao.filter(user_id=user[0][0].id)
     api_key_instance = api_key[0][0]
 
-    org_member = organization_member_dao.filter(user_id=user[0][0].id)
+    org_members = organization_member_dao.filter(user_id=user[0][0].id)
     org_name, org_level = None, None
-    if org_member:
-        org_level = org_member[0][0].level
-        org = organization_dao.filter(id=org_member[0][0].organization_id)
+    if org_members:
+        org_level = org_members[0][0].level
+        org = organization_dao.filter(id=org_members[0][0].organization_id)
         org_name = org[0][0].name
+
+    # Build organizations list with org-specific API keys
+    organizations = []
+    for member_row in org_members:
+        member = member_row[0]
+        org_result = organization_dao.get(member.organization_id)
+        if org_result:
+            # Get org-specific API key for this user+org
+            org_keys = api_key_dao.get_organization_keys(
+                user_instance.id,
+                organization_id=member.organization_id,
+            )
+            org_api_key = org_keys[0][0].key if org_keys else None
+            organizations.append(
+                {
+                    "id": member.organization_id,
+                    "name": org_result.name,
+                    "level": member.level,
+                    "apiKey": org_api_key,
+                },
+            )
+
     return {
         "id": user_instance.id,
         "name": user_instance.name,
@@ -181,6 +203,7 @@ async def get_user_by_email(
         "createdAt": user_instance.created_at,
         "apiKey": api_key_instance.key,
         "organization": {"name": org_name, "level": org_level},
+        "organizations": organizations,
         "assistant_hiring_approval": user_instance.assistant_hiring_approval,
         "has_claimed_approval_link": user_instance.has_claimed_approval_link,
         "business_classification": format_business_classification(user_instance),
