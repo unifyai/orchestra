@@ -74,6 +74,13 @@ async def test_transfer_personal_to_organization(client: AsyncClient, dbsession)
     assert project.organization_id == org_id
     assert project.user_id is None
 
+    # Verify explicit Owner grant was created for the transferring user
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    access_entries = resource_access_dao.get_resource_access("project", project.id)
+    assert len(access_entries) == 1
+    assert access_entries[0].grantee_type == "user"
+    assert access_entries[0].grantee_id == user["id"]
+
 
 @pytest.mark.anyio
 async def test_transfer_organization_to_personal(client: AsyncClient, dbsession):
@@ -365,6 +372,13 @@ async def test_viewer_cannot_transfer_but_member_can(client: AsyncClient, dbsess
     dbsession.refresh(project)
     assert project.organization_id == org_id
     assert project.user_id is None
+
+    # Verify explicit Owner grant was created for the transferring user
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    access_entries = resource_access_dao.get_resource_access("project", project.id)
+    assert len(access_entries) == 1
+    assert access_entries[0].grantee_type == "user"
+    assert access_entries[0].grantee_id == user["id"]
 
 
 @pytest.mark.anyio

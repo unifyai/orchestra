@@ -824,10 +824,15 @@ async def test_revoke_resource_access(client: AsyncClient, dbsession):
 @pytest.mark.anyio
 async def test_org_member_implicit_access_no_teams(client: AsyncClient, dbsession):
     """
-    Test that organization members have implicit access to org resources
-    even without explicit ResourceAccess grants or team memberships.
+    Test implicit org membership access fallback when no explicit grants exist.
 
-    This ensures organizations work seamlessly without teams or manual sharing.
+    NOTE: This test uses project_dao.create() directly (not the API) to create
+    a project WITHOUT explicit ResourceAccess grants, simulating legacy projects
+    or projects created outside the normal API flow.
+
+    When org projects are created via the API (POST /project with org API key),
+    they automatically receive an explicit Owner grant for the creator.
+    This test validates the fallback behavior for projects without explicit grants.
     """
     owner = await create_test_user(client, "org_implicit_owner@test.com")
     member = await create_test_user(client, "org_implicit_member@test.com")
@@ -924,6 +929,11 @@ async def test_explicit_grant_overrides_implicit_access(client: AsyncClient, dbs
     Test that explicit ResourceAccess grants REPLACE implicit organization membership.
 
     When a resource has explicit grants, only those grants apply (no implicit fallback).
+
+    NOTE: This test uses project_dao.create() directly (not the API) to create
+    a project WITHOUT automatic explicit grants, then manually adds an explicit
+    grant to test the override behavior. When projects are created via the API,
+    they automatically receive an explicit Owner grant for the creator.
     """
     owner = await create_test_user(client, "org_explicit_owner@test.com")
     member = await create_test_user(client, "org_explicit_member@test.com")
