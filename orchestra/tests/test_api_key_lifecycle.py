@@ -437,7 +437,7 @@ async def test_admin_regenerate_personal_api_key(client: AsyncClient, dbsession)
     # Get the personal key ID
     list_response = await client.get("/v0/api-keys", headers=user["headers"])
     personal_key_id = list_response.json()["personal_keys"][0]["id"]
-    old_key_prefix = list_response.json()["personal_keys"][0]["key_prefix"]
+    old_key = list_response.json()["personal_keys"][0]["key"]
 
     # Regenerate the key via admin endpoint
     regen_response = await client.post(
@@ -453,7 +453,7 @@ async def test_admin_regenerate_personal_api_key(client: AsyncClient, dbsession)
 
     # Verify the new key is different
     new_key = regen_data["api_key"]
-    assert not new_key.startswith(old_key_prefix[:8])
+    assert new_key != old_key
 
 
 @pytest.mark.anyio
@@ -480,9 +480,7 @@ async def test_admin_regenerate_org_api_key(client: AsyncClient, dbsession):
     # Get the org key ID
     list_response = await client.get("/v0/api-keys", headers=member["headers"])
     org_key_id = list_response.json()["organization_keys"]["Regen Org Key Org"][0]["id"]
-    old_key_prefix = list_response.json()["organization_keys"]["Regen Org Key Org"][0][
-        "key_prefix"
-    ]
+    old_key = list_response.json()["organization_keys"]["Regen Org Key Org"][0]["key"]
 
     # Regenerate the key via admin endpoint
     regen_response = await client.post(
@@ -498,7 +496,7 @@ async def test_admin_regenerate_org_api_key(client: AsyncClient, dbsession):
 
     # Verify the new key is different
     new_key = regen_data["api_key"]
-    assert not new_key.startswith(old_key_prefix[:8])
+    assert new_key != old_key
 
 
 @pytest.mark.anyio

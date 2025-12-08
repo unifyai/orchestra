@@ -32,7 +32,7 @@ async def list_api_keys(
         ApiKeyResponse(
             id=key[0].id,
             name=key[0].name or "Default",
-            key_prefix=key[0].key[:8] + "..." if key[0].key else "...",
+            key=key[0].key,
             created_at=key[0].created_at,
             organization_id=None,
             organization_name=None,
@@ -57,7 +57,7 @@ async def list_api_keys(
                 ApiKeyResponse(
                     id=key.id,
                     name=key.name or f"org_{org_name}",
-                    key_prefix=key.key[:8] + "..." if key.key else "...",
+                    key=key.key,
                     created_at=key.created_at,
                     organization_id=key.organization_id,
                     organization_name=org_name,
