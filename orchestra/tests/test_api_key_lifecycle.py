@@ -5,7 +5,7 @@ from fastapi import status
 from httpx import AsyncClient
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
-from orchestra.tests.utils import create_test_user
+from orchestra.tests.utils import ADMIN_HEADERS, create_test_user
 
 
 @pytest.mark.anyio
@@ -424,3 +424,88 @@ async def test_adding_members_requires_org_write_permission(
         headers={"Authorization": f"Bearer {viewer_org_api_key}"},
     )
     assert add_response.status_code == status.HTTP_403_FORBIDDEN
+
+
+# Admin API Key Regeneration Tests
+
+
+@pytest.mark.anyio
+async def test_admin_regenerate_personal_api_key(client: AsyncClient, dbsession):
+    """Test admin regenerating a personal API key by ID."""
+    user = await create_test_user(client, "regen_personal@test.com")
+
+    # Get the personal key ID
+    list_response = await client.get("/v0/api-keys", headers=user["headers"])
+    personal_key_id = list_response.json()["personal_keys"][0]["id"]
+    old_key_prefix = list_response.json()["personal_keys"][0]["key_prefix"]
+
+    # Regenerate the key via admin endpoint
+    regen_response = await client.post(
+        f"/v0/admin/api-keys/{personal_key_id}/regenerate",
+        headers=ADMIN_HEADERS,
+    )
+    assert regen_response.status_code == status.HTTP_200_OK
+
+    regen_data = regen_response.json()
+    assert "api_key" in regen_data
+    assert regen_data["user_id"] == user["id"]
+    assert regen_data["organization_id"] is None
+
+    # Verify the new key is different
+    new_key = regen_data["api_key"]
+    assert not new_key.startswith(old_key_prefix[:8])
+
+
+@pytest.mark.anyio
+async def test_admin_regenerate_org_api_key(client: AsyncClient, dbsession):
+    """Test admin regenerating an organization API key by ID."""
+    owner = await create_test_user(client, "regen_org_owner@test.com")
+    member = await create_test_user(client, "regen_org_member@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Regen Org Key Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Add member (automatically creates org API key)
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"], "level": "user"},
+        headers=owner["headers"],
+    )
+
+    # Get the org key ID
+    list_response = await client.get("/v0/api-keys", headers=member["headers"])
+    org_key_id = list_response.json()["organization_keys"]["Regen Org Key Org"][0]["id"]
+    old_key_prefix = list_response.json()["organization_keys"]["Regen Org Key Org"][0][
+        "key_prefix"
+    ]
+
+    # Regenerate the key via admin endpoint
+    regen_response = await client.post(
+        f"/v0/admin/api-keys/{org_key_id}/regenerate",
+        headers=ADMIN_HEADERS,
+    )
+    assert regen_response.status_code == status.HTTP_200_OK
+
+    regen_data = regen_response.json()
+    assert "api_key" in regen_data
+    assert regen_data["user_id"] == member["id"]
+    assert regen_data["organization_id"] == org_id
+
+    # Verify the new key is different
+    new_key = regen_data["api_key"]
+    assert not new_key.startswith(old_key_prefix[:8])
+
+
+@pytest.mark.anyio
+async def test_admin_regenerate_nonexistent_key(client: AsyncClient):
+    """Test admin regenerating a non-existent key returns 404."""
+    regen_response = await client.post(
+        "/v0/admin/api-keys/999999/regenerate",
+        headers=ADMIN_HEADERS,
+    )
+    assert regen_response.status_code == status.HTTP_404_NOT_FOUND
