@@ -527,3 +527,220 @@ async def test_transfer_ownership_cannot_transfer_to_self(client: AsyncClient):
     )
     assert transfer_response.status_code == status.HTTP_400_BAD_REQUEST
     assert "yourself" in transfer_response.json()["detail"].lower()
+
+
+# ==================== Org Project Creation Tests ====================
+
+
+@pytest.mark.anyio
+async def test_create_project_with_org_api_key(client: AsyncClient, dbsession):
+    """Test that creating a project with org API key creates an org project."""
+    owner = await create_test_user(client, "org_project_owner@test.com")
+
+    # Create organization and get org API key
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Org Project Test"},
+        headers=owner["headers"],
+    )
+    assert org_response.status_code == status.HTTP_201_CREATED
+    org_data = org_response.json()
+    org_id = org_data["id"]
+    org_api_key = org_data["api_key"]
+
+    # Create org headers
+    org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {org_api_key}",
+    }
+
+    # Create project using org API key
+    project_response = await client.post(
+        "/v0/project",
+        json={"name": "Org_Project_Test"},
+        headers=org_headers,
+    )
+    assert project_response.status_code == 200
+    assert project_response.json()["info"] == "Project created successfully!"
+
+    # Verify project is an org project by checking it's accessible via org membership
+    from orchestra.db.dao.context_dao import ContextDAO
+    from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+    from orchestra.db.dao.project_dao import ProjectDAO
+
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    # Filter by organization_id - should find the project
+    projects = project_dao.filter(organization_id=org_id, name="Org_Project_Test")
+    assert len(projects) == 1
+    project = projects[0][0]
+    assert project.organization_id == org_id
+    assert project.user_id is None  # Org projects don't have user_id
+
+
+@pytest.mark.anyio
+async def test_create_project_with_personal_api_key(client: AsyncClient, dbsession):
+    """Test that creating a project with personal API key creates a personal project."""
+    user = await create_test_user(client, "personal_project_user@test.com")
+
+    # Create project using personal API key
+    project_response = await client.post(
+        "/v0/project",
+        json={"name": "Personal_Project_Test"},
+        headers=user["headers"],
+    )
+    assert project_response.status_code == 200
+    assert project_response.json()["info"] == "Project created successfully!"
+
+    # Verify project is a personal project
+    from orchestra.db.dao.context_dao import ContextDAO
+    from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+    from orchestra.db.dao.project_dao import ProjectDAO
+
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    # Filter by user_id - should find the project
+    projects = project_dao.filter(user_id=user["id"], name="Personal_Project_Test")
+    assert len(projects) == 1
+    project = projects[0][0]
+    assert project.user_id == user["id"]
+    assert project.organization_id is None  # Personal projects don't have org_id
+
+
+@pytest.mark.anyio
+async def test_create_org_project_requires_permission(client: AsyncClient, dbsession):
+    """Test that creating org project requires project:write permission."""
+    owner = await create_test_user(client, "org_perm_owner@test.com")
+    viewer = await create_test_user(client, "org_perm_viewer@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Permission Test Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Add viewer to org with Viewer role (no project:write)
+    from orchestra.db.dao.role_dao import RoleDAO
+
+    role_dao = RoleDAO(dbsession)
+    viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
+
+    add_member_response = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": viewer["id"], "level": "user", "role_id": viewer_role.id},
+        headers=owner["headers"],
+    )
+    assert add_member_response.status_code == status.HTTP_201_CREATED
+
+    # Get viewer's org API key from the add_member response
+    viewer_org_key = add_member_response.json()["api_key"]
+
+    viewer_org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {viewer_org_key}",
+    }
+
+    # Try to create project with viewer's org API key - should fail
+    project_response = await client.post(
+        "/v0/project",
+        json={"name": "Viewer_Project_Test"},
+        headers=viewer_org_headers,
+    )
+    assert project_response.status_code == status.HTTP_403_FORBIDDEN
+    assert "permission" in project_response.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_create_org_project_duplicate_name(client: AsyncClient):
+    """Test that duplicate project names in same org are rejected."""
+    owner = await create_test_user(client, "org_dup_owner@test.com")
+
+    # Create organization and get org API key
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Duplicate Project Org"},
+        headers=owner["headers"],
+    )
+    org_api_key = org_response.json()["api_key"]
+
+    org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {org_api_key}",
+    }
+
+    # Create first project
+    project_response1 = await client.post(
+        "/v0/project",
+        json={"name": "Duplicate_Org_Project"},
+        headers=org_headers,
+    )
+    assert project_response1.status_code == 200
+
+    # Try to create second project with same name - should fail
+    project_response2 = await client.post(
+        "/v0/project",
+        json={"name": "Duplicate_Org_Project"},
+        headers=org_headers,
+    )
+    assert project_response2.status_code == 400
+    assert "already exists" in project_response2.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_member_can_create_org_project(client: AsyncClient, dbsession):
+    """Test that members with project:write (Member role) can create org projects."""
+    owner = await create_test_user(client, "member_create_owner@test.com")
+    member = await create_test_user(client, "member_create_member@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Member Create Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Add member to org (default Member role has project:write)
+    add_member_response = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"], "level": "user"},
+        headers=owner["headers"],
+    )
+    assert add_member_response.status_code == status.HTTP_201_CREATED
+
+    # Get member's org API key from the add_member response
+    member_org_key = add_member_response.json()["api_key"]
+
+    member_org_headers = {
+        "accept": "application/json",
+        "Authorization": f"Bearer {member_org_key}",
+    }
+
+    # Create project with member's org API key - should succeed
+    project_response = await client.post(
+        "/v0/project",
+        json={"name": "Member_Created_Project"},
+        headers=member_org_headers,
+    )
+    assert project_response.status_code == 200
+    assert project_response.json()["info"] == "Project created successfully!"
+
+    # Verify it's an org project
+    from orchestra.db.dao.context_dao import ContextDAO
+    from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+    from orchestra.db.dao.project_dao import ProjectDAO
+
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    projects = project_dao.filter(organization_id=org_id, name="Member_Created_Project")
+    assert len(projects) == 1
+    assert projects[0][0].organization_id == org_id
+    assert projects[0][0].user_id is None
