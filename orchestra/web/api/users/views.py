@@ -481,6 +481,55 @@ async def reset_api_key(
     return new_api_key
 
 
+@admin_router.post("/api-keys/{key_id}/regenerate")
+async def regenerate_api_key(
+    key_id: int,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Regenerate an API key by ID.
+
+    Deletes the old key and creates a new one with the same metadata.
+    Works for both personal and organization API keys.
+    Returns the full new key.
+    """
+    api_key_dao = ApiKeyDAO(session)
+
+    # Get existing key
+    keys = api_key_dao.filter(id=key_id)
+    if not keys:
+        raise HTTPException(
+            status_code=404,
+            detail="API key not found",
+        )
+
+    old_key = keys[0][0]
+
+    # Store metadata
+    user_id = old_key.user_id
+    organization_id = old_key.organization_id
+    name = old_key.name
+
+    # Delete old key
+    api_key_dao.delete(key_id)
+
+    # Create new key with same metadata
+    new_api_key = generate_key()
+    api_key_dao.create(
+        key=new_api_key,
+        name=name,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+    session.commit()
+
+    return {
+        "api_key": new_api_key,
+        "user_id": user_id,
+        "organization_id": organization_id,
+    }
+
+
 @admin_router.post("/auth-user/{user_id}/organization-api-key")
 async def create_organization_api_key(
     user_id: str,
