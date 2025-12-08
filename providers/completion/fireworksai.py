@@ -38,6 +38,11 @@ supported_models = {
         "context_window": 131072,
         "cost": {"prompt": 0.15, "completion": 0.6},
     },
+    "deepseek-v3.2": {
+        "endpoint": "fireworks_ai/accounts/fireworks/models/deepseek-v3p2",
+        "context_window": 160000,
+        "cost": {"prompt": 0.56, "completion": 1.68},
+    },
     "deepseek-v3.1": {
         "endpoint": "fireworks_ai/accounts/fireworks/models/deepseek-v3p1",
         "context_window": 160000,
