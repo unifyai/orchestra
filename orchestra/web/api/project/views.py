@@ -19,6 +19,7 @@ from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
+from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.tab_dao import TabDAO
 from orchestra.db.dao.tile_dao import TileDAO
 from orchestra.db.dependencies import get_db_session
@@ -693,6 +694,24 @@ def create_project(
                 description=request.description,
                 order=request.order,
             )
+
+            # Flush to get project ID, then add explicit Owner grant for creator
+            session.flush()
+            created_projects = project_dao.filter(
+                organization_id=organization_id,
+                name=request.name,
+            )
+            project = created_projects[0][0]
+
+            role_dao = RoleDAO(session)
+            owner_role = role_dao.get_by_name("Owner", organization_id=None)
+            resource_access_dao.grant_access(
+                resource_type="project",
+                resource_id=project.id,
+                role_id=owner_role.id,
+                grantee_type="user",
+                grantee_id=request_fastapi.state.user_id,
+            )
         else:
             # Personal API key - create personal project (existing behavior)
             existing_project = project_dao.get_by_user_and_name(
@@ -1038,7 +1057,7 @@ def transfer_project_to_organization(
     Process:
     - Sets project.organization_id = target org
     - Sets project.user_id = NULL (org-owned)
-    - No ResourceAccess entries created (implicit membership handles access)
+    - Creates explicit Owner ResourceAccess grant for the transferring user
     """
     user_id = request_fastapi.state.user_id
     organization_member_dao = OrganizationMemberDAO(session)
@@ -1046,6 +1065,7 @@ def transfer_project_to_organization(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     org_dao = OrganizationDAO(session)
     resource_access_dao = ResourceAccessDAO(session)
+    role_dao = RoleDAO(session)
 
     # Get project
     project = session.query(Project).filter(Project.id == project_id).first()
@@ -1096,6 +1116,17 @@ def transfer_project_to_organization(
         # Transfer the project (direct SQLAlchemy update to ensure None is set)
         project.organization_id = transfer_request.organization_id
         project.user_id = None  # Org-owned projects don't have user_id
+
+        # Create explicit Owner grant for the transferring user
+        owner_role = role_dao.get_by_name("Owner", organization_id=None)
+        resource_access_dao.grant_access(
+            resource_type="project",
+            resource_id=project_id,
+            role_id=owner_role.id,
+            grantee_type="user",
+            grantee_id=user_id,
+        )
+
         session.commit()
 
         return TransferResponse(

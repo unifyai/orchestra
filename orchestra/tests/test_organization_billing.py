@@ -567,10 +567,14 @@ async def test_create_project_with_org_api_key(client: AsyncClient, dbsession):
     from orchestra.db.dao.context_dao import ContextDAO
     from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
     from orchestra.db.dao.project_dao import ProjectDAO
+    from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
+    from orchestra.db.dao.role_dao import RoleDAO
 
     context_dao = ContextDAO(dbsession)
     org_member_dao = OrganizationMemberDAO(dbsession)
     project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
 
     # Filter by organization_id - should find the project
     projects = project_dao.filter(organization_id=org_id, name="Org_Project_Test")
@@ -578,6 +582,14 @@ async def test_create_project_with_org_api_key(client: AsyncClient, dbsession):
     project = projects[0][0]
     assert project.organization_id == org_id
     assert project.user_id is None  # Org projects don't have user_id
+
+    # Verify explicit Owner grant was created for the creator
+    access_entries = resource_access_dao.get_resource_access("project", project.id)
+    assert len(access_entries) == 1
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+    assert access_entries[0].role_id == owner_role.id
+    assert access_entries[0].grantee_type == "user"
+    assert access_entries[0].grantee_id == owner["id"]
 
 
 @pytest.mark.anyio
@@ -735,12 +747,25 @@ async def test_member_can_create_org_project(client: AsyncClient, dbsession):
     from orchestra.db.dao.context_dao import ContextDAO
     from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
     from orchestra.db.dao.project_dao import ProjectDAO
+    from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
+    from orchestra.db.dao.role_dao import RoleDAO
 
     context_dao = ContextDAO(dbsession)
     org_member_dao = OrganizationMemberDAO(dbsession)
     project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
 
     projects = project_dao.filter(organization_id=org_id, name="Member_Created_Project")
     assert len(projects) == 1
-    assert projects[0][0].organization_id == org_id
-    assert projects[0][0].user_id is None
+    project = projects[0][0]
+    assert project.organization_id == org_id
+    assert project.user_id is None
+
+    # Verify explicit Owner grant was created for the member who created the project
+    access_entries = resource_access_dao.get_resource_access("project", project.id)
+    assert len(access_entries) == 1
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+    assert access_entries[0].role_id == owner_role.id
+    assert access_entries[0].grantee_type == "user"
+    assert access_entries[0].grantee_id == member["id"]
