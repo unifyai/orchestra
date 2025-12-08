@@ -11,8 +11,8 @@ class ApiKeyResponse(BaseModel):
 
     id: int
     name: str
-    key_prefix: str = Field(
-        description="First 8 characters of the key for identification",
+    key: str = Field(
+        description="The full API key",
     )
     created_at: datetime
     organization_id: Optional[int] = None
