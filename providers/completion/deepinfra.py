@@ -36,17 +36,12 @@ supported_models = {
     "gpt-oss-120b": {
         "endpoint": "deepinfra/openai/gpt-oss-120b",
         "context_window": 128000,
-        "cost": {"prompt": 0.05, "completion": 0.24},
-    },
-    "deepseek-v3.2": {
-        "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3.2-Exp",
-        "context_window": 160000,
-        "cost": {"prompt": 0.27, "completion": 0.4},
+        "cost": {"prompt": 0.039, "completion": 0.19},
     },
     "deepseek-v3.1": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3.1",
         "context_window": 160000,
-        "cost": {"prompt": 0.27, "completion": 1},
+        "cost": {"prompt": 0.21, "completion": 0.79},
     },
     "deepseek-v3-0324": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3-0324",
@@ -61,7 +56,7 @@ supported_models = {
     "deepseek-v3": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3",
         "context_window": 160000,
-        "cost": {"prompt": 0.38, "completion": 0.89},
+        "cost": {"prompt": 0.32, "completion": 0.89},
     },
     "llama-4-maverick-instruct": {
         "endpoint": "deepinfra/meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8",
@@ -126,7 +121,7 @@ supported_models = {
     "qwen-3-235b-a22b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen3-235B-A22B-Instruct-2507",
         "context_window": 256000,
-        "cost": {"prompt": 0.09, "completion": 0.57},
+        "cost": {"prompt": 0.071, "completion": 0.463},
     },
     "qwen-3-30b-a3b-instruct": {
         "endpoint": "deepinfra/Qwen/Qwen3-30B-A3B",

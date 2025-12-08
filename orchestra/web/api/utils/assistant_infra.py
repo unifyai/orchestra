@@ -103,7 +103,7 @@ def create_email(local: str, first_name: str, last_name: str):
         Response from the email creation endpoint
     """
     return requests.post(
-        f"{COMMS_URL}/email/create",
+        f"{COMMS_URL}/gmail/create",
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         json={
             "local": local,
@@ -124,7 +124,7 @@ def delete_email(email: str):
         JSON response from the email deletion endpoint
     """
     return requests.delete(
-        f"{COMMS_URL}/email/delete",
+        f"{COMMS_URL}/gmail/delete",
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         json={"primary_email": email},
     ).json()
@@ -143,7 +143,7 @@ def watch_email(email: str, is_staging: bool = False):
     """
     print(f"Watching email: {email}")
     return requests.post(
-        f"{COMMS_URL}/email/watch",
+        f"{COMMS_URL}/gmail/watch",
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         json={
             "primary_email": email,
