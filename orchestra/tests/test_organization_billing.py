@@ -3,7 +3,7 @@ import pytest
 from fastapi import status
 from httpx import AsyncClient
 
-from orchestra.tests.utils import ADMIN_HEADERS, create_test_user, get_credits
+from orchestra.tests.utils import create_test_user, get_credits
 
 
 @pytest.mark.anyio
@@ -23,33 +23,36 @@ async def test_create_organization(client: AsyncClient):
 
     assert org_data["name"] == "Test Org"
     assert org_data["owner_id"] == owner["id"]
-    assert org_data["billing_user_id"] == owner["id"]  # Default to owner
+    assert org_data["billing_user_id"] == owner["id"]  # Always equals owner
     assert "id" in org_data
     assert "created_at" in org_data
+    # Owner should receive an organization API key
+    assert "api_key" in org_data
+    assert org_data["api_key"] is not None
 
 
 @pytest.mark.anyio
-async def test_create_organization_with_custom_billing_user(client: AsyncClient):
-    """Test creating an organization with a custom billing user."""
-    # Create users
+async def test_create_organization_owner_gets_org_api_key(client: AsyncClient):
+    """Test that creating an organization gives the owner an org API key."""
     owner = await create_test_user(client, "owner2@test.com")
-    billing_user = await create_test_user(client, "billing2@test.com")
 
-    # Create organization with custom billing user
+    # Create organization
     response = await client.post(
         "/v0/organizations",
-        json={
-            "name": "Custom Billing Org",
-            "billing_user_id": billing_user["id"],
-        },
+        json={"name": "Owner API Key Org"},
         headers=owner["headers"],
     )
     assert response.status_code == status.HTTP_201_CREATED
     org_data = response.json()
+    org_api_key = org_data["api_key"]
 
-    assert org_data["name"] == "Custom Billing Org"
-    assert org_data["owner_id"] == owner["id"]
-    assert org_data["billing_user_id"] == billing_user["id"]
+    # Verify owner has org API key by listing keys
+    keys_response = await client.get("/v0/api-keys", headers=owner["headers"])
+    keys_data = keys_response.json()
+
+    assert len(keys_data["personal_keys"]) == 1
+    assert "Owner API Key Org" in keys_data["organization_keys"]
+    assert len(keys_data["organization_keys"]["Owner API Key Org"]) == 1
 
 
 @pytest.mark.anyio
@@ -159,9 +162,8 @@ async def test_get_organization_unauthorized(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_update_organization(client: AsyncClient):
-    """Test updating organization details."""
+    """Test updating organization details (name only, billing follows owner)."""
     owner = await create_test_user(client, "owner7@test.com")
-    new_billing_user = await create_test_user(client, "billing7@test.com")
 
     # Create organization
     create_response = await client.post(
@@ -171,20 +173,18 @@ async def test_update_organization(client: AsyncClient):
     )
     org_id = create_response.json()["id"]
 
-    # Update organization
+    # Update organization name
     response = await client.patch(
         f"/v0/organizations/{org_id}",
-        json={
-            "name": "Updated Org Name",
-            "billing_user_id": new_billing_user["id"],
-        },
+        json={"name": "Updated Org Name"},
         headers=owner["headers"],
     )
     assert response.status_code == status.HTTP_200_OK
     org_data = response.json()
 
     assert org_data["name"] == "Updated Org Name"
-    assert org_data["billing_user_id"] == new_billing_user["id"]
+    # billing_user_id should still equal owner (unchanged)
+    assert org_data["billing_user_id"] == owner["id"]
 
 
 @pytest.mark.anyio
@@ -305,55 +305,39 @@ async def test_personal_query_billing(client: AsyncClient, dbsession):
 
 @pytest.mark.anyio
 async def test_organization_query_billing(client: AsyncClient, dbsession):
-    """Test that organization API key queries are billed to org's billing_user."""
-    from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+    """Test that organization API key queries are billed to org's owner (billing_user)."""
     from orchestra.db.dao.users_dao import UsersDAO
 
-    # Create owner, billing user, and org member
+    # Create owner and org member
     owner = await create_test_user(client, "org_owner@test.com")
-    billing_user = await create_test_user(client, "org_billing@test.com")
     member = await create_test_user(client, "org_member@test.com")
 
-    # Add credits to billing user (not to member) - direct DAO access
+    # Add credits to owner (billing_user always equals owner)
     users_dao = UsersDAO(dbsession)
-    users_dao.recharge_credit(billing_user["id"], 10)
+    users_dao.recharge_credit(owner["id"], 10)
     dbsession.commit()
 
-    # Create organization with custom billing user
+    # Create organization (billing_user_id = owner_id automatically)
     org_response = await client.post(
         "/v0/organizations",
-        json={
-            "name": "Billing Test Org",
-            "billing_user_id": billing_user["id"],
-        },
+        json={"name": "Billing Test Org"},
         headers=owner["headers"],
     )
     org_id = org_response.json()["id"]
 
-    # Add member to the organization
-    org_member_dao = OrganizationMemberDAO(dbsession)
-    org_member_dao.create(
-        organization_id=org_id,
-        user_id=member["id"],
-        level="user",
+    # Add member to the organization (this creates org API key for member)
+    add_member_response = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"], "level": "user"},
+        headers=owner["headers"],
     )
-    dbsession.commit()
-
-    # Create organization API key for member
-    api_key_response = await client.post(
-        f"/v0/admin/auth-user/{member['id']}/organization-api-key?organization_id={org_id}",
-        headers=ADMIN_HEADERS,
-    )
-    org_api_key = api_key_response.json()["api_key"]
+    org_api_key = add_member_response.json()["api_key"]
 
     # Get initial credits
-    billing_user_initial = await get_credits(
-        client,
-        {"Authorization": f"Bearer {billing_user['api_key']}"},
-    )
+    owner_initial = await get_credits(client, owner["headers"])
     member_initial = float(await get_credits(client, member["headers"]) or 0)
 
-    assert billing_user_initial == 10.0
+    assert owner_initial == 10.0
 
     # Make a query using organization API key (as member)
     await client.post(
@@ -376,14 +360,11 @@ async def test_organization_query_billing(client: AsyncClient, dbsession):
         headers={"Authorization": f"Bearer {org_api_key}"},
     )
 
-    # Check credits were deducted from billing user (not member)
-    billing_user_final = await get_credits(
-        client,
-        {"Authorization": f"Bearer {billing_user['api_key']}"},
-    )
+    # Check credits were deducted from owner (billing_user) not member
+    owner_final = await get_credits(client, owner["headers"])
     member_final = float(await get_credits(client, member["headers"]) or 0)
 
-    assert billing_user_final == pytest.approx(9.98, rel=0.01)
+    assert owner_final == pytest.approx(9.98, rel=0.01)
     assert member_final == member_initial  # Member credits unchanged
 
 
@@ -394,20 +375,13 @@ async def test_query_logs_organization_id(client: AsyncClient):
     # For now, we test that the endpoint accepts the organization context
     owner = await create_test_user(client, "log_owner@test.com")
 
-    # Create organization
+    # Create organization (owner gets org API key automatically)
     org_response = await client.post(
         "/v0/organizations",
         json={"name": "Log Test Org"},
         headers=owner["headers"],
     )
-    org_id = org_response.json()["id"]
-
-    # Create org API key
-    api_key_response = await client.post(
-        f"/v0/admin/auth-user/{owner['id']}/organization-api-key?organization_id={org_id}",
-        headers=ADMIN_HEADERS,
-    )
-    org_api_key = api_key_response.json()["api_key"]
+    org_api_key = org_response.json()["api_key"]
 
     # Log a query with org API key
     response = await client.post(
@@ -420,3 +394,136 @@ async def test_query_logs_organization_id(client: AsyncClient):
         headers={"Authorization": f"Bearer {org_api_key}"},
     )
     assert response.status_code == status.HTTP_200_OK
+
+
+# Ownership Transfer Tests
+
+
+@pytest.mark.anyio
+async def test_transfer_ownership_success(client: AsyncClient, dbsession):
+    """Test successful ownership transfer."""
+    from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+    from orchestra.db.dao.role_dao import RoleDAO
+
+    owner = await create_test_user(client, "transfer_owner@test.com")
+    new_owner = await create_test_user(client, "transfer_new_owner@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Transfer Test Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Add new_owner as member
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": new_owner["id"], "level": "user"},
+        headers=owner["headers"],
+    )
+
+    # Transfer ownership
+    transfer_response = await client.post(
+        f"/v0/organizations/{org_id}/transfer-ownership",
+        json={"new_owner_id": new_owner["id"]},
+        headers=owner["headers"],
+    )
+    assert transfer_response.status_code == status.HTTP_200_OK
+
+    org_data = transfer_response.json()
+    assert org_data["owner_id"] == new_owner["id"]
+    assert org_data["billing_user_id"] == new_owner["id"]
+
+    # Verify roles were swapped
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
+
+    new_owner_member = org_member_dao.get_member(new_owner["id"], org_id)
+    old_owner_member = org_member_dao.get_member(owner["id"], org_id)
+
+    new_owner_role = role_dao.get(new_owner_member.role_id)
+    old_owner_role = role_dao.get(old_owner_member.role_id)
+
+    assert new_owner_role.name == "Owner"
+    assert old_owner_role.name == "Admin"
+    assert new_owner_member.level == "owner"
+    assert old_owner_member.level == "admin"
+
+
+@pytest.mark.anyio
+async def test_transfer_ownership_only_owner_can_transfer(client: AsyncClient):
+    """Test that only the current owner can transfer ownership."""
+    owner = await create_test_user(client, "transfer_only_owner@test.com")
+    member = await create_test_user(client, "transfer_member@test.com")
+    outsider = await create_test_user(client, "transfer_outsider@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Only Owner Transfer Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Add member
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"], "level": "user"},
+        headers=owner["headers"],
+    )
+
+    # Member tries to transfer - should fail
+    transfer_response = await client.post(
+        f"/v0/organizations/{org_id}/transfer-ownership",
+        json={"new_owner_id": member["id"]},
+        headers=member["headers"],
+    )
+    assert transfer_response.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.anyio
+async def test_transfer_ownership_new_owner_must_be_member(client: AsyncClient):
+    """Test that new owner must be an existing member."""
+    owner = await create_test_user(client, "transfer_must_be_member@test.com")
+    non_member = await create_test_user(client, "transfer_non_member@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Must Be Member Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Try to transfer to non-member - should fail
+    transfer_response = await client.post(
+        f"/v0/organizations/{org_id}/transfer-ownership",
+        json={"new_owner_id": non_member["id"]},
+        headers=owner["headers"],
+    )
+    assert transfer_response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "existing member" in transfer_response.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_transfer_ownership_cannot_transfer_to_self(client: AsyncClient):
+    """Test that owner cannot transfer to themselves."""
+    owner = await create_test_user(client, "transfer_self@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Self Transfer Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Try to transfer to self - should fail
+    transfer_response = await client.post(
+        f"/v0/organizations/{org_id}/transfer-ownership",
+        json={"new_owner_id": owner["id"]},
+        headers=owner["headers"],
+    )
+    assert transfer_response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "yourself" in transfer_response.json()["detail"].lower()

@@ -15,6 +15,7 @@ from orchestra.web.api.organization.schema import (
     OrganizationMemberAdd,
     OrganizationMemberResponse,
     OrganizationMemberRoleUpdate,
+    OrganizationOwnershipTransfer,
     OrganizationResponse,
     OrganizationUpdate,
 )
@@ -25,23 +26,24 @@ router = APIRouter()
 
 @router.post(
     "/organizations",
-    response_model=OrganizationResponse,
     status_code=status.HTTP_201_CREATED,
 )
 async def create_organization(
     request_fastapi: Request,
     organization: OrganizationCreate,
     session: Session = Depends(get_db_session),
-) -> OrganizationResponse:
+) -> dict:
     """
     Create a new organization.
 
     The authenticated user will be the owner of the organization.
-    If billing_user_id is not provided, it defaults to the owner.
+    billing_user_id is always set to the owner (billing follows ownership).
+    Returns the organization details and the owner's organization API key.
     """
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
     org_member_dao = OrganizationMemberDAO(session)
+    api_key_dao = ApiKeyDAO(session)
     role_dao = RoleDAO(session)
 
     # Check if organization name already exists
@@ -54,10 +56,11 @@ async def create_organization(
 
     # Create organization
     try:
+        # billing_user_id always equals owner_id
         org = org_dao.create(
             name=organization.name,
             owner_id=user_id,
-            billing_user_id=organization.billing_user_id or user_id,
+            billing_user_id=user_id,
         )
 
         # Get Owner system role
@@ -73,8 +76,22 @@ async def create_organization(
             role_id=owner_role.id,
         )
 
+        # Create organization API key for the owner
+        new_api_key = generate_key()
+        api_key_dao.create(
+            key=new_api_key,
+            name=f"org_{org.name}",
+            user_id=user_id,
+            organization_id=org.id,
+        )
+
         session.commit()
-        return OrganizationResponse.model_validate(org)
+
+        org_response = OrganizationResponse.model_validate(org)
+        return {
+            **org_response.model_dump(),
+            "api_key": new_api_key,
+        }
     except Exception as e:
         session.rollback()
         raise HTTPException(
@@ -150,6 +167,7 @@ async def update_organization(
     Update an organization.
 
     Requires org:write permission.
+    Note: To change owner or billing_user_id, use the transfer-ownership endpoint.
     """
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
@@ -185,12 +203,11 @@ async def update_organization(
                 detail=f"Organization with name '{organization.name}' already exists",
             )
 
-    # Update organization
+    # Update organization (only name can be updated here)
     try:
         org_dao.update(
             id=organization_id,
             name=organization.name,
-            billing_user_id=organization.billing_user_id,
         )
         session.commit()
 
@@ -311,6 +328,16 @@ async def add_organization_member(
             status_code=status.HTTP_409_CONFLICT,
             detail="User is already a member of this organization",
         )
+
+    # Block Owner role assignment via add_member
+    if member_data.role_id:
+        requested_role = role_dao.get(member_data.role_id)
+        if requested_role and requested_role.name == "Owner":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot assign Owner role via add member. "
+                "Use ownership transfer instead.",
+            )
 
     # Add member
     try:
@@ -562,6 +589,13 @@ async def update_member_role(
             detail="Only system roles can be assigned to members",
         )
 
+    # Block Owner role assignment via update_member_role
+    if role.name == "Owner":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot assign Owner role. Use ownership transfer instead.",
+        )
+
     # Get the member
     member = org_member_dao.get_member(member_user_id, organization_id)
     if not member:
@@ -595,4 +629,117 @@ async def update_member_role(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update member role: {str(e)}",
+        )
+
+
+@router.post(
+    "/organizations/{organization_id}/transfer-ownership",
+    response_model=OrganizationResponse,
+)
+async def transfer_organization_ownership(
+    request_fastapi: Request,
+    organization_id: int,
+    transfer: OrganizationOwnershipTransfer,
+    session: Session = Depends(get_db_session),
+) -> OrganizationResponse:
+    """
+    Transfer organization ownership to another member.
+
+    Only the current owner can transfer ownership.
+    The new owner must already be a member of the organization.
+
+    Changes applied:
+    - org.owner_id → new_owner_id
+    - org.billing_user_id → new_owner_id (billing always follows owner)
+    - new_owner's role → Owner
+    - old_owner's role → Admin
+    """
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    org_member_dao = OrganizationMemberDAO(session)
+    role_dao = RoleDAO(session)
+
+    # Get organization
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {organization_id} not found",
+        )
+
+    # Only current owner can transfer ownership
+    if org.owner_id != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only the organization owner can transfer ownership",
+        )
+
+    # Cannot transfer to self
+    if transfer.new_owner_id == user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot transfer ownership to yourself",
+        )
+
+    # New owner must be an existing member
+    new_owner_member = org_member_dao.get_member(transfer.new_owner_id, organization_id)
+    if not new_owner_member:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New owner must be an existing member of the organization",
+        )
+
+    try:
+        # Get role IDs
+        owner_role = role_dao.get_by_name("Owner", organization_id=None)
+        admin_role = role_dao.get_by_name("Admin", organization_id=None)
+
+        if not owner_role or not admin_role:
+            raise ValueError("Required system roles not found")
+
+        # Update organization: owner_id and billing_user_id
+        org_dao.update(
+            id=organization_id,
+            owner_id=transfer.new_owner_id,
+            billing_user_id=transfer.new_owner_id,
+        )
+
+        # Update new owner's role to Owner
+        org_member_dao.update_member_role(
+            user_id=transfer.new_owner_id,
+            organization_id=organization_id,
+            role_id=owner_role.id,
+        )
+
+        # Update old owner's role to Admin
+        org_member_dao.update_member_role(
+            user_id=user_id,
+            organization_id=organization_id,
+            role_id=admin_role.id,
+        )
+
+        # Update old owner's level to admin
+        old_owner_member = org_member_dao.get_member(user_id, organization_id)
+        if old_owner_member:
+            org_member_dao.update(
+                id=old_owner_member.id,
+                level="admin",
+            )
+
+        # Update new owner's level to owner
+        org_member_dao.update(
+            id=new_owner_member.id,
+            level="owner",
+        )
+
+        session.commit()
+
+        updated_org = org_dao.get(organization_id)
+        return OrganizationResponse.model_validate(updated_org)
+
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to transfer ownership: {str(e)}",
         )
