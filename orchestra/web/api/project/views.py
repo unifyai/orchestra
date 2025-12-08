@@ -645,31 +645,74 @@ def create_project(
     session=Depends(get_db_session),
 ):
     """
-    Creates a logging project and adds this to your account. This project will
-    have a set of logs associated with it.
+    Creates a logging project and adds this to your account.
+
+    If using an organization API key, the project will be created as an
+    organizational project (requires project:write permission in the org).
+    If using a personal API key, the project will be a personal project.
     """
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    # Check if using an organization API key
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
 
     try:
-        existing_project = project_dao.get_by_user_and_name(
-            user_id=request_fastapi.state.user_id,
-            name=request.name,
-        )
-        if existing_project:
-            raise ValueError("Project already exists")
-        project_dao.create(
-            user_id=request_fastapi.state.user_id,
-            # TODO: Add organization id when appropriate
-            name=request.name,
-            icon=request.icon or "folder",
-            is_versioned=request.is_versioned,
-            description=request.description,
-            order=request.order,
-        )
+        if organization_id:
+            # Org API key - create organizational project
+            # Check if user has project:write permission in the org
+            has_permission = resource_access_dao.check_user_permission(
+                request_fastapi.state.user_id,
+                "org",
+                organization_id,
+                "project:write",
+            )
+            if not has_permission:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have permission to create projects in this organization",
+                )
+
+            # Check for existing org project with same name
+            existing_projects = project_dao.filter(
+                organization_id=organization_id,
+                name=request.name,
+            )
+            if existing_projects:
+                raise ValueError("Project already exists")
+
+            # Create org project (user_id is NULL for org projects)
+            project_dao.create(
+                user_id=None,
+                organization_id=organization_id,
+                name=request.name,
+                icon=request.icon or "folder",
+                is_versioned=request.is_versioned,
+                description=request.description,
+                order=request.order,
+            )
+        else:
+            # Personal API key - create personal project (existing behavior)
+            existing_project = project_dao.get_by_user_and_name(
+                user_id=request_fastapi.state.user_id,
+                name=request.name,
+            )
+            if existing_project:
+                raise ValueError("Project already exists")
+            project_dao.create(
+                user_id=request_fastapi.state.user_id,
+                name=request.name,
+                icon=request.icon or "folder",
+                is_versioned=request.is_versioned,
+                description=request.description,
+                order=request.order,
+            )
 
         return {"info": "Project created successfully!"}
+    except HTTPException:
+        raise
     except ValueError as e:
         if "Project already exists" in str(e):
             raise HTTPException(
