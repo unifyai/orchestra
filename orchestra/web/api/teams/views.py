@@ -41,7 +41,7 @@ async def create_team(
     """
     Create a new team in an organization.
 
-    Only organization owners can create teams.
+    Requires org:write permission (Owner and Admin roles have this).
 
     :param request_fastapi: FastAPI request object.
     :param organization_id: Organization ID.
@@ -52,6 +52,7 @@ async def create_team(
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
     team_dao = TeamDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
 
     # Verify organization exists
     org = org_dao.get(organization_id)
@@ -61,11 +62,17 @@ async def create_team(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user is the owner
-    if org.owner_id != user_id:
+    # Check if user has org:write permission (Owner and Admin roles have this)
+    has_permission = resource_access_dao.check_user_permission(
+        user_id,
+        "org",
+        organization_id,
+        "org:write",
+    )
+    if not has_permission:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the organization owner can create teams",
+            detail="You do not have permission to create teams in this organization",
         )
 
     # Check for duplicate team name
@@ -234,7 +241,7 @@ async def update_team(
     """
     Update a team.
 
-    Only organization owners can update teams.
+    Requires org:write permission (Owner and Admin roles have this).
 
     :param request_fastapi: FastAPI request object.
     :param organization_id: Organization ID.
@@ -246,6 +253,7 @@ async def update_team(
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
     team_dao = TeamDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
 
     # Verify organization exists
     org = org_dao.get(organization_id)
@@ -255,11 +263,17 @@ async def update_team(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user is the owner
-    if org.owner_id != user_id:
+    # Check if user has org:write permission (Owner and Admin roles have this)
+    has_permission = resource_access_dao.check_user_permission(
+        user_id,
+        "org",
+        organization_id,
+        "org:write",
+    )
+    if not has_permission:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the organization owner can update teams",
+            detail="You do not have permission to update teams in this organization",
         )
 
     # Get team
@@ -319,7 +333,7 @@ async def delete_team(
     """
     Delete a team.
 
-    Only organization owners can delete teams.
+    Requires org:write permission (Owner and Admin roles have this).
 
     :param request_fastapi: FastAPI request object.
     :param organization_id: Organization ID.
@@ -329,6 +343,7 @@ async def delete_team(
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
     team_dao = TeamDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
 
     # Verify organization exists
     org = org_dao.get(organization_id)
@@ -338,11 +353,17 @@ async def delete_team(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user is the owner
-    if org.owner_id != user_id:
+    # Check if user has org:write permission (Owner and Admin roles have this)
+    has_permission = resource_access_dao.check_user_permission(
+        user_id,
+        "org",
+        organization_id,
+        "org:write",
+    )
+    if not has_permission:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the organization owner can delete teams",
+            detail="You do not have permission to delete teams in this organization",
         )
 
     # Get team
@@ -380,7 +401,7 @@ async def add_team_members(
     """
     Add members to a team.
 
-    Only organization owners can add members to teams.
+    Requires org:write permission (Owner and Admin roles have this).
 
     :param request_fastapi: FastAPI request object.
     :param organization_id: Organization ID.
@@ -394,6 +415,7 @@ async def add_team_members(
     team_dao = TeamDAO(session)
     org_member_dao = OrganizationMemberDAO(session)
     auth_user_dao = AuthUserDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
 
     # Verify organization exists
     org = org_dao.get(organization_id)
@@ -403,11 +425,17 @@ async def add_team_members(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user is the owner
-    if org.owner_id != user_id:
+    # Check if user has org:write permission (Owner and Admin roles have this)
+    has_permission = resource_access_dao.check_user_permission(
+        user_id,
+        "org",
+        organization_id,
+        "org:write",
+    )
+    if not has_permission:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the organization owner can add members to teams",
+            detail="You do not have permission to manage team members",
         )
 
     # Get team
@@ -483,7 +511,7 @@ async def remove_team_member(
     """
     Remove a member from a team.
 
-    Only organization owners can remove members from teams.
+    Requires org:write permission (Owner and Admin roles have this).
 
     :param request_fastapi: FastAPI request object.
     :param organization_id: Organization ID.
@@ -495,6 +523,7 @@ async def remove_team_member(
     user_id = request_fastapi.state.user_id
     org_dao = OrganizationDAO(session)
     team_dao = TeamDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
 
     # Verify organization exists
     org = org_dao.get(organization_id)
@@ -504,11 +533,17 @@ async def remove_team_member(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user is the owner
-    if org.owner_id != user_id:
+    # Check if user has org:write permission (Owner and Admin roles have this)
+    has_permission = resource_access_dao.check_user_permission(
+        user_id,
+        "org",
+        organization_id,
+        "org:write",
+    )
+    if not has_permission:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only the organization owner can remove members from teams",
+            detail="You do not have permission to manage team members",
         )
 
     # Get team

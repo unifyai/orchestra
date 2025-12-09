@@ -165,12 +165,34 @@ async def get_user_by_email(
     api_key = api_key_dao.filter(user_id=user[0][0].id)
     api_key_instance = api_key[0][0]
 
-    org_member = organization_member_dao.filter(user_id=user[0][0].id)
+    org_members = organization_member_dao.filter(user_id=user[0][0].id)
     org_name, org_level = None, None
-    if org_member:
-        org_level = org_member[0][0].level
-        org = organization_dao.filter(id=org_member[0][0].organization_id)
+    if org_members:
+        org_level = org_members[0][0].level
+        org = organization_dao.filter(id=org_members[0][0].organization_id)
         org_name = org[0][0].name
+
+    # Build organizations list with org-specific API keys
+    organizations = []
+    for member_row in org_members:
+        member = member_row[0]
+        org_result = organization_dao.get(member.organization_id)
+        if org_result:
+            # Get org-specific API key for this user+org
+            org_keys = api_key_dao.get_organization_keys(
+                user_instance.id,
+                organization_id=member.organization_id,
+            )
+            org_api_key = org_keys[0][0].key if org_keys else None
+            organizations.append(
+                {
+                    "id": member.organization_id,
+                    "name": org_result.name,
+                    "level": member.level,
+                    "apiKey": org_api_key,
+                },
+            )
+
     return {
         "id": user_instance.id,
         "name": user_instance.name,
@@ -181,6 +203,7 @@ async def get_user_by_email(
         "createdAt": user_instance.created_at,
         "apiKey": api_key_instance.key,
         "organization": {"name": org_name, "level": org_level},
+        "organizations": organizations,
         "assistant_hiring_approval": user_instance.assistant_hiring_approval,
         "has_claimed_approval_link": user_instance.has_claimed_approval_link,
         "business_classification": format_business_classification(user_instance),
@@ -456,6 +479,55 @@ async def reset_api_key(
         organization_id=organization_id,
     )
     return new_api_key
+
+
+@admin_router.post("/api-keys/{key_id}/regenerate")
+async def regenerate_api_key(
+    key_id: int,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Regenerate an API key by ID.
+
+    Deletes the old key and creates a new one with the same metadata.
+    Works for both personal and organization API keys.
+    Returns the full new key.
+    """
+    api_key_dao = ApiKeyDAO(session)
+
+    # Get existing key
+    keys = api_key_dao.filter(id=key_id)
+    if not keys:
+        raise HTTPException(
+            status_code=404,
+            detail="API key not found",
+        )
+
+    old_key = keys[0][0]
+
+    # Store metadata
+    user_id = old_key.user_id
+    organization_id = old_key.organization_id
+    name = old_key.name
+
+    # Delete old key
+    api_key_dao.delete(key_id)
+
+    # Create new key with same metadata
+    new_api_key = generate_key()
+    api_key_dao.create(
+        key=new_api_key,
+        name=name,
+        user_id=user_id,
+        organization_id=organization_id,
+    )
+    session.commit()
+
+    return {
+        "api_key": new_api_key,
+        "user_id": user_id,
+        "organization_id": organization_id,
+    }
 
 
 @admin_router.post("/auth-user/{user_id}/organization-api-key")

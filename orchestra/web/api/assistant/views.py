@@ -54,7 +54,6 @@ from orchestra.web.api.assistant.schema import (
     RecordingCreate,
     RecordingInfo,
     ReplicatePredictionResponse,
-    UnifyMessage,
     VoiceCreate,
     VoiceDesignCreateFromPreviewRequest,
     VoiceDesignGeneratePreviewsAPIResponse,
@@ -112,46 +111,6 @@ def check_assistant_hiring_approval(
 
 router = APIRouter()
 admin_router = APIRouter()
-
-
-@router.post(
-    "/assistant/message",
-    response_model=InfoResponse[str],
-    status_code=status.HTTP_200_OK,
-    summary="Send a message to an assistant and get a response",
-    description="Sends a message to a specified assistant and waits for the next reply from that assistant.",
-    tags=["Assistant Interaction"],
-)
-def message_assistant(
-    payload: UnifyMessage,
-    request: Request,
-    session: Session = Depends(get_db_session),
-    _: None = Depends(check_assistant_hiring_approval),
-) -> InfoResponse[str]:
-    user_id = request.state.user_id
-    assistant_dao = AssistantDAO(session)
-
-    try:
-        response_content = assistant_dao.message_assistant(
-            user_id=user_id,
-            assistant_id=payload.assistant_id,
-            contact_id=payload.contact_id,
-            message=payload.message,
-        )
-        return InfoResponse(info=response_content)
-    except HTTPException as e:
-        # Re-raise HTTPExceptions raised from the DAO layer
-        raise e
-    except Exception as e:
-        # Catch any other unexpected errors
-        logging.error(
-            f"Unexpected error in message_assistant endpoint: {e}",
-            exc_info=True,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="An unexpected error occurred while processing the message.",
-        )
 
 
 @router.post(
@@ -2901,10 +2860,7 @@ async def animate_video_endpoint(
     audio_url: Optional[str] = Form(None),
     audio_file: Optional[UploadFile] = File(None),
     seed: Optional[int] = Form(None),
-    dynamic_scale: Optional[float] = Form(1.0),
-    min_resolution: Optional[int] = Form(512),
-    inference_steps: Optional[int] = Form(25),
-    keep_resolution: Optional[bool] = Form(True),
+    duration: Optional[int] = Form(None),
     _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[ReplicatePredictionResponse]:
     user_id = request.state.user_id
@@ -3038,21 +2994,22 @@ async def animate_video_endpoint(
         # Pre-check credits (assuming video_generation_cost is defined in settings)
         if not settings.is_staging:
             user = users_dao.get_user_with_id(user_id)
-            if user.credits < settings.video_generation_cost:
+            if user.credits < settings.video_generation_cost * (
+                duration if duration is not None else settings.default_video_duration
+            ):
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
                     detail="Insufficient credits to generate video.",
                 )
 
-        prediction = replicate_service.create_video_animation(
-            image_url=final_image_url_for_replicate,
-            audio_url=final_audio_url_for_replicate,
-            seed=seed,
-            dynamic_scale=dynamic_scale,
-            min_resolution=min_resolution,
-            inference_steps=inference_steps,
-            keep_resolution=keep_resolution,
-        )
+        animation_kwargs = {
+            "image_url": final_image_url_for_replicate,
+            "audio_url": final_audio_url_for_replicate,
+            "seed": seed,
+        }
+        if duration is not None:
+            animation_kwargs["duration"] = duration
+        prediction = replicate_service.create_video_animation(**animation_kwargs)
 
         # Deduct credits after successful generation
         if not settings.is_staging:
