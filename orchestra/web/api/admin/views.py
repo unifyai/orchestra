@@ -27,6 +27,7 @@ from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.metric_dao import MetricDAO
 from orchestra.db.dao.modality_dao import ModalityDAO
 from orchestra.db.dao.model_dao import ModelDAO
+from orchestra.db.dao.organization_invite_dao import OrganizationInviteDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
@@ -2466,4 +2467,41 @@ def test_queue_auto_recharge(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to test auto-recharge: {str(e)}",
+        )
+
+
+@router.post(
+    "/cleanup/expired-invites",
+    summary="Admin: Cleanup expired organization invites",
+    description="Delete all expired pending organization invites. "
+    "Called by scheduled cleanup job.",
+)
+def admin_cleanup_expired_invites(
+    session=Depends(get_db_session),
+) -> dict:
+    """
+    Clean up expired organization invites.
+
+    This endpoint is designed to be called by a scheduled job (e.g., GitHub Actions cron).
+    It deletes all organization invites where expires_at is in the past.
+
+    :param session: Database session.
+    :return: Count of deleted invites and timestamp.
+    """
+    invite_dao = OrganizationInviteDAO(session)
+
+    try:
+        deleted_count = invite_dao.cleanup_expired_invites()
+        session.commit()
+
+        return {
+            "deleted_count": deleted_count,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "message": f"Successfully deleted {deleted_count} expired invite(s)",
+        }
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to cleanup expired invites: {str(e)}",
         )

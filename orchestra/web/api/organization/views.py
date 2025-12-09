@@ -1,4 +1,7 @@
 """Organization management endpoints."""
+import asyncio
+import logging
+from datetime import datetime, timedelta, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -7,11 +10,18 @@ from sqlalchemy.orm import Session
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
+from orchestra.db.dao.organization_invite_dao import OrganizationInviteDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dependencies import get_db_session
+from orchestra.settings import settings
 from orchestra.web.api.organization.schema import (
+    AcceptInviteResponse,
+    DeclineInviteResponse,
+    InviteListResponse,
+    InviteResponse,
+    InviteUserRequest,
     OrganizationCreate,
     OrganizationMemberAdd,
     OrganizationMemberResponse,
@@ -21,6 +31,9 @@ from orchestra.web.api.organization.schema import (
     OrganizationUpdate,
 )
 from orchestra.web.api.users.views import generate_key
+from orchestra.web.api.utils.email import send_email_async
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -766,3 +779,530 @@ async def transfer_organization_ownership(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to transfer ownership: {str(e)}",
         )
+
+
+# ============== Organization Invite Endpoints ==============
+
+
+def _build_invite_response(
+    invite,
+    org,
+    role_dao: RoleDAO,
+    auth_user_dao: AuthUserDAO,
+) -> InviteResponse:
+    """Helper to build InviteResponse from invite object."""
+    role_name = None
+    if invite.role_id:
+        role = role_dao.get(invite.role_id)
+        role_name = role.name if role else None
+
+    invited_by_name = None
+    inviter_row = auth_user_dao.get_by_id(invite.invited_by_user_id)
+    if inviter_row:
+        inviter = inviter_row[0]
+        name_parts = []
+        if inviter.name:
+            name_parts.append(inviter.name)
+        if inviter.last_name:
+            name_parts.append(inviter.last_name)
+        invited_by_name = " ".join(name_parts) if name_parts else inviter.email
+
+    return InviteResponse(
+        id=invite.id,
+        token=invite.token,
+        organization_id=invite.organization_id,
+        organization_name=org.name,
+        invitee_email=invite.invitee_email,
+        invited_by_user_id=invite.invited_by_user_id,
+        invited_by_name=invited_by_name,
+        role_id=invite.role_id,
+        role_name=role_name,
+        level=invite.level,
+        expires_at=invite.expires_at,
+        created_at=invite.created_at,
+    )
+
+
+@router.post(
+    "/organizations/{organization_id}/invites",
+    response_model=InviteResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def invite_user_to_organization(
+    request_fastapi: Request,
+    organization_id: int,
+    invite_request: InviteUserRequest,
+    session: Session = Depends(get_db_session),
+) -> InviteResponse:
+    """
+    Invite a user to join an organization via email.
+
+    Requires org:write permission.
+    Sends an email with an invite link to the specified email address.
+    """
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    org_member_dao = OrganizationMemberDAO(session)
+    invite_dao = OrganizationInviteDAO(session)
+    role_dao = RoleDAO(session)
+    auth_user_dao = AuthUserDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    # Get organization
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {organization_id} not found",
+        )
+
+    # Check if user has org:write permission
+    has_permission = resource_access_dao.check_user_permission(
+        user_id,
+        "org",
+        organization_id,
+        "org:write",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to invite users to this organization",
+        )
+
+    email = invite_request.email.lower()
+
+    # Check if user is already a member
+    # First, try to find the user by email
+    existing_user_row = auth_user_dao.filter(email=email)
+    if existing_user_row:
+        existing_user = existing_user_row[0][0]
+        existing_member = org_member_dao.filter(
+            organization_id=organization_id,
+            user_id=existing_user.id,
+        )
+        if existing_member:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="User is already a member of this organization",
+            )
+
+    # Check for existing invite
+    existing_invite = invite_dao.get_by_email_and_org(email, organization_id)
+    if existing_invite:
+        # Refresh expiry and resend the email
+        existing_invite.expires_at = datetime.now(timezone.utc) + timedelta(
+            days=invite_request.expires_in_days,
+        )
+        session.commit()
+        await _send_invite_email(existing_invite, org, auth_user_dao, user_id)
+        return _build_invite_response(existing_invite, org, role_dao, auth_user_dao)
+
+    # Determine role_id (default to Member role)
+    role_id = invite_request.role_id
+    if not role_id:
+        member_role = role_dao.get_by_name("Member", organization_id=None)
+        if not member_role:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Default Member role not found",
+            )
+        role_id = member_role.id
+
+    # Block Owner role assignment via invite
+    requested_role = role_dao.get(role_id)
+    if requested_role and requested_role.name == "Owner":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot assign Owner role via invite. Use ownership transfer instead.",
+        )
+
+    # Create invite
+    invitee_user_id = None
+    if existing_user_row:
+        invitee_user_id = existing_user_row[0][0].id
+
+    try:
+        invite = invite_dao.create(
+            organization_id=organization_id,
+            invitee_email=email,
+            invited_by_user_id=user_id,
+            role_id=role_id,
+            level=invite_request.level,
+            expires_in_days=invite_request.expires_in_days,
+            invitee_user_id=invitee_user_id,
+        )
+        session.commit()
+
+        # Send invite email
+        await _send_invite_email(invite, org, auth_user_dao, user_id)
+
+        return _build_invite_response(invite, org, role_dao, auth_user_dao)
+
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to create invite: {str(e)}",
+        )
+
+
+async def _send_invite_email(
+    invite,
+    org,
+    auth_user_dao: AuthUserDAO,
+    inviter_user_id: str,
+) -> None:
+    """Send the invitation email."""
+    # Get inviter info
+    inviter_name = "A team member"
+    inviter_row = auth_user_dao.get_by_id(inviter_user_id)
+    if inviter_row:
+        inviter = inviter_row[0]
+        if inviter.name:
+            inviter_name = inviter.name
+            if inviter.last_name:
+                inviter_name += f" {inviter.last_name}"
+
+    # Build invite link
+    frontend_url = getattr(settings, "frontend_url", "https://app.unify.ai")
+    invite_link = f"{frontend_url}/invite?token={invite.token}"
+
+    email_subject = f"You've been invited to join {org.name}"
+    email_body = f"""
+    <html>
+    <body>
+        <h2>You've been invited to join {org.name}</h2>
+        <p>{inviter_name} has invited you to join the <strong>{org.name}</strong> organization on Unify.</p>
+        <p>Click the link below to accept the invitation:</p>
+        <p><a href="{invite_link}" style="background-color: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Accept Invitation</a></p>
+        <p>Or copy and paste this link into your browser:</p>
+        <p>{invite_link}</p>
+        <p>This invitation expires on {invite.expires_at.strftime('%B %d, %Y at %H:%M UTC')}.</p>
+        <p>If you don't have a Unify account yet, you'll be able to create one after clicking the link.</p>
+    </body>
+    </html>
+    """
+
+    try:
+        email_task = asyncio.create_task(
+            send_email_async(invite.invitee_email, email_subject, email_body),
+        )
+
+        def _log_email_result(task: asyncio.Task) -> None:
+            try:
+                task.result()
+                logger.info(f"Invite email sent to {invite.invitee_email}")
+            except Exception as e:
+                logger.error(
+                    f"Failed to send invite email to {invite.invitee_email}: {e}",
+                )
+
+        email_task.add_done_callback(_log_email_result)
+    except Exception as e:
+        logger.error(f"Failed to schedule invite email: {e}")
+
+
+@router.get(
+    "/organizations/{organization_id}/invites",
+    response_model=InviteListResponse,
+)
+async def list_organization_invites(
+    request_fastapi: Request,
+    organization_id: int,
+    session: Session = Depends(get_db_session),
+) -> InviteListResponse:
+    """
+    List pending invites for an organization.
+
+    Requires org:read permission.
+    All invites returned are pending (not expired).
+    """
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    invite_dao = OrganizationInviteDAO(session)
+    role_dao = RoleDAO(session)
+    auth_user_dao = AuthUserDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    # Get organization
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {organization_id} not found",
+        )
+
+    # Check permission
+    has_permission = resource_access_dao.check_user_permission(
+        user_id,
+        "org",
+        organization_id,
+        "org:read",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view invites for this organization",
+        )
+
+    invites = invite_dao.list_by_organization(organization_id)
+
+    return InviteListResponse(
+        invites=[
+            _build_invite_response(invite, org, role_dao, auth_user_dao)
+            for invite in invites
+        ],
+    )
+
+
+@router.delete(
+    "/organizations/{organization_id}/invites/{invite_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def cancel_organization_invite(
+    request_fastapi: Request,
+    organization_id: int,
+    invite_id: str,
+    session: Session = Depends(get_db_session),
+) -> None:
+    """
+    Cancel a pending invite.
+
+    Requires org:write permission.
+    """
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    invite_dao = OrganizationInviteDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    # Get organization
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {organization_id} not found",
+        )
+
+    # Check permission
+    has_permission = resource_access_dao.check_user_permission(
+        user_id,
+        "org",
+        organization_id,
+        "org:write",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to cancel invites for this organization",
+        )
+
+    # Get and verify invite
+    invite = invite_dao.get_by_id(invite_id)
+    if not invite or invite.organization_id != organization_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Invite not found",
+        )
+
+    invite_dao.delete(invite_id)
+    session.commit()
+
+
+@router.get(
+    "/invites/pending",
+    response_model=InviteListResponse,
+)
+async def list_my_pending_invites(
+    request_fastapi: Request,
+    session: Session = Depends(get_db_session),
+) -> InviteListResponse:
+    """
+    List all pending invites for the current user's email.
+    """
+    user_id = request_fastapi.state.user_id
+    auth_user_dao = AuthUserDAO(session)
+    invite_dao = OrganizationInviteDAO(session)
+    org_dao = OrganizationDAO(session)
+    role_dao = RoleDAO(session)
+
+    # Get current user's email
+    user_row = auth_user_dao.get_by_id(user_id)
+    if not user_row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+    user = user_row[0]
+
+    invites = invite_dao.list_by_email(user.email)
+
+    invite_responses = []
+    for invite in invites:
+        org = org_dao.get(invite.organization_id)
+        if org:
+            invite_responses.append(
+                _build_invite_response(invite, org, role_dao, auth_user_dao),
+            )
+
+    return InviteListResponse(invites=invite_responses)
+
+
+@router.post(
+    "/invites/{token}/accept",
+    response_model=AcceptInviteResponse,
+)
+async def accept_invite(
+    request_fastapi: Request,
+    token: str,
+    session: Session = Depends(get_db_session),
+) -> AcceptInviteResponse:
+    """
+    Accept an organization invite.
+
+    The invite must be pending and not expired.
+    The current user's email must match the invite email.
+    """
+    user_id = request_fastapi.state.user_id
+    auth_user_dao = AuthUserDAO(session)
+    invite_dao = OrganizationInviteDAO(session)
+    org_dao = OrganizationDAO(session)
+    org_member_dao = OrganizationMemberDAO(session)
+    api_key_dao = ApiKeyDAO(session)
+
+    # Get current user
+    user_row = auth_user_dao.get_by_id(user_id)
+    if not user_row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+    user = user_row[0]
+
+    # Get invite by token
+    invite = invite_dao.get_by_token(token)
+    if not invite:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Invite not found or invalid token",
+        )
+
+    # Verify user's email matches invite
+    if user.email.lower() != invite.invitee_email.lower():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This invite is for a different email address",
+        )
+
+    # Check if invite is valid
+    is_valid, error_msg = invite_dao.is_valid_for_acceptance(invite)
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=error_msg,
+        )
+
+    # Get organization
+    org = org_dao.get(invite.organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization no longer exists",
+        )
+
+    # Check if already a member
+    existing_member = org_member_dao.filter(
+        organization_id=invite.organization_id,
+        user_id=user_id,
+    )
+    if existing_member:
+        # Delete invite since user is already a member
+        invite_dao.delete_invite(invite)
+        session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="You are already a member of this organization",
+        )
+
+    try:
+        # Add user as member
+        org_member_dao.create(
+            organization_id=invite.organization_id,
+            user_id=user_id,
+            level=invite.level,
+            role_id=invite.role_id,
+        )
+
+        # Create organization API key
+        new_api_key = generate_key()
+        api_key_dao.create(
+            key=new_api_key,
+            name=f"org_{org.name}",
+            user_id=user_id,
+            organization_id=invite.organization_id,
+        )
+
+        # Delete the invite (accepted)
+        invite_dao.delete_invite(invite)
+
+        session.commit()
+
+        return AcceptInviteResponse(
+            message="Successfully joined organization",
+            organization_id=org.id,
+            organization_name=org.name,
+            api_key=new_api_key,
+        )
+
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to join organization: {str(e)}",
+        )
+
+
+@router.post(
+    "/invites/{token}/decline",
+    response_model=DeclineInviteResponse,
+)
+async def decline_invite(
+    request_fastapi: Request,
+    token: str,
+    session: Session = Depends(get_db_session),
+) -> DeclineInviteResponse:
+    """
+    Decline an organization invite.
+    """
+    user_id = request_fastapi.state.user_id
+    auth_user_dao = AuthUserDAO(session)
+    invite_dao = OrganizationInviteDAO(session)
+
+    # Get current user
+    user_row = auth_user_dao.get_by_id(user_id)
+    if not user_row:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+    user = user_row[0]
+
+    # Get invite by token
+    invite = invite_dao.get_by_token(token)
+    if not invite:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Invite not found or invalid token",
+        )
+
+    # Verify user's email matches invite
+    if user.email.lower() != invite.invitee_email.lower():
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="This invite is for a different email address",
+        )
+
+    # Delete the invite (declined)
+    invite_dao.delete_invite(invite)
+    session.commit()
+
+    return DeclineInviteResponse(message="Invite declined")
