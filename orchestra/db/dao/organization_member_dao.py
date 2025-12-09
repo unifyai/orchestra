@@ -164,3 +164,19 @@ class OrganizationMemberDAO:
         except:
             self.session.rollback()
             raise ValueError
+
+    def count_members(self, organization_id: int) -> int:
+        """
+        Count the number of members in an organization.
+
+        :param organization_id: Organization ID.
+        :return: Number of members in the organization.
+        """
+        from sqlalchemy import func
+
+        result = (
+            self.session.query(func.count(OrganizationMember.id))
+            .filter(OrganizationMember.organization_id == organization_id)
+            .scalar()
+        )
+        return result or 0

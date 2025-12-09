@@ -150,3 +150,23 @@ class OrganizationDAO:
         )
 
         return owned_orgs + member_orgs
+
+    def list_all(
+        self,
+        limit: int = 100,
+        offset: int = 0,
+        name_filter: Optional[str] = None,
+    ) -> List[Organization]:
+        """
+        List all organizations with pagination.
+
+        :param limit: Maximum number of results.
+        :param offset: Number of results to skip.
+        :param name_filter: Optional partial name match filter.
+        :return: List of organizations.
+        """
+        query = select(Organization)
+        if name_filter:
+            query = query.where(Organization.name.ilike(f"%{name_filter}%"))
+        query = query.order_by(Organization.id).limit(limit).offset(offset)
+        return list(self.session.execute(query).scalars().all())
