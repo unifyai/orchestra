@@ -1,6 +1,7 @@
 """Organization management endpoints."""
 import asyncio
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 from typing import List
 
@@ -15,7 +16,6 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dependencies import get_db_session
-from orchestra.settings import settings
 from orchestra.web.api.organization.schema import (
     AcceptInviteResponse,
     DeclineInviteResponse,
@@ -964,7 +964,7 @@ async def _send_invite_email(
                 inviter_name += f" {inviter.last_name}"
 
     # Build invite link
-    frontend_url = getattr(settings, "frontend_url", "https://app.unify.ai")
+    frontend_url = os.getenv("UNIFY_CONSOLE_FRONTEND_URL", "https://console.unify.ai")
     invite_link = f"{frontend_url}/invite?token={invite.token}"
 
     email_subject = f"You've been invited to join {org.name}"
