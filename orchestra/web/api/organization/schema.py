@@ -75,3 +75,58 @@ class OrganizationMemberResponse(BaseModel):
     image: Optional[str] = None
 
     model_config = {"from_attributes": True}
+
+
+# ============== Organization Invite Schemas ==============
+
+
+class InviteUserRequest(BaseModel):
+    """Schema for inviting a user to an organization."""
+
+    email: str
+    role_id: Optional[int] = None  # Defaults to Member role if not provided
+    level: str = "user"  # owner, admin, user
+    expires_in_days: int = 7  # Default 7 days
+
+
+class InviteResponse(BaseModel):
+    """Schema for organization invite response.
+
+    All invites in the system are pending - they are deleted when accepted/declined.
+    """
+
+    id: str
+    token: str
+    organization_id: int
+    organization_name: str
+    invitee_email: str
+    invited_by_user_id: str
+    invited_by_name: Optional[str] = None
+    role_id: int
+    role_name: Optional[str] = None
+    level: str
+    expires_at: datetime
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class InviteListResponse(BaseModel):
+    """Schema for listing organization invites."""
+
+    invites: list[InviteResponse]
+
+
+class AcceptInviteResponse(BaseModel):
+    """Schema for accepting an invite."""
+
+    message: str
+    organization_id: int
+    organization_name: str
+    api_key: str
+
+
+class DeclineInviteResponse(BaseModel):
+    """Schema for declining an invite."""
+
+    message: str
