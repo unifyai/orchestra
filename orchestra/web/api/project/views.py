@@ -1112,6 +1112,21 @@ def transfer_project_to_organization(
             "You must be a member with project:write permission.",
         )
 
+    # Check for name conflict in target organization
+    existing_project = (
+        session.query(Project)
+        .filter(
+            Project.organization_id == transfer_request.organization_id,
+            Project.name == project.name,
+        )
+        .first()
+    )
+    if existing_project:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Organization '{org.name}' already has a project named '{project.name}'",
+        )
+
     try:
         # Transfer the project (direct SQLAlchemy update to ensure None is set)
         project.organization_id = transfer_request.organization_id
@@ -1233,6 +1248,22 @@ def transfer_project_to_personal(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have permission to transfer this project to personal ownership. "
             "You need project:write permission.",
+        )
+
+    # Check for name conflict in user's personal projects
+    existing_project = (
+        session.query(Project)
+        .filter(
+            Project.user_id == user_id,
+            Project.organization_id.is_(None),
+            Project.name == project.name,
+        )
+        .first()
+    )
+    if existing_project:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"You already have a personal project named '{project.name}'",
         )
 
     try:
