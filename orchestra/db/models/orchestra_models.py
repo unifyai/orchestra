@@ -646,6 +646,44 @@ class OrganizationMember(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
 
 
+class OrganizationInvite(Base):
+    """Model for pending organization invitations.
+
+    Invites are deleted when accepted or declined.
+    Expired invites are cleaned up via admin endpoint.
+    """
+
+    __tablename__ = "organization_invite"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    token = Column(String, unique=True, index=True, nullable=False)
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    invitee_email = Column(String, nullable=False, index=True)
+    invitee_user_id = Column(
+        String,
+        ForeignKey("auth_user.id", ondelete="SET NULL"),
+        nullable=True,
+    )  # Set if user already exists in system
+    invited_by_user_id = Column(
+        String,
+        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    role_id = Column(
+        Integer,
+        ForeignKey("role.id", ondelete="RESTRICT"),
+        nullable=False,
+    )  # Role to assign when invite is accepted
+    level = Column(String, nullable=False, default="user")  # Level to assign on accept
+    expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
 class Permission(Base):
     """Model for permissions (atomic actions like 'project:read', 'interface:edit')."""
 
