@@ -4,6 +4,7 @@ import requests
 import unify
 
 COMMS_URL = os.environ.get("UNITY_COMMS_URL")
+ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 
@@ -18,20 +19,9 @@ def create_phone_number(phone_country: str = "US", is_staging: bool = False):
     Returns:
         JSON response from the phone creation endpoint
     """
-    voice_url = "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/" + (
-        "twilio-call-webhook" if not is_staging else "twilio-call-webhook-staging"
-    )
-    sms_url = "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/" + (
-        "twilio-msg-webhook" if not is_staging else "twilio-msg-webhook-staging"
-    )
-    status_callback = (
-        "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/"
-        + (
-            "twilio-status-callback"
-            if not is_staging
-            else "twilio-status-callback-staging"
-        )
-    )
+    voice_url = ADAPTERS_URL + "/twilio/call"
+    sms_url = ADAPTERS_URL + "/twilio/msg"
+    status_callback = ADAPTERS_URL + "/twilio/call-status"
     return requests.post(
         f"{COMMS_URL}/phone/create",
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},
@@ -55,14 +45,7 @@ def assign_whatsapp_sender(user_whatsapp_number: str, is_staging: bool = False):
     Returns:
         JSON response from the WhatsApp creation endpoint
     """
-    callback_url = (
-        "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/"
-        + (
-            "twilio-whatsapp-webhook"
-            if not is_staging
-            else "twilio-whatsapp-webhook-staging"
-        )
-    )
+    callback_url = ADAPTERS_URL + "/twilio/whatsapp"
     return requests.post(
         f"{COMMS_URL}/whatsapp/create",
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},
@@ -234,10 +217,7 @@ def stop_jobs(assistant_id: str):
 
 
 def wake_up_assistant(assistant_id: str, is_staging: bool = False):
-    wake_up_url = (
-        "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/"
-        "assistant-wakeup-webhook" + ("-staging" if is_staging else "")
-    )
+    wake_up_url = ADAPTERS_URL + "/assistant/wakeup"
     return requests.post(
         wake_up_url,
         data={"assistant_id": assistant_id},
@@ -253,10 +233,7 @@ def reawaken_assistant(assistant_id: str, is_staging: bool = False):
     Returns:
         The JSON response from the webhook.
     """
-    reawaken_url = (
-        "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/"
-        "assistant-update-webhook" + ("-staging" if is_staging else "")
-    )
+    reawaken_url = ADAPTERS_URL + "/assistant/update"
     response = requests.post(
         reawaken_url,
         data={"assistant_id": assistant_id},
@@ -275,13 +252,10 @@ def log_pre_hire_chat(assistant_id: str, messages: list, is_staging: bool = Fals
     Returns:
         The JSON response from the webhook.
     """
-    webhook_url = (
-        "https://us-central1-responsive-city-458413-a2.cloudfunctions.net/log-pre-hire-chats-webhook"
-        + ("-staging" if is_staging else "")
-    )
+    log_pre_hire_chat_url = ADAPTERS_URL + "/log-pre-hire-chats"
     payload = {"assistant_id": assistant_id, "body": messages}
     response = requests.post(
-        webhook_url,
+        log_pre_hire_chat_url,
         headers={
             "Authorization": f"Bearer {ADMIN_KEY}",
             "Content-Type": "application/json",
