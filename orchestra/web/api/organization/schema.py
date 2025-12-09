@@ -10,14 +10,21 @@ class OrganizationCreate(BaseModel):
     """Schema for creating an organization."""
 
     name: str
-    billing_user_id: Optional[str] = None
+    # Note: billing_user_id is always set to owner_id automatically
 
 
 class OrganizationUpdate(BaseModel):
     """Schema for updating an organization."""
 
     name: Optional[str] = None
-    billing_user_id: Optional[str] = None
+    # Note: billing_user_id cannot be updated directly.
+    # Use the transfer-ownership endpoint to change both owner and billing user.
+
+
+class OrganizationOwnershipTransfer(BaseModel):
+    """Schema for transferring organization ownership."""
+
+    new_owner_id: str
 
 
 class OrganizationResponse(BaseModel):

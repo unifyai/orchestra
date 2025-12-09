@@ -824,10 +824,15 @@ async def test_revoke_resource_access(client: AsyncClient, dbsession):
 @pytest.mark.anyio
 async def test_org_member_implicit_access_no_teams(client: AsyncClient, dbsession):
     """
-    Test that organization members have implicit access to org resources
-    even without explicit ResourceAccess grants or team memberships.
+    Test implicit org membership access fallback when no explicit grants exist.
 
-    This ensures organizations work seamlessly without teams or manual sharing.
+    NOTE: This test uses project_dao.create() directly (not the API) to create
+    a project WITHOUT explicit ResourceAccess grants, simulating legacy projects
+    or projects created outside the normal API flow.
+
+    When org projects are created via the API (POST /project with org API key),
+    they automatically receive an explicit Owner grant for the creator.
+    This test validates the fallback behavior for projects without explicit grants.
     """
     owner = await create_test_user(client, "org_implicit_owner@test.com")
     member = await create_test_user(client, "org_implicit_member@test.com")
@@ -924,6 +929,11 @@ async def test_explicit_grant_overrides_implicit_access(client: AsyncClient, dbs
     Test that explicit ResourceAccess grants REPLACE implicit organization membership.
 
     When a resource has explicit grants, only those grants apply (no implicit fallback).
+
+    NOTE: This test uses project_dao.create() directly (not the API) to create
+    a project WITHOUT automatic explicit grants, then manually adds an explicit
+    grant to test the override behavior. When projects are created via the API,
+    they automatically receive an explicit Owner grant for the creator.
     """
     owner = await create_test_user(client, "org_explicit_owner@test.com")
     member = await create_test_user(client, "org_explicit_member@test.com")
@@ -1625,3 +1635,292 @@ async def test_update_resource_access_preserves_grantee(client: AsyncClient, dbs
         project.id,
         "project:write",
     ), "member2 should not have access"
+
+
+# ==================== Admin Team Management Tests ====================
+
+
+@pytest.mark.anyio
+async def test_admin_can_create_team(client: AsyncClient, dbsession):
+    """Test that admins (org:write permission) can create teams."""
+    owner = await create_test_user(client, "admin_team_owner@test.com")
+    admin = await create_test_user(client, "admin_team_admin@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Admin Team Test Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Add admin to org with Admin role
+    role_dao = RoleDAO(dbsession)
+    admin_role = role_dao.get_by_name("Admin", organization_id=None)
+
+    add_member_response = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": admin["id"], "level": "admin", "role_id": admin_role.id},
+        headers=owner["headers"],
+    )
+    assert add_member_response.status_code == status.HTTP_201_CREATED
+
+    # Admin creates a team - should succeed
+    team_response = await client.post(
+        f"/v0/organizations/{org_id}/teams",
+        json={"name": "Admin Created Team", "description": "Team created by admin"},
+        headers=admin["headers"],
+    )
+    assert team_response.status_code == status.HTTP_201_CREATED
+
+    team = team_response.json()
+    assert team["name"] == "Admin Created Team"
+    assert team["organization_id"] == org_id
+
+
+@pytest.mark.anyio
+async def test_admin_can_update_team(client: AsyncClient, dbsession):
+    """Test that admins can update teams."""
+    owner = await create_test_user(client, "admin_update_owner@test.com")
+    admin = await create_test_user(client, "admin_update_admin@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Admin Update Team Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Add admin to org
+    role_dao = RoleDAO(dbsession)
+    admin_role = role_dao.get_by_name("Admin", organization_id=None)
+
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": admin["id"], "level": "admin", "role_id": admin_role.id},
+        headers=owner["headers"],
+    )
+
+    # Owner creates team
+    team_response = await client.post(
+        f"/v0/organizations/{org_id}/teams",
+        json={"name": "Team to Update"},
+        headers=owner["headers"],
+    )
+    team_id = team_response.json()["id"]
+
+    # Admin updates team - should succeed
+    update_response = await client.patch(
+        f"/v0/organizations/{org_id}/teams/{team_id}",
+        json={"name": "Updated by Admin", "description": "Admin updated this"},
+        headers=admin["headers"],
+    )
+    assert update_response.status_code == status.HTTP_200_OK
+    assert update_response.json()["name"] == "Updated by Admin"
+
+
+@pytest.mark.anyio
+async def test_admin_can_delete_team(client: AsyncClient, dbsession):
+    """Test that admins can delete teams."""
+    owner = await create_test_user(client, "admin_delete_owner@test.com")
+    admin = await create_test_user(client, "admin_delete_admin@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Admin Delete Team Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Add admin to org
+    role_dao = RoleDAO(dbsession)
+    admin_role = role_dao.get_by_name("Admin", organization_id=None)
+
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": admin["id"], "level": "admin", "role_id": admin_role.id},
+        headers=owner["headers"],
+    )
+
+    # Owner creates team
+    team_response = await client.post(
+        f"/v0/organizations/{org_id}/teams",
+        json={"name": "Team to Delete"},
+        headers=owner["headers"],
+    )
+    team_id = team_response.json()["id"]
+
+    # Admin deletes team - should succeed
+    delete_response = await client.delete(
+        f"/v0/organizations/{org_id}/teams/{team_id}",
+        headers=admin["headers"],
+    )
+    assert delete_response.status_code == status.HTTP_204_NO_CONTENT
+
+
+@pytest.mark.anyio
+async def test_admin_can_add_team_members(client: AsyncClient, dbsession):
+    """Test that admins can add members to teams."""
+    owner = await create_test_user(client, "admin_add_owner@test.com")
+    admin = await create_test_user(client, "admin_add_admin@test.com")
+    member = await create_test_user(client, "admin_add_member@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Admin Add Team Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Add admin and member to org
+    role_dao = RoleDAO(dbsession)
+    admin_role = role_dao.get_by_name("Admin", organization_id=None)
+
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": admin["id"], "level": "admin", "role_id": admin_role.id},
+        headers=owner["headers"],
+    )
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"], "level": "user"},
+        headers=owner["headers"],
+    )
+
+    # Owner creates team
+    team_response = await client.post(
+        f"/v0/organizations/{org_id}/teams",
+        json={"name": "Team for Members"},
+        headers=owner["headers"],
+    )
+    team_id = team_response.json()["id"]
+
+    # Admin adds member to team - should succeed
+    add_response = await client.post(
+        f"/v0/organizations/{org_id}/teams/{team_id}/members",
+        json={"user_ids": [member["id"]]},
+        headers=admin["headers"],
+    )
+    assert add_response.status_code == status.HTTP_200_OK
+    assert member["id"] in add_response.json()["members"]
+
+
+@pytest.mark.anyio
+async def test_admin_can_remove_team_members(client: AsyncClient, dbsession):
+    """Test that admins can remove members from teams."""
+    owner = await create_test_user(client, "admin_remove_owner@test.com")
+    admin = await create_test_user(client, "admin_remove_admin@test.com")
+    member = await create_test_user(client, "admin_remove_member@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Admin Remove Team Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Add admin and member to org
+    role_dao = RoleDAO(dbsession)
+    admin_role = role_dao.get_by_name("Admin", organization_id=None)
+
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": admin["id"], "level": "admin", "role_id": admin_role.id},
+        headers=owner["headers"],
+    )
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"], "level": "user"},
+        headers=owner["headers"],
+    )
+
+    # Owner creates team and adds member
+    team_response = await client.post(
+        f"/v0/organizations/{org_id}/teams",
+        json={"name": "Team for Removal"},
+        headers=owner["headers"],
+    )
+    team_id = team_response.json()["id"]
+
+    await client.post(
+        f"/v0/organizations/{org_id}/teams/{team_id}/members",
+        json={"user_ids": [member["id"]]},
+        headers=owner["headers"],
+    )
+
+    # Admin removes member from team - should succeed
+    remove_response = await client.delete(
+        f"/v0/organizations/{org_id}/teams/{team_id}/members/{member['id']}",
+        headers=admin["headers"],
+    )
+    assert remove_response.status_code == status.HTTP_200_OK
+    assert member["id"] not in remove_response.json()["members"]
+
+
+@pytest.mark.anyio
+async def test_member_cannot_manage_teams(client: AsyncClient, dbsession):
+    """Test that members (without org:write) cannot manage teams."""
+    owner = await create_test_user(client, "member_team_owner@test.com")
+    member = await create_test_user(client, "member_team_member@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Member Team Test Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Add member with default Member role (no org:write)
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"], "level": "user"},
+        headers=owner["headers"],
+    )
+
+    # Member tries to create team - should fail
+    team_response = await client.post(
+        f"/v0/organizations/{org_id}/teams",
+        json={"name": "Member Team"},
+        headers=member["headers"],
+    )
+    assert team_response.status_code == status.HTTP_403_FORBIDDEN
+    assert "permission" in team_response.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_viewer_cannot_manage_teams(client: AsyncClient, dbsession):
+    """Test that viewers cannot manage teams."""
+    owner = await create_test_user(client, "viewer_team_owner@test.com")
+    viewer = await create_test_user(client, "viewer_team_viewer@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Viewer Team Test Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Add viewer with Viewer role
+    role_dao = RoleDAO(dbsession)
+    viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
+
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": viewer["id"], "level": "user", "role_id": viewer_role.id},
+        headers=owner["headers"],
+    )
+
+    # Viewer tries to create team - should fail
+    team_response = await client.post(
+        f"/v0/organizations/{org_id}/teams",
+        json={"name": "Viewer Team"},
+        headers=viewer["headers"],
+    )
+    assert team_response.status_code == status.HTTP_403_FORBIDDEN
+    assert "permission" in team_response.json()["detail"].lower()

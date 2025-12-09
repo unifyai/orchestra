@@ -105,23 +105,20 @@ class ReplicateService:
         image_url: str,
         audio_url: str,
         seed: Optional[int] = None,
-        dynamic_scale: Optional[float] = 1.0,
-        min_resolution: Optional[int] = 512,
-        inference_steps: Optional[int] = 25,
-        keep_resolution: Optional[bool] = True,
+        duration: Optional[int] = None,
     ) -> Prediction:
         """
         Creates a video animation prediction using zsxkib/sonic model.
         """
         try:
-            model_identifier = "zsxkib/sonic:a2aad29ea95f19747a5ea22ab14fc6594654506e5815f7f5ba4293e888d3e20f"
+            model_identifier = "wan-video/wan-2.5-i2v-fast"
             model_input: Dict[str, Any] = {
                 "image": image_url,
                 "audio": audio_url,
-                "dynamic_scale": dynamic_scale,
-                "min_resolution": min_resolution,
-                "inference_steps": inference_steps,
-                "keep_resolution": keep_resolution,
+                "prompt": "A speaking person",
+                "duration": duration
+                if duration is not None
+                else settings.default_video_duration,
             }
             if seed is not None:
                 model_input["seed"] = seed
@@ -133,7 +130,8 @@ class ReplicateService:
             return prediction
         except Exception as e:
             logging.error(
-                f"Replicate create_video_animation failed: {e}", exc_info=True
+                f"Replicate create_video_animation failed: {e}",
+                exc_info=True,
             )
             raise ReplicateAPIError(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

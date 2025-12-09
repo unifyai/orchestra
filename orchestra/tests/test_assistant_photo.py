@@ -355,14 +355,13 @@ async def test_animate_video_with_urls_success(
         users_dao = UsersDAO(dbsession)
         users_dao.recharge_credit(
             "test-user",
-            settings.video_generation_cost * 2,
+            (settings.video_generation_cost * settings.default_video_duration) * 2,
         )  # give enough credits
         dbsession.commit()
 
     data_payload = {
         "image_url": "https://example.com/image.png",
         "audio_url": "https://example.com/audio.mp3",
-        "dynamic_scale": 1.5,
     }
     request_headers = HEADERS.copy()
     request_headers.pop("Content-Type", None)
@@ -389,10 +388,6 @@ async def test_animate_video_with_urls_success(
         image_url="https://example.com/image.png",
         audio_url="https://example.com/audio.mp3",
         seed=None,
-        dynamic_scale=1.5,
-        min_resolution=512,  # default
-        inference_steps=25,  # default
-        keep_resolution=True,  # default
     )
     bucket_mock.upload_temp_assistant_file.assert_not_called()
     bucket_mock.delete_assistant_file.assert_not_called()
@@ -426,9 +421,7 @@ async def test_animate_video_with_files_success(
         ),
     ]
 
-    data_payload = {
-        "keep_resolution": False,
-    }
+    data_payload = {}
     files_payload = {
         "image_file": ("image.jpg", io.BytesIO(image_content), "image/jpeg"),
         "audio_file": ("audio.mp3", io.BytesIO(audio_content), "audio/mpeg"),
@@ -470,10 +463,6 @@ async def test_animate_video_with_files_success(
         image_url="https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_image.jpg",
         audio_url="https://storage.googleapis.com/mock-bucket/_temp/test-user/temp_audio.mp3",
         seed=None,
-        dynamic_scale=1.0,  # default
-        min_resolution=512,  # default
-        inference_steps=25,  # default
-        keep_resolution=False,
     )
 
     assert bucket_mock.delete_assistant_file.call_count == 2

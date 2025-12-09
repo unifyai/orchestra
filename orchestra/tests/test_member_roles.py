@@ -23,7 +23,12 @@ async def test_create_organization_assigns_owner_role(client: AsyncClient, dbses
         headers=owner["headers"],
     )
     assert org_response.status_code == status.HTTP_201_CREATED
-    org_id = org_response.json()["id"]
+    org_data = org_response.json()
+    org_id = org_data["id"]
+
+    # Verify org API key is returned
+    assert "api_key" in org_data
+    assert org_data["api_key"] is not None
 
     # Check that the owner has the Owner role assigned
     org_member_dao = OrganizationMemberDAO(dbsession)
@@ -489,6 +494,75 @@ async def test_only_system_roles_can_be_assigned(client: AsyncClient, dbsession)
     )
     assert update_response.status_code == status.HTTP_400_BAD_REQUEST
     assert "system role" in update_response.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_cannot_add_member_with_owner_role(client: AsyncClient, dbsession):
+    """Test that adding a member with Owner role is blocked."""
+    owner = await create_test_user(client, "block_owner_add@test.com")
+    user = await create_test_user(client, "block_owner_user@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Block Owner Add Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Get Owner role ID
+    role_dao = RoleDAO(dbsession)
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+
+    # Try to add member with Owner role - should fail
+    add_response = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={
+            "user_id": user["id"],
+            "level": "user",
+            "role_id": owner_role.id,
+        },
+        headers=owner["headers"],
+    )
+    assert add_response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "owner role" in add_response.json()["detail"].lower()
+    assert "transfer" in add_response.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_cannot_update_member_to_owner_role(client: AsyncClient, dbsession):
+    """Test that updating a member to Owner role is blocked."""
+    owner = await create_test_user(client, "block_owner_update@test.com")
+    user = await create_test_user(client, "block_owner_update_user@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Block Owner Update Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Add member with default role
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": user["id"], "level": "user"},
+        headers=owner["headers"],
+    )
+
+    # Get Owner role ID
+    role_dao = RoleDAO(dbsession)
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+
+    # Try to update member to Owner role - should fail
+    update_response = await client.patch(
+        f"/v0/organizations/{org_id}/members/{user['id']}/role",
+        json={"role_id": owner_role.id},
+        headers=owner["headers"],
+    )
+    assert update_response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "owner role" in update_response.json()["detail"].lower()
+    assert "transfer" in update_response.json()["detail"].lower()
 
 
 @pytest.mark.anyio
