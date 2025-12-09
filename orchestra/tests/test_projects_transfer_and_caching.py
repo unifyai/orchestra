@@ -456,6 +456,371 @@ async def test_org_to_personal_deletes_resource_access(client: AsyncClient, dbse
     assert len(access_entries_after) == 0
 
 
+# ==================== Name Conflict Tests ====================
+
+
+@pytest.mark.anyio
+async def test_transfer_to_org_fails_on_name_conflict(client: AsyncClient, dbsession):
+    """Test that transferring to an org fails if project with same name exists."""
+    user = await create_test_user(client, "name_conflict_org@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Name Conflict Test Org"},
+        headers=user["headers"],
+    )
+    assert org_response.status_code == status.HTTP_201_CREATED
+    org_id = org_response.json()["id"]
+
+    # Create an org project with a specific name
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    project_dao.create(
+        name="Duplicate_Name",
+        user_id=None,
+        organization_id=org_id,
+    )
+    dbsession.commit()
+
+    # Create a personal project with the SAME name
+    project_dao.create(
+        name="Duplicate_Name",
+        user_id=user["id"],
+        organization_id=None,
+    )
+    dbsession.commit()
+
+    personal_projects = project_dao.filter(user_id=user["id"], name="Duplicate_Name")
+    personal_project = personal_projects[0][0]
+
+    # Try to transfer personal project to org - should fail with 409
+    transfer_response = await client.post(
+        f"/v0/project/{personal_project.id}/transfer-to-organization",
+        json={"organization_id": org_id},
+        headers=user["headers"],
+    )
+
+    assert transfer_response.status_code == status.HTTP_409_CONFLICT
+    assert "already has a project named" in transfer_response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_transfer_to_personal_fails_on_name_conflict(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test that transferring to personal fails if user has project with same name."""
+    user = await create_test_user(client, "name_conflict_personal@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Personal Conflict Test Org"},
+        headers=user["headers"],
+    )
+    assert org_response.status_code == status.HTTP_201_CREATED
+    org_id = org_response.json()["id"]
+
+    # Create a personal project with a specific name
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    project_dao.create(
+        name="Personal_Duplicate",
+        user_id=user["id"],
+        organization_id=None,
+    )
+    dbsession.commit()
+
+    # Create an org project with the SAME name
+    project_dao.create(
+        name="Personal_Duplicate",
+        user_id=None,
+        organization_id=org_id,
+    )
+    dbsession.commit()
+
+    org_projects = project_dao.filter(organization_id=org_id, name="Personal_Duplicate")
+    org_project = org_projects[0][0]
+
+    # Try to transfer org project to personal - should fail with 409
+    transfer_response = await client.post(
+        f"/v0/project/{org_project.id}/transfer-to-personal",
+        headers=user["headers"],
+    )
+
+    assert transfer_response.status_code == status.HTTP_409_CONFLICT
+    assert "already have a personal project named" in transfer_response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_transfer_to_nonexistent_org_returns_404(client: AsyncClient, dbsession):
+    """Test that transferring to a non-existent organization returns 404."""
+    user = await create_test_user(client, "nonexistent_org@test.com")
+
+    # Create personal project
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    project_dao.create(
+        name="Orphan_Project",
+        user_id=user["id"],
+        organization_id=None,
+    )
+    dbsession.commit()
+
+    projects = project_dao.filter(user_id=user["id"], name="Orphan_Project")
+    project = projects[0][0]
+
+    # Try to transfer to non-existent org
+    transfer_response = await client.post(
+        f"/v0/project/{project.id}/transfer-to-organization",
+        json={"organization_id": 999999},
+        headers=user["headers"],
+    )
+
+    assert transfer_response.status_code == status.HTTP_404_NOT_FOUND
+    assert "not found" in transfer_response.json()["detail"]
+
+
+# ==================== Transfer Preservation Tests ====================
+
+
+@pytest.mark.anyio
+async def test_transfer_preserves_logs_and_contexts(client: AsyncClient, dbsession):
+    """Test that logs and contexts remain associated after transfer."""
+    user = await create_test_user(client, "preserve_logs@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Logs Preservation Org"},
+        headers=user["headers"],
+    )
+    assert org_response.status_code == status.HTTP_201_CREATED
+    org_id = org_response.json()["id"]
+
+    # Create personal project
+    project_response = await client.post(
+        "/v0/project",
+        json={"name": "Logs_Preserve_Project", "is_versioned": False},
+        headers=user["headers"],
+    )
+    assert project_response.status_code == status.HTTP_200_OK
+
+    # Add logs with a context
+    log_response = await client.post(
+        "/v0/logs",
+        json={
+            "project": "Logs_Preserve_Project",
+            "context": "TestContext",
+            "entries": [
+                {"field1": "value1", "field2": 123},
+                {"field1": "value2", "field2": 456},
+            ],
+        },
+        headers=user["headers"],
+    )
+    assert log_response.status_code == status.HTTP_200_OK
+
+    # Get project ID
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+    projects = project_dao.filter(user_id=user["id"], name="Logs_Preserve_Project")
+    project = projects[0][0]
+    project_id = project.id
+
+    # Verify logs exist before transfer
+    query_response = await client.post(
+        "/v0/logs/query",
+        json={"project": "Logs_Preserve_Project", "context": "TestContext"},
+        headers=user["headers"],
+    )
+    assert query_response.status_code == status.HTTP_200_OK
+    logs_before = query_response.json()
+    assert len(logs_before["logs"]) == 2
+
+    # Transfer to organization
+    transfer_response = await client.post(
+        f"/v0/project/{project_id}/transfer-to-organization",
+        json={"organization_id": org_id},
+        headers=user["headers"],
+    )
+    assert transfer_response.status_code == status.HTTP_200_OK
+
+    # Verify project is now organizational
+    dbsession.refresh(project)
+    assert project.organization_id == org_id
+    assert project.user_id is None
+
+    # Verify logs are still queryable after transfer
+    query_response_after = await client.post(
+        "/v0/logs/query",
+        json={"project": "Logs_Preserve_Project", "context": "TestContext"},
+        headers=user["headers"],
+    )
+    assert query_response_after.status_code == status.HTTP_200_OK
+    logs_after = query_response_after.json()
+    assert len(logs_after["logs"]) == 2
+
+    # Verify the data is the same
+    values_before = {e.get("field1") for e in logs_before["logs"]}
+    values_after = {e.get("field1") for e in logs_after["logs"]}
+    assert values_before == values_after
+
+
+@pytest.mark.anyio
+async def test_transfer_preserves_field_types(client: AsyncClient, dbsession):
+    """Test that field type definitions are preserved after transfer."""
+    from orchestra.db.models.orchestra_models import FieldType
+
+    user = await create_test_user(client, "preserve_fieldtypes@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "FieldTypes Preservation Org"},
+        headers=user["headers"],
+    )
+    assert org_response.status_code == status.HTTP_201_CREATED
+    org_id = org_response.json()["id"]
+
+    # Create personal project
+    project_response = await client.post(
+        "/v0/project",
+        json={"name": "FieldTypes_Project", "is_versioned": False},
+        headers=user["headers"],
+    )
+    assert project_response.status_code == status.HTTP_200_OK
+
+    # Add logs to create field types
+    log_response = await client.post(
+        "/v0/logs",
+        json={
+            "project": "FieldTypes_Project",
+            "context": "TypedContext",
+            "entries": [
+                {"string_field": "hello", "int_field": 42, "float_field": 3.14},
+            ],
+        },
+        headers=user["headers"],
+    )
+    assert log_response.status_code == status.HTTP_200_OK
+
+    # Get project ID
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+    projects = project_dao.filter(user_id=user["id"], name="FieldTypes_Project")
+    project = projects[0][0]
+    project_id = project.id
+
+    # Count field types before transfer
+    field_types_before = (
+        dbsession.query(FieldType).filter(FieldType.project_id == project_id).all()
+    )
+    field_names_before = {ft.field_name for ft in field_types_before}
+
+    # Transfer to organization
+    transfer_response = await client.post(
+        f"/v0/project/{project_id}/transfer-to-organization",
+        json={"organization_id": org_id},
+        headers=user["headers"],
+    )
+    assert transfer_response.status_code == status.HTTP_200_OK
+
+    # Verify field types still exist after transfer
+    dbsession.expire_all()
+    field_types_after = (
+        dbsession.query(FieldType).filter(FieldType.project_id == project_id).all()
+    )
+    field_names_after = {ft.field_name for ft in field_types_after}
+
+    assert field_names_before == field_names_after
+    assert len(field_types_after) == len(field_types_before)
+
+
+@pytest.mark.anyio
+async def test_transfer_preserves_interfaces(client: AsyncClient, dbsession):
+    """Test that interfaces are preserved after transfer."""
+    from orchestra.db.models.orchestra_models import Interface
+
+    user = await create_test_user(client, "preserve_interfaces@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Interfaces Preservation Org"},
+        headers=user["headers"],
+    )
+    assert org_response.status_code == status.HTTP_201_CREATED
+    org_id = org_response.json()["id"]
+
+    # Create personal project
+    project_response = await client.post(
+        "/v0/project",
+        json={"name": "Interfaces_Project", "is_versioned": False},
+        headers=user["headers"],
+    )
+    assert project_response.status_code == status.HTTP_200_OK
+
+    # Get project ID
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+    projects = project_dao.filter(user_id=user["id"], name="Interfaces_Project")
+    project = projects[0][0]
+    project_id = project.id
+
+    # Create an interface for this project
+    interface_response = await client.post(
+        "/v0/interfaces/",
+        json={
+            "project": "Interfaces_Project",
+            "name": "TestInterface",
+            "icon": "test-icon",
+        },
+        headers=user["headers"],
+    )
+    # Interface creation might return 200 or 201 depending on implementation
+    assert interface_response.status_code in [
+        status.HTTP_200_OK,
+        status.HTTP_201_CREATED,
+    ]
+
+    # Count interfaces before transfer
+    interfaces_before = (
+        dbsession.query(Interface).filter(Interface.project_id == project_id).all()
+    )
+    interface_count_before = len(interfaces_before)
+
+    # Transfer to organization
+    transfer_response = await client.post(
+        f"/v0/project/{project_id}/transfer-to-organization",
+        json={"organization_id": org_id},
+        headers=user["headers"],
+    )
+    assert transfer_response.status_code == status.HTTP_200_OK
+
+    # Verify interfaces still exist after transfer
+    dbsession.expire_all()
+    interfaces_after = (
+        dbsession.query(Interface).filter(Interface.project_id == project_id).all()
+    )
+
+    assert len(interfaces_after) == interface_count_before
+    if interface_count_before > 0:
+        interface_names_before = {i.name for i in interfaces_before}
+        interface_names_after = {i.name for i in interfaces_after}
+        assert interface_names_before == interface_names_after
+
+
 # ==================== Caching Performance Tests ====================
 
 
