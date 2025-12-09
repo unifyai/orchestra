@@ -404,3 +404,23 @@ class Contact(BaseModel):
     whatsapp_number: Optional[str]
     description: Optional[str]
     custom_fields: Dict[str, Any] = {}
+
+
+# Organization list schemas for admin endpoint
+class OrganizationListItem(BaseModel):
+    """Response model for a single organization in the list."""
+
+    id: int
+    name: str
+    owner_id: str
+    billing_user_id: Optional[str]
+    created_at: Optional[datetime.datetime]
+    member_count: int
+
+
+class OrganizationListResponse(BaseModel):
+    """Response model for listing all organizations."""
+
+    organizations: list[OrganizationListItem]
+    limit: int
+    offset: int
