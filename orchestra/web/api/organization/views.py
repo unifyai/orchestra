@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
+from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
@@ -476,6 +477,7 @@ async def list_organization_members(
     org_member_dao = OrganizationMemberDAO(session)
     role_dao = RoleDAO(session)
     resource_access_dao = ResourceAccessDAO(session)
+    auth_user_dao = AuthUserDAO(session)
 
     # Get organization
     org = org_dao.get(organization_id)
@@ -501,7 +503,7 @@ async def list_organization_members(
     # Get all members
     all_members_result = org_member_dao.filter(organization_id=organization_id)
 
-    # Build response with role names
+    # Build response with role names and user info
     members_response = []
     for member_row in all_members_result:
         member = member_row[0]
@@ -509,6 +511,24 @@ async def list_organization_members(
         if member.role_id:
             role = role_dao.get(member.role_id)
             role_name = role.name if role else None
+
+        # Fetch user info
+        user_info_row = auth_user_dao.get_by_id(member.user_id)
+        user_name = None
+        user_email = None
+        user_image = None
+        if user_info_row:
+            # get_by_id returns a Row, extract the AuthUser model
+            user_info = user_info_row[0]
+            # Combine first and last name if available
+            name_parts = []
+            if user_info.name:
+                name_parts.append(user_info.name)
+            if user_info.last_name:
+                name_parts.append(user_info.last_name)
+            user_name = " ".join(name_parts) if name_parts else None
+            user_email = user_info.email
+            user_image = user_info.image
 
         members_response.append(
             OrganizationMemberResponse(
@@ -519,6 +539,9 @@ async def list_organization_members(
                 role_id=member.role_id,
                 role_name=role_name,
                 created_at=member.created_at,
+                name=user_name,
+                email=user_email,
+                image=user_image,
             ),
         )
 

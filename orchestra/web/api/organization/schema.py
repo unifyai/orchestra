@@ -69,5 +69,9 @@ class OrganizationMemberResponse(BaseModel):
     role_id: Optional[int]
     role_name: Optional[str] = None
     created_at: datetime
+    # User info fields (populated from AuthUser)
+    name: Optional[str] = None
+    email: Optional[str] = None
+    image: Optional[str] = None
 
     model_config = {"from_attributes": True}
