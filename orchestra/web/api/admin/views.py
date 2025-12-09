@@ -72,6 +72,8 @@ from orchestra.web.api.admin.schema import (  # noqa: WPS235
     ModalityModelRequest,
     ModalityModelResponse,
     ModelRequest,
+    OrganizationListItem,
+    OrganizationListResponse,
     ProviderModelRequest,
     RechargeModelRequest,
     RechargeModelResponse,
@@ -99,6 +101,55 @@ def get_all_users_models(
     """
     users_dao = UsersDAO(session)
     return users_dao.get_all_users()
+
+
+@router.get(
+    "/organizations",
+    response_model=OrganizationListResponse,
+    summary="Admin: List all organizations",
+    description="Retrieve all organizations with pagination support.",
+)
+def admin_list_organizations(
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
+    name: Optional[str] = Query(None, description="Filter by name (partial match)"),
+    session=Depends(get_db_session),
+) -> OrganizationListResponse:
+    """
+    List all organizations in the system with pagination.
+
+    :param limit: Maximum number of results (1-1000).
+    :param offset: Number of results to skip.
+    :param name: Optional partial name match filter.
+    :param session: Database session.
+    :return: Paginated list of organizations with member counts.
+    """
+    from orchestra.db.dao.organization_dao import OrganizationDAO
+
+    org_dao = OrganizationDAO(session)
+    member_dao = OrganizationMemberDAO(session)
+
+    orgs = org_dao.list_all(limit=limit, offset=offset, name_filter=name)
+
+    items = []
+    for org in orgs:
+        member_count = member_dao.count_members(org.id)
+        items.append(
+            OrganizationListItem(
+                id=org.id,
+                name=org.name,
+                owner_id=org.owner_id,
+                billing_user_id=org.billing_user_id,
+                created_at=org.created_at,
+                member_count=member_count,
+            ),
+        )
+
+    return OrganizationListResponse(
+        organizations=items,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/get_user", response_model=List[UsersModelResponse])
