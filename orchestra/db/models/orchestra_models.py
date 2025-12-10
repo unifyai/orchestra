@@ -474,6 +474,7 @@ class AuthUser(Base):
     name = Column(String)
     last_name = Column(String)
     job_title = Column(String)
+    bio = Column(String, nullable=True)
     image = Column(String)
     timezone = Column(String, nullable=True)
     # Account tier, developer, professional, enterprise

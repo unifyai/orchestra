@@ -81,6 +81,7 @@ async def create_user(
         name=user.name,
         last_name=user.last_name,
         job_title=user.job_title,
+        bio=user.bio,
         image=user.image,
         timezone=user.timezone,
     )
@@ -134,6 +135,7 @@ async def get_user(
         "name": user_instance.name,
         "lastName": user_instance.last_name,
         "jobTitle": user_instance.job_title,
+        "bio": user_instance.bio,
         "image": user_instance.image,
         "email": user_instance.email,
         "createdAt": user_instance.created_at,
@@ -198,6 +200,7 @@ async def get_user_by_email(
         "name": user_instance.name,
         "lastName": user_instance.last_name,
         "jobTitle": user_instance.job_title,
+        "bio": user_instance.bio,
         "image": user_instance.image,
         "email": user_instance.email,
         "createdAt": user_instance.created_at,
@@ -249,6 +252,7 @@ async def get_user_by_account(
         "name": user_instance.name,
         "lastName": user_instance.last_name,
         "jobTitle": user_instance.job_title,
+        "bio": user_instance.bio,
         "image": user_instance.image,
         "email": user_instance.email,
         "createdAt": user_instance.created_at,
@@ -276,6 +280,7 @@ async def update_user(
         name=updated_user.name,
         last_name=updated_user.last_name,
         job_title=updated_user.job_title,
+        bio=updated_user.bio,
         timezone=updated_user.timezone,
     )
     return "User information updated successfully!"
@@ -718,6 +723,7 @@ async def get_user_basic_info(
         "last": user.last_name,
         "email": user.email,
         "job_title": user.job_title,
+        "bio": user.bio,
     }
 
 
