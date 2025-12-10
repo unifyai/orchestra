@@ -456,16 +456,18 @@ async def test_share_project(client: AsyncClient):
 
     # Verify the response
     assert response.status_code == 200, response.json()
-    share_result = response.json()
-    assert share_result["info"] == "Project shared successfully!"
-    assert "api_key" in share_result  # Org API key for to_user
-    assert "organization_id" in share_result
+    assert response.json()["info"] == "Project shared successfully!"
 
-    # Use the org API key returned from share endpoint to access org projects
-    org_api_key = share_result["api_key"]
+    # get the api key for the new user
+    response = await client.get(
+        f"/v0/admin/auth-user/by-user-id?user_id={to_user_id}",
+        headers=admin_headers,
+    )
+    data = response.json()
+    to_user_api_key = data["apiKey"]
     new_headers = {
         "accept": "application/json",
-        "Authorization": f"Bearer {org_api_key}",
+        "Authorization": f"Bearer {to_user_api_key}",
     }
 
     # 1) Verify the new user can acces the project
