@@ -16,6 +16,7 @@ async def test_create_user(client: AsyncClient):
         "email": "testuser@example.com",
         "name": "Test User",
         "job_title": "Developer",
+        "bio": "A developer",
         "image": "http://...",
         "timezone": "America/New_York",
     }
@@ -24,6 +25,7 @@ async def test_create_user(client: AsyncClient):
     assert response.status_code == 200, response.json()
     user_data = response.json()
     assert user_data["email"] == "testuser@example.com"
+    assert user_data["bio"] == "A developer"
     assert user_data["timezone"] == "America/New_York"
 
 
@@ -85,6 +87,7 @@ async def test_update_user(client: AsyncClient):
         "user_id": user_id,
         "name": "A",
         "last_name": "B",
+        "bio": "A test user",
         "timezone": "Asia/Tokyo",
     }
     response = await client.put(url, json=params, headers=HEADERS)
@@ -95,6 +98,7 @@ async def test_update_user(client: AsyncClient):
     response = await client.get(url, headers=HEADERS)
     assert response.status_code == 200, response.json()
     assert response.json()["name"] == "A"
+    assert response.json()["bio"] == "A test user"
     assert response.json()["timezone"] == "Asia/Tokyo"
 
 
