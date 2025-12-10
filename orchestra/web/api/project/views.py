@@ -1365,7 +1365,10 @@ def list_projects(
     session=Depends(get_db_session),
 ):
     """
-    Returns the names of all projects stored in your account.
+    Returns the names of all projects based on the API key context.
+
+    - Personal API key: returns only personal projects
+    - Organization API key: returns only projects from that specific organization
     """
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
@@ -1374,7 +1377,17 @@ def list_projects(
     raw_projects = project_dao.filter_by_user_access(
         user_id=request_fastapi.state.user_id,
     )
-    return [p[0].name for p in raw_projects]
+
+    # Filter by API key context
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
+    if organization_id:
+        # Org API key: show only projects from this specific organization
+        filtered = [p for p in raw_projects if p[0].organization_id == organization_id]
+    else:
+        # Personal API key: show only personal projects
+        filtered = [p for p in raw_projects if p[0].organization_id is None]
+
+    return [p[0].name for p in filtered]
 
 
 @router.get("/projects/tree", response_model=List[ProjectTreeItem])
@@ -1382,7 +1395,12 @@ async def list_projects_tree(
     request_fastapi: Request,
     session: Session = Depends(get_db_session),
 ):
-    """Return all projects the user can access with their icons and interface names."""
+    """
+    Return all projects based on API key context with their icons and interface names.
+
+    - Personal API key: returns only personal projects
+    - Organization API key: returns only projects from that specific organization
+    """
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
@@ -1391,6 +1409,16 @@ async def list_projects_tree(
     favorite_project_dao = FavoriteProjectDAO(session)
 
     projects = project_dao.filter_by_user_access(user_id=request_fastapi.state.user_id)
+
+    # Filter by API key context
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
+    if organization_id:
+        # Org API key: show only projects from this specific organization
+        projects = [p for p in projects if p[0].organization_id == organization_id]
+    else:
+        # Personal API key: show only personal projects
+        projects = [p for p in projects if p[0].organization_id is None]
+
     favorites = favorite_project_dao.filter_by_user(request_fastapi.state.user_id)
     fav_map = {f.project_id: f for f in favorites}
 
