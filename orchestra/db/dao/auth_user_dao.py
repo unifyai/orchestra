@@ -27,6 +27,7 @@ class AuthUserDAO:
         name: Optional[str] = None,
         last_name: Optional[str] = None,
         job_title: Optional[str] = None,
+        bio: Optional[str] = None,
         image: Optional[str] = None,
         timezone: Optional[str] = None,
         account_type: Optional[str] = None,
@@ -63,6 +64,7 @@ class AuthUserDAO:
                 name=name,
                 last_name=last_name,
                 job_title=job_title,
+                bio=bio,
                 image=image,
                 timezone=timezone,
                 account_type=account_type or "individual",
@@ -130,6 +132,7 @@ class AuthUserDAO:
         name: Optional[str] = ...,
         last_name: Optional[str] = ...,
         job_title: Optional[str] = ...,
+        bio: Optional[str] = ...,
         image: Optional[str] = ...,
         timezone: Optional[str] = ...,
         tier: Optional[str] = ...,
@@ -163,6 +166,8 @@ class AuthUserDAO:
                 setattr(entry, "last_name", last_name)
             if job_title is not ...:
                 setattr(entry, "job_title", job_title)
+            if bio is not ...:
+                setattr(entry, "bio", bio)
             if image is not ...:
                 setattr(entry, "image", image)
             if timezone is not ...:

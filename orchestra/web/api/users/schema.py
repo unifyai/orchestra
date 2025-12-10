@@ -16,6 +16,7 @@ class UserRequest(BaseModel):
     name: Optional[str] = None
     last_name: Optional[str] = None
     job_title: Optional[str] = None
+    bio: Optional[str] = None
     timezone: Optional[str] = None
 
     @field_validator("timezone")
