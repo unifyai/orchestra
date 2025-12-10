@@ -130,9 +130,9 @@ def watch_email(email: str, is_staging: bool = False):
         headers={"Authorization": f"Bearer {ADMIN_KEY}"},
         json={
             "primary_email": email,
-            "topic": "email-notifications-staging"
+            "topic": "gmail-notifications-staging"
             if is_staging
-            else "email-notifications",
+            else "gmail-notifications",
         },
     ).json()
 
