@@ -769,3 +769,202 @@ async def test_member_can_create_org_project(client: AsyncClient, dbsession):
     assert access_entries[0].role_id == owner_role.id
     assert access_entries[0].grantee_type == "user"
     assert access_entries[0].grantee_id == member["id"]
+
+
+# ============== Project Listing API Key Context Tests ==============
+
+
+@pytest.mark.anyio
+async def test_list_projects_personal_api_key_shows_only_personal(client: AsyncClient):
+    """Test that listing projects with personal API key shows only personal projects."""
+    user = await create_test_user(client, "list_personal_only@test.com")
+
+    # Create a personal project
+    await client.post(
+        "/v0/project",
+        json={"name": "Personal_List_Test"},
+        headers=user["headers"],
+    )
+
+    # Create an organization and org project
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "List Test Org"},
+        headers=user["headers"],
+    )
+    org_api_key = org_response.json()["api_key"]
+    org_headers = {"Authorization": f"Bearer {org_api_key}"}
+
+    await client.post(
+        "/v0/project",
+        json={"name": "Org_List_Test"},
+        headers=org_headers,
+    )
+
+    # List projects using personal API key - should only see personal project
+    list_response = await client.get("/v0/projects", headers=user["headers"])
+    assert list_response.status_code == 200
+    projects = list_response.json()
+
+    assert "Personal_List_Test" in projects
+    assert "Org_List_Test" not in projects
+
+
+@pytest.mark.anyio
+async def test_list_projects_org_api_key_shows_only_org_projects(client: AsyncClient):
+    """Test that listing projects with org API key shows only that org's projects."""
+    user = await create_test_user(client, "list_org_only@test.com")
+
+    # Create a personal project
+    await client.post(
+        "/v0/project",
+        json={"name": "Personal_Not_Listed"},
+        headers=user["headers"],
+    )
+
+    # Create an organization and org project
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Org Only List Test"},
+        headers=user["headers"],
+    )
+    org_api_key = org_response.json()["api_key"]
+    org_headers = {"Authorization": f"Bearer {org_api_key}"}
+
+    await client.post(
+        "/v0/project",
+        json={"name": "Org_Only_Listed"},
+        headers=org_headers,
+    )
+
+    # List projects using org API key - should only see org project
+    list_response = await client.get("/v0/projects", headers=org_headers)
+    assert list_response.status_code == 200
+    projects = list_response.json()
+
+    assert "Org_Only_Listed" in projects
+    assert "Personal_Not_Listed" not in projects
+
+
+@pytest.mark.anyio
+async def test_list_projects_multiple_orgs_shows_correct_org(client: AsyncClient):
+    """Test that org API key only shows projects from its specific organization."""
+    user = await create_test_user(client, "list_multi_org@test.com")
+
+    # Create first organization and project
+    org1_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Org1 List Test"},
+        headers=user["headers"],
+    )
+    org1_api_key = org1_response.json()["api_key"]
+    org1_headers = {"Authorization": f"Bearer {org1_api_key}"}
+
+    await client.post(
+        "/v0/project",
+        json={"name": "Org1_Project"},
+        headers=org1_headers,
+    )
+
+    # Create second organization and project
+    org2_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Org2 List Test"},
+        headers=user["headers"],
+    )
+    org2_api_key = org2_response.json()["api_key"]
+    org2_headers = {"Authorization": f"Bearer {org2_api_key}"}
+
+    await client.post(
+        "/v0/project",
+        json={"name": "Org2_Project"},
+        headers=org2_headers,
+    )
+
+    # List using org1 key - should only see org1 project
+    list_org1 = await client.get("/v0/projects", headers=org1_headers)
+    assert list_org1.status_code == 200
+    projects_org1 = list_org1.json()
+    assert "Org1_Project" in projects_org1
+    assert "Org2_Project" not in projects_org1
+
+    # List using org2 key - should only see org2 project
+    list_org2 = await client.get("/v0/projects", headers=org2_headers)
+    assert list_org2.status_code == 200
+    projects_org2 = list_org2.json()
+    assert "Org2_Project" in projects_org2
+    assert "Org1_Project" not in projects_org2
+
+
+@pytest.mark.anyio
+async def test_list_projects_tree_personal_api_key(client: AsyncClient):
+    """Test that /projects/tree with personal API key shows only personal projects."""
+    user = await create_test_user(client, "tree_personal@test.com")
+
+    # Create a personal project
+    await client.post(
+        "/v0/project",
+        json={"name": "Personal_Tree_Test"},
+        headers=user["headers"],
+    )
+
+    # Create an organization and org project
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Tree Personal Org"},
+        headers=user["headers"],
+    )
+    org_api_key = org_response.json()["api_key"]
+    org_headers = {"Authorization": f"Bearer {org_api_key}"}
+
+    await client.post(
+        "/v0/project",
+        json={"name": "Org_Tree_Test"},
+        headers=org_headers,
+    )
+
+    # List projects/tree using personal API key - should only see personal project
+    list_response = await client.get("/v0/projects/tree", headers=user["headers"])
+    assert list_response.status_code == 200
+    projects = list_response.json()
+    project_names = [p["project"] for p in projects]
+
+    assert "Personal_Tree_Test" in project_names
+    assert "Org_Tree_Test" not in project_names
+
+
+@pytest.mark.anyio
+async def test_list_projects_tree_org_api_key(client: AsyncClient):
+    """Test that /projects/tree with org API key shows only that org's projects."""
+    user = await create_test_user(client, "tree_org@test.com")
+
+    # Create a personal project
+    await client.post(
+        "/v0/project",
+        json={"name": "Personal_Tree_Hidden"},
+        headers=user["headers"],
+    )
+
+    # Create an organization and org project
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Tree Org Only"},
+        headers=user["headers"],
+    )
+    org_api_key = org_response.json()["api_key"]
+    org_headers = {"Authorization": f"Bearer {org_api_key}"}
+
+    await client.post(
+        "/v0/project",
+        json={"name": "Org_Tree_Shown"},
+        headers=org_headers,
+    )
+
+    # List projects/tree using org API key - should only see org project
+    list_response = await client.get("/v0/projects/tree", headers=org_headers)
+    assert list_response.status_code == 200
+    projects = list_response.json()
+    project_names = [p["project"] for p in projects]
+
+    assert "Org_Tree_Shown" in project_names
+    assert "Personal_Tree_Hidden" not in project_names
