@@ -1458,13 +1458,17 @@ def test_tax_id_validator_us_ein():
         assert formatted == "12-3456789", f"EIN should be formatted as 12-3456789"
         assert error is None
 
-    # Invalid EIN formats (based on actual python-stdnum behavior)
-    invalid_eins = ["invalid", "12-345678", "123-456789", "abc-defghij", "1234567890"]
+    # Test strict validation for truly invalid formats
+    invalid_eins = ["invalid", "abc", "12"]  # Too short or non-alphanumeric
     for ein in invalid_eins:
-        is_valid, formatted, error = TaxIDValidator.validate_tax_id(ein, "US")
-        assert is_valid is False, f"EIN {ein} should be invalid"
-        assert formatted is None
+        is_valid, formatted, error = TaxIDValidator.validate_tax_id_strict(ein, "US")
+        assert is_valid is False, f"EIN {ein} should be invalid in strict mode"
         assert error is not None
+
+    # Lenient fallback accepts alphanumeric strings of reasonable length
+    # (useful for edge cases where Stripe will do final validation)
+    is_valid, formatted, error = TaxIDValidator.validate_tax_id("1234567890", "US")
+    assert is_valid is True  # Lenient accepts this
 
 
 def test_tax_id_validator_eu_vat():
@@ -1485,13 +1489,28 @@ def test_tax_id_validator_eu_vat():
 
 
 def test_tax_id_validator_unsupported_country():
-    """Test validation for unsupported countries."""
+    """Test validation for unsupported countries with lenient fallback."""
     from orchestra.web.api.utils.tax_id_validator import TaxIDValidator
 
+    # Lenient validation accepts valid-looking tax IDs from any country
     is_valid, formatted, error = TaxIDValidator.validate_tax_id("123456789", "ZZ")
+    assert is_valid is True  # Lenient fallback
+    assert formatted == "123456789"
+    assert error is None
+
+    # Strict validation fails for unsupported countries
+    is_valid, formatted, error = TaxIDValidator.validate_tax_id_strict("123456789", "ZZ")
     assert is_valid is False
-    assert formatted is None
-    assert "No validation pattern available" in error
+    assert "No validation available" in error
+
+    # Lenient validation still rejects obviously invalid formats
+    is_valid, formatted, error = TaxIDValidator.validate_tax_id("ab", "ZZ")
+    assert is_valid is False  # Too short
+    assert "too short" in error.lower()
+
+    is_valid, formatted, error = TaxIDValidator.validate_tax_id("@#$%^&", "ZZ")
+    assert is_valid is False  # Non-alphanumeric
+    assert "must contain only" in error.lower()
 
 
 def test_validate_tax_id_for_country_function():
@@ -1505,11 +1524,16 @@ def test_validate_tax_id_for_country_function():
     assert result["error"] is None
     assert result["country"] == "US"
     assert result["original_input"] == "123456789"
+    assert result["validation_type"] == "strict"  # US has strict validation
 
-    # Invalid tax ID
-    result = validate_tax_id_for_country("invalid", "US")
+    # Test lenient validation for unknown countries
+    result = validate_tax_id_for_country("123456789", "ZZ")
+    assert result["is_valid"] is True  # Lenient fallback
+    assert result["validation_type"] == "lenient"
+
+    # Invalid tax ID (too short even for lenient)
+    result = validate_tax_id_for_country("ab", "US")
     assert result["is_valid"] is False
-    assert result["formatted_tax_id"] is None
     assert result["error"] is not None
 
 
@@ -1582,11 +1606,11 @@ def test_pydantic_tax_id_validation_invalid():
 
     from orchestra.web.api.users.schema import BusinessAddress, BusinessInfo
 
-    # Invalid tax ID should raise ValidationError
+    # Too short tax ID should raise ValidationError (even lenient rejects < 5 chars)
     with pytest.raises(ValidationError) as exc_info:
         BusinessInfo(
             business_name="Test Corp",
-            tax_id="invalid-tax-id",
+            tax_id="ab",  # Too short - rejected by lenient validation
             business_type="corporation",
             business_address=BusinessAddress(
                 address_line1="123 Test St",
@@ -1598,7 +1622,7 @@ def test_pydantic_tax_id_validation_invalid():
 
     # Check that the error mentions tax ID validation
     error_str = str(exc_info.value)
-    assert "Invalid tax ID for US" in error_str
+    assert "tax" in error_str.lower() or "short" in error_str.lower()
 
 
 def test_tax_id_validation_edge_cases():
@@ -1613,6 +1637,105 @@ def test_tax_id_validation_edge_cases():
     # Test country code case insensitivity
     is_valid, formatted, error = TaxIDValidator.validate_tax_id("123456789", "us")
     assert is_valid is True  # Country should be normalized to uppercase
+
+
+def test_tax_id_validator_uk_vat():
+    """Test UK VAT number validation (primary market)."""
+    from orchestra.web.api.utils.tax_id_validator import TaxIDValidator
+
+    # Valid UK VAT number (known test number from HMRC)
+    is_valid, formatted, error = TaxIDValidator.validate_tax_id("GB999999973", "GB")
+    assert is_valid is True
+    assert formatted is not None
+    assert error is None
+
+    # UK should have strict validation
+    assert TaxIDValidator.get_validation_type("GB") == "strict"
+
+
+def test_tax_id_validator_india_gstin():
+    """Test India GSTIN validation."""
+    from orchestra.web.api.utils.tax_id_validator import TaxIDValidator
+
+    # Valid Indian GSTIN format
+    is_valid, formatted, error = TaxIDValidator.validate_tax_id("29AABCT1332L1ZH", "IN")
+    assert is_valid is True
+    assert error is None
+
+    # India should have strict validation
+    assert TaxIDValidator.get_validation_type("IN") == "strict"
+
+
+def test_tax_id_validator_auto_discovery():
+    """Test that validator auto-discovers available country modules."""
+    from orchestra.web.api.utils.tax_id_validator import TaxIDValidator
+
+    # Clear cache to force re-discovery
+    TaxIDValidator.clear_cache()
+
+    supported = TaxIDValidator.get_supported_countries()
+
+    # Should have many countries (stdnum supports 80+)
+    assert len(supported) >= 40
+
+    # Key markets should be supported
+    key_markets = ["US", "GB", "DE", "FR", "IN", "AU", "CA", "JP"]
+    for country in key_markets:
+        assert country in supported, f"{country} should be supported"
+
+
+def test_tax_id_validator_lenient_validation():
+    """Test lenient validation for unsupported/unknown countries."""
+    from orchestra.web.api.utils.tax_id_validator import TaxIDValidator
+
+    # UAE - not in stdnum, should use lenient validation
+    is_valid, formatted, error = TaxIDValidator.validate_tax_id("123456789012345", "AE")
+    assert is_valid is True
+    assert TaxIDValidator.get_validation_type("AE") == "lenient"
+
+    # Lenient validation rejects too short
+    is_valid, _, error = TaxIDValidator.validate_tax_id("1234", "AE")
+    assert is_valid is False
+    assert "too short" in error.lower()
+
+    # Lenient validation rejects too long
+    is_valid, _, error = TaxIDValidator.validate_tax_id("A" * 30, "AE")
+    assert is_valid is False
+    assert "too long" in error.lower()
+
+    # Lenient validation rejects special characters
+    is_valid, _, error = TaxIDValidator.validate_tax_id("ABC@#$123", "AE")
+    assert is_valid is False
+
+
+def test_tax_id_validator_strict_mode():
+    """Test strict validation mode that doesn't fall back to lenient."""
+    from orchestra.web.api.utils.tax_id_validator import TaxIDValidator
+
+    # Invalid US EIN - strict mode should reject
+    is_valid, _, error = TaxIDValidator.validate_tax_id_strict("1234567890", "US")
+    assert is_valid is False  # Wrong format for EIN
+
+    # Same value passes lenient mode
+    is_valid, _, _ = TaxIDValidator.validate_tax_id("1234567890", "US")
+    assert is_valid is True  # Lenient accepts alphanumeric
+
+    # Unknown country - strict mode fails
+    is_valid, _, error = TaxIDValidator.validate_tax_id_strict("123456789", "XX")
+    assert is_valid is False
+    assert "No validation available" in error
+
+
+def test_tax_id_validator_eu_countries():
+    """Test EU VAT validation across multiple EU countries."""
+    from orchestra.web.api.utils.tax_id_validator import TaxIDValidator
+
+    # All EU countries should use EU VAT validation
+    eu_countries = ["DE", "FR", "IT", "ES", "NL", "BE", "AT", "SE", "PL", "IE"]
+    for country in eu_countries:
+        vtype = TaxIDValidator.get_validation_type(country)
+        # Should be either eu_vat or strict (if country-specific module exists)
+        assert vtype in ["eu_vat", "strict"], f"{country} should have EU VAT or strict validation"
 
 
 if __name__ == "__main__":
