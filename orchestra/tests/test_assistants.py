@@ -1169,36 +1169,83 @@ async def test_create_assistant_with_pre_hire_chat_logs_correctly(
 @pytest.mark.anyio
 async def test_delete_assistant_deletes_contexts(
     client: AsyncClient,
+    dbsession,
 ):
+    from orchestra.db.dao.users_dao import UsersDAO
+    from orchestra.settings import settings
+
+    # Create a test user with a proper name for context path testing
+    test_user = await create_test_user(
+        client,
+        "context_delete_test@example.com",
+        hiring_approved=True,
+        name="Context",
+        last_name="Tester",
+    )
+    user_name = f"{test_user['name']}{test_user['last_name']}"
+    user_headers = test_user["headers"]
+
+    # Add credits so the user can create an assistant
+    users_dao = UsersDAO(dbsession)
+    users_dao.recharge_credit(test_user["id"], settings.assistant_creation_cost)
+    dbsession.commit()
+
     # Create an assistant
     payload = {
         "first_name": "Deletable",
         "surname": "Dan",
         "create_infra": False,
     }
-    create_resp = await client.post("/v0/assistant", json=payload, headers=HEADERS)
+    create_resp = await client.post("/v0/assistant", json=payload, headers=user_headers)
     assert create_resp.status_code == 200
     assistant_info = create_resp.json()["info"]
     assistant_id = assistant_info["agent_id"]
+    assistant_name = f"{assistant_info['first_name']}{assistant_info['surname']}"
 
     # Manually create a project and context to simulate logs being present
+    # Context format: <UserName>/<AssistantName>/Transcripts
     project_name = "Assistants"
-    context_name = (
-        f"{assistant_info['first_name']}{assistant_info['surname']}/Transcripts"
-    )
+    context_name = f"{user_name}/{assistant_name}/Transcripts"
+
     # The "Assistants" project is created automatically on first assistant creation
     log_payload = {
         "project": project_name,
         "context": context_name,
-        "entries": [{"message": "test"}],
+        "entries": [
+            {
+                "message": "test",
+                "_user": user_name,
+                "_assistant": assistant_name,
+            },
+        ],
     }
-    log_resp = await client.post("/v0/logs", json=log_payload, headers=HEADERS)
+    log_resp = await client.post("/v0/logs", json=log_payload, headers=user_headers)
     assert log_resp.status_code == 200
+    log_id = log_resp.json()["log_event_ids"][0]
+
+    # Also add log to All contexts (to test that they get cleaned up too)
+    global_all_context = "All/Transcripts"
+    user_all_context = f"{user_name}/All/Transcripts"
+    for ctx in [global_all_context, user_all_context]:
+        ctx_resp = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": ctx},
+            headers=user_headers,
+        )
+        # Context might already exist, that's fine
+        assert ctx_resp.status_code in [200, 409], ctx_resp.json()
+
+        add_resp = await client.post(
+            f"/v0/project/{project_name}/contexts/add_logs",
+            json={"context_name": ctx, "log_ids": [log_id]},
+            headers=user_headers,
+        )
+        assert add_resp.status_code == 200, add_resp.json()
 
     # Verify context and logs exist before deletion
     logs_before_delete = await client.get(
         f"/v0/logs?project={project_name}&context={context_name}",
-        headers=HEADERS,
+        headers=user_headers,
     )
     assert logs_before_delete.status_code == 200
     assert (
@@ -1208,16 +1255,16 @@ async def test_delete_assistant_deletes_contexts(
     # Delete the assistant
     delete_resp = await client.delete(
         f"/v0/assistant/{assistant_id}",
-        headers=HEADERS,
+        headers=user_headers,
     )
     assert delete_resp.status_code == 200, f"Delete failed: {delete_resp.text}"
 
-    # Verify the context is now gone.
+    # Verify the assistant-specific context is now gone.
     # A successful deletion can result in either the context being empty (200 OK, count=0)
     # or the context itself being gone (404 Not Found). Both are valid success states.
     logs_after_delete = await client.get(
         f"/v0/logs?project={project_name}&context={context_name}",
-        headers=HEADERS,
+        headers=user_headers,
     )
 
     assert logs_after_delete.status_code in [
@@ -1229,6 +1276,18 @@ async def test_delete_assistant_deletes_contexts(
         assert (
             logs_after_delete.json()["count"] == 0
         ), f"Context still exists and is not empty. Found {logs_after_delete.json()['count']} logs."
+
+    # Verify logs are also removed from All contexts
+    for ctx in [global_all_context, user_all_context]:
+        all_logs_resp = await client.get(
+            f"/v0/logs?project={project_name}&context={ctx}",
+            headers=user_headers,
+        )
+        # Either 200 with no logs, or 404 if context is gone
+        assert all_logs_resp.status_code in [200, 404], all_logs_resp.json()
+        if all_logs_resp.status_code == 200:
+            log_ids = [log["id"] for log in all_logs_resp.json()["logs"]]
+            assert log_id not in log_ids, f"Log should be removed from {ctx}"
 
 
 @pytest.mark.anyio

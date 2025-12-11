@@ -958,136 +958,43 @@ async def test_delete_logs_keeps_fields_used_by_other_contexts(client: AsyncClie
 
 
 # =============================================================================
-# Tests for Assistants project dual-context deletion feature
+# Tests for Assistants project multi-context deletion feature
+# =============================================================================
+# Context structure:
+# - All/<Ctx> (global aggregate context)
+# - <UserName>/All/<Ctx> (user-scoped aggregate context)
+# - <UserName>/<AssistantName>/<Ctx> (assistant-specific context)
+#
+# When deleting from any of these contexts, the log should be removed from
+# all sibling contexts based on _user and _assistant fields in the log.
 # =============================================================================
 
 
 @pytest.mark.anyio
-async def test_assistants_dual_context_delete_from_all_context(client: AsyncClient):
-    """
-    Test deleting logs from 'All/Transcripts' also removes from '<Assistant>/Transcripts'.
-
-    When project is 'Assistants' and logs exist in both:
-    - All/Transcripts (aggregate context)
-    - AdaLovelace/Transcripts (assistant-specific context)
-
-    Deleting from 'All/Transcripts' should also remove from 'AdaLovelace/Transcripts'.
-    """
-    project_name = "Assistants"
-    all_context = "All/Transcripts"
-    assistant_context = "AdaLovelace/Transcripts"
-
-    # Create the Assistants project
-    response = await _create_project(client, project_name)
-    assert response.status_code == 200, response.json()
-
-    # Create the All/Transcripts context
-    response = await client.post(
-        f"/v0/project/{project_name}/contexts",
-        json={"name": all_context},
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, response.json()
-
-    # Create the assistant-specific context
-    response = await client.post(
-        f"/v0/project/{project_name}/contexts",
-        json={"name": assistant_context},
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, response.json()
-
-    # Create a log in the All/Transcripts context with _assistant field
-    # The _assistant field is used to identify which assistant-specific context to delete from
-    response = await _create_log(
-        client,
-        project_name,
-        entries={
-            "message": "Hello from Ada",
-            "role": "assistant",
-            "_assistant": "AdaLovelace",  # This field links to AdaLovelace/Transcripts
-        },
-        context=all_context,
-    )
-    assert response.status_code == 200, response.json()
-    log_id = response.json()["log_event_ids"][0]
-
-    # Add the same log to the assistant-specific context (by reference)
-    response = await client.post(
-        f"/v0/project/{project_name}/contexts/add_logs",
-        json={"context_name": assistant_context, "log_ids": [log_id]},
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, response.json()
-
-    # Verify log is in both contexts
-    response = await client.get(
-        f"/v0/logs?project={project_name}",
-        params={"context": all_context},
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, response.json()
-    assert log_id in [log["id"] for log in response.json()["logs"]]
-
-    response = await client.get(
-        f"/v0/logs?project={project_name}",
-        params={"context": assistant_context},
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, response.json()
-    assert log_id in [log["id"] for log in response.json()["logs"]]
-
-    # Delete from All/Transcripts - should also remove from AdaLovelace/Transcripts
-    # Uses _assistant field to find the sibling context
-    ids_and_fields = [([log_id], None)]
-    response = await _delete_logs(
-        client,
-        ids_and_fields,
-        project_name=project_name,
-        context=all_context,
-    )
-    assert response.status_code == 200, response.json()
-    assert response.json()["info"] == "Logs and fields deleted successfully!"
-
-    # Verify log is removed from All/Transcripts
-    response = await client.get(
-        f"/v0/logs?project={project_name}",
-        params={"context": all_context},
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, response.json()
-    assert log_id not in [log["id"] for log in response.json()["logs"]]
-
-    # Verify log is ALSO removed from AdaLovelace/Transcripts (dual-context removal)
-    response = await client.get(
-        f"/v0/logs?project={project_name}",
-        params={"context": assistant_context},
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, response.json()
-    assert log_id not in [log["id"] for log in response.json()["logs"]]
-
-
-@pytest.mark.anyio
-async def test_assistants_dual_context_delete_from_assistant_context(
+async def test_assistants_multi_context_delete_from_global_all_context(
     client: AsyncClient,
 ):
     """
-    Test deleting logs from '<Assistant>/Transcripts' also removes from 'All/Transcripts'.
+    Test deleting logs from 'All/Transcripts' also removes from user-scoped contexts.
 
-    When project is 'Assistants' and logs exist in both contexts,
-    deleting from the assistant-specific context should also remove from 'All/Transcripts'.
+    When project is 'Assistants' and logs exist in:
+    - All/Transcripts (global aggregate context)
+    - JohnDoe/All/Transcripts (user-scoped aggregate context)
+    - JohnDoe/AdaLovelace/Transcripts (assistant-specific context)
+
+    Deleting from 'All/Transcripts' should remove from all three contexts.
     """
     project_name = "Assistants"
-    all_context = "All/Transcripts"
-    assistant_context = "BobSmith/Transcripts"
+    global_all_context = "All/Transcripts"
+    user_all_context = "JohnDoe/All/Transcripts"
+    assistant_context = "JohnDoe/AdaLovelace/Transcripts"
 
     # Create the Assistants project
     response = await _create_project(client, project_name)
     assert response.status_code == 200, response.json()
 
-    # Create both contexts
-    for ctx in [all_context, assistant_context]:
+    # Create all three contexts
+    for ctx in [global_all_context, user_all_context, assistant_context]:
         response = await client.post(
             f"/v0/project/{project_name}/contexts",
             json={"name": ctx},
@@ -1095,26 +1002,32 @@ async def test_assistants_dual_context_delete_from_assistant_context(
         )
         assert response.status_code == 200, response.json()
 
-    # Create a log in the assistant-specific context
+    # Create a log in the All/Transcripts context with _user and _assistant fields
     response = await _create_log(
         client,
         project_name,
-        entries={"message": "Hello from Bob", "role": "assistant"},
-        context=assistant_context,
+        entries={
+            "message": "Hello from Ada",
+            "role": "assistant",
+            "_user": "JohnDoe",
+            "_assistant": "AdaLovelace",
+        },
+        context=global_all_context,
     )
     assert response.status_code == 200, response.json()
     log_id = response.json()["log_event_ids"][0]
 
-    # Add the same log to All/Transcripts (by reference)
-    response = await client.post(
-        f"/v0/project/{project_name}/contexts/add_logs",
-        json={"context_name": all_context, "log_ids": [log_id]},
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, response.json()
+    # Add the same log to the other contexts (by reference)
+    for ctx in [user_all_context, assistant_context]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts/add_logs",
+            json={"context_name": ctx, "log_ids": [log_id]},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
 
-    # Verify log is in both contexts
-    for ctx in [all_context, assistant_context]:
+    # Verify log is in all three contexts
+    for ctx in [global_all_context, user_all_context, assistant_context]:
         response = await client.get(
             f"/v0/logs?project={project_name}",
             params={"context": ctx},
@@ -1123,18 +1036,19 @@ async def test_assistants_dual_context_delete_from_assistant_context(
         assert response.status_code == 200, response.json()
         assert log_id in [log["id"] for log in response.json()["logs"]]
 
-    # Delete from BobSmith/Transcripts - should also remove from All/Transcripts
+    # Delete from All/Transcripts - should remove from all contexts
     ids_and_fields = [([log_id], None)]
     response = await _delete_logs(
         client,
         ids_and_fields,
         project_name=project_name,
-        context=assistant_context,
+        context=global_all_context,
     )
     assert response.status_code == 200, response.json()
+    assert response.json()["info"] == "Logs and fields deleted successfully!"
 
-    # Verify log is removed from BOTH contexts
-    for ctx in [all_context, assistant_context]:
+    # Verify log is removed from ALL contexts (multi-context removal)
+    for ctx in [global_all_context, user_all_context, assistant_context]:
         response = await client.get(
             f"/v0/logs?project={project_name}",
             params={"context": ctx},
@@ -1145,31 +1059,28 @@ async def test_assistants_dual_context_delete_from_assistant_context(
 
 
 @pytest.mark.anyio
-async def test_assistants_dual_context_preserves_third_context(client: AsyncClient):
+async def test_assistants_multi_context_delete_from_assistant_context(
+    client: AsyncClient,
+):
     """
-    Test that logs in a third context are preserved when deleting from dual contexts.
+    Test deleting logs from '<UserName>/<AssistantName>/Transcripts' also removes from All contexts.
 
-    If a log exists in:
+    When project is 'Assistants' and logs exist in all three contexts,
+    deleting from the assistant-specific context should also remove from:
+    - <UserName>/All/Transcripts
     - All/Transcripts
-    - AdaLovelace/Transcripts
-    - Archive/Transcripts (a third context)
-
-    Deleting from All/Transcripts should:
-    - Remove from All/Transcripts
-    - Remove from AdaLovelace/Transcripts
-    - PRESERVE in Archive/Transcripts
     """
     project_name = "Assistants"
-    all_context = "All/Transcripts"
-    assistant_context = "AdaLovelace/Transcripts"
-    archive_context = "Archive/Transcripts"
+    global_all_context = "All/Transcripts"
+    user_all_context = "JaneDoe/All/Transcripts"
+    assistant_context = "JaneDoe/BobSmith/Transcripts"
 
-    # Create project
+    # Create the Assistants project
     response = await _create_project(client, project_name)
     assert response.status_code == 200, response.json()
 
     # Create all three contexts
-    for ctx in [all_context, assistant_context, archive_context]:
+    for ctx in [global_all_context, user_all_context, assistant_context]:
         response = await client.post(
             f"/v0/project/{project_name}/contexts",
             json={"name": ctx},
@@ -1177,22 +1088,23 @@ async def test_assistants_dual_context_preserves_third_context(client: AsyncClie
         )
         assert response.status_code == 200, response.json()
 
-    # Create a log in All/Transcripts with _assistant field
+    # Create a log in the assistant-specific context with _user and _assistant fields
     response = await _create_log(
         client,
         project_name,
         entries={
-            "message": "Archived message",
+            "message": "Hello from Bob",
             "role": "assistant",
-            "_assistant": "AdaLovelace",  # Links to AdaLovelace/Transcripts
+            "_user": "JaneDoe",
+            "_assistant": "BobSmith",
         },
-        context=all_context,
+        context=assistant_context,
     )
     assert response.status_code == 200, response.json()
     log_id = response.json()["log_event_ids"][0]
 
-    # Add to assistant context and archive context
-    for ctx in [assistant_context, archive_context]:
+    # Add the same log to All contexts (by reference)
+    for ctx in [global_all_context, user_all_context]:
         response = await client.post(
             f"/v0/project/{project_name}/contexts/add_logs",
             json={"context_name": ctx, "log_ids": [log_id]},
@@ -1200,18 +1112,28 @@ async def test_assistants_dual_context_preserves_third_context(client: AsyncClie
         )
         assert response.status_code == 200, response.json()
 
-    # Delete from All/Transcripts - uses _assistant field to find sibling
+    # Verify log is in all three contexts
+    for ctx in [global_all_context, user_all_context, assistant_context]:
+        response = await client.get(
+            f"/v0/logs?project={project_name}",
+            params={"context": ctx},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+        assert log_id in [log["id"] for log in response.json()["logs"]]
+
+    # Delete from assistant context - should also remove from All contexts
     ids_and_fields = [([log_id], None)]
     response = await _delete_logs(
         client,
         ids_and_fields,
         project_name=project_name,
-        context=all_context,
+        context=assistant_context,
     )
     assert response.status_code == 200, response.json()
 
-    # Verify log is removed from All/Transcripts and AdaLovelace/Transcripts
-    for ctx in [all_context, assistant_context]:
+    # Verify log is removed from ALL contexts
+    for ctx in [global_all_context, user_all_context, assistant_context]:
         response = await client.get(
             f"/v0/logs?project={project_name}",
             params={"context": ctx},
@@ -1220,7 +1142,95 @@ async def test_assistants_dual_context_preserves_third_context(client: AsyncClie
         assert response.status_code == 200, response.json()
         assert log_id not in [log["id"] for log in response.json()["logs"]]
 
-    # Verify log is PRESERVED in Archive/Transcripts
+
+@pytest.mark.anyio
+async def test_assistants_multi_context_preserves_unrelated_context(
+    client: AsyncClient,
+):
+    """
+    Test that logs in an unrelated context are preserved when deleting from sibling contexts.
+
+    If a log exists in:
+    - All/Transcripts
+    - JohnDoe/All/Transcripts
+    - JohnDoe/AdaLovelace/Transcripts
+    - Archive/Transcripts (an unrelated context)
+
+    Deleting from All/Transcripts should:
+    - Remove from All/Transcripts
+    - Remove from JohnDoe/All/Transcripts
+    - Remove from JohnDoe/AdaLovelace/Transcripts
+    - PRESERVE in Archive/Transcripts (not a sibling context)
+    """
+    project_name = "Assistants"
+    global_all_context = "All/Transcripts"
+    user_all_context = "JohnDoe/All/Transcripts"
+    assistant_context = "JohnDoe/AdaLovelace/Transcripts"
+    archive_context = "Archive/Transcripts"
+
+    # Create project
+    response = await _create_project(client, project_name)
+    assert response.status_code == 200, response.json()
+
+    # Create all four contexts
+    for ctx in [
+        global_all_context,
+        user_all_context,
+        assistant_context,
+        archive_context,
+    ]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": ctx},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+
+    # Create a log in All/Transcripts with _user and _assistant fields
+    response = await _create_log(
+        client,
+        project_name,
+        entries={
+            "message": "Archived message",
+            "role": "assistant",
+            "_user": "JohnDoe",
+            "_assistant": "AdaLovelace",
+        },
+        context=global_all_context,
+    )
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    # Add to all other contexts
+    for ctx in [user_all_context, assistant_context, archive_context]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts/add_logs",
+            json={"context_name": ctx, "log_ids": [log_id]},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+
+    # Delete from All/Transcripts
+    ids_and_fields = [([log_id], None)]
+    response = await _delete_logs(
+        client,
+        ids_and_fields,
+        project_name=project_name,
+        context=global_all_context,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify log is removed from all sibling contexts
+    for ctx in [global_all_context, user_all_context, assistant_context]:
+        response = await client.get(
+            f"/v0/logs?project={project_name}",
+            params={"context": ctx},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+        assert log_id not in [log["id"] for log in response.json()["logs"]]
+
+    # Verify log is PRESERVED in Archive/Transcripts (not a sibling)
     response = await client.get(
         f"/v0/logs?project={project_name}",
         params={"context": archive_context},
@@ -1231,49 +1241,50 @@ async def test_assistants_dual_context_preserves_third_context(client: AsyncClie
 
 
 @pytest.mark.anyio
-async def test_assistants_dual_context_no_sibling_exists(client: AsyncClient):
+async def test_assistants_multi_context_no_sibling_exists(client: AsyncClient):
     """
-    Test deletion when the sibling context doesn't exist.
+    Test deletion when the sibling contexts don't exist.
 
     If a log exists only in 'All/Transcripts' but there's no corresponding
-    '<Assistant>/Transcripts' context, the deletion should proceed normally.
+    user-scoped or assistant-specific contexts, the deletion should proceed normally.
     """
     project_name = "Assistants"
-    all_context = "All/Transcripts"
+    global_all_context = "All/Transcripts"
 
     # Create project
     response = await _create_project(client, project_name)
     assert response.status_code == 200, response.json()
 
-    # Create only the All/Transcripts context (no assistant-specific context)
+    # Create only the All/Transcripts context (no other sibling contexts)
     response = await client.post(
         f"/v0/project/{project_name}/contexts",
-        json={"name": all_context},
+        json={"name": global_all_context},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
 
-    # Create a log with _assistant field pointing to non-existent context
+    # Create a log with _user and _assistant fields pointing to non-existent contexts
     response = await _create_log(
         client,
         project_name,
         entries={
             "message": "Orphan log",
             "role": "assistant",
-            "_assistant": "NonExistent",  # This context doesn't exist
+            "_user": "NonExistent",
+            "_assistant": "NonExistent",
         },
-        context=all_context,
+        context=global_all_context,
     )
     assert response.status_code == 200, response.json()
     log_id = response.json()["log_event_ids"][0]
 
-    # Delete from All/Transcripts - should work without sibling context existing
+    # Delete from All/Transcripts - should work without sibling contexts existing
     ids_and_fields = [([log_id], None)]
     response = await _delete_logs(
         client,
         ids_and_fields,
         project_name=project_name,
-        context=all_context,
+        context=global_all_context,
     )
     assert response.status_code == 200, response.json()
     assert response.json()["info"] == "Logs and fields deleted successfully!"
@@ -1281,7 +1292,7 @@ async def test_assistants_dual_context_no_sibling_exists(client: AsyncClient):
     # Verify log is removed
     response = await client.get(
         f"/v0/logs?project={project_name}",
-        params={"context": all_context},
+        params={"context": global_all_context},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -1289,28 +1300,30 @@ async def test_assistants_dual_context_no_sibling_exists(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_assistants_dual_context_multiple_assistants(client: AsyncClient):
+async def test_assistants_multi_context_delete_from_user_all_context(
+    client: AsyncClient,
+):
     """
-    Test deletion from All context when multiple assistants share the same log.
+    Test deletion from user-scoped All context removes from sibling contexts.
 
     If a log exists in:
     - All/Transcripts
-    - AdaLovelace/Transcripts
-    - BobSmith/Transcripts
+    - JohnDoe/All/Transcripts
+    - JohnDoe/AdaLovelace/Transcripts
 
-    Deleting from All/Transcripts should find the correct sibling(s).
+    Deleting from JohnDoe/All/Transcripts should remove from all three.
     """
     project_name = "Assistants"
-    all_context = "All/Transcripts"
-    assistant1_context = "AdaLovelace/Transcripts"
-    assistant2_context = "BobSmith/Transcripts"
+    global_all_context = "All/Transcripts"
+    user_all_context = "JohnDoe/All/Transcripts"
+    assistant_context = "JohnDoe/AdaLovelace/Transcripts"
 
     # Create project
     response = await _create_project(client, project_name)
     assert response.status_code == 200, response.json()
 
     # Create all contexts
-    for ctx in [all_context, assistant1_context, assistant2_context]:
+    for ctx in [global_all_context, user_all_context, assistant_context]:
         response = await client.post(
             f"/v0/project/{project_name}/contexts",
             json={"name": ctx},
@@ -1318,40 +1331,42 @@ async def test_assistants_dual_context_multiple_assistants(client: AsyncClient):
         )
         assert response.status_code == 200, response.json()
 
-    # Create log in All/Transcripts with _assistant field pointing to AdaLovelace
+    # Create log in user All context with _user and _assistant fields
     response = await _create_log(
         client,
         project_name,
         entries={
-            "message": "Shared message",
+            "message": "User scoped message",
             "role": "system",
-            "_assistant": "AdaLovelace",  # Links to AdaLovelace/Transcripts
+            "_user": "JohnDoe",
+            "_assistant": "AdaLovelace",
         },
-        context=all_context,
+        context=user_all_context,
     )
     assert response.status_code == 200, response.json()
     log_id = response.json()["log_event_ids"][0]
 
-    # Add to Ada's context only (not Bob's) - matching the _assistant field
-    response = await client.post(
-        f"/v0/project/{project_name}/contexts/add_logs",
-        json={"context_name": assistant1_context, "log_ids": [log_id]},
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, response.json()
+    # Add to other contexts
+    for ctx in [global_all_context, assistant_context]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts/add_logs",
+            json={"context_name": ctx, "log_ids": [log_id]},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
 
-    # Delete from All/Transcripts
+    # Delete from JohnDoe/All/Transcripts
     ids_and_fields = [([log_id], None)]
     response = await _delete_logs(
         client,
         ids_and_fields,
         project_name=project_name,
-        context=all_context,
+        context=user_all_context,
     )
     assert response.status_code == 200, response.json()
 
-    # Verify removed from both All and Ada's context
-    for ctx in [all_context, assistant1_context]:
+    # Verify removed from all three contexts
+    for ctx in [global_all_context, user_all_context, assistant_context]:
         response = await client.get(
             f"/v0/logs?project={project_name}",
             params={"context": ctx},
@@ -1506,28 +1521,29 @@ async def test_assistants_context_without_slash_normal_behavior(client: AsyncCli
 
 
 @pytest.mark.anyio
-async def test_assistants_dual_context_delete_fields_preserves_assistant(
+async def test_assistants_multi_context_delete_fields_preserves_system_fields(
     client: AsyncClient,
 ):
     """
-    Test that deleting user fields from Assistants logs preserves the _assistant field.
+    Test that deleting user fields from Assistants logs preserves the _user and _assistant fields.
 
-    Since _assistant is a system field that won't be deleted in practice, logs in
+    Since _user and _assistant are system fields that won't be deleted in practice, logs in
     the Assistants project will never become truly empty. This test verifies that:
     1. Deleting user fields works correctly
-    2. The _assistant field remains intact
-    3. The log is not considered empty and stays in both contexts
+    2. The _user and _assistant fields remain intact
+    3. The log is not considered empty and stays in all contexts
     """
     project_name = "Assistants"
-    all_context = "All/Transcripts"
-    assistant_context = "CharlieDoe/Transcripts"
+    global_all_context = "All/Transcripts"
+    user_all_context = "JohnDoe/All/Transcripts"
+    assistant_context = "JohnDoe/CharlieDoe/Transcripts"
 
     # Create project
     response = await _create_project(client, project_name)
     assert response.status_code == 200, response.json()
 
     # Create contexts
-    for ctx in [all_context, assistant_context]:
+    for ctx in [global_all_context, user_all_context, assistant_context]:
         response = await client.post(
             f"/v0/project/{project_name}/contexts",
             json={"name": ctx},
@@ -1535,40 +1551,42 @@ async def test_assistants_dual_context_delete_fields_preserves_assistant(
         )
         assert response.status_code == 200, response.json()
 
-    # Create a log with a user field + _assistant
+    # Create a log with a user field + _user + _assistant
     response = await _create_log(
         client,
         project_name,
         entries={
             "single_field": "value",
-            "_assistant": "CharlieDoe",  # Links to CharlieDoe/Transcripts
+            "_user": "JohnDoe",
+            "_assistant": "CharlieDoe",
         },
-        context=all_context,
+        context=global_all_context,
     )
     assert response.status_code == 200, response.json()
     log_id = response.json()["log_event_ids"][0]
 
-    # Add to assistant context
-    response = await client.post(
-        f"/v0/project/{project_name}/contexts/add_logs",
-        json={"context_name": assistant_context, "log_ids": [log_id]},
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, response.json()
+    # Add to other contexts
+    for ctx in [user_all_context, assistant_context]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts/add_logs",
+            json={"context_name": ctx, "log_ids": [log_id]},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
 
-    # Delete ONLY the user field (not _assistant - it's a system field)
+    # Delete ONLY the user field (not _user/_assistant - they are system fields)
     ids_and_fields = [(log_id, ["single_field"])]
     response = await _delete_logs(
         client,
         ids_and_fields,
         project_name=project_name,
-        context=all_context,
+        context=global_all_context,
         delete_empty_logs=True,
     )
     assert response.status_code == 200, response.json()
 
-    # Verify log STILL EXISTS in both contexts (not empty because _assistant remains)
-    for ctx in [all_context, assistant_context]:
+    # Verify log STILL EXISTS in all contexts (not empty because _user/_assistant remain)
+    for ctx in [global_all_context, user_all_context, assistant_context]:
         response = await client.get(
             f"/v0/logs?project={project_name}",
             params={"context": ctx},
@@ -1578,30 +1596,33 @@ async def test_assistants_dual_context_delete_fields_preserves_assistant(
         logs = response.json()["logs"]
         assert log_id in [log["id"] for log in logs], f"Log should still exist in {ctx}"
 
-        # Verify _assistant field still exists and single_field was deleted
+        # Verify _user and _assistant fields still exist and single_field was deleted
         log = next(l for l in logs if l["id"] == log_id)
+        assert "_user" in log["entries"], "_user field should be preserved"
         assert "_assistant" in log["entries"], "_assistant field should be preserved"
         assert "single_field" not in log["entries"], "single_field should be deleted"
 
 
 @pytest.mark.anyio
-async def test_assistants_dual_context_nested_subcontext(client: AsyncClient):
+async def test_assistants_multi_context_nested_subcontext(client: AsyncClient):
     """
-    Test dual-context deletion with nested subcontexts.
+    Test multi-context deletion with nested subcontexts.
 
-    For contexts like 'All/Calls/Transcripts' and 'AdaLovelace/Calls/Transcripts',
-    the dual-context logic should still work correctly.
+    For contexts like 'All/Calls/Transcripts', 'JohnDoe/All/Calls/Transcripts',
+    and 'JohnDoe/AdaLovelace/Calls/Transcripts', the multi-context logic should
+    still work correctly.
     """
     project_name = "Assistants"
-    all_context = "All/Calls/Transcripts"
-    assistant_context = "AdaLovelace/Calls/Transcripts"
+    global_all_context = "All/Calls/Transcripts"
+    user_all_context = "JohnDoe/All/Calls/Transcripts"
+    assistant_context = "JohnDoe/AdaLovelace/Calls/Transcripts"
 
     # Create project
     response = await _create_project(client, project_name)
     assert response.status_code == 200, response.json()
 
     # Create contexts with nested paths
-    for ctx in [all_context, assistant_context]:
+    for ctx in [global_all_context, user_all_context, assistant_context]:
         response = await client.post(
             f"/v0/project/{project_name}/contexts",
             json={"name": ctx},
@@ -1609,40 +1630,42 @@ async def test_assistants_dual_context_nested_subcontext(client: AsyncClient):
         )
         assert response.status_code == 200, response.json()
 
-    # Create a log in All context with _assistant field for nested path
+    # Create a log in All context with _user and _assistant fields for nested path
     response = await _create_log(
         client,
         project_name,
         entries={
             "transcript": "Hello, how can I help?",
             "call_id": "123",
-            "_assistant": "AdaLovelace",  # Links to AdaLovelace/Calls/Transcripts
+            "_user": "JohnDoe",
+            "_assistant": "AdaLovelace",
         },
-        context=all_context,
+        context=global_all_context,
     )
     assert response.status_code == 200, response.json()
     log_id = response.json()["log_event_ids"][0]
 
-    # Add to assistant context
-    response = await client.post(
-        f"/v0/project/{project_name}/contexts/add_logs",
-        json={"context_name": assistant_context, "log_ids": [log_id]},
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, response.json()
+    # Add to other contexts
+    for ctx in [user_all_context, assistant_context]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts/add_logs",
+            json={"context_name": ctx, "log_ids": [log_id]},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
 
-    # Delete from All context - uses _assistant field to find sibling
+    # Delete from All context
     ids_and_fields = [([log_id], None)]
     response = await _delete_logs(
         client,
         ids_and_fields,
         project_name=project_name,
-        context=all_context,
+        context=global_all_context,
     )
     assert response.status_code == 200, response.json()
 
-    # Verify removed from both nested contexts
-    for ctx in [all_context, assistant_context]:
+    # Verify removed from all nested contexts
+    for ctx in [global_all_context, user_all_context, assistant_context]:
         response = await client.get(
             f"/v0/logs?project={project_name}",
             params={"context": ctx},
