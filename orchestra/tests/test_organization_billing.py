@@ -776,7 +776,9 @@ async def test_member_can_create_org_project(client: AsyncClient, dbsession):
 # is on the roadmap but blocked by Unity/AssistantJobs dependencies (confirmed with Julia)
 
 
-@pytest.mark.skip(reason="Project scoping by API key context not yet implemented - blocked by Unity deps")
+@pytest.mark.skip(
+    reason="Project scoping by API key context not yet implemented - blocked by Unity deps"
+)
 @pytest.mark.anyio
 async def test_list_projects_personal_api_key_shows_only_personal(client: AsyncClient):
     """Test that listing projects with personal API key shows only personal projects."""
@@ -813,7 +815,9 @@ async def test_list_projects_personal_api_key_shows_only_personal(client: AsyncC
     assert "Org_List_Test" not in projects
 
 
-@pytest.mark.skip(reason="Project scoping by API key context not yet implemented - blocked by Unity deps")
+@pytest.mark.skip(
+    reason="Project scoping by API key context not yet implemented - blocked by Unity deps"
+)
 @pytest.mark.anyio
 async def test_list_projects_org_api_key_shows_only_org_projects(client: AsyncClient):
     """Test that listing projects with org API key shows only that org's projects."""
@@ -850,7 +854,9 @@ async def test_list_projects_org_api_key_shows_only_org_projects(client: AsyncCl
     assert "Personal_Not_Listed" not in projects
 
 
-@pytest.mark.skip(reason="Project scoping by API key context not yet implemented - blocked by Unity deps")
+@pytest.mark.skip(
+    reason="Project scoping by API key context not yet implemented - blocked by Unity deps"
+)
 @pytest.mark.anyio
 async def test_list_projects_multiple_orgs_shows_correct_org(client: AsyncClient):
     """Test that org API key only shows projects from its specific organization."""
@@ -901,7 +907,9 @@ async def test_list_projects_multiple_orgs_shows_correct_org(client: AsyncClient
     assert "Org1_Project" not in projects_org2
 
 
-@pytest.mark.skip(reason="Project scoping by API key context not yet implemented - blocked by Unity deps")
+@pytest.mark.skip(
+    reason="Project scoping by API key context not yet implemented - blocked by Unity deps"
+)
 @pytest.mark.anyio
 async def test_list_projects_tree_personal_api_key(client: AsyncClient):
     """Test that /projects/tree with personal API key shows only personal projects."""
@@ -939,7 +947,9 @@ async def test_list_projects_tree_personal_api_key(client: AsyncClient):
     assert "Org_Tree_Test" not in project_names
 
 
-@pytest.mark.skip(reason="Project scoping by API key context not yet implemented - blocked by Unity deps")
+@pytest.mark.skip(
+    reason="Project scoping by API key context not yet implemented - blocked by Unity deps"
+)
 @pytest.mark.anyio
 async def test_list_projects_tree_org_api_key(client: AsyncClient):
     """Test that /projects/tree with org API key shows only that org's projects."""
@@ -1799,7 +1809,9 @@ async def test_deduct_credits_from_org(client: AsyncClient, dbsession):
 
 
 @pytest.mark.anyio
-async def test_billing_entity_should_trigger_autorecharge(client: AsyncClient, dbsession):
+async def test_billing_entity_should_trigger_autorecharge(
+    client: AsyncClient, dbsession
+):
     """Test BillingEntity.should_trigger_autorecharge method."""
     from decimal import Decimal
 
@@ -1971,7 +1983,11 @@ async def test_webhook_invoice_paid_org(client: AsyncClient, dbsession):
     """Test invoice.payment_succeeded updates org recharge status."""
     from decimal import Decimal
 
-    from orchestra.db.models.orchestra_models import Organization, Recharge, RechargeStatus
+    from orchestra.db.models.orchestra_models import (
+        Organization,
+        Recharge,
+        RechargeStatus,
+    )
     from orchestra.web.api.webhooks.stripe import process_invoice_event
 
     owner = await create_test_user(client, "webhook_invoice_org@test.com")
@@ -2026,7 +2042,9 @@ async def test_webhook_invoice_paid_org(client: AsyncClient, dbsession):
     assert updated_recharge.status == RechargeStatus.PAID
 
     # Verify org account status
-    updated_org = dbsession.query(Organization).filter(Organization.id == org_id).first()
+    updated_org = (
+        dbsession.query(Organization).filter(Organization.id == org_id).first()
+    )
     assert updated_org.account_status == "ACTIVE"
 
 
@@ -2035,7 +2053,11 @@ async def test_webhook_invoice_failed_org(client: AsyncClient, dbsession):
     """Test invoice.payment_failed updates org status to PAST_DUE."""
     from decimal import Decimal
 
-    from orchestra.db.models.orchestra_models import Organization, Recharge, RechargeStatus
+    from orchestra.db.models.orchestra_models import (
+        Organization,
+        Recharge,
+        RechargeStatus,
+    )
     from orchestra.web.api.webhooks.stripe import process_invoice_event
 
     owner = await create_test_user(client, "webhook_invoice_failed_org@test.com")
@@ -2091,7 +2113,9 @@ async def test_webhook_invoice_failed_org(client: AsyncClient, dbsession):
     assert updated_recharge.status == RechargeStatus.FAILED
 
     # Verify org account status
-    updated_org = dbsession.query(Organization).filter(Organization.id == org_id).first()
+    updated_org = (
+        dbsession.query(Organization).filter(Organization.id == org_id).first()
+    )
     assert updated_org.account_status == "PAST_DUE"
 
 
@@ -2563,18 +2587,24 @@ async def test_billing_permissions_owner_has_read_write(client: AsyncClient, dbs
     resource_access_dao = ResourceAccessDAO(dbsession)
 
     # Owner should have billing:read
-    assert resource_access_dao.check_user_has_permission_in_org(
-        owner["id"],
-        org_id,
-        "billing:read",
-    ) is True
+    assert (
+        resource_access_dao.check_user_has_permission_in_org(
+            owner["id"],
+            org_id,
+            "billing:read",
+        )
+        is True
+    )
 
     # Owner should have billing:write
-    assert resource_access_dao.check_user_has_permission_in_org(
-        owner["id"],
-        org_id,
-        "billing:write",
-    ) is True
+    assert (
+        resource_access_dao.check_user_has_permission_in_org(
+            owner["id"],
+            org_id,
+            "billing:write",
+        )
+        is True
+    )
 
 
 @pytest.mark.anyio
@@ -2608,18 +2638,24 @@ async def test_billing_permissions_admin_has_read_write(client: AsyncClient, dbs
     resource_access_dao = ResourceAccessDAO(dbsession)
 
     # Admin should have billing:read
-    assert resource_access_dao.check_user_has_permission_in_org(
-        admin["id"],
-        org_id,
-        "billing:read",
-    ) is True
+    assert (
+        resource_access_dao.check_user_has_permission_in_org(
+            admin["id"],
+            org_id,
+            "billing:read",
+        )
+        is True
+    )
 
     # Admin should have billing:write
-    assert resource_access_dao.check_user_has_permission_in_org(
-        admin["id"],
-        org_id,
-        "billing:write",
-    ) is True
+    assert (
+        resource_access_dao.check_user_has_permission_in_org(
+            admin["id"],
+            org_id,
+            "billing:write",
+        )
+        is True
+    )
 
 
 @pytest.mark.anyio
@@ -2634,20 +2670,32 @@ async def test_billing_permissions_member_read_only(client: AsyncClient, dbsessi
     assert member_role is not None, "Member system role should exist"
 
     # Check what permissions the Member role has
-    role_perms = dbsession.query(RolePermission).filter(
-        RolePermission.role_id == member_role.id,
-    ).all()
+    role_perms = (
+        dbsession.query(RolePermission)
+        .filter(
+            RolePermission.role_id == member_role.id,
+        )
+        .all()
+    )
     perm_names = []
     for rp in role_perms:
-        perm = dbsession.query(Permission).filter(Permission.id == rp.permission_id).first()
+        perm = (
+            dbsession.query(Permission)
+            .filter(Permission.id == rp.permission_id)
+            .first()
+        )
         if perm:
             perm_names.append(perm.name)
 
     # Member should have billing:read
-    assert "billing:read" in perm_names, f"Member role should have billing:read. Has: {perm_names}"
+    assert (
+        "billing:read" in perm_names
+    ), f"Member role should have billing:read. Has: {perm_names}"
 
     # Member should NOT have billing:write
-    assert "billing:write" not in perm_names, f"Member role should NOT have billing:write. Has: {perm_names}"
+    assert (
+        "billing:write" not in perm_names
+    ), f"Member role should NOT have billing:write. Has: {perm_names}"
 
 
 @pytest.mark.anyio
@@ -2738,7 +2786,9 @@ async def test_billing_api_member_can_read(client: AsyncClient, dbsession):
         json={"user_id": member["id"], "level": "user"},
         headers=owner["headers"],
     )
-    assert add_response.status_code == status.HTTP_201_CREATED, f"Failed to add member: {add_response.json()}"
+    assert (
+        add_response.status_code == status.HTTP_201_CREATED
+    ), f"Failed to add member: {add_response.json()}"
 
     # Member should be able to read billing info
     response = await client.get(
@@ -2747,7 +2797,9 @@ async def test_billing_api_member_can_read(client: AsyncClient, dbsession):
     )
     if response.status_code != status.HTTP_200_OK:
         print(f"Response: {response.status_code} - {response.json()}")
-    assert response.status_code == status.HTTP_200_OK, f"Expected 200 but got {response.status_code}: {response.json()}"
+    assert (
+        response.status_code == status.HTTP_200_OK
+    ), f"Expected 200 but got {response.status_code}: {response.json()}"
 
 
 # ============== International Address Tests ==============
@@ -2983,19 +3035,19 @@ def test_frozen_org_cannot_spend_credits(dbsession):
 
     # Create owner
     owner = AuthUser(
-        id='frozen_org_owner',
-        email='frozen_org_owner@test.com',
-        name='Frozen Org Owner',
+        id="frozen_org_owner",
+        email="frozen_org_owner@test.com",
+        name="Frozen Org Owner",
     )
     dbsession.add(owner)
     dbsession.flush()
 
     # Create org with direct billing
     org = Organization(
-        name='Frozen Test Org',
+        name="Frozen Test Org",
         owner_id=owner.id,
-        stripe_customer_id='cus_frozen_test',
-        account_status='ACTIVE',
+        stripe_customer_id="cus_frozen_test",
+        account_status="ACTIVE",
     )
     dbsession.add(org)
     dbsession.commit()
@@ -3006,14 +3058,15 @@ def test_frozen_org_cannot_spend_credits(dbsession):
 
     # Suspend the org
     dao = OrganizationBillingDAO(dbsession)
-    dao.set_account_status(org.id, 'SUSPENDED')
+    dao.set_account_status(org.id, "SUSPENDED")
     dbsession.commit()
 
     # Should raise when SUSPENDED
     import pytest
+
     with pytest.raises(ValueError) as exc_info:
         get_billing_entity(dbsession, owner.id, org.id)
-    assert 'SUSPENDED' in str(exc_info.value)
+    assert "SUSPENDED" in str(exc_info.value)
 
 
 def test_invalid_account_status_rejected(dbsession):
@@ -3024,18 +3077,18 @@ def test_invalid_account_status_rejected(dbsession):
 
     # Create owner
     owner = AuthUser(
-        id='status_owner',
-        email='status_owner@test.com',
-        name='Status Owner',
+        id="status_owner",
+        email="status_owner@test.com",
+        name="Status Owner",
     )
     dbsession.add(owner)
     dbsession.flush()
 
     # Create org
     org = Organization(
-        name='Status Test Org',
+        name="Status Test Org",
         owner_id=owner.id,
-        account_status='ACTIVE',
+        account_status="ACTIVE",
     )
     dbsession.add(org)
     dbsession.commit()
@@ -3043,57 +3096,62 @@ def test_invalid_account_status_rejected(dbsession):
     dao = OrganizationBillingDAO(dbsession)
 
     # Valid statuses should work
-    assert dao.set_account_status(org.id, 'SUSPENDED') is True
-    assert dao.set_account_status(org.id, 'PAST_DUE') is True
-    assert dao.set_account_status(org.id, 'CLOSED') is True
-    assert dao.set_account_status(org.id, 'ACTIVE') is True
+    assert dao.set_account_status(org.id, "SUSPENDED") is True
+    assert dao.set_account_status(org.id, "PAST_DUE") is True
+    assert dao.set_account_status(org.id, "CLOSED") is True
+    assert dao.set_account_status(org.id, "ACTIVE") is True
 
     # Invalid status should raise
     with pytest.raises(ValueError) as exc_info:
-        dao.set_account_status(org.id, 'BANANA')
-    assert 'Invalid account status' in str(exc_info.value)
+        dao.set_account_status(org.id, "BANANA")
+    assert "Invalid account status" in str(exc_info.value)
 
     with pytest.raises(ValueError):
-        dao.set_account_status(org.id, 'FROZEN')  # Not a valid status
+        dao.set_account_status(org.id, "FROZEN")  # Not a valid status
 
 
 def test_recharge_xor_constraint(dbsession):
     """Test that recharge table enforces exactly one of user_id/organization_id (XOR fix)."""
     from sqlalchemy.exc import IntegrityError
-    from orchestra.db.models.orchestra_models import AuthUser, Organization, Recharge, RechargeStatus
+    from orchestra.db.models.orchestra_models import (
+        AuthUser,
+        Organization,
+        Recharge,
+        RechargeStatus,
+    )
     from orchestra.db.models.orchestra_models import Users
     from decimal import Decimal
 
     # Create user
     user = Users(
-        id='xor_user',
-        credits=Decimal('100'),
+        id="xor_user",
+        credits=Decimal("100"),
     )
     dbsession.add(user)
 
     # Create owner and org
     owner = AuthUser(
-        id='xor_owner',
-        email='xor_owner@test.com',
-        name='XOR Owner',
+        id="xor_owner",
+        email="xor_owner@test.com",
+        name="XOR Owner",
     )
     dbsession.add(owner)
     dbsession.flush()
 
     org = Organization(
-        name='XOR Test Org',
+        name="XOR Test Org",
         owner_id=owner.id,
-        account_status='ACTIVE',
+        account_status="ACTIVE",
     )
     dbsession.add(org)
     dbsession.commit()
 
     # Valid: user_id only
     r1 = Recharge(
-        user_id='xor_user',
+        user_id="xor_user",
         organization_id=None,
-        quantity=Decimal('10'),
-        amount_usd=Decimal('10'),
+        quantity=Decimal("10"),
+        amount_usd=Decimal("10"),
         status=RechargeStatus.PENDING_INVOICE,
     )
     dbsession.add(r1)
@@ -3103,8 +3161,8 @@ def test_recharge_xor_constraint(dbsession):
     r2 = Recharge(
         user_id=None,
         organization_id=org.id,
-        quantity=Decimal('10'),
-        amount_usd=Decimal('10'),
+        quantity=Decimal("10"),
+        amount_usd=Decimal("10"),
         status=RechargeStatus.PENDING_INVOICE,
     )
     dbsession.add(r2)
@@ -3112,14 +3170,15 @@ def test_recharge_xor_constraint(dbsession):
 
     # Invalid: both set - should fail
     r3 = Recharge(
-        user_id='xor_user',
+        user_id="xor_user",
         organization_id=org.id,
-        quantity=Decimal('10'),
-        amount_usd=Decimal('10'),
+        quantity=Decimal("10"),
+        amount_usd=Decimal("10"),
         status=RechargeStatus.PENDING_INVOICE,
     )
     dbsession.add(r3)
     import pytest
+
     with pytest.raises(IntegrityError):
         dbsession.commit()
     dbsession.rollback()
@@ -3128,8 +3187,8 @@ def test_recharge_xor_constraint(dbsession):
     r4 = Recharge(
         user_id=None,
         organization_id=None,
-        quantity=Decimal('10'),
-        amount_usd=Decimal('10'),
+        quantity=Decimal("10"),
+        amount_usd=Decimal("10"),
         status=RechargeStatus.PENDING_INVOICE,
     )
     dbsession.add(r4)
@@ -3145,28 +3204,28 @@ def test_duplicate_stripe_customer_id_rejected(dbsession):
     import pytest
 
     # Create owners
-    owner1 = AuthUser(id='dup_owner1', email='dup1@test.com', name='Owner 1')
-    owner2 = AuthUser(id='dup_owner2', email='dup2@test.com', name='Owner 2')
+    owner1 = AuthUser(id="dup_owner1", email="dup1@test.com", name="Owner 1")
+    owner2 = AuthUser(id="dup_owner2", email="dup2@test.com", name="Owner 2")
     dbsession.add(owner1)
     dbsession.add(owner2)
     dbsession.flush()
 
     # Create org1 with stripe customer id
     org1 = Organization(
-        name='Dup Test Org 1',
+        name="Dup Test Org 1",
         owner_id=owner1.id,
-        stripe_customer_id='cus_duplicate_test',
-        account_status='ACTIVE',
+        stripe_customer_id="cus_duplicate_test",
+        account_status="ACTIVE",
     )
     dbsession.add(org1)
     dbsession.commit()
 
     # Try to create org2 with same stripe customer id - should fail
     org2 = Organization(
-        name='Dup Test Org 2',
+        name="Dup Test Org 2",
         owner_id=owner2.id,
-        stripe_customer_id='cus_duplicate_test',  # Same as org1
-        account_status='ACTIVE',
+        stripe_customer_id="cus_duplicate_test",  # Same as org1
+        account_status="ACTIVE",
     )
     dbsession.add(org2)
     with pytest.raises(IntegrityError):
@@ -3175,16 +3234,16 @@ def test_duplicate_stripe_customer_id_rejected(dbsession):
 
     # But NULL stripe_customer_id should be allowed for multiple orgs
     org3 = Organization(
-        name='Dup Test Org 3',
+        name="Dup Test Org 3",
         owner_id=owner1.id,
         stripe_customer_id=None,
-        account_status='ACTIVE',
+        account_status="ACTIVE",
     )
     org4 = Organization(
-        name='Dup Test Org 4',
+        name="Dup Test Org 4",
         owner_id=owner2.id,
         stripe_customer_id=None,
-        account_status='ACTIVE',
+        account_status="ACTIVE",
     )
     dbsession.add(org3)
     dbsession.add(org4)
@@ -3196,14 +3255,14 @@ async def test_checkout_webhook_enables_direct_billing(client: AsyncClient, dbse
     """Test that checkout webhook sets stripe_customer_id for new orgs (H2 fix)."""
     from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
 
-    owner = await create_test_user(client, 'webhook_owner@test.com')
+    owner = await create_test_user(client, "webhook_owner@test.com")
 
     org_response = await client.post(
-        '/v0/organizations',
-        json={'name': 'Webhook Test Org'},
-        headers=owner['headers'],
+        "/v0/organizations",
+        json={"name": "Webhook Test Org"},
+        headers=owner["headers"],
     )
-    org_id = org_response.json()['id']
+    org_id = org_response.json()["id"]
 
     dao = OrganizationBillingDAO(dbsession)
     org = dao.get(org_id)
@@ -3213,40 +3272,45 @@ async def test_checkout_webhook_enables_direct_billing(client: AsyncClient, dbse
 
     # Simulate what webhook handler does
     if not org.stripe_customer_id:
-        stripe_customer_id = 'cus_webhook_test_123'
+        stripe_customer_id = "cus_webhook_test_123"
         dao.set_stripe_customer_id(org_id, stripe_customer_id)
         dbsession.commit()
 
     # Verify it was set
     dbsession.refresh(org)
-    assert org.stripe_customer_id == 'cus_webhook_test_123'
+    assert org.stripe_customer_id == "cus_webhook_test_123"
     assert dao.has_direct_billing(org_id) is True
 
 
 def test_duplicate_autorecharge_prevented(dbsession):
     """Test that duplicate auto-recharges in same month are prevented (M2 fix)."""
-    from orchestra.db.models.orchestra_models import AuthUser, Organization, Recharge, RechargeStatus
+    from orchestra.db.models.orchestra_models import (
+        AuthUser,
+        Organization,
+        Recharge,
+        RechargeStatus,
+    )
     from orchestra.lib.time import month_end_utc
     from datetime import datetime, timezone
     from decimal import Decimal
 
     # Create owner and org
     owner = AuthUser(
-        id='dup_recharge_owner',
-        email='dup_recharge@test.com',
-        name='Dup Recharge Owner',
+        id="dup_recharge_owner",
+        email="dup_recharge@test.com",
+        name="Dup Recharge Owner",
     )
     dbsession.add(owner)
     dbsession.flush()
 
     org = Organization(
-        name='Dup Recharge Org',
+        name="Dup Recharge Org",
         owner_id=owner.id,
-        stripe_customer_id='cus_dup_recharge',
-        account_status='ACTIVE',
+        stripe_customer_id="cus_dup_recharge",
+        account_status="ACTIVE",
         autorecharge=True,
-        autorecharge_threshold=Decimal('10'),
-        autorecharge_qty=Decimal('100'),
+        autorecharge_threshold=Decimal("10"),
+        autorecharge_qty=Decimal("100"),
     )
     dbsession.add(org)
     dbsession.commit()
@@ -3256,21 +3320,25 @@ def test_duplicate_autorecharge_prevented(dbsession):
     # Create first pending recharge
     r1 = Recharge(
         organization_id=org.id,
-        quantity=Decimal('100'),
-        amount_usd=Decimal('100'),
+        quantity=Decimal("100"),
+        amount_usd=Decimal("100"),
         invoice_group=current_month_end,
         status=RechargeStatus.PENDING_INVOICE,
-        type='auto',
+        type="auto",
     )
     dbsession.add(r1)
     dbsession.commit()
 
     # Simulate the idempotency check from bg_tasks.py
-    existing_recharge = dbsession.query(Recharge).filter_by(
-        organization_id=org.id,
-        invoice_group=current_month_end,
-        status=RechargeStatus.PENDING_INVOICE,
-    ).first()
+    existing_recharge = (
+        dbsession.query(Recharge)
+        .filter_by(
+            organization_id=org.id,
+            invoice_group=current_month_end,
+            status=RechargeStatus.PENDING_INVOICE,
+        )
+        .first()
+    )
 
     # Should find the existing recharge
     assert existing_recharge is not None

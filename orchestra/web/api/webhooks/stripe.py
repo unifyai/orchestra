@@ -133,7 +133,11 @@ def process_checkout_session_event(
                 user = users_dao.get_user_with_id(user_id)
                 users_dao.recharge_credit(user_id, credits)
                 logger.info(
-                    {"message": "User credited", "user_id": user_id, "credits": credits},
+                    {
+                        "message": "User credited",
+                        "user_id": user_id,
+                        "credits": credits,
+                    },
                 )
 
             else:
@@ -206,11 +210,7 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
     session.flush()
 
     # Get recharges for this invoice - could be user OR organization recharges
-    recharges = (
-        session.query(Recharge)
-        .filter_by(stripe_invoice_id=invoice_id)
-        .all()
-    )
+    recharges = session.query(Recharge).filter_by(stripe_invoice_id=invoice_id).all()
 
     # Determine if these are user or organization recharges
     user_ids = set()

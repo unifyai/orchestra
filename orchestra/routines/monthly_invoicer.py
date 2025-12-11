@@ -59,9 +59,33 @@ def _get_tax_id_type_for_country(country_code: Optional[str]) -> str:
 
     # EU countries use eu_vat
     eu_countries = {
-        "AT", "BE", "BG", "CY", "CZ", "DE", "DK", "EE", "ES", "FI",
-        "FR", "GR", "HR", "HU", "IE", "IT", "LT", "LU", "LV", "MT",
-        "NL", "PL", "PT", "RO", "SE", "SI", "SK",
+        "AT",
+        "BE",
+        "BG",
+        "CY",
+        "CZ",
+        "DE",
+        "DK",
+        "EE",
+        "ES",
+        "FI",
+        "FR",
+        "GR",
+        "HR",
+        "HU",
+        "IE",
+        "IT",
+        "LT",
+        "LU",
+        "LV",
+        "MT",
+        "NL",
+        "PL",
+        "PT",
+        "RO",
+        "SE",
+        "SI",
+        "SK",
     }
 
     if country_code in eu_countries:
@@ -383,4 +407,6 @@ def _invoice_org_recharges(
             r.status = RechargeStatus.INVOICE_CREATED
             r.stripe_invoice_id = invoice.id
 
-        INVOICE_CREATED_TOTAL.labels(entity_type="organization", entity_id=str(org_id)).inc()
+        INVOICE_CREATED_TOTAL.labels(
+            entity_type="organization", entity_id=str(org_id)
+        ).inc()

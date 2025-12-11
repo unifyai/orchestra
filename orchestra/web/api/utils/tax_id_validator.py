@@ -70,7 +70,9 @@ class TaxIDValidator:
         for importer, modname, ispkg in pkgutil.iter_modules(stdnum.__path__):
             # Handle 2-letter codes OR trailing underscore (e.g., 'in_' for India)
             # Python keyword countries like 'in' use 'in_' in stdnum
-            if ispkg and (len(modname) == 2 or (len(modname) == 3 and modname.endswith("_"))):
+            if ispkg and (
+                len(modname) == 2 or (len(modname) == 3 and modname.endswith("_"))
+            ):
                 # Convert module name to country code (e.g., 'in_' -> 'IN')
                 country = modname.rstrip("_").upper()
                 try:

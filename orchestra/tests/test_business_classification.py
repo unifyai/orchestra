@@ -1499,7 +1499,9 @@ def test_tax_id_validator_unsupported_country():
     assert error is None
 
     # Strict validation fails for unsupported countries
-    is_valid, formatted, error = TaxIDValidator.validate_tax_id_strict("123456789", "ZZ")
+    is_valid, formatted, error = TaxIDValidator.validate_tax_id_strict(
+        "123456789", "ZZ"
+    )
     assert is_valid is False
     assert "No validation available" in error
 
@@ -1735,7 +1737,10 @@ def test_tax_id_validator_eu_countries():
     for country in eu_countries:
         vtype = TaxIDValidator.get_validation_type(country)
         # Should be either eu_vat or strict (if country-specific module exists)
-        assert vtype in ["eu_vat", "strict"], f"{country} should have EU VAT or strict validation"
+        assert vtype in [
+            "eu_vat",
+            "strict",
+        ], f"{country} should have EU VAT or strict validation"
 
 
 if __name__ == "__main__":

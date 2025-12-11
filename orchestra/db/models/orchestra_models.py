@@ -633,7 +633,9 @@ class Organization(Base):
         default=0,
         server_default="0",
     )
-    stripe_customer_id = Column(String, nullable=True, unique=True, index=True)  # NULL = legacy billing
+    stripe_customer_id = Column(
+        String, nullable=True, unique=True, index=True
+    )  # NULL = legacy billing
     autorecharge = Column(
         Boolean,
         nullable=False,

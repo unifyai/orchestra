@@ -1449,7 +1449,11 @@ async def update_organization_billing(
     # Return updated billing info
     has_direct_billing = org_billing_dao.has_direct_billing(organization_id)
     billing_mode = "direct" if has_direct_billing else "delegated"
-    credits = float(org_billing_dao.get_credits(organization_id)) if has_direct_billing else 0.0
+    credits = (
+        float(org_billing_dao.get_credits(organization_id))
+        if has_direct_billing
+        else 0.0
+    )
 
     # Refresh org to get updated values
     session.refresh(org)

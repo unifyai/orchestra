@@ -782,7 +782,9 @@ def test_monthly_invoicer_mixed_user_and_org_recharges(dbsession: Session, mock_
     dbsession.expire_all()
 
     # Check that both were processed
-    user_recharges = dbsession.query(Recharge).filter_by(user_id="mixed_test_user").all()
+    user_recharges = (
+        dbsession.query(Recharge).filter_by(user_id="mixed_test_user").all()
+    )
     org_recharges = dbsession.query(Recharge).filter_by(organization_id=org_id).all()
 
     assert len(user_recharges) == 1

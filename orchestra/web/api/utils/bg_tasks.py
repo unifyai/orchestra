@@ -234,14 +234,23 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
                         )
                         locked_user = None
 
-                    if locked_user and locked_user.credits <= locked_user.autorecharge_threshold:
+                    if (
+                        locked_user
+                        and locked_user.credits <= locked_user.autorecharge_threshold
+                    ):
                         # Idempotency check: skip if pending recharge already exists for this month
-                        current_month_end = month_end_utc(datetime.now(timezone.utc).date())
-                        existing_recharge = session.query(Recharge).filter_by(
-                            user_id=billing_entity.entity_id,
-                            invoice_group=current_month_end,
-                            status=RechargeStatus.PENDING_INVOICE,
-                        ).first()
+                        current_month_end = month_end_utc(
+                            datetime.now(timezone.utc).date()
+                        )
+                        existing_recharge = (
+                            session.query(Recharge)
+                            .filter_by(
+                                user_id=billing_entity.entity_id,
+                                invoice_group=current_month_end,
+                                status=RechargeStatus.PENDING_INVOICE,
+                            )
+                            .first()
+                        )
 
                         if existing_recharge:
                             print(
@@ -249,11 +258,15 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
                                 f"User: {billing_entity.entity_id}, Month: {current_month_end}",
                             )
                         else:
-                            billing_user = users_dao.get_user_with_id(billing_entity.entity_id)
+                            billing_user = users_dao.get_user_with_id(
+                                billing_entity.entity_id
+                            )
                             queue_auto_recharge(session, billing_user, recharge_qty)
 
                             # Credit user immediately (they pay later via monthly invoice)
-                            users_dao.recharge_credit(billing_entity.entity_id, recharge_qty)
+                            users_dao.recharge_credit(
+                                billing_entity.entity_id, recharge_qty
+                            )
                             session.commit()
                             print(
                                 f"[BG-TASK] User credits added - User: {billing_entity.entity_id}, "
@@ -285,14 +298,23 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
                         )
                         locked_org = None
 
-                    if locked_org and locked_org.credits <= locked_org.autorecharge_threshold:
+                    if (
+                        locked_org
+                        and locked_org.credits <= locked_org.autorecharge_threshold
+                    ):
                         # Idempotency check: skip if pending recharge already exists for this month
-                        current_month_end = month_end_utc(datetime.now(timezone.utc).date())
-                        existing_recharge = session.query(Recharge).filter_by(
-                            organization_id=billing_entity.entity_id,
-                            invoice_group=current_month_end,
-                            status=RechargeStatus.PENDING_INVOICE,
-                        ).first()
+                        current_month_end = month_end_utc(
+                            datetime.now(timezone.utc).date()
+                        )
+                        existing_recharge = (
+                            session.query(Recharge)
+                            .filter_by(
+                                organization_id=billing_entity.entity_id,
+                                invoice_group=current_month_end,
+                                status=RechargeStatus.PENDING_INVOICE,
+                            )
+                            .first()
+                        )
 
                         if existing_recharge:
                             print(
@@ -304,7 +326,9 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
                             queue_org_auto_recharge(session, locked_org, recharge_qty)
 
                             # Credit org immediately (they pay later via monthly invoice)
-                            org_billing_dao.add_credits(billing_entity.entity_id, recharge_qty)
+                            org_billing_dao.add_credits(
+                                billing_entity.entity_id, recharge_qty
+                            )
                             session.commit()
                             print(
                                 f"[BG-TASK] Org credits added - Org: {billing_entity.entity_id}, "

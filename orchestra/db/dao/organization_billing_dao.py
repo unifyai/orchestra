@@ -425,4 +425,3 @@ class OrganizationBillingDAO:
 
         org.billing_user_id = None
         return True
-

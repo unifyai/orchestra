@@ -198,9 +198,13 @@ def deduct_credits(
         return user.credits
 
     else:  # Organization
-        org = session.query(Organization).filter_by(
-            id=billing_entity.entity_id,
-        ).first()
+        org = (
+            session.query(Organization)
+            .filter_by(
+                id=billing_entity.entity_id,
+            )
+            .first()
+        )
         if not org:
             raise ValueError(f"Organization {billing_entity.entity_id} not found.")
 
