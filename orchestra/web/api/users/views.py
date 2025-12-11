@@ -100,6 +100,7 @@ async def create_user(
     return {
         "id": new_user.id,
         "name": new_user.name,
+        "bio": new_user.bio,
         "image": new_user.image,
         "email": new_user.email,
         "timezone": new_user.timezone,
