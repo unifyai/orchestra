@@ -132,22 +132,18 @@ def _get_assistants_sibling_context_info(
     context_name: str,
     log_event_ids: List[int],
     context_dao: ContextDAO,
-) -> Dict[int, List[int]]:
+) -> Dict[int, int]:
     """
     For Assistants project, find sibling context IDs for each log event.
 
-    When logs are added to the Assistants project, they are associated with:
-    - "All/<SubContext>" (global aggregate context)
-    - "<UserName>/All/<SubContext>" (user-scoped aggregate context)
-    - "<UserName>/<AssistantName>/<SubContext>" (assistant-specific context)
+    When logs are added to the Assistants project, they are associated with both:
+    - "All/<SubContext>" (aggregate context)
+    - "<AssistantName>/<SubContext>" (assistant-specific context)
 
-    This function finds the sibling contexts for deletion purposes:
-    - If context is "All/<Ctx>", uses "_user" and "_assistant" fields to find
-      "<UserName>/All/<Ctx>" and "<UserName>/<AssistantName>/<Ctx>" contexts
-    - If context is "<UserName>/All/<Ctx>", uses "_assistant" field to find
-      "<UserName>/<AssistantName>/<Ctx>" and also finds "All/<Ctx>"
-    - If context is "<UserName>/<AssistantName>/<Ctx>", finds
-      "<UserName>/All/<Ctx>" and "All/<Ctx>"
+    This function finds the sibling context for deletion purposes:
+    - If context starts with "All/", uses the "_assistant" field from logs to find
+      the corresponding "<AssistantName>/<SubContext>" context
+    - If context starts with "<AssistantName>/", finds the "All/..." context
 
     Args:
         session: Database session
@@ -158,55 +154,68 @@ def _get_assistants_sibling_context_info(
         context_dao: Context DAO instance
 
     Returns:
-        Dict mapping log_event_id to list of sibling context_ids.
+        Dict mapping log_event_id to sibling context_id.
         Empty dict if no sibling contexts found.
     """
     if not log_event_ids or not context_name:
         return {}
 
-    sibling_map: Dict[int, List[int]] = {}
-    parts = context_name.split("/")
+    sibling_map: Dict[int, int] = {}
+    parts = context_name.split("/", 1)
 
-    # Must have at least format "X/Y" to have a sibling
-    if len(parts) < 2:
+    # Must have format "X/Y" to have a sibling
+    if len(parts) != 2:
         return {}
 
-    def _add_sibling(log_id: int, ctx_id: int):
-        """Helper to add a sibling context ID to the map."""
-        if log_id not in sibling_map:
-            sibling_map[log_id] = []
-        if ctx_id not in sibling_map[log_id]:
-            sibling_map[log_id].append(ctx_id)
+    sub_context = parts[1]
 
-    def _get_user_assistant_fields(event_ids: List[int]) -> Dict[int, Dict[str, str]]:
-        """Get _user and _assistant field values for log events."""
-        field_values = (
-            session.query(LogEventLog.log_event_id, Log.key, Log.value)
+    if context_name.startswith("All/"):
+        # "All/X" -> "<Assistant>/X" using _assistant field from logs
+        # Batch query: get _assistant field for all logs at once
+        assistant_values = (
+            session.query(LogEventLog.log_event_id, Log.value)
             .join(Log, Log.id == LogEventLog.log_id)
             .filter(
-                LogEventLog.log_event_id.in_(event_ids),
-                Log.key.in_(["_user", "_assistant"]),
+                LogEventLog.log_event_id.in_(log_event_ids),
+                Log.key == "_assistant",
             )
             .all()
         )
-        result: Dict[int, Dict[str, str]] = {}
-        for log_event_id, key, value in field_values:
-            if log_event_id not in result:
-                result[log_event_id] = {}
-            if value:
-                if isinstance(value, str):
-                    value = value.strip('"')
-                result[log_event_id][key] = value
-        return result
 
-    def _find_and_add_sibling_context(
-        sibling_name: str,
-        event_ids: List[int],
-    ) -> Optional[int]:
-        """Find sibling context and add verified log associations."""
+        # Group logs by assistant name
+        assistant_to_logs: Dict[str, List[int]] = {}
+        for log_event_id, assistant_name in assistant_values:
+            if assistant_name:
+                if isinstance(assistant_name, str):
+                    assistant_name = assistant_name.strip('"')
+                assistant_to_logs.setdefault(assistant_name, []).append(log_event_id)
+
+        # For each assistant, find sibling context and batch verify membership
+        for assistant_name, logs in assistant_to_logs.items():
+            sibling_context_name = f"{assistant_name}/{sub_context}"
+            sibling_ctx = context_dao.filter(
+                project_id=project_id,
+                name=sibling_context_name,
+            )
+            if sibling_ctx:
+                sibling_ctx_id = sibling_ctx[0][0].id
+                # Batch verify which logs exist in sibling context
+                existing = (
+                    session.query(LogEventContext.log_event_id)
+                    .filter(
+                        LogEventContext.log_event_id.in_(logs),
+                        LogEventContext.context_id == sibling_ctx_id,
+                    )
+                    .all()
+                )
+                for (log_id,) in existing:
+                    sibling_map[log_id] = sibling_ctx_id
+    else:
+        # "<Assistant>/X" -> "All/X"
+        sibling_context_name = f"All/{sub_context}"
         sibling_ctx = context_dao.filter(
             project_id=project_id,
-            name=sibling_name,
+            name=sibling_context_name,
         )
         if sibling_ctx:
             sibling_ctx_id = sibling_ctx[0][0].id
@@ -214,98 +223,13 @@ def _get_assistants_sibling_context_info(
             existing = (
                 session.query(LogEventContext.log_event_id)
                 .filter(
-                    LogEventContext.log_event_id.in_(event_ids),
+                    LogEventContext.log_event_id.in_(log_event_ids),
                     LogEventContext.context_id == sibling_ctx_id,
                 )
                 .all()
             )
             for (log_id,) in existing:
-                _add_sibling(log_id, sibling_ctx_id)
-            return sibling_ctx_id
-        return None
-
-    if context_name.startswith("All/"):
-        # "All/<Ctx>" -> find "<UserName>/All/<Ctx>" and "<UserName>/<AssistantName>/<Ctx>"
-        sub_context = "/".join(parts[1:])  # Everything after "All/"
-
-        # Get _user and _assistant fields for all logs
-        field_values = _get_user_assistant_fields(log_event_ids)
-
-        # Group logs by (user, assistant) pairs
-        user_assistant_to_logs: Dict[tuple, List[int]] = {}
-        for log_event_id, fields in field_values.items():
-            user_name = fields.get("_user")
-            assistant_name = fields.get("_assistant")
-            if user_name:
-                key = (user_name, assistant_name)
-                user_assistant_to_logs.setdefault(key, []).append(log_event_id)
-
-        # For each (user, assistant) pair, find sibling contexts
-        for (user_name, assistant_name), logs in user_assistant_to_logs.items():
-            # Find <UserName>/All/<Ctx>
-            user_all_context_name = f"{user_name}/All/{sub_context}"
-            _find_and_add_sibling_context(user_all_context_name, logs)
-
-            # Find <UserName>/<AssistantName>/<Ctx> if assistant is known
-            if assistant_name:
-                user_assistant_context_name = (
-                    f"{user_name}/{assistant_name}/{sub_context}"
-                )
-                _find_and_add_sibling_context(user_assistant_context_name, logs)
-
-    elif len(parts) >= 3 and parts[1] == "All":
-        # "<UserName>/All/<Ctx>" -> find "<UserName>/<AssistantName>/<Ctx>" and "All/<Ctx>"
-        user_name = parts[0]
-        sub_context = "/".join(parts[2:])  # Everything after "<UserName>/All/"
-
-        # Find "All/<Ctx>"
-        global_all_context_name = f"All/{sub_context}"
-        _find_and_add_sibling_context(global_all_context_name, log_event_ids)
-
-        # Get _assistant field for all logs to find assistant-specific contexts
-        field_values = _get_user_assistant_fields(log_event_ids)
-
-        # Group logs by assistant name
-        assistant_to_logs: Dict[str, List[int]] = {}
-        for log_event_id, fields in field_values.items():
-            assistant_name = fields.get("_assistant")
-            if assistant_name:
-                assistant_to_logs.setdefault(assistant_name, []).append(log_event_id)
-
-        # For each assistant, find sibling context
-        for assistant_name, logs in assistant_to_logs.items():
-            user_assistant_context_name = f"{user_name}/{assistant_name}/{sub_context}"
-            _find_and_add_sibling_context(user_assistant_context_name, logs)
-
-    elif len(parts) >= 3:
-        # "<UserName>/<AssistantName>/<Ctx>" -> find "<UserName>/All/<Ctx>" and "All/<Ctx>"
-        user_name = parts[0]
-        # assistant_name = parts[1]  # Not needed for finding siblings
-        sub_context = "/".join(
-            parts[2:],
-        )  # Everything after "<UserName>/<AssistantName>/"
-
-        # Find "<UserName>/All/<Ctx>"
-        user_all_context_name = f"{user_name}/All/{sub_context}"
-        _find_and_add_sibling_context(user_all_context_name, log_event_ids)
-
-        # Find "All/<Ctx>"
-        global_all_context_name = f"All/{sub_context}"
-        _find_and_add_sibling_context(global_all_context_name, log_event_ids)
-
-    else:
-        # Legacy 2-part format: "<Something>/<Ctx>"
-        # This handles backward compatibility with old format
-        first_part = parts[0]
-        sub_context = "/".join(parts[1:])
-
-        if first_part == "All":
-            # Already handled above
-            pass
-        else:
-            # Could be old format "<AssistantName>/<Ctx>" -> find "All/<Ctx>"
-            global_all_context_name = f"All/{sub_context}"
-            _find_and_add_sibling_context(global_all_context_name, log_event_ids)
+                sibling_map[log_id] = sibling_ctx_id
 
     return sibling_map
 
@@ -2505,8 +2429,8 @@ def delete_logs(
             ).keys(),
         )
 
-        # For Assistants project, get sibling context IDs for multi-context removal
-        sibling_context_map: Dict[int, List[int]] = {}
+        # For Assistants project, get sibling context IDs for dual-context removal
+        sibling_context_map: Dict[int, int] = {}
         if is_assistants_dual_context:
             sibling_context_map = _get_assistants_sibling_context_info(
                 session=session,
@@ -2517,18 +2441,19 @@ def delete_logs(
                 context_dao=context_dao,
             )
 
-        # Check which logs exist in other contexts (excluding siblings for Assistants)
+        # Check which logs exist in other contexts (excluding sibling for Assistants)
         logs_in_other_contexts = []
         logs_to_delete = []
 
         for log_id in entire_log_deletions:
             # Build list of context IDs to exclude when checking for "other" contexts
-            # For Assistants project, exclude both current and all sibling contexts
+            # For Assistants project, exclude both current and sibling context
             exclude_context_ids = [context_id]
-            sibling_ctx_ids = sibling_context_map.get(log_id, [])
-            exclude_context_ids.extend(sibling_ctx_ids)
+            sibling_ctx_id = sibling_context_map.get(log_id)
+            if sibling_ctx_id:
+                exclude_context_ids.append(sibling_ctx_id)
 
-            # Check if this log exists in any other context (besides current and siblings)
+            # Check if this log exists in any other context (besides current and sibling)
             other_contexts = (
                 session.query(LogEventContext.context_id)
                 .filter(
@@ -2539,7 +2464,7 @@ def delete_logs(
             )
 
             if other_contexts:
-                # Log exists in other contexts, just remove from this context (and siblings)
+                # Log exists in other contexts, just remove from this context (and sibling)
                 logs_in_other_contexts.append(log_id)
             else:
                 # Log doesn't exist in other contexts, delete it entirely
@@ -2561,7 +2486,7 @@ def delete_logs(
                 )
                 context_updated = True
 
-        # For Assistants project, also remove from sibling contexts
+        # For Assistants project, also remove from sibling context
         if is_assistants_dual_context and sibling_context_map:
             sibling_removals = [
                 log_id
@@ -2572,8 +2497,8 @@ def delete_logs(
                 # Group by sibling context ID for efficient deletion
                 sibling_ctx_to_logs: Dict[int, List[int]] = {}
                 for log_id in sibling_removals:
-                    for sib_ctx_id in sibling_context_map[log_id]:
-                        sibling_ctx_to_logs.setdefault(sib_ctx_id, []).append(log_id)
+                    sib_ctx_id = sibling_context_map[log_id]
+                    sibling_ctx_to_logs.setdefault(sib_ctx_id, []).append(log_id)
 
                 for sib_ctx_id, log_ids in sibling_ctx_to_logs.items():
                     sibling_removed = (
@@ -2771,7 +2696,7 @@ def delete_logs(
         # For empty logs, check which ones exist in other contexts
         if empty_log_ids:
             # For Assistants project, get sibling context IDs for empty logs
-            empty_sibling_context_map: Dict[int, List[int]] = {}
+            empty_sibling_context_map: Dict[int, int] = {}
             if is_assistants_dual_context:
                 empty_sibling_context_map = _get_assistants_sibling_context_info(
                     session=session,
@@ -2787,12 +2712,13 @@ def delete_logs(
 
             for log_id in empty_log_ids:
                 # Build list of context IDs to exclude when checking for "other" contexts
-                # For Assistants project, exclude both current and all sibling contexts
+                # For Assistants project, exclude both current and sibling context
                 exclude_context_ids = [context_id]
-                sibling_ctx_ids = empty_sibling_context_map.get(log_id, [])
-                exclude_context_ids.extend(sibling_ctx_ids)
+                sibling_ctx_id = empty_sibling_context_map.get(log_id)
+                if sibling_ctx_id:
+                    exclude_context_ids.append(sibling_ctx_id)
 
-                # Check if this log exists in any other context (besides current and siblings)
+                # Check if this log exists in any other context (besides current and sibling)
                 other_contexts = (
                     session.query(LogEventContext.context_id)
                     .filter(
@@ -2803,7 +2729,7 @@ def delete_logs(
                 )
 
                 if other_contexts:
-                    # Log exists in other contexts, just remove from this context (and siblings)
+                    # Log exists in other contexts, just remove from this context (and sibling)
                     logs_in_other_contexts.append(log_id)
                 else:
                     # Log doesn't exist in other contexts, delete it entirely
@@ -2825,7 +2751,7 @@ def delete_logs(
                     )
                     context_updated = True
 
-            # For Assistants project, also remove empty logs from sibling contexts
+            # For Assistants project, also remove empty logs from sibling context
             if is_assistants_dual_context and empty_sibling_context_map:
                 sibling_removals = [
                     log_id
@@ -2836,10 +2762,8 @@ def delete_logs(
                     # Group by sibling context ID for efficient deletion
                     sibling_ctx_to_logs: Dict[int, List[int]] = {}
                     for log_id in sibling_removals:
-                        for sib_ctx_id in empty_sibling_context_map[log_id]:
-                            sibling_ctx_to_logs.setdefault(sib_ctx_id, []).append(
-                                log_id,
-                            )
+                        sib_ctx_id = empty_sibling_context_map[log_id]
+                        sibling_ctx_to_logs.setdefault(sib_ctx_id, []).append(log_id)
 
                     for sib_ctx_id, log_ids in sibling_ctx_to_logs.items():
                         sibling_removed = (

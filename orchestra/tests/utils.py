@@ -82,12 +82,10 @@ async def create_test_user(
     client: AsyncClient,
     email: str,
     hiring_approved: bool = False,
-    name: str = "Test",
-    last_name: str = "",
 ) -> Dict[str, Any]:
     response = await client.post(
         "/v0/admin/auth-user",
-        json={"email": email, "name": name, "last_name": last_name},
+        json={"email": email, "name": "Test"},
         headers=ADMIN_HEADERS,
     )
     assert response.status_code == status.HTTP_200_OK, response.json()
@@ -120,8 +118,6 @@ async def create_test_user(
     return {
         "id": user_id,
         "email": email,
-        "name": name,
-        "last_name": last_name,
         "headers": user_auth_headers,
         "api_key": api_key,
     }
