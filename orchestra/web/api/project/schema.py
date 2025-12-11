@@ -98,6 +98,7 @@ class ProjectUpdate(BaseModel):
 class ProjectOut(BaseModel):
     """Response model for detailed project data."""
 
+    id: int = Field(description="The unique identifier of the project")
     name: str = Field(description="The name of the project")
     description: Optional[str] = Field(None, description="Description of the project")
     icon: str = Field(description="Icon identifier for the project")
