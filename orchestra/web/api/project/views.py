@@ -1334,6 +1334,7 @@ def get_project(
     Returns detailed information about a specific project.
     """
     return ProjectOut(
+        id=project.id,
         name=project.name,
         description=project.description,
         icon=project.icon,
