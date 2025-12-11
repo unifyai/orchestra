@@ -20,10 +20,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestra.db.dao.auth_user_dao import AuthUserDAO
+from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dao.webhook_log_dao import WebhookLogDAO
-from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
+from orchestra.db.models.orchestra_models import Organization, Recharge, RechargeStatus
 from orchestra.db.models.orchestra_models import Users as User
 from orchestra.db.models.orchestra_models import WebhookLog
 from orchestra.web.api.utils.prometheus_middleware import (
@@ -66,48 +67,103 @@ def process_checkout_session_event(
             return Response(status_code=200)
 
         # Handle one-time payments
+        # Check metadata for organization_id (direct org billing)
+        metadata = data.get("metadata", {})
+        organization_id = metadata.get("organization_id")
         user_id = data.get("client_reference_id")
         amount_total = data.get("amount_total")
 
-        if not user_id or amount_total is None:
+        if amount_total is None:
             logger.error(
                 {
-                    "message": "checkout.session.completed event missing user_id or amount_total",
+                    "message": "checkout.session.completed event missing amount_total",
                     "event_id": event_id,
                 },
             )
-            session.commit()  # Still commit the webhook log
+            session.commit()
             return Response(status_code=400)
 
         credits = amount_total / 100  # Assuming 1 credit = $1 and amount is in cents
 
         try:
-            users_dao = UsersDAO(session)
-            # This will raise an HTTPException with status 404 if the user is not found
-            user = users_dao.get_user_with_id(user_id)
-            users_dao.recharge_credit(user_id, credits)
-            logger.info(
-                {"message": "User credited", "user_id": user_id, "credits": credits},
-            )
+            # Handle organization checkout (direct org billing)
+            if organization_id:
+                org_billing_dao = OrganizationBillingDAO(session)
+                org = org_billing_dao.get(int(organization_id))
 
-        except HTTPException as e:
-            # Specifically handle the case where the user is not found from the DAO
-            if e.status_code == 404:
+                if not org:
+                    logger.error(
+                        {
+                            "message": "Organization not found for checkout",
+                            "organization_id": organization_id,
+                            "event_id": event_id,
+                        },
+                    )
+                    session.commit()
+                    return Response(status_code=404)
+
+                # Enable direct billing if this is the org's first checkout
+                if not org.stripe_customer_id:
+                    stripe_customer_id = data.get("customer")
+                    if stripe_customer_id:
+                        org_billing_dao.set_stripe_customer_id(
+                            int(organization_id),
+                            stripe_customer_id,
+                        )
+                        logger.info(
+                            {
+                                "message": "Organization direct billing enabled",
+                                "organization_id": organization_id,
+                                "stripe_customer_id": stripe_customer_id,
+                            },
+                        )
+
+                org_billing_dao.add_credits(int(organization_id), credits)
+                logger.info(
+                    {
+                        "message": "Organization credited",
+                        "organization_id": organization_id,
+                        "credits": credits,
+                    },
+                )
+
+            # Handle user checkout (personal or delegated billing)
+            elif user_id:
+                users_dao = UsersDAO(session)
+                user = users_dao.get_user_with_id(user_id)
+                users_dao.recharge_credit(user_id, credits)
+                logger.info(
+                    {"message": "User credited", "user_id": user_id, "credits": credits},
+                )
+
+            else:
                 logger.error(
                     {
-                        "message": "User specified in client_reference_id not found in DB",
-                        "user_id": user_id,
+                        "message": "checkout.session.completed missing both user_id and organization_id",
                         "event_id": event_id,
                     },
                 )
-                session.commit()  # Still commit the webhook log
+                session.commit()
+                return Response(status_code=400)
+
+        except HTTPException as e:
+            if e.status_code == 404:
+                logger.error(
+                    {
+                        "message": "Entity not found for checkout",
+                        "user_id": user_id,
+                        "organization_id": organization_id,
+                        "event_id": event_id,
+                    },
+                )
+                session.commit()
                 return Response(status_code=404)
-            # Re-raise other HTTP exceptions
             logger.error(
                 {
                     "message": "Unexpected HTTPException during credit recharge",
                     "error": f"{e.status_code}: {e.detail}",
                     "user_id": user_id,
+                    "organization_id": organization_id,
                 },
             )
             session.rollback()
@@ -116,13 +172,14 @@ def process_checkout_session_event(
         except Exception as e:
             logger.error(
                 {
-                    "message": "Failed to update user credits",
+                    "message": "Failed to update credits",
                     "user_id": user_id,
+                    "organization_id": organization_id,
                     "error": str(e),
                 },
             )
             session.rollback()
-            raise  # Let the webhook fail to retry
+            raise
 
     session.commit()
     return Response(status_code=200)
@@ -148,31 +205,66 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
     )
     session.flush()
 
+    # Get recharges for this invoice - could be user OR organization recharges
+    recharges = (
+        session.query(Recharge)
+        .filter_by(stripe_invoice_id=invoice_id)
+        .all()
+    )
+
+    # Determine if these are user or organization recharges
+    user_ids = set()
+    org_ids = set()
+    for recharge in recharges:
+        if recharge.user_id:
+            user_ids.add(recharge.user_id)
+        if recharge.organization_id:
+            org_ids.add(recharge.organization_id)
+
+    # For metrics, use first user_id found
+    user_id = next(iter(user_ids), None)
+    org_id = next(iter(org_ids), None)
+
+    # Build subqueries for user updates
     user_ids_subq = (
         select(Recharge.user_id)
         .where(Recharge.stripe_invoice_id == invoice_id)
+        .where(Recharge.user_id.isnot(None))
         .scalar_subquery()
     )
 
-    # Get user_id for metrics (take first one since all recharges for same invoice have same user)
-    user_id = session.execute(
-        select(Recharge.user_id)
+    org_ids_subq = (
+        select(Recharge.organization_id)
         .where(Recharge.stripe_invoice_id == invoice_id)
-        .limit(1),
-    ).scalar()
+        .where(Recharge.organization_id.isnot(None))
+        .scalar_subquery()
+    )
 
     # success ---------------------------------------------------------------
     if event["type"] == "invoice.payment_succeeded":
+        # Update all recharges to PAID
         (
             session.query(Recharge)
             .filter_by(stripe_invoice_id=invoice_id)
             .update({"status": RechargeStatus.PAID}, synchronize_session=False)
         )
-        (
-            session.query(User)
-            .filter(User.id.in_(user_ids_subq))
-            .update({"billing_state": "OK"}, synchronize_session=False)
-        )
+
+        # Update user billing state
+        if user_ids:
+            (
+                session.query(User)
+                .filter(User.id.in_(user_ids_subq))
+                .update({"billing_state": "OK"}, synchronize_session=False)
+            )
+
+        # Update organization account status
+        if org_ids:
+            (
+                session.query(Organization)
+                .filter(Organization.id.in_(org_ids_subq))
+                .update({"account_status": "ACTIVE"}, synchronize_session=False)
+            )
+
         session.commit()
         if user_id:
             INVOICE_PAID_TOTAL.labels(user_id=user_id).inc()
@@ -181,6 +273,7 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
                 "message": "Invoice marked PAID",
                 "invoice_id": invoice_id,
                 "user_id": user_id,
+                "organization_id": org_id,
             },
         )
         return Response(status_code=200)
@@ -189,16 +282,29 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
     if event["type"] in ("invoice.payment_failed", "invoice.payment_action_required"):
         final = data["status"] in ("past_due", "uncollectible")
         if final:
+            # Update recharges to FAILED
             (
                 session.query(Recharge)
                 .filter_by(stripe_invoice_id=invoice_id)
                 .update({"status": RechargeStatus.FAILED}, synchronize_session=False)
             )
-            (
-                session.query(User)
-                .filter(User.id.in_(user_ids_subq))
-                .update({"billing_state": "PAST_DUE"}, synchronize_session=False)
-            )
+
+            # Update user billing state
+            if user_ids:
+                (
+                    session.query(User)
+                    .filter(User.id.in_(user_ids_subq))
+                    .update({"billing_state": "PAST_DUE"}, synchronize_session=False)
+                )
+
+            # Update organization account status
+            if org_ids:
+                (
+                    session.query(Organization)
+                    .filter(Organization.id.in_(org_ids_subq))
+                    .update({"account_status": "PAST_DUE"}, synchronize_session=False)
+                )
+
         session.commit()
         if user_id:
             INVOICE_FAILED_TOTAL.labels(user_id=user_id).inc()
@@ -207,6 +313,7 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
                 "message": "Invoice marked FAILED",
                 "invoice_id": invoice_id,
                 "user_id": user_id,
+                "organization_id": org_id,
             },
         )
         return Response(status_code=200)
