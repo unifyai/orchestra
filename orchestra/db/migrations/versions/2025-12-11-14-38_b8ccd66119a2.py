@@ -1,8 +1,8 @@
 """add_organization_direct_billing
 
-Revision ID: 44875db74ea7
+Revision ID: b8ccd66119a2
 Revises: 9898c8469548
-Create Date: 2025-12-11 14:33:24.144160
+Create Date: 2025-12-11 14:38:34.893779
 
 """
 import sqlalchemy as sa
@@ -10,7 +10,7 @@ from alembic import op
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision = "44875db74ea7"
+revision = "b8ccd66119a2"
 down_revision = "9898c8469548"
 branch_labels = None
 depends_on = None
@@ -115,6 +115,41 @@ def upgrade() -> None:
     op.create_foreign_key(
         None, "recharge", "users", ["user_id"], ["id"], ondelete="CASCADE"
     )
+    op.alter_column(
+        "resource_access",
+        "created_at",
+        existing_type=postgresql.TIMESTAMP(),
+        nullable=True,
+        existing_server_default=sa.text("now()"),
+    )
+    op.alter_column(
+        "role",
+        "created_at",
+        existing_type=postgresql.TIMESTAMP(),
+        nullable=True,
+        existing_server_default=sa.text("now()"),
+    )
+    op.alter_column(
+        "role_permission",
+        "created_at",
+        existing_type=postgresql.TIMESTAMP(),
+        nullable=True,
+        existing_server_default=sa.text("now()"),
+    )
+    op.alter_column(
+        "team",
+        "created_at",
+        existing_type=postgresql.TIMESTAMP(),
+        nullable=True,
+        existing_server_default=sa.text("now()"),
+    )
+    op.alter_column(
+        "team_member",
+        "created_at",
+        existing_type=postgresql.TIMESTAMP(),
+        nullable=True,
+        existing_server_default=sa.text("now()"),
+    )
 
     # Add XOR constraint: exactly one of user_id or organization_id must be set
     op.execute(
@@ -125,6 +160,15 @@ def upgrade() -> None:
             (user_id IS NOT NULL AND organization_id IS NULL) OR
             (user_id IS NULL AND organization_id IS NOT NULL)
         )
+    """
+    )
+
+    # Add account_status check constraint
+    op.execute(
+        """
+        ALTER TABLE organization
+        ADD CONSTRAINT ck_organization_account_status
+        CHECK (account_status IN ('ACTIVE', 'SUSPENDED', 'PAST_DUE', 'CLOSED'))
     """
     )
 
@@ -186,42 +230,6 @@ def upgrade() -> None:
         ON CONFLICT DO NOTHING;
     """
     )
-
-    op.alter_column(
-        "resource_access",
-        "created_at",
-        existing_type=postgresql.TIMESTAMP(),
-        nullable=True,
-        existing_server_default=sa.text("now()"),
-    )
-    op.alter_column(
-        "role",
-        "created_at",
-        existing_type=postgresql.TIMESTAMP(),
-        nullable=True,
-        existing_server_default=sa.text("now()"),
-    )
-    op.alter_column(
-        "role_permission",
-        "created_at",
-        existing_type=postgresql.TIMESTAMP(),
-        nullable=True,
-        existing_server_default=sa.text("now()"),
-    )
-    op.alter_column(
-        "team",
-        "created_at",
-        existing_type=postgresql.TIMESTAMP(),
-        nullable=True,
-        existing_server_default=sa.text("now()"),
-    )
-    op.alter_column(
-        "team_member",
-        "created_at",
-        existing_type=postgresql.TIMESTAMP(),
-        nullable=True,
-        existing_server_default=sa.text("now()"),
-    )
     # ### end Alembic commands ###
 
 
@@ -245,8 +253,13 @@ def downgrade() -> None:
     """
     )
 
+    # Remove account_status check constraint
+    op.execute(
+        "ALTER TABLE organization DROP CONSTRAINT ck_organization_account_status"
+    )
+
     # Remove XOR constraint
-    op.execute("ALTER TABLE recharge DROP CONSTRAINT IF EXISTS ck_recharge_entity_xor")
+    op.execute("ALTER TABLE recharge DROP CONSTRAINT ck_recharge_entity_xor")
 
     op.alter_column(
         "team_member",
@@ -283,10 +296,10 @@ def downgrade() -> None:
         nullable=False,
         existing_server_default=sa.text("now()"),
     )
-    op.drop_constraint(None, "recharge", type_="foreignkey")
-    op.drop_constraint(None, "recharge", type_="foreignkey")
+    op.drop_constraint("recharge_organization_id_fkey", "recharge", type_="foreignkey")
+    op.drop_constraint("recharge_user_id_fkey", "recharge", type_="foreignkey")
     op.create_foreign_key(
-        op.f("recharge_user_id_fkey"), "recharge", "users", ["user_id"], ["id"]
+        "recharge_user_id_fkey", "recharge", "users", ["user_id"], ["id"]
     )
     op.drop_index(op.f("ix_recharge_organization_id"), table_name="recharge")
     op.alter_column("recharge", "user_id", existing_type=sa.VARCHAR(), nullable=False)
