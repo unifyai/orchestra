@@ -32,7 +32,7 @@ from orchestra.db.dao.recording_dao import RecordingDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import AuthUser, Context, Log, LogEventLog
+from orchestra.db.models.orchestra_models import AuthUser, Context
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.call_recording_service import CallRecordingService
 from orchestra.services.cartesia_service import CartesiaAPIError, CartesiaService
@@ -87,24 +87,6 @@ def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:
     if raw_phone and raw_phone.startswith(" "):
         return "+" + raw_phone[1:]
     return raw_phone
-
-
-def get_user_name_for_context(auth_user: AuthUser) -> str:
-    """
-    Get a user name string for use in context paths.
-
-    The user name is derived from the user's first and last name,
-    concatenated without spaces to create a path-safe identifier.
-
-    Args:
-        auth_user: The AuthUser object
-
-    Returns:
-        A string like "JohnDoe" for use in context paths
-    """
-    name = auth_user.name or ""
-    last_name = auth_user.last_name or ""
-    return f"{name}{last_name}"
 
 
 def check_assistant_hiring_approval(
@@ -228,9 +210,6 @@ def create_assistant(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Unauthorized. Please contact support to get an API key.",
         )
-    # Get user name for context paths
-    auth_user = session.query(AuthUser).filter(AuthUser.id == user_id).first()
-    user_name = get_user_name_for_context(auth_user) if auth_user else ""
     assistant = None
 
     # Determine total cost as base creation cost
@@ -484,8 +463,7 @@ def create_assistant(
                     # First, delete the chat context if it was created
                     if assistant_in.pre_hire_chat:
                         try:
-                            # Context format: <UserName>/<AssistantName>/Transcripts
-                            context_name = f"{user_name}/{assistant_in.first_name}{assistant_in.surname}/Transcripts"
+                            context_name = f"{assistant_in.first_name}{assistant_in.surname}/Transcripts"
                             assistants_project = project_dao.get_by_user_and_name(
                                 user_id=user_id,
                                 name="Assistants",
@@ -945,13 +923,6 @@ def delete_assistant(
                 detail="Assistant not found.",
             )
 
-        # Get user name for context paths
-        auth_user = (
-            session.query(AuthUser).filter(AuthUser.id == request.state.user_id).first()
-        )
-        user_name = get_user_name_for_context(auth_user) if auth_user else ""
-        assistant_name = f"{assistant.first_name}{assistant.surname}"
-
         # Suspend any jobs that might be currently running with that assistant
         try:
             response = stop_jobs(assistant_id)
@@ -960,8 +931,7 @@ def delete_assistant(
             logging.error(f"Failed to stop job: {str(e)}")
             cleanup_errors.append(f"Failed to stop job: {str(e)}")
 
-        # Delete the associated chat transcript contexts from the "Assistants" project
-        # and remove log links from the All contexts
+        # Delete the associated chat transcript context from the "Assistants" project
         try:
             ASSISTANTS_PROJECT_NAME = "Assistants"
             assistants_project = project_dao.get_by_user_and_name(
@@ -969,10 +939,8 @@ def delete_assistant(
                 name=ASSISTANTS_PROJECT_NAME,
             )
             if assistants_project:
-                # Context format: <UserName>/<AssistantName>/...
-                assistant_context_prefix = f"{user_name}/{assistant_name}"
-                # Find all contexts related to the assistant
-                # e.g., "JohnDoe/AdaLovelace", "JohnDoe/AdaLovelace/Transcripts"
+                assistant_context_prefix = f"{assistant.first_name}{assistant.surname}"
+                # Find all contexts related to the assistant (e.g., "AdaLovelace", "AdaLovelace/Transcripts")
                 contexts_to_delete = (
                     session.query(Context)
                     .filter(
@@ -984,48 +952,6 @@ def delete_assistant(
                     )
                     .all()
                 )
-
-                # Before deleting assistant contexts, find all log events
-                # that belong to this assistant and remove their links from All contexts
-                # This includes "All/<Ctx>" and "<UserName>/All/<Ctx>" contexts
-                from orchestra.db.models.orchestra_models import LogEventContext
-
-                # Find all log events that have _assistant = assistant_name
-                assistant_log_events = (
-                    session.query(LogEventLog.log_event_id)
-                    .join(Log, Log.id == LogEventLog.log_id)
-                    .filter(
-                        Log.key == "_assistant",
-                        Log.value == f'"{assistant_name}"',
-                    )
-                    .distinct()
-                    .all()
-                )
-                assistant_log_event_ids = [le[0] for le in assistant_log_events]
-
-                if assistant_log_event_ids:
-                    # Find All contexts (both global and user-scoped)
-                    all_contexts = (
-                        session.query(Context)
-                        .filter(
-                            Context.project_id == assistants_project.id,
-                            or_(
-                                Context.name.like("All/%"),
-                                Context.name.like(f"{user_name}/All/%"),
-                            ),
-                        )
-                        .all()
-                    )
-                    all_context_ids = [ctx.id for ctx in all_contexts]
-
-                    if all_context_ids:
-                        # Remove log links from All contexts
-                        session.query(LogEventContext).filter(
-                            LogEventContext.log_event_id.in_(assistant_log_event_ids),
-                            LogEventContext.context_id.in_(all_context_ids),
-                        ).delete(synchronize_session=False)
-
-                # Now delete the assistant-specific contexts
                 if contexts_to_delete:
                     for context_to_del in contexts_to_delete:
                         context_dao.delete(context_to_del.id)
