@@ -123,6 +123,11 @@ supported_models = {
         "context_window": 400000,
         "cost": {"prompt": 1.25, "completion": 10},
     },
+    "gpt-5.2": {
+        "endpoint": "replicate/openai/gpt-5.2",
+        "context_window": 400000,
+        "cost": {"prompt": 1.75, "completion": 14},
+    },
     "claude-4.5-haiku": {
         "endpoint": "replicate/anthropic/claude-4.5-haiku",
         "context_window": 200000,
