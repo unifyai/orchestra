@@ -3301,3 +3301,568 @@ def _handle_slice_operator_jsonb(
         )
 
     raise ValueError("Slice operation is only supported on string or list values")
+
+
+def _handle_dict_method_jsonb(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+    project_id=None,
+    context_id=None,
+    query_context=None,
+):
+    """
+    Handle dictionary method calls in JSONB mode.
+
+    Supports: .keys(), .values(), .items(), .get(key, default)
+
+    For direct JSONB expressions, wraps in subquery for lateral join operations.
+    """
+    from sqlalchemy.sql.selectable import Subquery
+
+    from .core import _build_sql_query_jsonb
+    from .functions import _handle_dict_method
+
+    method = filter_dict.get("method")
+
+    # Handle .get() specially
+    if method in ("get", "setdefault"):
+        return _handle_dict_get_jsonb(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope,
+            project_id=project_id,
+            context_id=context_id,
+            default_supplied=filter_dict.get("default_supplied", False),
+            query_context=query_context,
+        )
+
+    # Build source expression
+    src_expr = _build_sql_query_jsonb(
+        filter_dict["rhs"],
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+
+    # If source is already a subquery, delegate to shared handler
+    if isinstance(src_expr, Subquery):
+        return _handle_dict_method(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+        )
+
+    # For JSONB expressions, wrap and apply method
+    src_type = _infer_expression_type(src_expr, session, project_id, context_id)
+
+    # Use centralized type helper for consistent normalization
+    if not _is_dict_type(src_type):
+        # Not a dict, return empty list
+        return literal([], type_=JSONB)
+
+    # Wrap expression as subquery for lateral join
+    src_subq = _wrap_expression_as_subquery(
+        src_expr,
+        "dict",
+        log_event_alias,
+        session,
+        local_scope=local_scope,
+        prefix="dict_method_src",
+    )
+
+    # Create a modified filter_dict with the wrapped src subquery
+    # The shared handler will use _jsonb_src_subq instead of rebuilding from filter_dict["rhs"]
+    modified_filter = {**filter_dict, "_jsonb_src_subq": src_subq}
+
+    # Delegate to shared handler with the wrapped subquery
+    return _handle_dict_method(
+        modified_filter,
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+    )
+
+
+def _handle_dict_get_jsonb(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+    project_id=None,
+    context_id=None,
+    default_supplied=None,
+    query_context=None,
+):
+    """
+    Handle dict.get(key, default) in JSONB mode.
+
+    Handles dict.get(key, default) with:
+    - Accepts default_supplied flag to distinguish .get(key) from .get(key, None)
+    - Casts key to String for JSONB -> operator compatibility
+    - Uses _select_value and cast_expr to unify types between extracted and default
+    - When default_supplied is False, missing keys yield SQL NULL
+    """
+    from sqlalchemy import BindParameter
+    from sqlalchemy.sql.selectable import Subquery
+
+    from orchestra.db.dao.log_dao import LogDAO
+
+    from .core import _build_sql_query_jsonb
+    from .functions import _handle_dict_get
+    from .helpers import _select_value
+
+    # Use default_supplied from function arg if provided, otherwise from filter_dict
+    if default_supplied is None:
+        default_supplied = filter_dict.get("default_supplied", False)
+
+    # Build source expression
+    src_expr = _build_sql_query_jsonb(
+        filter_dict["rhs"],
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+
+    # If source is a subquery, delegate to shared handler
+    if isinstance(src_expr, Subquery):
+        return _handle_dict_get(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope,
+            default_supplied=default_supplied,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+        )
+
+    # Handle direct JSONB expression
+    key_expr = filter_dict.get("key")
+    default_expr = filter_dict.get("default")
+
+    # Build key expression
+    key = _build_sql_query_jsonb(
+        key_expr,
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+
+    # Get key value - cast to String for JSONB -> operator compatibility
+    if isinstance(key, BindParameter):
+        key_val = key.value
+    elif hasattr(key, "value"):
+        key_val = key.value
+    else:
+        # For non-literal keys, cast to String for -> operator
+        key_val = cast(key, String)
+
+    # Ensure src_expr is JSONB for -> operator compatibility
+    # If the source was built from ->> (text extraction, e.g., when field type unknown),
+    # we need to cast it to JSONB to use the -> operator
+    from sqlalchemy.sql.expression import BinaryExpression
+
+    if isinstance(src_expr, BinaryExpression):
+        # Check if this is a ->> expression (returns TEXT)
+        op_str = getattr(src_expr.operator, "opstring", str(src_expr.operator))
+        if op_str == "->>":
+            # Cast TEXT back to JSONB for subsequent -> operations
+            src_expr = cast(src_expr, JSONB)
+
+    # Extract value using -> operator (returns JSONB, not text)
+    extracted = src_expr.op("->")(key_val)
+
+    # If no default supplied, return extracted directly (NULL if key missing)
+    # This matches Python's dict.get() behavior
+    if not default_supplied or default_expr is None:
+        return extracted
+
+    # Build default expression
+    default = _build_sql_query_jsonb(
+        default_expr,
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+
+    # Infer types for proper coalescing
+    extracted_type = _infer_expression_type(extracted, session, project_id, context_id)
+
+    if isinstance(default, BindParameter):
+        default_type = LogDAO.infer_type("", default.value)
+    elif isinstance(default, Subquery):
+        _, default_type = _select_value(default, session)
+    else:
+        default_type = _infer_expression_type(default, session, project_id, context_id)
+
+    # Unify types for consistent result
+    result_type = unify_inferred_types(extracted_type, default_type)
+
+    # Cast both to unified type before coalescing
+    extracted_casted = cast_expr(extracted, extracted_type, result_type)
+    default_casted = cast_expr(default, default_type, result_type)
+
+    return func.coalesce(extracted_casted, default_casted)
+
+
+def _handle_str_method_jsonb(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+    project_id=None,
+    context_id=None,
+    query_context=None,
+):
+    """
+    Handle string method calls in JSONB mode.
+
+    Maps Python string methods to PostgreSQL functions:
+    - .lower() → func.lower()
+    - .upper() → func.upper()
+    - .strip() → func.trim()
+    - .startswith(prefix) → str_expr.like(prefix || '%')
+    - .endswith(suffix) → str_expr.like('%' || suffix)
+    - .contains(substr) → position() > 0
+    - .replace(old, new) → func.replace()
+    - .split(delim) → func.string_to_array()
+
+    Returns direct expression for efficiency.
+    """
+    from sqlalchemy import BindParameter
+    from sqlalchemy.sql.selectable import Subquery
+
+    from .core import _build_sql_query_jsonb
+    from .functions import _handle_str_method
+
+    method = filter_dict.get("method")
+    bool_methods = {"startswith", "endswith", "contains", "match"}
+
+    # Build source expression
+    src_expr = _build_sql_query_jsonb(
+        filter_dict["rhs"],
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+
+    # If source is a subquery, delegate to shared handler
+    if isinstance(src_expr, Subquery):
+        return _handle_str_method(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+        )
+
+    # Build argument expressions
+    args = []
+    if "args" in filter_dict and filter_dict["args"]:
+        args = [
+            _build_sql_query_jsonb(
+                arg,
+                log_event_alias,
+                session,
+                log_event_ids,
+                is_derived=is_derived,
+                local_scope=local_scope,
+                is_vector=is_vector,
+                project_id=project_id,
+                context_id=context_id,
+                query_context=query_context,
+            )
+            for arg in filter_dict["args"]
+        ]
+
+    # Cast source to string
+    # For JSONB expressions with -> operator, use .astext to strip JSON quotes
+    # Check if expression has .astext attribute (e.g., BinaryExpression with -> op)
+    if _is_jsonb_expression(src_expr) and hasattr(src_expr, "astext"):
+        str_val = src_expr.astext
+    else:
+        str_val = cast(src_expr, String)
+
+    # Apply the appropriate string operation
+    if method == "lower":
+        return func.lower(str_val)
+    elif method == "upper":
+        return func.upper(str_val)
+    elif method == "capitalize":
+        return func.concat(
+            func.upper(func.substr(str_val, 1, 1)),
+            func.lower(func.substr(str_val, 2)),
+        )
+    elif method == "strip":
+        if args:
+            chars = cast(args[0], String)
+            return func.btrim(str_val, chars)
+        else:
+            return func.trim(str_val)
+    elif method == "lstrip":
+        if args:
+            chars = cast(args[0], String)
+            return func.ltrim(str_val, chars)
+        else:
+            return func.ltrim(str_val)
+    elif method == "rstrip":
+        if args:
+            chars = cast(args[0], String)
+            return func.rtrim(str_val, chars)
+        else:
+            return func.rtrim(str_val)
+    elif method == "startswith":
+        if not args:
+            raise ValueError("startswith() requires a prefix argument")
+        prefix = cast(args[0], String)
+        return func.substr(str_val, 1, func.length(prefix)) == prefix
+    elif method == "endswith":
+        if not args:
+            raise ValueError("endswith() requires a suffix argument")
+        suffix = cast(args[0], String)
+        return func.right(str_val, func.length(suffix)) == suffix
+    elif method == "contains":
+        if not args:
+            raise ValueError("contains() requires a substring argument")
+        substring = args[0]
+        if isinstance(substring, BindParameter):
+            substring_val = substring.value
+            return func.strpos(str_val, substring_val) > 0
+        else:
+            return func.strpos(str_val, substring) > 0
+    elif method == "match":
+        if not args:
+            raise ValueError("match() requires a pattern argument")
+        pattern = args[0]
+        return str_val.op("~")(pattern)
+    elif method == "replace":
+        if len(args) < 2:
+            raise ValueError("replace() requires old and new substring arguments")
+        old = args[0]
+        new = args[1]
+        return func.replace(str_val, old, new)
+    elif method == "split":
+        # Wrap string_to_array in to_jsonb to ensure 0-based indexing with ->
+        delim = args[0] if args else literal(" ")
+        return func.to_jsonb(func.string_to_array(str_val, delim))
+    elif method == "substring":
+        # substring(start, end) -> func.substr(str, start, length)
+        # Python slice semantics: start is 0-based, end is exclusive.
+        # SQL substr: start is 1-based, length.
+        # But the parser might be passing arguments differently.
+        # Based on test: s.substring(1, 5) == 'hello' (where s='hello world')
+        # This implies start=1 (1-based), length=5? Or end=5?
+        # 'hello' is 5 chars.
+        # If it's python slice [1:5], it would be 'ello'.
+        # If it's SQL substring(1, 5), it's 'hello'.
+        # The test comment says "SQL 1-based".
+        # So we assume args are (start, length) or (start, end).
+        # Let's assume (start, length) as per standard SQL substring.
+        if len(args) == 1:
+            return func.substr(str_val, cast(args[0], Integer))
+        elif len(args) == 2:
+            return func.substr(str_val, cast(args[0], Integer), cast(args[1], Integer))
+        else:
+            raise ValueError("substring() requires 1 or 2 arguments")
+    else:
+        raise ValueError(f"Unsupported string method in JSONB mode: {method}")
+
+
+def _handle_zip_jsonb(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+    project_id=None,
+    context_id=None,
+    query_context=None,
+):
+    """
+    Handle zip() function in JSONB mode.
+    Wraps arguments in subqueries and performs the join logic.
+    """
+    from sqlalchemy import cast
+    from sqlalchemy.dialects.postgresql import JSONB
+    from sqlalchemy.sql.selectable import Subquery
+
+    from . import alias_utils
+    from .core import _build_sql_query_jsonb
+    from .helpers import _get_parent_idx, _select_value
+
+    # Build and wrap arguments
+    zipped_subqs = []
+    for idx, arg in enumerate(filter_dict["rhs"]):
+        # Build the expression
+        expr = _build_sql_query_jsonb(
+            arg,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+            query_context=query_context,
+        )
+
+        # Wrap if not already a subquery
+        if not isinstance(expr, Subquery):
+            inferred_type = _infer_expression_type(
+                expr,
+                session,
+                project_id,
+                context_id,
+            )
+            expr = _wrap_expression_as_subquery(
+                expr,
+                inferred_type,
+                log_event_alias,
+                session,
+                local_scope=local_scope,
+                prefix=f"zip_arg_{idx}",
+            )
+
+        # Now we have a subquery, prepare it for joining
+        col, _ = _select_value(expr, session, is_collection=True)
+        # Ensure col is JSONB (it might be Text if coming from ->>)
+        col = cast(col, JSONB)
+        parent_idx_col = _get_parent_idx(expr.c)
+
+        # Unnest the array
+        table_valued = (
+            func.jsonb_array_elements(col)
+            .table_valued("value", with_ordinality="ordinality")
+            .alias(f"elem_tbl_{idx}")
+        )
+
+        sub_cols = [
+            expr.c.log_event_id.label("log_event_id"),
+            table_valued.c.ordinality.label("ordinality"),
+            table_valued.c.value.label(f"value_{idx}"),
+        ]
+        if parent_idx_col is not None:
+            sub_cols.append(parent_idx_col.label("__parent_idx__"))
+
+        sub = alias_utils.subquery_with_unique_alias(
+            select(*sub_cols).select_from(expr.join(table_valued, literal(True))),
+            prefix=f"zip_subq_{idx}",
+        )
+        zipped_subqs.append(sub)
+
+    # Join the subqueries
+    base = zipped_subqs[0]
+    for i, other in enumerate(zipped_subqs[1:], start=1):
+        join_cond = and_(
+            base.c.log_event_id == other.c.log_event_id,
+            base.c.ordinality == other.c.ordinality,
+            *(
+                [base.c.__parent_idx__ == other.c.__parent_idx__]
+                if "__parent_idx__" in base.c.keys()
+                and "__parent_idx__" in other.c.keys()
+                else []
+            ),
+        )
+        base = select(
+            base.c.log_event_id,
+            base.c.ordinality,
+            *[base.c[col] for col in base.c.keys() if col.startswith("value")],
+            other.c[f"value_{i}"],
+        ).select_from(
+            base.join(
+                other,
+                join_cond,
+            ),
+        )
+        base = alias_utils.subquery_with_unique_alias(
+            base,
+            prefix=f"zip_join_{i}",
+        )
+
+    value_columns = [base.c[col] for col in base.c.keys() if col.startswith("value")]
+
+    select_cols = [
+        base.c.log_event_id,
+        func.coalesce(
+            func.jsonb_agg(func.jsonb_build_array(*value_columns)),
+            literal([], type_=JSONB),
+        ).label("value"),
+        literal("list").label("inferred_type"),
+    ]
+    group_cols = [base.c.log_event_id]
+
+    if "__parent_idx__" in base.c.keys():
+        select_cols.insert(1, base.c.__parent_idx__)
+        group_cols.append(base.c.__parent_idx__)
+
+    zipped = alias_utils.subquery_with_unique_alias(
+        select(*select_cols).group_by(*group_cols),
+        prefix="zipped",
+    )
+    # Return the subquery directly (not scalar_subquery!)
+    # scalar_subquery() fails with CardinalityViolation when there are multiple log events
+    return zipped
