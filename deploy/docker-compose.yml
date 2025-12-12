@@ -3,13 +3,13 @@ version: '3.9'
 services:
   api:
     build:
-      context: .
+      context: ..
       dockerfile: ./deploy/Dockerfile
       target: prod
     image: orchestra:${ORCHESTRA_VERSION:-latest}
     restart: always
     env_file:
-    - .env
+    - ../.env
     depends_on:
       db:
         condition: service_healthy
@@ -22,14 +22,14 @@ services:
       ORCHESTRA_DB_BASE: orchestra
 
   db:
-    image: pgvector/pgvector:pg15
+    image: pgvector/pgvector:pg18
     hostname: orchestra-db
     environment:
       POSTGRES_PASSWORD: "orchestra"
       POSTGRES_USER: "orchestra"
       POSTGRES_DB: "orchestra"
     volumes:
-    - orchestra-db-data:/var/lib/postgresql/data
+    - orchestra-db-data:/var/lib/postgresql
     restart: always
     healthcheck:
       test: pg_isready -U orchestra
