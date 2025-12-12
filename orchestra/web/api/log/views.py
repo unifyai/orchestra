@@ -95,6 +95,34 @@ router = APIRouter()
 admin_router = APIRouter()
 
 
+@router.post(
+    "/_debug/jsonb_mode",
+    include_in_schema=False,  # Hide from OpenAPI docs
+)
+async def set_jsonb_mode_endpoint(enabled: bool):
+    """
+    Toggle query mode at runtime for development and testing.
+    """
+    from orchestra.settings import set_jsonb_mode
+
+    set_jsonb_mode(enabled)
+    return {
+        "jsonb_mode": enabled,
+        "message": f"JSONB mode {'enabled' if enabled else 'disabled'}",
+    }
+
+
+@router.get(
+    "/_debug/jsonb_mode",
+    include_in_schema=False,  # Hide from OpenAPI docs
+)
+async def get_jsonb_mode_endpoint():
+    """Get current query mode status."""
+    from orchestra.settings import settings
+
+    return {"jsonb_mode": settings.use_jsonb_queries}
+
+
 def _sanitize_sql_error(error: Exception) -> str:
     """
     Extract a clean error message from SQLAlchemy exceptions, removing SQL traces.
