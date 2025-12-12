@@ -693,3 +693,167 @@ async def test_role_affects_implicit_permissions_only(client: AsyncClient, dbses
         "project:write",
     )
     assert explicit_has_write is True
+
+
+@pytest.mark.anyio
+async def test_check_org_member_permission(client: AsyncClient, dbsession):
+    """Test that check_org_member_permission() directly uses org member role.
+
+    This tests the new method that checks org-level permissions based on
+    OrganizationMember.role_id directly, without using ResourceAccess.
+    """
+    owner = await create_test_user(client, "org_member_perm_owner@test.com")
+    admin_user = await create_test_user(client, "org_member_perm_admin@test.com")
+    viewer_user = await create_test_user(client, "org_member_perm_viewer@test.com")
+    outsider = await create_test_user(client, "org_member_perm_outsider@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Org Member Permission Test"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Get role IDs
+    role_dao = RoleDAO(dbsession)
+    admin_role = role_dao.get_by_name("Admin", organization_id=None)
+    viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
+
+    # Add members with different roles
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": admin_user["id"], "level": "admin", "role_id": admin_role.id},
+        headers=owner["headers"],
+    )
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": viewer_user["id"], "level": "user", "role_id": viewer_role.id},
+        headers=owner["headers"],
+    )
+
+    resource_access_dao = ResourceAccessDAO(dbsession)
+
+    # Owner should have org:write, org:read, org:delete (via Owner role)
+    assert resource_access_dao.check_org_member_permission(
+        owner["id"],
+        org_id,
+        "org:read",
+    )
+    assert resource_access_dao.check_org_member_permission(
+        owner["id"],
+        org_id,
+        "org:write",
+    )
+    assert resource_access_dao.check_org_member_permission(
+        owner["id"],
+        org_id,
+        "org:delete",
+    )
+
+    # Admin should have org:write, org:read but NOT org:delete
+    assert resource_access_dao.check_org_member_permission(
+        admin_user["id"],
+        org_id,
+        "org:read",
+    )
+    assert resource_access_dao.check_org_member_permission(
+        admin_user["id"],
+        org_id,
+        "org:write",
+    )
+    assert not resource_access_dao.check_org_member_permission(
+        admin_user["id"],
+        org_id,
+        "org:delete",
+    )
+
+    # Viewer should have org:read but NOT org:write or org:delete
+    assert resource_access_dao.check_org_member_permission(
+        viewer_user["id"],
+        org_id,
+        "org:read",
+    )
+    assert not resource_access_dao.check_org_member_permission(
+        viewer_user["id"],
+        org_id,
+        "org:write",
+    )
+    assert not resource_access_dao.check_org_member_permission(
+        viewer_user["id"],
+        org_id,
+        "org:delete",
+    )
+
+    # Outsider (not an org member) should have no permissions
+    assert not resource_access_dao.check_org_member_permission(
+        outsider["id"],
+        org_id,
+        "org:read",
+    )
+    assert not resource_access_dao.check_org_member_permission(
+        outsider["id"],
+        org_id,
+        "org:write",
+    )
+    assert not resource_access_dao.check_org_member_permission(
+        outsider["id"],
+        org_id,
+        "org:delete",
+    )
+
+
+@pytest.mark.anyio
+async def test_org_member_permission_for_team_operations(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test that org member permission is used for team management operations.
+
+    Team create/update/delete operations should check org:write permission
+    via the org member role, not via ResourceAccess.
+    """
+    owner = await create_test_user(client, "team_ops_owner@test.com")
+    admin_user = await create_test_user(client, "team_ops_admin@test.com")
+    viewer_user = await create_test_user(client, "team_ops_viewer@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Team Ops Permission Test"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Get role IDs
+    role_dao = RoleDAO(dbsession)
+    admin_role = role_dao.get_by_name("Admin", organization_id=None)
+    viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
+
+    # Add admin and viewer
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": admin_user["id"], "level": "admin", "role_id": admin_role.id},
+        headers=owner["headers"],
+    )
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": viewer_user["id"], "level": "user", "role_id": viewer_role.id},
+        headers=owner["headers"],
+    )
+
+    # Admin (has org:write) CAN create a team
+    team_response = await client.post(
+        f"/v0/organizations/{org_id}/teams",
+        json={"name": "Admin Created Team"},
+        headers=admin_user["headers"],
+    )
+    assert team_response.status_code == status.HTTP_201_CREATED
+
+    # Viewer (no org:write) CANNOT create a team
+    viewer_team_response = await client.post(
+        f"/v0/organizations/{org_id}/teams",
+        json={"name": "Viewer Created Team"},
+        headers=viewer_user["headers"],
+    )
+    assert viewer_team_response.status_code == status.HTTP_403_FORBIDDEN
