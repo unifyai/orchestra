@@ -965,3 +965,193 @@ def _handle_arithmetic_operator_jsonb(
             prefix="arithmetic_op",
         )
 
+def _handle_membership_operator_jsonb(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+    project_id: Optional[int] = None,
+    context_id: Optional[int] = None,
+    query_context=None,
+):
+    """Handle membership operators ('in' and 'not in') in JSONB mode.
+
+    Translates Python membership tests to PostgreSQL JSONB queries:
+    - Array membership: Uses @> containment operator with GIN index
+    - String membership: Uses LIKE or POSITION for substring checks
+    - List literals: Converts to PostgreSQL array comparison
+
+    Args:
+        filter_dict: Parsed filter expression with 'operand', 'lhs', and 'rhs' keys.
+        log_event_alias: SQLAlchemy alias for the LogEvent table.
+        session: Database session for field type lookups.
+        log_event_ids: Optional list of log event IDs to filter on.
+        is_derived: Whether this is for a derived field expression.
+        local_scope: Local variable bindings for comprehensions.
+        is_vector: Whether the expression involves vector types.
+        project_id: Project ID for field type lookups (required).
+        context_id: Optional context ID for field type lookups.
+        query_context: QueryContext for CTE-based aggregation optimization.
+
+    Returns:
+        Boolean expression or Subquery indicating membership result.
+    """
+    from .core import _build_sql_query_jsonb
+    from .helpers import _substring_expr
+
+    operand = filter_dict["operand"]
+    lhs_dict = filter_dict["lhs"]
+    rhs_dict = filter_dict["rhs"]
+
+    lhs_expr = _build_sql_query_jsonb(
+        lhs_dict,
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+    rhs_expr = _build_sql_query_jsonb(
+        rhs_dict,
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+
+    lhs_is_sub = isinstance(lhs_expr, Subquery)
+    rhs_is_sub = isinstance(rhs_expr, Subquery)
+    is_in = operand == "in"
+
+    # If both are JSONB expressions (common case)
+    if not lhs_is_sub and not rhs_is_sub:
+        lhs_type = _infer_expression_type(lhs_expr, session, project_id, context_id)
+        rhs_type = _infer_expression_type(rhs_expr, session, project_id, context_id)
+
+        # Case 1: RHS is JSONB array (use centralized type helper)
+        if _is_list_type(rhs_type):
+            containment = rhs_expr.op("@>")(
+                func.jsonb_build_array(lhs_expr),
+            )
+            return containment if is_in else not_(containment)
+
+        # Case 2: RHS is Python list literal or list of SQL expressions
+        if isinstance(rhs_dict, list) or (
+            isinstance(rhs_dict, dict) and rhs_dict.get("type") == "literal_list"
+        ):
+            rhs_list = None
+            # Check if rhs_expr is a list of SQL expressions (from type_literal processing)
+            if isinstance(rhs_expr, list):
+                # rhs_expr is already a list of SQL expressions
+                return lhs_expr.in_(rhs_expr) if is_in else not_(lhs_expr.in_(rhs_expr))
+            elif hasattr(rhs_expr, "value"):
+                rhs_list = rhs_expr.value
+            if rhs_list is not None:
+                return lhs_expr.in_(rhs_list) if is_in else not_(lhs_expr.in_(rhs_list))
+
+        # Case 3: Scalar field (substring) - only valid for strings
+        if rhs_type == "str":
+            if lhs_type != "str":
+                lhs_expr = cast_expr(lhs_expr, lhs_type, "str")
+            # Explicitly cast to String to ensure LIKE is used instead of @>
+            rhs_str = cast(rhs_expr, String)
+            contains_expr = rhs_str.contains(lhs_expr)
+            return contains_expr if is_in else not_(contains_expr)
+
+        # Case 4: NULL/NoneType - return False for membership in None (matches Python TypeError behavior)
+        if _normalize_type(rhs_type) == "NoneType":
+            return literal(False)
+
+        # Case 5: Non-iterable types (bool, int, float, etc.)
+        # In Python, `x in 5` or `x in True` raises TypeError
+        # We return False (no matches) to align with Python semantics
+        # where membership in non-iterables is invalid
+        non_iterable_types = {
+            "bool",
+            "int",
+            "float",
+            "datetime",
+            "date",
+            "time",
+            "timedelta",
+        }
+        if _normalize_type(rhs_type) in non_iterable_types:
+            # Return a condition that's always False for `in`, always True for `not in`
+            return literal(False) if is_in else literal(True)
+
+        # Default fallback for dict types (substring on JSON representation)
+        if _is_dict_type(rhs_type):
+            lhs_str = cast(lhs_expr, String)
+            rhs_str = cast(rhs_expr, String)
+            contains_expr = rhs_str.like(func.concat("%", lhs_str, "%"))
+            return contains_expr if is_in else not_(contains_expr)
+
+        # Last resort fallback
+        try:
+            return lhs_expr.in_(rhs_expr) if is_in else not_(lhs_expr.in_(rhs_expr))
+        except:
+            lhs_str = cast(lhs_expr, String)
+            rhs_str = cast(rhs_expr, String)
+            contains_expr = rhs_str.like(func.concat("%", lhs_str, "%"))
+            return contains_expr if is_in else not_(contains_expr)
+
+    # Mixed case: at least one side is a Subquery
+    # When one side is a JSONB expression, we need to join with log_event_alias
+    lval, lval_type = _select_value(
+        lhs_expr,
+        session,
+        project_id=project_id,
+        context_id=context_id,
+    )
+    rval, rval_type = _select_value(
+        rhs_expr,
+        session,
+        project_id=project_id,
+        context_id=context_id,
+    )
+
+    # Build membership expression
+    if _is_list_type(rval_type):
+        expr = rval.op("@>")(func.jsonb_build_array(lval))
+        expr = expr if is_in else not_(expr)
+    else:
+        # Substring check
+        substring_cond = _substring_expr(lval, rval)
+        expr = substring_cond if is_in else not_(substring_cond)
+
+    # Wrap result in subquery to preserve log_event_id correlation
+    if lhs_is_sub and rhs_is_sub:
+        return _join_subqueries(lhs_expr, rhs_expr, expr, "bool", session=session)
+    elif lhs_is_sub:
+        # RHS is a JSONB expression - join subquery with log_event_alias
+        return build_result_subquery_with_join(
+            base_subq=lhs_expr,
+            join_target=log_event_alias,
+            join_condition=lhs_expr.c.log_event_id == log_event_alias.id,
+            value_expr=expr,
+            result_type="bool",
+            prefix="membership_op",
+        )
+    else:  # rhs_is_sub
+        # LHS is a JSONB expression - join subquery with log_event_alias
+        return build_result_subquery_with_join(
+            base_subq=rhs_expr,
+            join_target=log_event_alias,
+            join_condition=rhs_expr.c.log_event_id == log_event_alias.id,
+            value_expr=expr,
+            result_type="bool",
+            prefix="membership_op",
+        )
+
