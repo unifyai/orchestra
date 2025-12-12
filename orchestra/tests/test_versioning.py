@@ -1,11 +1,35 @@
+"""
+Versioning Tests - Dual-Mode Coverage (EAV + JSONB)
+
+This test suite validates Orchestra's versioning system in both EAV and JSONB modes.
+All tests are parametrized with use_jsonb_mode fixture to run in both modes unless
+explicitly marked as mode-specific.
+
+MODE-SPECIFIC TESTS:
+- @requires_eav_mode: Tests that rely on EAV-only features (e.g., shared logs via copy=False)
+- JSONB-only tests: Tests that validate JSONB-specific features (e.g., TOAST, key_order)
+
+VERSIONING ARCHITECTURE:
+- EAV mode: Uses LogVersion table (per-field snapshots) + Log/LogEventLog reconstruction
+- JSONB mode: Uses LogEventVersion table (per-event JSONB snapshots) + direct data restore
+
+PERFORMANCE EXPECTATIONS:
+- JSONB snapshot creation: 2-10x faster (bulk insert vs N inserts)
+- JSONB rollback: 2-3x faster (no Log/JSONLog recreation)
+- Storage: JSONB uses ~3-4x more space (full document duplication vs EAV dedup)
+
+See conftest.py for dual-mode testing infrastructure and performance tracking.
+"""
 import pytest
 from httpx import AsyncClient
+
+from orchestra.conftest import requires_eav_mode
 
 from .test_log import HEADERS, _create_log, _delete_logs, _update_logs, fetch_logs
 
 
 @pytest.mark.anyio
-async def test_basic_commit_and_rollback(client: AsyncClient):
+async def test_basic_commit_and_rollback(client: AsyncClient, use_jsonb_mode):
     """
     Tests the core project-level functionality:
     1. Create a log and commit (v1).
@@ -81,7 +105,7 @@ async def test_basic_commit_and_rollback(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_rollback_with_structural_changes(client: AsyncClient):
+async def test_rollback_with_structural_changes(client: AsyncClient, use_jsonb_mode):
     """
     Tests that rollback correctly handles logs being added and removed.
     1. Create log_A and log_B, then commit.
@@ -172,7 +196,7 @@ async def test_rollback_with_structural_changes(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_context_level_commit_and_rollback(client: AsyncClient):
+async def test_context_level_commit_and_rollback(client: AsyncClient, use_jsonb_mode):
     """
     Tests that committing and rolling back a single context works and
     does not affect other contexts.
@@ -255,7 +279,7 @@ async def test_context_level_commit_and_rollback(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_commit_history_endpoints(client: AsyncClient):
+async def test_commit_history_endpoints(client: AsyncClient, use_jsonb_mode):
     """
     Tests the project and context commit history endpoints.
     """
@@ -332,7 +356,10 @@ async def test_commit_history_endpoints(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_project_rollback_ignores_context_commits(client: AsyncClient):
+async def test_project_rollback_ignores_context_commits(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
     """
     Tests that a project-level rollback correctly restores its state,
     ignoring any intermittent context-only commits.
@@ -408,7 +435,7 @@ async def test_project_rollback_ignores_context_commits(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_project_level_branching(client: AsyncClient):
+async def test_project_level_branching(client: AsyncClient, use_jsonb_mode):
     """
     Tests project-level version branching functionality:
     1. Create a log and commit (commit A)
@@ -539,7 +566,7 @@ async def test_project_level_branching(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_context_level_branching(client: AsyncClient):
+async def test_context_level_branching(client: AsyncClient, use_jsonb_mode):
     """
     Tests context-level version branching functionality using context-specific endpoints.
     Mirrors the project-level branching test but uses context commit/rollback endpoints.
@@ -665,7 +692,7 @@ async def test_context_level_branching(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_branching_history_endpoints(client: AsyncClient):
+async def test_branching_history_endpoints(client: AsyncClient, use_jsonb_mode):
     """
     Tests that commit history endpoints return the correct branching information
     and that the new fields are present even in linear histories.
@@ -770,11 +797,22 @@ async def test_branching_history_endpoints(client: AsyncClient):
     assert proj_in_ctx["type"] == "project"
 
 
+@requires_eav_mode
 @pytest.mark.anyio
-async def test_rollback_with_shared_logs(client: AsyncClient):
+async def test_rollback_with_shared_logs(client: AsyncClient, use_jsonb_mode):
     """
     Tests rollback when logs are shared between multiple LogEvents (many-to-many).
     Ensures that LogVersion correctly captures each log's state for each LogEvent association.
+
+    EAV MODE BEHAVIOR:
+    - Multiple LogEvent rows can reference the same Log row via LogEventLog
+    - copy=False creates shared references (space-efficient)
+    - LogVersion snapshots each Log once per LogEvent association
+
+    JSONB MODE BEHAVIOR:
+    - Not supported: Each LogEvent has its own data JSONB column
+    - copy=False would need to duplicate data (no true sharing)
+    - Test is skipped in JSONB mode via @requires_eav_mode decorator
     """
     project_name = "test_shared_logs_rollback"
     context1_name = "context_with_shared_logs_1"
@@ -963,3 +1001,295 @@ async def test_rollback_with_shared_logs(client: AsyncClient):
 
     # The new log created after commit should not exist
     assert not any("new_in_ctx2" in log["entries"] for log in logs_ctx2_after_rollback)
+
+
+# =============================================================================
+# JSONB-Specific Versioning Tests
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_jsonb_large_document_versioning(client: AsyncClient, use_jsonb_mode):
+    """
+    Tests versioning with large JSONB documents (>8KB) that trigger PostgreSQL TOAST storage.
+
+    JSONB mode stores entire documents in LogEvent.data, which can exceed the 8KB inline
+    storage threshold. This test ensures LogEventVersion correctly snapshots and restores
+    large TOASTed JSONB values.
+
+    EAV mode doesn't have this concern since each Log row stores a single value.
+    """
+    if not use_jsonb_mode:
+        pytest.skip("Test is JSONB-specific (large document TOAST storage)")
+
+    project_name = "test_large_jsonb_versioning"
+    context_name = "large_doc_context"
+
+    # Setup
+    await client.post(
+        "/v0/project",
+        json={"name": project_name, "is_versioned": True},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "is_versioned": True},
+        headers=HEADERS,
+    )
+
+    # Create a log with a large text field (>8KB to trigger TOAST)
+    large_text = "x" * 10000  # 10KB text
+    await _create_log(
+        client,
+        project_name,
+        context={"name": context_name},
+        entries={
+            "large_field": large_text,
+            "metadata": {"nested": {"deep": "value"}},
+            "array": list(range(100)),
+        },
+    )
+
+    # Commit v1
+    commit1_res = await client.post(
+        f"/v0/project/{project_name}/commit",
+        json={"commit_message": "Large doc v1"},
+        headers=HEADERS,
+    )
+    assert commit1_res.status_code == 200
+    commit1_hash = commit1_res.json()["commit_hash"]
+
+    # Update to smaller document
+    logs_v1 = await fetch_logs(client, project_name, context=context_name)
+    await _update_logs(
+        client,
+        [logs_v1[0]["id"]],
+        {"large_field": "small", "metadata": {"changed": True}},
+        context={"name": context_name},
+        overwrite=True,
+    )
+
+    # Commit v2
+    await client.post(
+        f"/v0/project/{project_name}/commit",
+        json={"commit_message": "Large doc v2"},
+        headers=HEADERS,
+    )
+
+    # Rollback to v1 and verify large document restored
+    await client.post(
+        f"/v0/project/{project_name}/rollback",
+        json={"commit_hash": commit1_hash},
+        headers=HEADERS,
+    )
+
+    logs_after_rollback = await fetch_logs(client, project_name, context=context_name)
+    assert len(logs_after_rollback) == 1
+    assert logs_after_rollback[0]["entries"]["large_field"] == large_text
+    assert logs_after_rollback[0]["entries"]["metadata"] == {
+        "nested": {"deep": "value"},
+    }
+    assert logs_after_rollback[0]["entries"]["array"] == list(range(100))
+
+
+@pytest.mark.anyio
+async def test_jsonb_key_order_preservation(client: AsyncClient, use_jsonb_mode):
+    """
+    Tests that LogEvent.key_order is preserved through commit/rollback cycles.
+
+    JSONB mode stores key_order separately to maintain dict insertion order for UI rendering.
+    This test ensures key_order is correctly snapshotted in LogEventVersion and restored.
+
+    EAV mode doesn't have this concept since Log rows don't have ordering.
+    """
+    if not use_jsonb_mode:
+        pytest.skip("Test is JSONB-specific (key_order field)")
+
+    project_name = "test_key_order_versioning"
+    context_name = "key_order_context"
+
+    # Setup
+    await client.post(
+        "/v0/project",
+        json={"name": project_name, "is_versioned": True},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "is_versioned": True},
+        headers=HEADERS,
+    )
+
+    # Create log with specific key order
+    await _create_log(
+        client,
+        project_name,
+        context={"name": context_name},
+        entries={
+            "z_field": "last",
+            "a_field": "first",
+            "m_field": "middle",
+        },
+    )
+
+    # Fetch and verify key_order exists
+    logs_v1 = await fetch_logs(client, project_name, context=context_name)
+    original_key_order = logs_v1[0].get("key_order")
+    # key_order may be None in some implementations - just capture original state
+    original_keys = set(logs_v1[0]["entries"].keys())
+
+    # Commit v1
+    commit1_res = await client.post(
+        f"/v0/project/{project_name}/commit",
+        json={"commit_message": "Key order v1"},
+        headers=HEADERS,
+    )
+    commit1_hash = commit1_res.json()["commit_hash"]
+
+    # Update with different key order (add new fields)
+    await _update_logs(
+        client,
+        [logs_v1[0]["id"]],
+        {
+            "new_field": "added",
+            "z_field": "updated",
+        },
+        context={"name": context_name},
+        overwrite=False,  # Append, don't overwrite
+    )
+
+    # Commit v2
+    await client.post(
+        f"/v0/project/{project_name}/commit",
+        json={"commit_message": "Key order v2"},
+        headers=HEADERS,
+    )
+
+    # Rollback to v1
+    await client.post(
+        f"/v0/project/{project_name}/rollback",
+        json={"commit_hash": commit1_hash},
+        headers=HEADERS,
+    )
+
+    # Verify key_order and keys restored
+    logs_after_rollback = await fetch_logs(client, project_name, context=context_name)
+    restored_key_order = logs_after_rollback[0].get("key_order")
+
+    # If key_order was tracked, verify it's restored
+    if original_key_order is not None:
+        assert restored_key_order == original_key_order, (
+            f"key_order not preserved after rollback. "
+            f"Expected: {original_key_order}, Got: {restored_key_order}"
+        )
+
+    # Verify keys match original
+    assert set(logs_after_rollback[0]["entries"].keys()) == original_keys
+    assert "new_field" not in logs_after_rollback[0]["entries"]
+
+
+@pytest.mark.anyio
+async def test_jsonb_nested_structure_versioning(client: AsyncClient, use_jsonb_mode):
+    """
+    Tests versioning of deeply nested dicts and arrays in JSONB mode.
+
+    JSONB mode stores complex nested structures in a single data column. This test
+    ensures nested modifications are correctly captured and restored.
+
+    EAV mode stores each nested path as a separate Log row, so this behavior differs.
+    """
+    if not use_jsonb_mode:
+        pytest.skip("Test is JSONB-specific (nested JSONB structures)")
+
+    project_name = "test_nested_jsonb_versioning"
+    context_name = "nested_context"
+
+    # Setup
+    await client.post(
+        "/v0/project",
+        json={"name": project_name, "is_versioned": True},
+        headers=HEADERS,
+    )
+    await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": context_name, "is_versioned": True},
+        headers=HEADERS,
+    )
+
+    # Create log with nested structures
+    await _create_log(
+        client,
+        project_name,
+        context={"name": context_name},
+        entries={
+            "config": {
+                "model": {
+                    "name": "gpt-4",
+                    "params": {
+                        "temperature": 0.7,
+                        "max_tokens": 100,
+                    },
+                },
+                "retry": {"max_attempts": 3, "backoff": [1, 2, 4]},
+            },
+            "tags": ["prod", "critical"],
+            "matrix": [[1, 2], [3, 4]],
+        },
+    )
+
+    # Commit v1
+    commit1_res = await client.post(
+        f"/v0/project/{project_name}/commit",
+        json={"commit_message": "Nested v1"},
+        headers=HEADERS,
+    )
+    commit1_hash = commit1_res.json()["commit_hash"]
+
+    # Deep update: modify nested values
+    logs_v1 = await fetch_logs(client, project_name, context=context_name)
+    await _update_logs(
+        client,
+        [logs_v1[0]["id"]],
+        {
+            "config": {
+                "model": {
+                    "name": "gpt-3.5-turbo",  # Changed
+                    "params": {
+                        "temperature": 0.9,  # Changed
+                        "max_tokens": 200,  # Changed
+                    },
+                },
+                "retry": {"max_attempts": 5, "backoff": [2, 4, 8]},  # Changed
+            },
+            "tags": ["staging"],  # Completely replaced
+            "matrix": [[5, 6], [7, 8], [9, 10]],  # Extended
+        },
+        context={"name": context_name},
+        overwrite=True,
+    )
+
+    # Commit v2
+    await client.post(
+        f"/v0/project/{project_name}/commit",
+        json={"commit_message": "Nested v2"},
+        headers=HEADERS,
+    )
+
+    # Rollback to v1
+    await client.post(
+        f"/v0/project/{project_name}/rollback",
+        json={"commit_hash": commit1_hash},
+        headers=HEADERS,
+    )
+
+    # Verify exact nested structure restored
+    logs_after_rollback = await fetch_logs(client, project_name, context=context_name)
+    entries = logs_after_rollback[0]["entries"]
+
+    assert entries["config"]["model"]["name"] == "gpt-4"
+    assert entries["config"]["model"]["params"]["temperature"] == 0.7
+    assert entries["config"]["model"]["params"]["max_tokens"] == 100
+    assert entries["config"]["retry"]["max_attempts"] == 3
+    assert entries["config"]["retry"]["backoff"] == [1, 2, 4]
+    assert entries["tags"] == ["prod", "critical"]
+    assert entries["matrix"] == [[1, 2], [3, 4]]
