@@ -232,8 +232,12 @@ class ResourceAccessDAO:
         Uses caching to improve performance. Cache is cleared when calling
         clear_permission_cache().
 
+        NOTE: For org-level operations (managing members, teams, invites),
+        use check_org_member_permission() instead. This method is for
+        resource-level access control (e.g., projects).
+
         :param user_id: User ID.
-        :param resource_type: Type of resource ('project', 'interface', 'tab', 'tile').
+        :param resource_type: Type of resource ('project').
         :param resource_id: Resource ID.
         :param permission_name: Permission name (e.g., 'project:read').
         :return: True if user has permission, False otherwise.
@@ -324,15 +328,66 @@ class ResourceAccessDAO:
 
         return permission_exists is not None
 
+    def check_org_member_permission(
+        self,
+        user_id: str,
+        organization_id: int,
+        permission_name: str,
+    ) -> bool:
+        """
+        Check if user's organization membership role grants a specific permission.
+
+        This is the preferred method for org-level operations (managing members,
+        teams, invites, org settings) as it directly uses the OrganizationMember.role_id.
+
+        For resource-level access (e.g., project access), use check_user_permission()
+        with resource_type="project" instead.
+
+        :param user_id: User ID.
+        :param organization_id: Organization ID.
+        :param permission_name: Permission name (e.g., 'org:write', 'org:read').
+        :return: True if user has permission, False otherwise.
+        """
+        from orchestra.db.dao.organization_dao import OrganizationDAO
+        from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+        from orchestra.db.dao.role_dao import RoleDAO
+
+        org_dao = OrganizationDAO(self.session)
+        org_member_dao = OrganizationMemberDAO(self.session)
+        role_dao = RoleDAO(self.session)
+
+        # Check if org exists
+        org = org_dao.get(organization_id)
+        if not org:
+            return False
+
+        # Org owner always has full permissions (check via Owner role)
+        if org.owner_id == user_id:
+            owner_role = role_dao.get_by_name("Owner", organization_id=None)
+            if owner_role and role_dao.has_permission(owner_role.id, permission_name):
+                return True
+
+        # Check user's org membership role
+        member = org_member_dao.get_member(user_id, organization_id)
+        if not member:
+            return False  # Not a member
+
+        if not member.role_id:
+            raise ValueError(
+                f"Organization member {user_id} in org {organization_id} has no role_id. "
+                "This indicates a data integrity issue - all members must have explicit roles.",
+            )
+
+        return role_dao.has_permission(member.role_id, permission_name)
+
     def _is_personal_resource(self, resource_type: str, resource_id: int) -> bool:
         """
         Check if a resource is personal (not associated with an organization).
 
-        Only project and org resources are supported.
+        Only project resources are supported.
         Projects can be personal (user_id set, organization_id NULL).
-        Organizations are never personal.
 
-        :param resource_type: Type of resource ("project" or "org").
+        :param resource_type: Type of resource ("project").
         :param resource_id: Resource ID.
         :return: True if personal, False if organizational.
         :raises ValueError: If resource_type is not supported.
@@ -340,13 +395,11 @@ class ResourceAccessDAO:
         if resource_type == "project":
             project = self.session.query(Project).filter_by(id=resource_id).first()
             return project is not None and project.organization_id is None
-        elif resource_type == "org":
-            # Organizations are never personal
-            return False
         else:
             raise ValueError(
                 f"Unsupported resource type: {resource_type}. "
-                "Only 'project' and 'org' are supported.",
+                "Only 'project' is supported. For org-level permissions, "
+                "use check_org_member_permission() instead.",
             )
 
     def _check_personal_ownership(
@@ -359,9 +412,8 @@ class ResourceAccessDAO:
         Check if user owns a personal resource.
 
         Only personal projects have ownership.
-        Organizations cannot be personal.
 
-        :param resource_type: Type of resource ("project" only for personal).
+        :param resource_type: Type of resource ("project").
         :param resource_id: Resource ID.
         :param user_id: User ID.
         :return: True if user is owner, False otherwise.
@@ -370,13 +422,11 @@ class ResourceAccessDAO:
         if resource_type == "project":
             project = self.session.query(Project).filter_by(id=resource_id).first()
             return project is not None and project.user_id == user_id
-        elif resource_type == "org":
-            # Organizations cannot be personal
-            return False
         else:
             raise ValueError(
                 f"Unsupported resource type: {resource_type}. "
-                "Only 'project' and 'org' are supported.",
+                "Only 'project' is supported. For org-level permissions, "
+                "use check_org_member_permission() instead.",
             )
 
     def _check_org_permission(
@@ -484,9 +534,8 @@ class ResourceAccessDAO:
         Get the organization ID for a resource.
 
         Projects have organization_id directly.
-        For "org" type, the resource_id IS the organization_id.
 
-        :param resource_type: Type of resource ("project" or "org").
+        :param resource_type: Type of resource ("project").
         :param resource_id: Resource ID.
         :return: Organization ID or None if personal/not found.
         :raises ValueError: If resource_type is not supported.
@@ -494,13 +543,11 @@ class ResourceAccessDAO:
         if resource_type == "project":
             project = self.session.query(Project).filter_by(id=resource_id).first()
             return project.organization_id if project else None
-        elif resource_type == "org":
-            # For organization resources, the resource_id IS the organization_id
-            return resource_id
         else:
             raise ValueError(
                 f"Unsupported resource type: {resource_type}. "
-                "Only 'project' and 'org' are supported.",
+                "Only 'project' is supported. For org-level permissions, "
+                "use check_org_member_permission() instead.",
             )
 
     def filter_accessible_resources(
@@ -513,34 +560,34 @@ class ResourceAccessDAO:
         Get IDs of all resources of a given type that user can access.
 
         Returns both personal and organizational resource IDs.
-        Only "project" and "org" resource types are supported.
+        Only "project" resource type is supported.
 
         :param user_id: User ID.
-        :param resource_type: Type of resource ("project" or "org").
+        :param resource_type: Type of resource ("project").
         :param permission_name: Required permission.
         :return: List of resource IDs.
         :raises ValueError: If resource_type is not supported.
         """
         # Validate resource type
-        if resource_type not in ("project", "org"):
+        if resource_type != "project":
             raise ValueError(
                 f"Unsupported resource type: {resource_type}. "
-                "Only 'project' and 'org' are supported.",
+                "Only 'project' is supported. For org-level permissions, "
+                "use check_org_member_permission() instead.",
             )
 
         accessible_ids = []
 
         # Personal resources: only projects can be personal
-        if resource_type == "project":
-            personal_projects = (
-                self.session.query(Project.id)
-                .filter(
-                    Project.user_id == user_id,
-                    Project.organization_id.is_(None),
-                )
-                .all()
+        personal_projects = (
+            self.session.query(Project.id)
+            .filter(
+                Project.user_id == user_id,
+                Project.organization_id.is_(None),
             )
-            accessible_ids.extend([p[0] for p in personal_projects])
+            .all()
+        )
+        accessible_ids.extend([p[0] for p in personal_projects])
 
         # Org resources: check via RBAC
         # Get teams user belongs to

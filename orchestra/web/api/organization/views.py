@@ -153,11 +153,10 @@ async def get_organization(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user has org:read permission
+    # Check if user has org:read permission via org membership role
     resource_access_dao = ResourceAccessDAO(session)
-    has_permission = resource_access_dao.check_user_permission(
+    has_permission = resource_access_dao.check_org_member_permission(
         user_id,
-        "org",
         organization_id,
         "org:read",
     )
@@ -195,10 +194,9 @@ async def update_organization(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user has org:write permission
-    has_permission = resource_access_dao.check_user_permission(
+    # Check if user has org:write permission via org membership role
+    has_permission = resource_access_dao.check_org_member_permission(
         user_id,
-        "org",
         organization_id,
         "org:write",
     )
@@ -263,10 +261,9 @@ async def delete_organization(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user has org:delete permission
-    has_permission = resource_access_dao.check_user_permission(
+    # Check if user has org:delete permission via org membership role
+    has_permission = resource_access_dao.check_org_member_permission(
         user_id,
-        "org",
         organization_id,
         "org:delete",
     )
@@ -319,10 +316,9 @@ async def add_organization_member(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user has org:write permission
-    has_permission = resource_access_dao.check_user_permission(
+    # Check if user has org:write permission via org membership role
+    has_permission = resource_access_dao.check_org_member_permission(
         user_id,
-        "org",
         organization_id,
         "org:write",
     )
@@ -418,10 +414,9 @@ async def remove_organization_member(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if requesting user has org:write permission
-    has_permission = resource_access_dao.check_user_permission(
+    # Check if requesting user has org:write permission via org membership role
+    has_permission = resource_access_dao.check_org_member_permission(
         requesting_user_id,
-        "org",
         organization_id,
         "org:write",
     )
@@ -500,10 +495,9 @@ async def list_organization_members(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user has org:read permission
-    has_permission = resource_access_dao.check_user_permission(
+    # Check if user has org:read permission via org membership role
+    has_permission = resource_access_dao.check_org_member_permission(
         user_id,
-        "org",
         organization_id,
         "org:read",
     )
@@ -591,10 +585,9 @@ async def update_member_role(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user has org:write permission
-    has_permission = resource_access_dao.check_user_permission(
+    # Check if user has org:write permission via org membership role
+    has_permission = resource_access_dao.check_org_member_permission(
         user_id,
-        "org",
         organization_id,
         "org:write",
     )
@@ -856,10 +849,9 @@ async def invite_user_to_organization(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user has org:write permission
-    has_permission = resource_access_dao.check_user_permission(
+    # Check if user has org:write permission via org membership role
+    has_permission = resource_access_dao.check_org_member_permission(
         user_id,
-        "org",
         organization_id,
         "org:write",
     )
@@ -1032,10 +1024,9 @@ async def list_organization_invites(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check permission
-    has_permission = resource_access_dao.check_user_permission(
+    # Check permission via org membership role
+    has_permission = resource_access_dao.check_org_member_permission(
         user_id,
-        "org",
         organization_id,
         "org:read",
     )
@@ -1083,10 +1074,9 @@ async def cancel_organization_invite(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check permission
-    has_permission = resource_access_dao.check_user_permission(
+    # Check permission via org membership role
+    has_permission = resource_access_dao.check_org_member_permission(
         user_id,
-        "org",
         organization_id,
         "org:write",
     )
