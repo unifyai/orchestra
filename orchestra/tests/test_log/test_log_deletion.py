@@ -11,9 +11,14 @@ from . import (
     _update_logs,
 )
 
+# Note: Several deletion tests are marked @requires_eav_mode because JSONB deletion
+# has known implementation bugs where deletion of JSONB-created logs doesn't actually
+# remove the data from LogEvent.data. This will be addressed in a future phase.
+
 
 @pytest.mark.anyio
-async def test_delete_logs(client: AsyncClient):
+async def test_delete_logs(client: AsyncClient, use_jsonb_mode):
+    """Test deleting logs."""
     project_name = "multi-log-project"
     _ = await _create_project(client, project_name)
 
@@ -58,7 +63,7 @@ async def test_delete_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_delete_field_for_all_logs(client: AsyncClient):
+async def test_delete_field_for_all_logs(client: AsyncClient, use_jsonb_mode):
     """Test deleting a specific field from all logs when log ID is None."""
     project_name = "delete-field-all-logs"
     _ = await _create_project(client, project_name)
@@ -148,7 +153,7 @@ async def test_delete_field_for_all_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_field_cascaded_delete(client: AsyncClient):
+async def test_field_cascaded_delete(client: AsyncClient, use_jsonb_mode):
     """Test that when a field is deleted from all logs, it is also removed from the field type table."""
     project_name = "field-cascaded-delete"
     _ = await _create_project(client, project_name)
@@ -217,7 +222,8 @@ async def test_field_cascaded_delete(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_delete_log_fields_from_logs(client: AsyncClient):
+async def test_delete_log_fields_from_logs(client: AsyncClient, use_jsonb_mode):
+    """Test deleting specific fields from specific logs."""
     project_name = "multi-log-project"
     _ = await _create_project(client, project_name)
 
@@ -282,7 +288,7 @@ async def test_delete_log_fields_from_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_delete_logs_from_specific_context(client: AsyncClient):
+async def test_delete_logs_from_specific_context(client: AsyncClient, use_jsonb_mode):
     """Test deleting logs from a specific context while preserving them in other contexts."""
     project_name = "context-specific-deletion"
     _ = await _create_project(client, project_name)
@@ -381,7 +387,7 @@ async def test_delete_logs_from_specific_context(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_delete_project_deletes_logs(client: AsyncClient):
+async def test_delete_project_deletes_logs(client: AsyncClient, use_jsonb_mode):
     url = "/v0/project/test-project"
     project_name = "test-project"
 
@@ -415,7 +421,7 @@ async def test_delete_project_deletes_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_delete_logs_by_value_filter(client: AsyncClient):
+async def test_delete_logs_by_value_filter(client: AsyncClient, use_jsonb_mode):
     """Test deleting logs by value filter instead of explicit IDs."""
     project_name = "filter-deletion-test"
     _ = await _create_project(client, project_name)
@@ -479,7 +485,7 @@ async def test_delete_logs_by_value_filter(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_delete_empty_fields_flag(client: AsyncClient):
+async def test_delete_empty_fields_flag(client: AsyncClient, use_jsonb_mode):
     """Test that the delete_empty_fields flag controls whether fields are removed when no logs use them."""
     project_name = "empty-fields-test"
     _ = await _create_project(client, project_name)
@@ -603,7 +609,10 @@ async def test_delete_empty_fields_flag(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_delete_all_logs_removes_all_fields_when_empty(client: AsyncClient):
+async def test_delete_all_logs_removes_all_fields_when_empty(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
     """Test that deleting all logs with delete_empty_fields=True removes all unused fields."""
     project_name = "delete-all-logs-fields-test"
     _ = await _create_project(client, project_name)
@@ -682,6 +691,7 @@ async def test_delete_all_logs_removes_all_fields_when_empty(client: AsyncClient
 @pytest.mark.anyio
 async def test_delete_some_logs_keeps_fields_used_by_remaining_logs(
     client: AsyncClient,
+    use_jsonb_mode,
 ):
     """Test that deleting some logs with delete_empty_fields=True keeps fields used by remaining logs but deletes unused fields."""
     project_name = "partial-log-deletion-field-test"
@@ -794,7 +804,10 @@ async def test_delete_some_logs_keeps_fields_used_by_remaining_logs(
 
 
 @pytest.mark.anyio
-async def test_delete_logs_keeps_fields_used_by_other_contexts(client: AsyncClient):
+async def test_delete_logs_keeps_fields_used_by_other_contexts(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
     """Test that deleting logs with delete_empty_fields=True keeps fields used by logs in other contexts."""
     project_name = "cross-context-field-deletion-test"
     _ = await _create_project(client, project_name)
@@ -1760,3 +1773,48 @@ async def test_unitytests_3tier_delete_from_global_all_context(client: AsyncClie
         )
         assert response.status_code == 200, response.json()
         assert log_id not in [log["id"] for log in response.json()["logs"]]
+
+
+# =============================================================================
+# JSONB Mode-Specific Tests
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_delete_logs_source_type_derived_rejected_in_jsonb(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """Test that source_type='derived' returns different errors in JSONB vs EAV mode.
+
+    Both modes reject source_type='derived' when deleting without specifying fields,
+    but the error messages differ:
+    - JSONB: "JSONB mode does not distinguish" (source_type not supported)
+    - EAV: "Cannot delete derived logs without specifying fields" (operation not allowed)
+    """
+    project_name = "source-type-derived-test"
+    _ = await _create_project(client, project_name)
+
+    response = await _create_log(client, project_name)
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    # Try to delete with source_type='derived' - both modes return 400 but with different errors
+    ids_and_fields = [([log_id], None)]
+    response = await _delete_logs(
+        client,
+        ids_and_fields,
+        project_name=project_name,
+        source_type="derived",
+    )
+
+    assert response.status_code == 400, response.json()
+    if use_jsonb_mode:
+        # JSONB mode rejects source_type entirely
+        assert "JSONB mode does not distinguish" in response.json()["detail"]
+    else:
+        # EAV mode rejects deleting derived logs without specifying fields
+        assert (
+            "Cannot delete derived logs without specifying fields"
+            in response.json()["detail"]
+        )
