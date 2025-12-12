@@ -17,6 +17,7 @@ from orchestra.db.models.orchestra_models import (
     LogEventContext,
     LogEventJSONLog,
     LogEventLog,
+    LogEventVersion,
     LogVersion,
     ProjectVersion,
 )
@@ -632,7 +633,7 @@ class ContextDAO:
         if not context or not context.foreign_keys:
             return {}  # No foreign keys to validate
 
-        # Phase 1: Collect all FK values grouped by FK definition
+        # Step 1: Collect all FK values grouped by FK definition
         # Structure: {(ref_context_name, ref_column, fk_path, is_nested): {values}}
         fk_values_by_ref = defaultdict(set)
 
@@ -698,7 +699,7 @@ class ContextDAO:
         if not fk_values_by_ref:
             return {}
 
-        # Phase 2: Query valid values for each unique FK in a single query
+        # Step 2: Query valid values for each unique FK in a single query
         # Structure: {(ref_context_name, ref_column, fk_path, is_nested): set of valid values}
         valid_fk_values = {}
 
@@ -762,7 +763,7 @@ class ContextDAO:
                 (ref_context_name, ref_column, fk_path, is_nested)
             ] = valid_values
 
-        # Phase 3: Check each log's FK values against valid sets
+        # Step 3: Check each log's FK values against valid sets
         failed_validations = {}
 
         for idx, entries in enumerate(batch_entries):
@@ -3039,6 +3040,9 @@ class ContextDAO:
 
         Returns True if there exists another log_event in the same context whose
         values for keys_to_check match the updated log_event's values for those keys.
+
+        Note: For batch operations, use `check_for_duplicates_subset_batch` to avoid
+        N+1 queries. This method executes one query per call.
         """
         if not keys_to_check:
             return False
@@ -3079,6 +3083,126 @@ class ContextDAO:
             },
         )
         return result.scalar()
+
+    def check_for_duplicates_subset_batch(
+        self,
+        context_id: int,
+        log_event_ids: List[int],
+        keys_to_check: List[str],
+    ) -> List[int]:
+        """
+        Batch check for duplicates based on a subset of keys for multiple log events.
+
+        This method checks which log_event_ids have duplicates in the context by
+        comparing only the specified keys in LogEvent.data JSONB columns. It uses
+        a single efficient SQL query instead of N individual queries.
+
+        Args:
+            context_id: ID of the context to check
+            log_event_ids: List of log event IDs to check for duplicates
+            keys_to_check: List of field keys to compare for duplicate detection
+
+        Returns:
+            List of log_event_ids that have duplicates (should be marked as failed)
+        """
+        if not log_event_ids or not keys_to_check:
+            return []
+
+        # Build the key extraction for JSONB comparison
+        # We extract the specified keys from LogEvent.data and compare them
+        query = """
+        WITH check_logs AS (
+            SELECT le.id, le.data
+            FROM log_event le
+            WHERE le.id = ANY(:log_event_ids)
+        ),
+        existing_logs AS (
+            SELECT le.id, le.data
+            FROM log_event le
+            JOIN log_event_context lec ON le.id = lec.log_event_id
+            WHERE lec.context_id = :context_id
+              AND le.id != ALL(:log_event_ids)
+        ),
+        duplicates AS (
+            SELECT DISTINCT cl.id
+            FROM check_logs cl
+            WHERE EXISTS (
+                SELECT 1 FROM existing_logs el
+                WHERE (
+                    SELECT jsonb_object_agg(k, el.data->k)
+                    FROM unnest(:keys) AS k
+                    WHERE el.data ? k
+                ) = (
+                    SELECT jsonb_object_agg(k, cl.data->k)
+                    FROM unnest(:keys) AS k
+                    WHERE cl.data ? k
+                )
+            )
+        )
+        SELECT id FROM duplicates
+        """
+        result = self.session.execute(
+            text(query),
+            {
+                "context_id": context_id,
+                "log_event_ids": log_event_ids,
+                "keys": keys_to_check,
+            },
+        )
+        return [row[0] for row in result.fetchall()]
+
+    def check_for_duplicates_jsonb_batch(
+        self,
+        context_id: int,
+        log_event_ids: List[int],
+    ) -> List[int]:
+        """
+        Check for duplicates in JSONB mode for a batch of log events.
+
+        This method checks which log_event_ids have duplicates in the context by
+        comparing LogEvent.data JSONB columns. It uses a single efficient SQL query
+        instead of N individual queries.
+
+        Args:
+            context_id: ID of the context to check
+            log_event_ids: List of log event IDs to check for duplicates
+
+        Returns:
+            List of log_event_ids that have duplicates (should be deleted/rejected)
+        """
+        if not log_event_ids:
+            return []
+
+        # Use a single SQL query to find all duplicates in the batch
+        # This compares LogEvent.data JSONB columns for exact matches
+        query = """
+        WITH new_logs AS (
+            SELECT le.id, le.data
+            FROM log_event le
+            WHERE le.id = ANY(:log_event_ids)
+        ),
+        existing_logs AS (
+            SELECT le.id, le.data
+            FROM log_event le
+            JOIN log_event_context lec ON le.id = lec.log_event_id
+            WHERE lec.context_id = :context_id
+              AND le.id != ALL(:log_event_ids)
+        ),
+        duplicates AS (
+            SELECT DISTINCT nl.id
+            FROM new_logs nl
+            WHERE EXISTS (
+                SELECT 1 FROM existing_logs el
+                WHERE el.data = nl.data
+            )
+        )
+        SELECT id FROM duplicates
+        """
+        result = self.session.execute(
+            text(query),
+            {"context_id": context_id, "log_event_ids": log_event_ids},
+        )
+        return [row[0] for row in result.fetchall()]
 
     def add_logs_copy(self, context_id: int, log_ids: List[int]) -> None:
         """Associate copies of LogEvent instances with the specified context.
@@ -3325,7 +3449,7 @@ class ContextDAO:
 
             context = self.session.query(Context).filter_by(id=context_id).one()
 
-            # Phase 1: Restore the state.
+            # Step 1: Restore the state
             self.rollback_to_version(context_id, context_version.id)
             context.updated_at = datetime.now(timezone.utc)
 
@@ -3334,7 +3458,7 @@ class ContextDAO:
 
             self.session.commit()
 
-            # Phase 2: Garbage collection in a new transaction.
+            # Step 2: Garbage collection in a new transaction
             delete_orphaned_log_events(self.session, context.project_id)
             self.session.commit()
 
@@ -3383,6 +3507,17 @@ class ContextDAO:
         prev_commit_hash: Optional[str] = None,
     ) -> None:
         """Creates a snapshot of the context's current state."""
+        from orchestra.settings import settings
+
+        if settings.use_jsonb_queries:
+            return self.create_version_snapshot_jsonb(
+                context=context,
+                commit_hash=commit_hash,
+                commit_message=commit_message,
+                project_version=project_version,
+                prev_commit_hash=prev_commit_hash,
+            )
+
         if not context.is_versioned:
             return
 
@@ -3451,6 +3586,14 @@ class ContextDAO:
         Helper method to prepare the rollback.
         This method only prepares the operations and does NOT commit.
         """
+        from orchestra.settings import settings
+
+        if settings.use_jsonb_queries:
+            return self.rollback_to_version_jsonb(
+                context_id=context_id,
+                context_version_id=context_version_id,
+            )
+
         log_versions_to_restore = (
             self.session.query(LogVersion)
             .filter_by(context_version_id=context_version_id)
@@ -3556,3 +3699,140 @@ class ContextDAO:
                         log_event_json_log_values,
                     )
                     self.session.execute(stmt_json_assoc)
+
+    def create_version_snapshot_jsonb(
+        self,
+        context: Context,
+        commit_hash: str,
+        commit_message: Optional[str] = None,
+        project_version: Optional[ProjectVersion] = None,
+        prev_commit_hash: Optional[str] = None,
+    ) -> None:
+        """Creates a snapshot of the context's current state.
+
+        This method stores complete JSONB documents in LogEventVersion (one row per event),
+        capturing both data and key_order for each log event.
+        """
+        if not context.is_versioned:
+            return
+
+        # 1. Create a ContextVersion record
+        context_version = ContextVersion(
+            context_id=context.id,
+            project_version_id=project_version.id if project_version else None,
+            name=context.name,
+            description=context.description,
+            commit_hash=commit_hash,
+            commit_message=commit_message,
+            prev_commit_hash=prev_commit_hash,
+        )
+        self.session.add(context_version)
+        self.session.flush()  # Flush to get the context_version.id
+
+        # Update the previous version's next_commit_hash array if it exists
+        if prev_commit_hash:
+            prev_version = (
+                self.session.query(ContextVersion)
+                .filter_by(
+                    context_id=context.id,
+                    commit_hash=prev_commit_hash,
+                )
+                .with_for_update()
+                .one()
+            )
+            if commit_hash not in prev_version.next_commit_hash:
+                prev_version.next_commit_hash = prev_version.next_commit_hash + [
+                    commit_hash,
+                ]
+
+        # 2. Get all LogEvents for the context with their JSONB data
+        log_events = (
+            self.session.query(
+                LogEvent.id,
+                LogEvent.data,
+                LogEvent.key_order,
+                LogEvent.created_at,
+                LogEvent.updated_at,
+            )
+            .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
+            .filter(LogEventContext.context_id == context.id)
+            .all()
+        )
+
+        if not log_events:
+            return
+
+        # 3. Create LogEventVersion snapshots
+        log_event_versions = [
+            LogEventVersion(
+                context_version_id=context_version.id,
+                log_event_id=le.id,
+                data=le.data,
+                key_order=le.key_order,
+                created_at=le.created_at,
+                updated_at=le.updated_at,
+            )
+            for le in log_events
+        ]
+
+        # 4. Bulk insert the log event snapshots for efficiency
+        self.session.bulk_save_objects(log_event_versions)
+
+    def rollback_to_version_jsonb(
+        self,
+        context_id: int,
+        context_version_id: int,
+    ) -> None:
+        """Restores context state from snapshots.
+
+        This method recreates LogEvent rows with data and key_order copied from
+        LogEventVersion snapshots.
+
+        This method only prepares the operations and does NOT commit.
+        """
+        # 1. Query all LogEventVersion snapshots for the target version
+        log_event_versions = (
+            self.session.query(LogEventVersion)
+            .filter_by(context_version_id=context_version_id)
+            .all()
+        )
+
+        # 2. Get the context for project_id
+        context = self.session.query(Context).filter_by(id=context_id).one()
+
+        # 3. Clear existing context associations
+        self.session.query(LogEventContext).filter_by(context_id=context_id).delete(
+            synchronize_session=False,
+        )
+
+        if not log_event_versions:
+            return
+
+        # 4. Bulk insert new LogEvents with RETURNING to get IDs
+        stmt = (
+            pg_insert(LogEvent)
+            .values(
+                [
+                    {
+                        "project_id": context.project_id,
+                        "data": lev.data,
+                        "key_order": lev.key_order,
+                        "created_at": lev.created_at,
+                        "updated_at": lev.updated_at,
+                    }
+                    for lev in log_event_versions
+                ],
+            )
+            .returning(LogEvent.id)
+        )
+        result = self.session.execute(stmt)
+        new_log_event_ids = [row[0] for row in result]
+
+        # 5. Bulk insert LogEventContext associations
+        if new_log_event_ids:
+            assoc_values = [
+                {"log_event_id": le_id, "context_id": context_id}
+                for le_id in new_log_event_ids
+            ]
+            stmt_assoc = pg_insert(LogEventContext).values(assoc_values)
+            self.session.execute(stmt_assoc)
