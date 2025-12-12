@@ -669,3 +669,299 @@ def _handle_comparison_operator_jsonb(
             result_type="bool",
             prefix="comparison_op",
         )
+
+def _value_or_coalesce_jsonb(
+    or_filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+    project_id: Optional[int] = None,
+    context_id: Optional[int] = None,
+    query_context=None,
+):
+    """
+    Build a CASE expression implementing Python's value-level `x or y`:
+    returns x if truthy (non-empty for strings, non-null), else y.
+
+    This handles expressions like `first_name or ''` where the result should be
+    the actual value, not a boolean.
+    """
+    from .core import _build_sql_query_jsonb
+
+    lhs_node = or_filter_dict.get("lhs")
+    rhs_node = or_filter_dict.get("rhs")
+
+    lhs_expr = _build_sql_query_jsonb(
+        lhs_node,
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+    rhs_expr = _build_sql_query_jsonb(
+        rhs_node,
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+
+    # Truthiness of LHS - use JSONB-aware truthiness check
+    lhs_truthy = _create_truthiness_condition_jsonb(
+        lhs_expr,
+        session,
+        project_id,
+        context_id,
+    )
+
+    # Extract string/text values - cast to text for string coalescing
+    lhs_text = cast(lhs_expr, String)
+    rhs_text = cast(rhs_expr, String)
+
+    # Return LHS if truthy, else RHS
+    return case((lhs_truthy, lhs_text), else_=rhs_text)
+
+
+def _handle_arithmetic_operator_jsonb(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+    project_id: Optional[int] = None,
+    context_id: Optional[int] = None,
+    query_context=None,
+):
+    """Handle arithmetic operators (+, -, *, /, %, **, //) in JSONB mode.
+
+    Translates Python arithmetic expressions to PostgreSQL queries. Supports:
+    - Numeric operations with proper type casting
+    - String concatenation via + (using || operator)
+    - Temporal subtraction (datetime - datetime -> interval)
+    - Value-level 'or' coalescing (e.g., `first_name or ''`)
+
+    Args:
+        filter_dict: Parsed filter expression with 'operand', 'lhs', and 'rhs' keys.
+        log_event_alias: SQLAlchemy alias for the LogEvent table.
+        session: Database session for field type lookups.
+        log_event_ids: Optional list of log event IDs to filter on.
+        is_derived: Whether this is for a derived field expression.
+        local_scope: Local variable bindings for comprehensions.
+        is_vector: Whether the expression involves vector types.
+        project_id: Project ID for field type lookups (required).
+        context_id: Optional context ID for field type lookups.
+        query_context: QueryContext for CTE-based aggregation optimization.
+
+    Returns:
+        SQLAlchemy expression or Subquery representing the arithmetic result.
+    """
+    from .core import _build_sql_query_jsonb
+
+    operand = filter_dict["operand"]
+    lhs_dict = filter_dict["lhs"]
+    rhs_dict = filter_dict["rhs"]
+
+    # Rewrite value-level `or` used inside arithmetic into a coalescing expression
+    # This handles expressions like `(first_name or '') + ' ' + (surname or '')`
+    if isinstance(lhs_dict, dict) and lhs_dict.get("operand") == "or":
+        lhs_expr = _value_or_coalesce_jsonb(
+            lhs_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+            query_context=query_context,
+        )
+    else:
+        lhs_expr = _build_sql_query_jsonb(
+            lhs_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+            query_context=query_context,
+        )
+
+    if isinstance(rhs_dict, dict) and rhs_dict.get("operand") == "or":
+        rhs_expr = _value_or_coalesce_jsonb(
+            rhs_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+            query_context=query_context,
+        )
+    else:
+        rhs_expr = _build_sql_query_jsonb(
+            rhs_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+            query_context=query_context,
+        )
+
+    lhs_is_sub = isinstance(lhs_expr, Subquery)
+    rhs_is_sub = isinstance(rhs_expr, Subquery)
+
+    # If both are JSONB expressions (common case), use simple direct arithmetic
+    if not lhs_is_sub and not rhs_is_sub:
+        lhs_type = _infer_expression_type(lhs_expr, session, project_id, context_id)
+        rhs_type = _infer_expression_type(rhs_expr, session, project_id, context_id)
+
+        # Check if date/time arithmetic
+        if any(
+            t in ("datetime", "date", "time", "timedelta") for t in (lhs_type, rhs_type)
+        ):
+            # Handle datetime subtraction with naive timestamps (timezone-agnostic)
+            if operand == "-" and lhs_type == "datetime" and rhs_type == "datetime":
+                # Use temporal_utils to build naive timestamp expressions
+                lhs_ts = build_naive_timestamp_expr(lhs_dict, log_event_alias)
+                rhs_ts = build_naive_timestamp_expr(rhs_dict, log_event_alias)
+
+                if lhs_ts is not None and rhs_ts is not None:
+                    return lhs_ts - rhs_ts
+
+            expr, result_type = _arithmetic_expr(
+                lhs_expr,
+                rhs_expr,
+                operand,
+                lhs_type,
+                rhs_type,
+            )
+            return expr
+
+        # Check for string concatenation: if + operator and at least one side is string
+        # PostgreSQL uses || for string concatenation, not +
+        if operand == "+" and (lhs_type == "str" or rhs_type == "str"):
+            lhs_str = cast(lhs_expr, String)
+            rhs_str = cast(rhs_expr, String)
+            return func.concat(lhs_str, rhs_str)
+
+        # Numeric arithmetic
+        unified_type = unify_inferred_types(lhs_type, rhs_type)
+        if unified_type not in ("int", "float"):
+            unified_type = "float"
+
+        # Use force_to_type=True to ensure we cast to the numeric type
+        # without cast_expr recalculating to a different type
+        lhs_casted = cast_expr(lhs_expr, lhs_type, unified_type, force_to_type=True)
+        rhs_casted = cast_expr(rhs_expr, rhs_type, unified_type, force_to_type=True)
+        safe_rhs = func.nullif(rhs_casted, 0)
+
+        if operand == "+":
+            return lhs_casted + rhs_casted
+        elif operand == "-":
+            return lhs_casted - rhs_casted
+        elif operand == "*":
+            return lhs_casted * rhs_casted
+        elif operand == "/":
+            return lhs_casted / safe_rhs
+        elif operand == "%":
+            return lhs_casted % safe_rhs
+        elif operand == "**":
+            return func.power(lhs_casted, rhs_casted)
+        elif operand == "//":
+            return func.floor(lhs_casted / safe_rhs)
+        raise ValueError(f"Unknown arithmetic operand: {operand}")
+
+    # Mixed case: at least one side is a Subquery
+    # When one side is a JSONB expression, we need to join with log_event_alias
+    lval, lval_type = _select_value(
+        lhs_expr,
+        session,
+        project_id=project_id,
+        context_id=context_id,
+    )
+    rval, rval_type = _select_value(
+        rhs_expr,
+        session,
+        project_id=project_id,
+        context_id=context_id,
+    )
+
+    # Special handling for datetime subtraction: compare "wall clock" times, not UTC instants
+    # This ensures "2023-06-15T12:00:00-05:00" - "2023-06-15T12:00:00+00:00" = PT0S
+    # (both represent 12:00 local time) rather than PT5H (the UTC difference).
+    if operand == "-" and lval_type == "datetime" and rval_type == "datetime":
+        # The values have already been converted to TIMESTAMPTZ by safe_cast_to_timestamptz,
+        # which converts to UTC. We need to access the RAW JSONB text to strip timezone.
+        # Use ast_utils to parse BASE expressions
+        lhs_base_ids, lhs_key = parse_base_params(lhs_dict)
+        rhs_base_ids, rhs_key = parse_base_params(rhs_dict)
+
+        # If we have both keys and base_ids, use temporal_utils for naive datetime subtraction
+        if lhs_key and rhs_key and lhs_base_ids and rhs_base_ids:
+            return build_naive_datetime_subtraction_subquery(
+                lhs_key=lhs_key,
+                rhs_key=rhs_key,
+                lhs_base_ids=lhs_base_ids,
+                rhs_base_ids=rhs_base_ids,
+                lhs_expr=lhs_expr,
+                lhs_is_sub=lhs_is_sub,
+            )
+
+        # Fallback: try stripping from converted values (may not work for UTC-converted values)
+        lval_naive = strip_timezone_from_value(lval)
+        rval_naive = strip_timezone_from_value(rval)
+        expr = lval_naive - rval_naive
+        result_type = "timedelta"
+    else:
+        # Compute the arithmetic expression
+        expr, result_type = _arithmetic_expr(lval, rval, operand, lval_type, rval_type)
+
+    # Wrap result in subquery to preserve log_event_id correlation
+    if lhs_is_sub and rhs_is_sub:
+        return _join_subqueries(lhs_expr, rhs_expr, expr, result_type, session=session)
+    elif lhs_is_sub:
+        # RHS is a JSONB expression - join subquery with log_event_alias
+        return build_result_subquery_with_join(
+            base_subq=lhs_expr,
+            join_target=log_event_alias,
+            join_condition=lhs_expr.c.log_event_id == log_event_alias.id,
+            value_expr=expr,
+            result_type=result_type,
+            prefix="arithmetic_op",
+        )
+    else:  # rhs_is_sub
+        # LHS is a JSONB expression - join subquery with log_event_alias
+        return build_result_subquery_with_join(
+            base_subq=rhs_expr,
+            join_target=log_event_alias,
+            join_condition=rhs_expr.c.log_event_id == log_event_alias.id,
+            value_expr=expr,
+            result_type=result_type,
+            prefix="arithmetic_op",
+        )
+
