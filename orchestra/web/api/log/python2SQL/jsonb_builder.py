@@ -1346,3 +1346,1108 @@ def _handle_logical_operator_jsonb(
             prefix="logical_op",
         )
 
+def _handle_functions_jsonb(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+    project_id=None,
+    context_id=None,
+    query_context=None,
+):
+    """Handle function calls in JSONB mode.
+
+    Implements a wide range of functions for JSONB queries:
+    - Type casting: int(), float(), bool(), str()
+    - Existence: exists() using PostgreSQL ? operator
+    - Length: len() for strings, arrays, and objects
+    - Type checking: type() returns JSONB type name
+    - Aggregations: mean(), sum(), var(), std(), min(), max(), median(), mode()
+    - Date/time: date(), time(), now(), round_timestamp()
+    - Math: round(), abs()
+    - Text: num_tokens() for token counting
+
+    When query_context is provided, aggregation functions use CTE-based
+    optimization for pre-computation instead of correlated subqueries.
+
+    Args:
+        filter_dict: Parsed filter expression with 'operand' and arguments.
+        log_event_alias: SQLAlchemy alias for the LogEvent table.
+        session: Database session for field type lookups.
+        log_event_ids: Optional list of log event IDs to filter on.
+        is_derived: Whether this is for a derived field expression.
+        local_scope: Local variable bindings for comprehensions.
+        is_vector: Whether the expression involves vector types.
+        project_id: Project ID for field type lookups.
+        context_id: Optional context ID for field type lookups.
+        query_context: Optional QueryContext for CTE-based aggregation optimization.
+    """
+    from orchestra.web.api.log.utils.metric_utils import (
+        AggregationMetric,
+        _get_reduction_expr,
+    )
+
+    from .core import _build_sql_query_jsonb
+
+    operand = filter_dict.get("operand")
+
+    if operand in ("int", "float", "bool"):
+        # Handle explicit casting: int(x), float(x), bool(x)
+        rhs = filter_dict.get("rhs")
+
+        # rhs is the argument (unwrapped by parser if single arg, or list if multiple/list literal)
+        # We pass it directly to _build_sql_query_jsonb
+        arg_expr = _build_sql_query_jsonb(
+            rhs,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+            query_context=query_context,
+        )
+
+        # Handle Subquery operands (from comprehensions, embed, BASE, etc.)
+        if isinstance(arg_expr, Subquery):
+            val_col, val_type = _select_value(
+                arg_expr,
+                session,
+                project_id=project_id,
+                context_id=context_id,
+            )
+
+            if operand == "int":
+                cast_result = cast(val_col, Integer)
+            elif operand == "float":
+                cast_result = cast(val_col, Float)
+            else:  # bool
+                cast_result = _create_truthiness_condition_jsonb(
+                    val_col,
+                    session,
+                    project_id,
+                    context_id,
+                )
+
+            # Wrap in subquery to preserve log_event_id
+            return build_result_subquery(
+                base_subq=arg_expr,
+                value_expr=cast_result,
+                result_type=operand,
+                prefix=f"{operand}_result",
+            )
+
+        # Infer type to help with casting
+        inferred_type = _infer_expression_type(
+            arg_expr,
+            session,
+            project_id,
+            context_id,
+        )
+
+        # Cast to target type
+        target_type = operand
+        casted = cast_expr(arg_expr, inferred_type, target_type, force_to_type=True)
+        return casted
+
+    rhs_dict = filter_dict.get("rhs")
+
+    # Helper to unpack single argument if passed as list (parser artifact?)
+    def _get_single_arg(rhs):
+        if isinstance(rhs, list) and len(rhs) == 1:
+            return rhs[0]
+        return rhs
+
+    # --- Aggregation Functions ---
+    if operand in [
+        "mean",
+        "sum",
+        "var",
+        "std",
+        "min",
+        "max",
+        "median",
+        "mode",
+    ]:
+        arg = _get_single_arg(rhs_dict)
+
+        # Map operand to AggregationMetric enum
+        metric_map = {
+            "mean": AggregationMetric.MEAN,
+            "sum": AggregationMetric.SUM,
+            "var": AggregationMetric.VAR,
+            "std": AggregationMetric.STD,
+            "min": AggregationMetric.MIN,
+            "max": AggregationMetric.MAX,
+            "median": AggregationMetric.MEDIAN,
+            "mode": AggregationMetric.MODE,
+        }
+
+        # For identifiers, look up field type directly from FieldType table
+        # This is more reliable than inferring from the SQL expression type
+        inferred_type = None
+        # Check if identifier is in local_scope - if so, get type from there
+        identifier_in_local_scope = False
+        if is_identifier_node(arg):
+            key = get_identifier_value(arg)
+            if local_scope and key in local_scope:
+                identifier_in_local_scope = True
+                # Get type from local_scope tuple (col, type)
+                _, scope_type = local_scope[key]
+                if scope_type:
+                    inferred_type = (
+                        normalize_field_type(scope_type)
+                        if isinstance(scope_type, str)
+                        else scope_type
+                    )
+            else:
+                ft = _get_field_type_from_db(key, session, project_id, context_id)
+                if ft:
+                    # Use type_mapping to normalize field type
+                    inferred_type = normalize_field_type(ft)
+
+        # Build argument expression
+        expr = _build_sql_query_jsonb(
+            arg,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+            query_context=query_context,
+        )
+
+        # Handle Subquery operands - extract the value column
+        if isinstance(expr, Subquery):
+            val_col, val_type = _select_value(
+                expr,
+                session,
+                project_id=project_id,
+                context_id=context_id,
+            )
+
+            # Coerce ambiguous string types to float for numeric aggregations
+            if val_type == "str" and operand in ("mean", "sum", "var", "std"):
+                val_type = "float"
+
+            agg_expr = _get_reduction_expr(
+                metric_map[operand],
+                val_type,
+                val_col,
+                "reduction_metric",
+            )
+
+            # For list/dict types, _get_reduction_expr returns a scalar subquery that references
+            # the parent subquery's value column. We need to wrap this in a proper subquery
+            # that includes the parent subquery in its FROM clause for proper correlation.
+            if val_type in ("list", "dict", "Any"):
+                # Build a proper wrapping subquery with GROUP BY
+                from .subquery_utils import build_result_subquery_with_groupby
+
+                return build_result_subquery_with_groupby(
+                    base_subq=expr,
+                    value_expr=agg_expr,
+                    result_type="float",
+                    prefix="aggregated",
+                    include_value_in_groupby=True,
+                )
+
+            return agg_expr
+
+        # If we didn't get type from FieldType lookup, infer from expression
+        if inferred_type is None:
+            inferred_type = _infer_expression_type(
+                expr,
+                session,
+                project_id,
+                context_id,
+            )
+
+        # Coerce string types to float for numeric aggregations
+        if inferred_type == "str" and operand in ("mean", "sum", "var", "std"):
+            inferred_type = "float"
+
+        # For list/dict types, ensure we use JSONB extraction (-> not ->>)
+        # so that _get_reduction_expr can properly use jsonb_array_elements
+        # BUT: Skip this rebuild if identifier was found in local_scope - the expression
+        # from local_scope is already correct (e.g., subq_a.c.data -> 'field')
+        field_key = None
+        if (
+            _is_jsonb_like_type(inferred_type)
+            and isinstance(arg, dict)
+            and arg.get("type") == "identifier"
+            and not identifier_in_local_scope  # Don't rebuild if from local_scope
+        ):
+            key = arg["value"]
+            field_key = key
+            # Rebuild expression using -> (JSONB) instead of ->> (TEXT)
+            expr = log_event_alias.data.op("->")(key)
+
+        # Register aggregation for CTE pre-computation when query_context provided
+        if (
+            query_context is not None
+            and _is_jsonb_like_type(inferred_type)
+            and isinstance(arg, dict)
+            and arg.get("type") == "identifier"
+        ):
+            # Get field key for CTE naming
+            if field_key is None:
+                field_key = arg.get("value", "expr")
+
+            # Build the JSONB field expression for CTE
+            jsonb_field_expr = log_event_alias.data.op("->")(field_key)
+
+            # Register aggregation for CTE pre-computation
+            return query_context.register_aggregation(
+                log_event_alias=log_event_alias,
+                jsonb_field_expr=jsonb_field_expr,
+                field_key=field_key,
+                metric_name=operand,
+                inferred_type=inferred_type,
+            )
+
+        # Fallback: Use existing correlated subquery approach
+        return _get_reduction_expr(
+            metric_map[operand],
+            inferred_type,
+            expr,
+            "reduction_metric",
+        )
+
+    # --- Existence Check ---
+    if operand == "exists":
+        arg = _get_single_arg(rhs_dict)
+        if isinstance(arg, dict) and arg.get("type") == "identifier":
+            key = arg["value"]
+            # PostgreSQL ? operator checks if key exists in JSONB object
+            return log_event_alias.data.op("?")(literal(key))
+        else:
+            # Complex expression existence check
+            expr = _build_sql_query_jsonb(
+                arg,
+                log_event_alias,
+                session,
+                log_event_ids,
+                is_derived=is_derived,
+                local_scope=local_scope,
+                is_vector=is_vector,
+                project_id=project_id,
+                context_id=context_id,
+                query_context=query_context,
+            )
+
+            # Handle Subquery operands
+            if isinstance(expr, Subquery):
+                val_col, val_type = _select_value(
+                    expr,
+                    session,
+                    project_id=project_id,
+                    context_id=context_id,
+                )
+
+                if _is_jsonb_like_type(val_type) or val_type == "bool":
+                    exists_expr = and_(
+                        val_col.isnot(None),
+                        func.jsonb_typeof(cast(val_col, JSONB)) != "null",
+                    )
+                else:
+                    exists_expr = val_col.isnot(None)
+
+                # Wrap in subquery to preserve log_event_id
+                return build_result_subquery(
+                    base_subq=expr,
+                    value_expr=exists_expr,
+                    result_type="bool",
+                    prefix="exists_result",
+                )
+
+            # Check for both SQL NULL and JSON null for proper existence semantics
+            inferred = _infer_expression_type(expr, session, project_id, context_id)
+
+            if _is_jsonb_like_type(inferred) or inferred == "bool":
+                # For JSONB types, ensure it's not 'null'::jsonb
+                return and_(
+                    expr.isnot(None),
+                    func.jsonb_typeof(cast(expr, JSONB)) != "null",
+                )
+            else:
+                # For scalar types (text, int, float), ->> returns SQL NULL if missing/null
+                return expr.isnot(None)
+
+    # --- Length Function ---
+    if operand == "len":
+        expr = _build_sql_query_jsonb(
+            _get_single_arg(rhs_dict),
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+            query_context=query_context,
+        )
+
+        # Handle Subquery operands (from embed, BASE, etc.)
+        if isinstance(expr, Subquery):
+            val_col, val_type = _select_value(
+                expr,
+                session,
+                project_id=project_id,
+                context_id=context_id,
+            )
+
+            # Build length expression based on type
+            if _is_list_type(val_type) or val_type == "vector":
+                len_expr = cast(func.jsonb_array_length(cast(val_col, JSONB)), Integer)
+            elif _is_dict_type(val_type):
+                len_expr = cast(
+                    select(func.count())
+                    .select_from(
+                        func.jsonb_object_keys(cast(val_col, JSONB)),
+                    )
+                    .scalar_subquery(),
+                    Integer,
+                )
+            elif val_type == "str":
+                len_expr = cast(func.length(cast(val_col, String)), Integer)
+            else:
+                len_expr = literal(0)
+
+            # Wrap in subquery to preserve log_event_id
+            return build_result_subquery(
+                base_subq=expr,
+                value_expr=len_expr,
+                result_type="int",
+                prefix="len_result",
+            )
+
+        # Handle JSONB expressions directly
+        inferred_type = _infer_expression_type(expr, session, project_id, context_id)
+
+        # Use centralized type helpers for normalization
+        if _is_list_type(inferred_type):
+            return cast(func.jsonb_array_length(cast(expr, JSONB)), Integer)
+        elif _is_dict_type(inferred_type):
+            # Count keys in object using a scalar subquery
+            return cast(
+                select(func.count())
+                .select_from(
+                    func.jsonb_object_keys(cast(expr, JSONB)),
+                )
+                .scalar_subquery(),
+                Integer,
+            )
+        elif inferred_type == "str":
+            return cast(func.length(cast_expr(expr, inferred_type, "str")), Integer)
+        else:
+            return literal(0)
+
+    # --- Type Inspection ---
+    if operand == "type":
+        arg = _get_single_arg(rhs_dict)
+        # If identifier, try to look up in FieldType first
+        if is_identifier_node(arg) and project_id is not None:
+            key = get_identifier_value(arg)
+            ft = _get_field_type_from_db(key, session, project_id, context_id)
+            # Only use FieldType if it's a specific type, not "Any" (default/unknown)
+            if ft and ft.lower() != "any":
+                # Use type_mapping for normalization
+                normalized = normalize_field_type(ft)
+                return literal(normalized)
+
+        # Fallback to runtime inspection
+        expr = _build_sql_query_jsonb(
+            arg,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+            query_context=query_context,
+        )
+
+        # Handle Subquery operands
+        if isinstance(expr, Subquery):
+            val_col, val_type = _select_value(
+                expr,
+                session,
+                project_id=project_id,
+                context_id=context_id,
+            )
+
+            # If we have a known type, use it directly
+            if val_type in ("int", "float", "str", "bool", "list", "dict", "vector"):
+                type_expr = literal(val_type)
+            else:
+                # Use jsonb_typeof for runtime inspection
+                pg_type = func.jsonb_typeof(cast(val_col, JSONB))
+                type_expr = case(
+                    (pg_type == "object", literal("dict")),
+                    (pg_type == "array", literal("list")),
+                    (pg_type == "string", literal("str")),
+                    (pg_type == "number", literal("float")),
+                    (pg_type == "boolean", literal("bool")),
+                    (pg_type == "null", literal("NoneType")),
+                    else_=literal("unknown"),
+                )
+
+            # Wrap in subquery to preserve log_event_id
+            return build_result_subquery(
+                base_subq=expr,
+                value_expr=type_expr,
+                result_type="str",
+                prefix="type_result",
+            )
+
+        # Use inferred type to distinguish int/float (jsonb_typeof returns 'number' for both)
+        inferred = _infer_expression_type(expr, session, project_id, context_id)
+        if inferred in ("int", "float"):
+            return literal(inferred)
+
+        # Map jsonb_typeof output to our type system
+        # Use -> (JSONB) not ->> (text) for type checking to distinguish JSON null from SQL NULL
+
+        # If arg is an identifier, use -> directly to preserve JSON null vs SQL NULL
+        if isinstance(arg, dict) and arg.get("type") == "identifier":
+            key = arg["value"]
+            jsonb_expr = log_event_alias.data.op("->")(key)
+        else:
+            # For complex expressions, we need to cast to JSONB
+            jsonb_expr = cast(expr, JSONB)
+
+        pg_type = func.jsonb_typeof(jsonb_expr)
+        return case(
+            (pg_type == "object", literal("dict")),
+            (pg_type == "array", literal("list")),
+            (pg_type == "string", literal("str")),
+            (
+                pg_type == "number",
+                literal("float"),
+            ),  # Default to float for generic numbers
+            (pg_type == "boolean", literal("bool")),
+            (pg_type == "null", literal("NoneType")),
+            else_=literal("unknown"),
+        )
+
+    # --- String Conversion ---
+    if operand == "str":
+        expr = _build_sql_query_jsonb(
+            _get_single_arg(rhs_dict),
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+            query_context=query_context,
+        )
+
+        # Handle Subquery operands (from embed, BASE, etc.)
+        if isinstance(expr, Subquery):
+            val_col, val_type = _select_value(
+                expr,
+                session,
+                project_id=project_id,
+                context_id=context_id,
+            )
+            str_expr = cast(val_col, String)
+
+            # Wrap in subquery to preserve log_event_id
+            return build_result_subquery(
+                base_subq=expr,
+                value_expr=str_expr,
+                result_type="str",
+                prefix="str_result",
+            )
+
+        return cast(expr, String)
+
+    # --- Token Count ---
+    if operand == "num_tokens":
+        arg_dict = _get_single_arg(rhs_dict)
+
+        # For identifiers, get raw text directly without type casting
+        # This avoids issues with interval/timedelta conversions
+        if isinstance(arg_dict, dict) and arg_dict.get("type") == "identifier":
+            key = arg_dict["value"]
+            # Get raw JSONB text value
+            raw_expr = log_event_alias.data[key].astext  # Use ->> to get text
+            # Handle NULL: return 0 for null field values, NULL for missing fields
+            # Using CASE: if field exists, count bytes (coalesce 0 for null values)
+            # If field doesn't exist, return NULL (which won't match == 0)
+            byte_len = case(
+                (
+                    log_event_alias.data.has_key(key),
+                    func.coalesce(func.octet_length(raw_expr), 0),
+                ),
+                else_=literal(None),
+            )
+            return cast(
+                func.ceil(
+                    cast(byte_len, Float) * literal(0.25),
+                ),
+                Float,
+            )
+
+        expr = _build_sql_query_jsonb(
+            arg_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+            query_context=query_context,
+        )
+
+        # Handle Subquery operands
+        if isinstance(expr, Subquery):
+            val_col, val_type = _select_value(
+                expr,
+                session,
+                project_id=project_id,
+                context_id=context_id,
+            )
+            token_expr = cast(
+                func.ceil(
+                    cast(func.octet_length(cast(val_col, Text)), Float) * literal(0.25),
+                ),
+                Float,
+            )
+
+            # Wrap in subquery to preserve log_event_id
+            return build_result_subquery(
+                base_subq=expr,
+                value_expr=token_expr,
+                result_type="float",
+                prefix="num_tokens_result",
+            )
+
+        # Estimate: ceil(octet_length(text) * 0.25)
+        # Explicitly cast result to Float to ensure numeric comparison
+        return cast(
+            func.ceil(
+                cast(func.octet_length(cast(expr, Text)), Float) * literal(0.25),
+            ),
+            Float,
+        )
+
+    # --- Date/Time Functions ---
+    if operand in ["date", "time", "now", "round_timestamp"]:
+        if operand == "now":
+            return func.timezone("UTC", func.now())
+
+        return _handle_date_function_jsonb(
+            operand,
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope,
+            is_vector,
+            project_id,
+            context_id,
+            query_context=query_context,
+        )
+
+    # --- Numeric Rounding ---
+    if operand == "round":
+        # Normalize rhs to list of arguments
+        rhs = rhs_dict
+        if not isinstance(rhs, list):
+            rhs = [rhs]
+
+        # Build each argument expression
+        args = []
+        for arg in rhs:
+            args.append(
+                _build_sql_query_jsonb(
+                    arg,
+                    log_event_alias,
+                    session,
+                    log_event_ids,
+                    is_derived=is_derived,
+                    local_scope=local_scope,
+                    is_vector=is_vector,
+                    project_id=project_id,
+                    context_id=context_id,
+                    query_context=query_context,
+                ),
+            )
+
+        if not args:
+            return literal(None)
+
+        from sqlalchemy import Numeric
+
+        # Check if first arg is a Subquery
+        if isinstance(args[0], Subquery):
+            val_col, val_type = _select_value(
+                args[0],
+                session,
+                project_id=project_id,
+                context_id=context_id,
+            )
+            val = cast(val_col, Numeric)
+
+            if len(args) > 1:
+                # Handle second argument (digits)
+                if isinstance(args[1], Subquery):
+                    digits_col, _ = _select_value(
+                        args[1],
+                        session,
+                        project_id=project_id,
+                        context_id=context_id,
+                    )
+                    digits = cast(digits_col, Integer)
+                elif isinstance(args[1], BindParameter):
+                    digits = cast(literal(args[1].value), Integer)
+                else:
+                    digits = cast(args[1], Integer)
+                round_expr = func.round(val, digits)
+            else:
+                round_expr = func.round(val)
+
+            # Wrap in subquery to preserve log_event_id
+            return build_result_subquery(
+                base_subq=args[0],
+                value_expr=round_expr,
+                result_type="float",
+                prefix="round_result",
+            )
+
+        # Apply func.round with casting to Numeric
+        val = cast(args[0], Numeric)
+        if len(args) > 1:
+            digits = cast(args[1], Integer)
+            return func.round(val, digits)
+        else:
+            return func.round(val)
+
+    # --- Special Values ---
+    if operand == "isNone":
+        # isNone(x) checks if x is None/NULL and returns a boolean
+        # Example: "isNone(field1)" returns True if field1 is NULL
+        # Returns True if the value is NULL/None
+        arg_expr = _build_sql_query_jsonb(
+            _get_single_arg(rhs_dict),
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+            query_context=query_context,
+        )
+
+        # Handle Subquery operands
+        if isinstance(arg_expr, Subquery):
+            val_col, val_type = _select_value(
+                arg_expr,
+                session,
+                project_id=project_id,
+                context_id=context_id,
+            )
+            is_none_expr = val_col.is_(None)
+            return build_result_subquery(
+                base_subq=arg_expr,
+                value_expr=is_none_expr,
+                result_type="bool",
+                prefix="isnone_result",
+            )
+
+        # For direct expressions, return is None check
+        return arg_expr.is_(None)
+
+    if operand == "version":
+        # Return param_version column if available, or NULL
+        return literal(None)
+
+    if operand == "BASE":
+        # BASE(event_ids, key) is used for referencing fields from OTHER log events.
+        # In JSONB mode, we query LogEvent.data directly for the specified event_ids.
+        if not isinstance(rhs_dict, list) or len(rhs_dict) != 2:
+            raise ValueError("BASE(...) requires exactly 2 arguments: (event_id, key)")
+
+        # Build the event_ids expression
+        event_id_expr = _build_sql_query_jsonb(
+            rhs_dict[0],
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+            query_context=query_context,
+        )
+
+        # Get the key name
+        # The key can be either:
+        # 1. A string (when field name contains special characters and was quoted)
+        # 2. A dict with type="identifier" (standard field reference)
+        key_dict = rhs_dict[1]
+        if isinstance(key_dict, str):
+            # Quoted field name (e.g., for "dt/est_time")
+            key = key_dict
+        elif isinstance(key_dict, dict) and key_dict.get("type") == "identifier":
+            key = key_dict["value"]
+        else:
+            raise ValueError(
+                f"BASE() second argument must be an identifier or string, got: {key_dict}",
+            )
+
+        # Extract base_ids from the expression
+        if isinstance(event_id_expr, BindParameter):
+            base_ids = event_id_expr.value
+        elif isinstance(event_id_expr, list):
+            base_ids = event_id_expr
+        else:
+            # Execute to get the value
+            import json
+
+            base_ids = session.execute(select(event_id_expr)).scalar()
+            if isinstance(base_ids, str):
+                base_ids = json.loads(base_ids)
+            if not isinstance(base_ids, list):
+                base_ids = [base_ids]
+
+        # JSONB-native: Query LogEvent.data for the referenced log events
+        from sqlalchemy.orm import aliased
+
+        ref_log_event = aliased(LogEvent, name="base_ref_log_event")
+
+        # Build JSONB field extraction for the key
+        field_type = _get_field_type_from_db(key, session, project_id, context_id)
+
+        # Normalize field type - handle "Any", None, and display types
+        # Use get_base_storage_type to extract base type from nested types like "list[dict[str, int]]" -> "list"
+        from orchestra.web.api.log.utils.type_utils import get_base_storage_type
+
+        base_type = get_base_storage_type(field_type) if field_type else "any"
+        normalized_type = base_type.lower() if base_type else "any"
+
+        # Map display types and variations to internal types
+        # This handles JSON Schema types, Python types, and common variations
+        type_mapping = {
+            # JSON Schema types
+            "integer": "int",
+            "number": "float",
+            "string": "str",
+            "boolean": "bool",
+            "array": "list",
+            "object": "dict",
+            # Python type variations
+            "nonetype": "str",  # Treat None as str for extraction
+            "none": "str",
+            # Temporal type variations
+            "timestamp": "datetime",
+            "interval": "timedelta",
+        }
+        normalized_type = type_mapping.get(normalized_type, normalized_type)
+
+        # If type is "Any" or unknown, infer type from actual JSONB data
+        # This handles all python2SQL types: int, float, str, bool, list, dict,
+        # datetime, date, time, timedelta, vector, etc.
+        if normalized_type in ("any", "none", ""):
+            if base_ids:
+                from orchestra.db.dao.log_dao import LogDAO
+                from orchestra.web.api.log.utils.type_utils import get_base_storage_type
+
+                # Sample ALL base_ids to find the first non-null type
+                # This handles cases where some logs have null values for the field
+                sample_query = (
+                    select(func.jsonb_typeof(ref_log_event.data.op("->")(key)))
+                    .where(ref_log_event.id.in_(base_ids))
+                    .where(ref_log_event.data.op("->")(key).isnot(None))  # Skip nulls
+                    .limit(1)
+                )
+                json_type = session.execute(sample_query).scalar()
+
+                # If all values are null, try to get any non-null jsonb_typeof
+                if json_type is None:
+                    # All values are null or field doesn't exist - check if field exists at all
+                    exists_query = (
+                        select(func.jsonb_typeof(ref_log_event.data.op("->")(key)))
+                        .where(ref_log_event.id.in_(base_ids))
+                        .limit(1)
+                    )
+                    json_type = session.execute(exists_query).scalar()
+
+                # Map PostgreSQL jsonb types to our internal types
+                jsonb_type_mapping = {
+                    "number": "float",  # Will refine below
+                    "boolean": "bool",
+                    "array": "list",
+                    "object": "dict",
+                    "null": "float",  # Default for null - assume numeric for arithmetic
+                }
+
+                if json_type == "string":
+                    # For strings, sample the actual value and use LogDAO.infer_type
+                    # to detect temporal types (datetime, date, time, timedelta)
+                    value_sample = session.execute(
+                        select(ref_log_event.data.op("->>")(key))
+                        .where(ref_log_event.id.in_(base_ids))
+                        .where(
+                            ref_log_event.data.op("->>")(key).isnot(None),
+                        )  # Skip nulls
+                        .limit(1),
+                    ).scalar()
+                    if value_sample is not None:
+                        # LogDAO.infer_type can detect datetime, date, time, timedelta from strings
+                        inferred = LogDAO.infer_type(key, value_sample)
+                        normalized_type = get_base_storage_type(inferred) or inferred
+                    else:
+                        normalized_type = "str"
+                elif json_type == "number":
+                    # For numbers, determine if int or float by checking string representation
+                    # We use the string representation because PostgreSQL CAST requires it:
+                    # - "25.0" can't be cast to INTEGER (has decimal point)
+                    # - "25" can be cast to INTEGER
+                    value_sample = session.execute(
+                        select(ref_log_event.data.op("->>")(key))
+                        .where(ref_log_event.id.in_(base_ids))
+                        .where(
+                            ref_log_event.data.op("->>")(key).isnot(None),
+                        )  # Skip nulls
+                        .limit(1),
+                    ).scalar()
+                    if value_sample is not None:
+                        # Check if the string contains a decimal point or scientific notation
+                        # If so, treat as float to avoid PostgreSQL cast errors
+                        if "." in value_sample or "e" in value_sample.lower():
+                            normalized_type = "float"
+                        else:
+                            try:
+                                int(value_sample)  # Verify it's a valid integer literal
+                                normalized_type = "int"
+                            except (ValueError, TypeError):
+                                normalized_type = "float"
+                    else:
+                        normalized_type = "float"
+                elif json_type in jsonb_type_mapping:
+                    normalized_type = jsonb_type_mapping[json_type]
+                else:
+                    normalized_type = (
+                        "float"  # Default fallback - assume numeric for arithmetic
+                    )
+            else:
+                normalized_type = (
+                    "float"  # Default fallback - assume numeric for arithmetic
+                )
+
+        # Build the value expression based on type
+        # Support all python2SQL types: numeric, boolean, temporal, collections
+        raw_text_expr = ref_log_event.data.op("->>")(key)
+
+        if normalized_type == "float":
+            value_expr = cast(raw_text_expr, Float)
+        elif normalized_type == "int":
+            value_expr = cast(raw_text_expr, Integer)
+        elif normalized_type == "bool":
+            value_expr = cast(ref_log_event.data.op("->")(key), Boolean)
+        elif normalized_type in ("list", "dict"):
+            value_expr = ref_log_event.data.op("->")(key)
+        elif normalized_type == "datetime":
+            # Use safe cast function to handle invalid values gracefully (returns NULL instead of error)
+            # This handles mixed types where some values are valid dates and some are garbage like "NULL"
+            value_expr = cast_expr(raw_text_expr, "str", "datetime")
+        elif normalized_type == "date":
+            # Use safe cast function to handle invalid values gracefully
+            value_expr = cast_expr(raw_text_expr, "str", "date")
+        elif normalized_type == "time":
+            # Use safe cast function to handle invalid values gracefully
+            value_expr = cast_expr(raw_text_expr, "str", "time")
+        elif normalized_type == "timedelta":
+            # Use safe cast function to handle invalid values gracefully
+            value_expr = cast_expr(raw_text_expr, "str", "timedelta")
+        elif normalized_type == "vector":
+            # Vector fields should be fetched from Embedding table, not JSONB
+            # Build a subquery that joins with Embedding table
+            from .helpers import DEFAULT_EMBEDDING_MODEL
+
+            model_name = DEFAULT_EMBEDDING_MODEL
+
+            # Build subquery selecting from Embedding table
+            vector_subq = (
+                select(
+                    ref_log_event.id.label("log_event_id"),
+                    Embedding.vector.label("value"),
+                    literal("vector").label("inferred_type"),
+                )
+                .select_from(ref_log_event)
+                .outerjoin(
+                    Embedding,
+                    and_(
+                        Embedding.ref_id == ref_log_event.id,
+                        Embedding.key == literal(key),
+                        Embedding.model == literal(model_name),
+                    ),
+                )
+                .where(ref_log_event.id.in_(base_ids))
+            )
+
+            return alias_utils.subquery_with_unique_alias(
+                vector_subq,
+                prefix=f"base_call_{key}",
+            )
+        else:
+            # For "str" and unknown types, extract as text
+            value_expr = raw_text_expr
+
+        inferred_type = normalized_type
+
+        # Build subquery selecting from referenced log events
+        select_cols = [
+            ref_log_event.id.label("log_event_id"),
+            value_expr.label("value"),
+            literal(inferred_type).label("inferred_type"),
+        ]
+
+        # Check if we're in a nested comprehension context
+        # If so, we need to join with the outer comprehension's base to correlate log_event_id
+        outer_comp_base = None
+        if local_scope and "__comp_base__" in local_scope:
+            comp_base = local_scope["__comp_base__"]
+            if comp_base:
+                # Get the first outer comprehension base (could be from dict-comp or list-comp)
+                for base_key, base_subq in comp_base.items():
+                    if isinstance(base_subq, Subquery):
+                        outer_comp_base = base_subq
+                        break
+
+        # Add parent index if in comprehension context
+        if local_scope and "__comp_idx__" in local_scope:
+            parent_idx_col, _ = local_scope["__comp_idx__"]
+            select_cols.insert(1, parent_idx_col.label("__comp_idx__"))
+
+        # Build the query with proper correlation for nested comprehensions
+        if outer_comp_base is not None:
+            # Join with outer comprehension's base to correlate log_event_id
+            # This ensures {log:field} accesses the same log event as the outer iteration
+            base_subq = (
+                select(*select_cols)
+                .select_from(outer_comp_base)
+                .join(
+                    ref_log_event,
+                    ref_log_event.id == outer_comp_base.c.log_event_id,
+                )
+                .where(ref_log_event.id.in_(base_ids))
+            )
+        else:
+            base_subq = (
+                select(*select_cols)
+                .select_from(ref_log_event)
+                .where(ref_log_event.id.in_(base_ids))
+            )
+
+        return alias_utils.subquery_with_unique_alias(
+            base_subq,
+            prefix=f"base_call_{key}",
+        )
+
+    # --- Embedding Functions ---
+    if operand == "embed":
+        return _handle_embed_jsonb(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+        )
+
+    if operand == "embed_image":
+        return _handle_embed_image_jsonb(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+        )
+
+    if operand == "phash":
+        return _handle_phash_jsonb(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+        )
+
+    # zip function - handle locally for JSONB
+    if operand == "zip":
+        return _handle_zip_jsonb(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+        )
+
+    if operand in ("jsonb_build_array", "jsonb_build_object"):
+        rhs = rhs_dict
+        if not isinstance(rhs, list):
+            rhs = [rhs]
+
+        args = []
+        for arg in rhs:
+            args.append(
+                _build_sql_query_jsonb(
+                    arg,
+                    log_event_alias,
+                    session,
+                    log_event_ids,
+                    is_derived=is_derived,
+                    local_scope=local_scope,
+                    is_vector=is_vector,
+                    project_id=project_id,
+                    context_id=context_id,
+                    query_context=query_context,
+                ),
+            )
+
+        if operand == "jsonb_build_array":
+            return func.jsonb_build_array(*args)
+        else:
+            return func.jsonb_build_object(*args)
+
+    raise NotImplementedError(f"JSONB support for function {operand} not implemented")
+
