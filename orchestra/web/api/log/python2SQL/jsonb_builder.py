@@ -2617,3 +2617,244 @@ def _handle_date_function_jsonb(
         f"Date function {operand} not fully implemented for JSONB",
     )
 
+
+def _wrap_expression_as_subquery(
+    expr,
+    inferred_type: str,
+    log_event_alias,
+    session,
+    local_scope=None,
+    prefix: str = "wrapped_expr",
+):
+    """
+    Wrap a JSONB expression in a subquery with standard columns (log_event_id, value, inferred_type).
+
+    Enables comprehension and method handlers to work with JSONB expressions by converting them
+    to the expected subquery format. Propagates index columns for nested comprehensions.
+    """
+    from sqlalchemy.sql.selectable import Subquery
+
+    from . import alias_utils
+
+    # Determine the base to select from
+    # For nested comprehensions, we may need to use a base subquery from local_scope
+    from_clause = log_event_alias
+    log_event_id_col = log_event_alias.id
+
+    # Check if we're in a nested comprehension context with a base subquery
+    if local_scope:
+        comp_base = local_scope.get("__comp_base__", {})
+        if comp_base:
+            # Use the first base subquery if available
+            for key, base_subq in comp_base.items():
+                if isinstance(base_subq, Subquery):
+                    from_clause = base_subq
+                    log_event_id_col = base_subq.c.log_event_id
+                    break
+
+    # Build select columns
+    select_cols = [
+        log_event_id_col.label("log_event_id"),
+    ]
+
+    # Include __comp_idx__ if present in local_scope (for comprehensions)
+    if local_scope and "__comp_idx__" in local_scope:
+        idx_col, _ = local_scope["__comp_idx__"]
+        select_cols.append(idx_col.label("__comp_idx__"))
+
+    # Include __parent_idx__ if present (for nested comprehensions)
+    if local_scope and "__parent_idx__" in local_scope:
+        parent_col, _ = local_scope["__parent_idx__"]
+        select_cols.append(parent_col.label("__parent_idx__"))
+
+    # Add ordinality column if we're wrapping for iteration (list type)
+    # This helps maintain proper element ordering in comprehensions
+    if _is_list_type(inferred_type) and from_clause is log_event_alias:
+        # For top-level list expressions, add a placeholder ordinality
+        # The actual ordinality will be provided by jsonb_array_elements
+        pass  # Ordinality is handled by the comprehension handler
+
+    # Add value and type columns
+    # Cast to JSONB for collection types to preserve structure
+    # Use centralized type helpers for consistent normalization
+    if _is_list_type(inferred_type) or _is_dict_type(inferred_type):
+        value_col = cast(expr, JSONB).label("value")
+    else:
+        value_col = expr.label("value")
+
+    select_cols.extend(
+        [
+            value_col,
+            literal(inferred_type).label("inferred_type"),
+        ],
+    )
+
+    subq = select(*select_cols).select_from(from_clause)
+
+    return alias_utils.subquery_with_unique_alias(subq, prefix=prefix)
+
+
+def _is_jsonb_expression(expr) -> bool:
+    """
+    Detect if an object is a JSONB expression or a Subquery.
+
+    Returns True if it's a JSONB expression (BinaryExpression with JSONB operators,
+    Cast expressions, or direct column references), False if it's a Subquery.
+    """
+    from sqlalchemy.sql.elements import ColumnElement
+    from sqlalchemy.sql.selectable import Subquery
+
+    if isinstance(expr, Subquery):
+        return False
+
+    # If it's a Cast, BinaryExpression, or other ColumnElement, it's an expression
+    if isinstance(expr, (BinaryExpression, Cast)):
+        return True
+
+    # Check for ColumnElement (covers most SQLAlchemy expressions)
+    if isinstance(expr, ColumnElement):
+        return True
+
+    return False
+
+
+
+def _handle_list_comp_jsonb(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+    project_id=None,
+    context_id=None,
+    query_context=None,
+):
+    """
+    Handle list comprehension expressions like [x*2 for x in scores if x > 0].
+
+    Builds the iterable expression, wraps it as a subquery if needed, and processes
+    the comprehension logic.
+    """
+    from .core import _build_sql_query_jsonb
+    from .functions import _handle_list_comp
+
+    # Build the iterable expression
+    iter_expr = _build_sql_query_jsonb(
+        filter_dict["iter"],
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+
+    # If result is a direct JSONB expression (not a subquery), wrap it
+    if _is_jsonb_expression(iter_expr):
+        inferred_type = _infer_expression_type(
+            iter_expr,
+            session,
+            project_id,
+            context_id,
+        )
+        iter_expr = _wrap_expression_as_subquery(
+            iter_expr,
+            inferred_type,
+            log_event_alias,
+            session,
+            local_scope=local_scope,
+            prefix="list_comp_iter_jsonb",
+        )
+
+    # Create a modified filter_dict with the wrapped iter subquery
+    # The shared handler will use _jsonb_iter_subq instead of rebuilding from filter_dict["iter"]
+    modified_filter = {**filter_dict, "_jsonb_iter_subq": iter_expr}
+
+    # Delegate to the shared handler which will use the wrapped subquery
+    return _handle_list_comp(
+        modified_filter,
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+    )
+
+
+def _handle_dict_comp_jsonb(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+    project_id=None,
+    context_id=None,
+    query_context=None,
+):
+    """
+    Handle dictionary comprehension expressions in JSONB mode.
+
+    Similar to list comprehensions but for {k: v*2 for k, v in items.items() if v > 0}.
+    Wraps JSONB expressions as subqueries and delegates to shared handler logic.
+    """
+    from .core import _build_sql_query_jsonb
+    from .functions import _handle_dict_comp
+
+    # Build the iterable expression
+    iter_expr = _build_sql_query_jsonb(
+        filter_dict["iter"],
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+
+    # If result is a direct JSONB expression, wrap it
+    if _is_jsonb_expression(iter_expr):
+        inferred_type = _infer_expression_type(
+            iter_expr,
+            session,
+            project_id,
+            context_id,
+        )
+        iter_expr = _wrap_expression_as_subquery(
+            iter_expr,
+            inferred_type,
+            log_event_alias,
+            session,
+            local_scope=local_scope,
+            prefix="dict_comp_iter_jsonb",
+        )
+
+    # Create a modified filter_dict with the wrapped iter subquery
+    # The shared handler will use _jsonb_iter_subq instead of rebuilding from filter_dict["iter"]
+    modified_filter = {**filter_dict, "_jsonb_iter_subq": iter_expr}
+
+    # Delegate to the shared handler with the wrapped subquery
+    return _handle_dict_comp(
+        modified_filter,
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+    )
+
