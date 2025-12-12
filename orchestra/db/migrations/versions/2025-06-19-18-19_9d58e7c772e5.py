@@ -5,8 +5,8 @@ Revises: c4c58223e97d
 Create Date: 2025-06-19 18:19:52.977191
 
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
@@ -43,7 +43,10 @@ def downgrade() -> None:
             nullable=True,
         ),
         sa.Column(
-            "updated_at", postgresql.TIMESTAMP(), autoincrement=False, nullable=True
+            "updated_at",
+            postgresql.TIMESTAMP(),
+            autoincrement=False,
+            nullable=True,
         ),
         sa.ForeignKeyConstraint(
             ["context_id"],
@@ -74,7 +77,10 @@ def downgrade() -> None:
             nullable=True,
         ),
         sa.Column(
-            "updated_at", postgresql.TIMESTAMP(), autoincrement=False, nullable=True
+            "updated_at",
+            postgresql.TIMESTAMP(),
+            autoincrement=False,
+            nullable=True,
         ),
         sa.ForeignKeyConstraint(
             ["project_id"],
