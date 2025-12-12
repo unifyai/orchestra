@@ -345,9 +345,9 @@ async def test_org_a_org_b_isolation(client: AsyncClient, dbsession):
     ), "Org A member should NOT access Org B project"
 
     # ORG A MEMBER: CANNOT access Org B organization
-    assert not resource_access_dao.check_user_permission(
+    # Use check_org_member_permission for org-level access checks
+    assert not resource_access_dao.check_org_member_permission(
         org_a_member["id"],
-        "org",
         org_b_id,
         "org:read",
     ), "Org A member should NOT access Org B organization"

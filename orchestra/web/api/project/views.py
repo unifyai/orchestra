@@ -663,10 +663,9 @@ def create_project(
     try:
         if organization_id:
             # Org API key - create organizational project
-            # Check if user has project:write permission in the org
-            has_permission = resource_access_dao.check_user_permission(
+            # Check if user has project:write permission via org membership role
+            has_permission = resource_access_dao.check_org_member_permission(
                 request_fastapi.state.user_id,
-                "org",
                 organization_id,
                 "project:write",
             )
