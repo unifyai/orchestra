@@ -143,4 +143,14 @@ supported_models = {
         "context_window": 400000,
         "cost": {"prompt": 1.25, "completion": 10},
     },
+    "gpt-5.2": {
+        "endpoint": "gpt-5.2",
+        "context_window": 400000,
+        "cost": {"prompt": 1.75, "completion": 14},
+    },
+    "gpt-5.2-chat-latest": {
+        "endpoint": "gpt-5.2-chat-latest",
+        "context_window": 400000,
+        "cost": {"prompt": 1.75, "completion": 14},
+    },
 }
