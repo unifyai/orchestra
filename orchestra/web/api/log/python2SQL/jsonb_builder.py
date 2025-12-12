@@ -2451,3 +2451,169 @@ def _handle_functions_jsonb(
 
     raise NotImplementedError(f"JSONB support for function {operand} not implemented")
 
+
+
+def _handle_date_function_jsonb(
+    operand,
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived,
+    local_scope,
+    is_vector,
+    project_id,
+    context_id,
+    query_context=None,
+):
+    """
+    Handle date/time functions (date, time, round_timestamp) for JSONB.
+    """
+    from .core import _build_sql_query_jsonb
+
+    rhs_dict = filter_dict.get("rhs")
+
+    # Helper for timestamp rounding
+    def _pg_round_timestamp(ts_col, seconds_col):
+        # func.to_timestamp(func.round(func.extract('epoch', ts_col) / seconds_col) * seconds_col)
+        # Note: ts_col might be JSONB, so we need to cast to timestamp first
+        # Use safe_cast_to_timestamptz for proper type handling
+        from sqlalchemy import Numeric as NumericType
+        from sqlalchemy import Text
+
+        # Cast to text first to get the string value, then to timestamp
+        ts_as_text = func.replace(cast(ts_col, Text), '"', "")
+        ts_as_timestamp = func.safe_cast_to_timestamptz(ts_as_text)
+
+        epoch = func.extract("epoch", ts_as_timestamp)
+        return func.to_timestamp(
+            func.round(epoch / cast(seconds_col, NumericType)) * seconds_col,
+        )
+
+    if operand == "round_timestamp":
+        # Expect exactly two arguments
+        if not isinstance(rhs_dict, list) or len(rhs_dict) != 2:
+            raise ValueError("round_timestamp requires exactly 2 arguments")
+
+        ts_expr = _build_sql_query_jsonb(
+            rhs_dict[0],
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+            query_context=query_context,
+        )
+        sec_expr = _build_sql_query_jsonb(
+            rhs_dict[1],
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+            query_context=query_context,
+        )
+
+        # Handle Subquery for ts_expr
+        if isinstance(ts_expr, Subquery):
+            ts_val, _ = _select_value(
+                ts_expr,
+                session,
+                project_id=project_id,
+                context_id=context_id,
+            )
+            sec_val = (
+                sec_expr.value if isinstance(sec_expr, BindParameter) else sec_expr
+            )
+            if isinstance(sec_expr, Subquery):
+                sec_val, _ = _select_value(
+                    sec_expr,
+                    session,
+                    project_id=project_id,
+                    context_id=context_id,
+                )
+
+            round_expr = _pg_round_timestamp(ts_val, sec_val)
+
+            # Wrap in subquery
+            return build_result_subquery(
+                base_subq=ts_expr,
+                value_expr=round_expr,
+                result_type="datetime",
+                prefix="round_timestamp_result",
+            )
+
+        return _pg_round_timestamp(ts_expr, sec_expr)
+
+    # For single-argument date/time functions
+    expr = _build_sql_query_jsonb(
+        rhs_dict,
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+
+    # Handle Subquery operands
+    if isinstance(expr, Subquery):
+        val_col, val_type = _select_value(
+            expr,
+            session,
+            project_id=project_id,
+            context_id=context_id,
+        )
+
+        if operand == "date":
+            if val_type == "datetime":
+                result_expr = cast(func.date_trunc("day", val_col), Date)
+            else:
+                result_expr = cast_expr(val_col, val_type, "date")
+            result_type = "date"
+        elif operand == "time":
+            if val_type == "datetime":
+                result_expr = cast(val_col, Time)
+            else:
+                result_expr = cast_expr(val_col, val_type, "time")
+            result_type = "time"
+        else:
+            raise NotImplementedError(
+                f"Date function {operand} not fully implemented for JSONB",
+            )
+
+        # Wrap in subquery
+        return build_result_subquery(
+            base_subq=expr,
+            value_expr=result_expr,
+            result_type=result_type,
+            prefix=f"{operand}_result",
+        )
+
+    inferred_type = _infer_expression_type(expr, session, project_id, context_id)
+
+    if operand == "date":
+        # Special handling for datetime -> date conversion
+        if inferred_type == "datetime":
+            return cast(func.date_trunc("day", expr), Date)
+        return cast_expr(expr, inferred_type, "date")
+
+    if operand == "time":
+        # Special handling for datetime -> time
+        if inferred_type == "datetime":
+            return cast(expr, Time)
+        return cast_expr(expr, inferred_type, "time")
+
+    raise NotImplementedError(
+        f"Date function {operand} not fully implemented for JSONB",
+    )
+
