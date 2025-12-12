@@ -23,7 +23,9 @@ async def test_create_organization(client: AsyncClient):
 
     assert org_data["name"] == "Test Org"
     assert org_data["owner_id"] == owner["id"]
-    assert org_data["billing_user_id"] == owner["id"]  # Always equals owner
+    assert (
+        org_data["billing_user_id"] == owner["id"]
+    )  # Defaults to owner (delegated mode)
     assert "id" in org_data
     assert "created_at" in org_data
     # Owner should receive an organization API key
