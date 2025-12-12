@@ -34,10 +34,12 @@ from sqlalchemy.sql.expression import Exists, UnaryExpression
 from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.dao.log_dao import LogDAO
+from orchestra.db.models.orchestra_models import Log, LogEventLog
 
-from . import alias_utils
+from . import alias_utils, jsonb_builder
 from .core import build_sql_query
 from .helpers import (
+    _is_jsonb_expression,
     _join_subqueries,
     _parse_rhs_list_or_dict_if_needed,
     _select_value,
@@ -254,33 +256,44 @@ def _create_truthiness_condition(subq_or_literal, session):
     if isinstance(subq_or_literal, (Exists, UnaryExpression)):
         return subq_or_literal
 
-    # If it's a literal value, we can determine truthiness directly in Python.
-    if not isinstance(subq_or_literal, Subquery):
-        # Let SQLAlchemy handle the boolean conversion for literals
-        return literal(
-            bool(
-                (
-                    subq_or_literal.value
-                    if isinstance(subq_or_literal, BindParameter)
-                    else subq_or_literal
-                ),
-            ),
-        )
-
     # If it's a subquery, build the condition based on its value and type.
-    val_col, val_type = _select_value(subq_or_literal, session)
+    if isinstance(subq_or_literal, Subquery):
+        val_col, val_type = _select_value(subq_or_literal, session)
 
-    # Handle cases where the subquery returns no value (e.g., key does not exist).
-    # This should be treated as falsy.
-    if val_col is None:
-        return literal(False)
+        # Handle cases where the subquery returns no value (e.g., key does not exist).
+        # This should be treated as falsy.
+        if val_col is None:
+            return literal(False)
 
+        return _build_truthiness_sql(val_col, val_type)
+
+    # Handle general SQL expressions (Case, BinaryExpression, ColumnElement, etc.)
+    # These are SQLAlchemy clause elements that cannot be converted to Python bool
+    if isinstance(subq_or_literal, ClauseElement):
+        from .helpers import _infer_expression_type
+
+        val_type = _infer_expression_type(subq_or_literal, session)
+        return _build_truthiness_sql(subq_or_literal, val_type)
+
+    # If it's a BindParameter, extract the value
+    if isinstance(subq_or_literal, BindParameter):
+        return literal(bool(subq_or_literal.value))
+
+    # For plain Python literals, determine truthiness directly
+    return literal(bool(subq_or_literal))
+
+
+def _build_truthiness_sql(val_col, val_type):
+    """
+    Build SQL truthiness condition based on value type.
+    """
     if val_type == "bool":
         # The value column might be JSONB, so we must cast it to Boolean.
         return cast(val_col, Boolean).is_(True)
     elif val_type in ("int", "float"):
         # For numbers, check if not 0
         return case(
+            (val_col.is_(None), literal(False)),
             (func.jsonb_typeof(val_col) == "null", literal(False)),
             else_=(cast(val_col, Float) != 0),
         )
@@ -441,7 +454,7 @@ def _handle_logical_operator(
                 select(
                     identifier_subq.c.log_event_id.label("log_event_id"),
                     combined_condition.label("value"),
-                    literal("bool").label("inferred_type"),
+                    literal("bool", type_=Boolean).label("inferred_type"),
                 )
                 .select_from(identifier_subq)
                 .where(combined_condition),
@@ -471,10 +484,24 @@ def _handle_logical_operator(
     lhs_is_sub = isinstance(lhs, Subquery)
     rhs_is_sub = isinstance(rhs, Subquery)
 
+    # For JOIN conditions, we want simple SQL AND/OR operators, not CASE expressions.
+    # The CASE-based truthiness logic is for WHERE clause filtering where Python
+    # semantics (e.g. NULL handling) need to be matched. JOIN conditions work
+    # differently and need direct boolean expressions for proper query planning.
+    comparison_context = None
+    if isinstance(local_scope, dict):
+        comparison_context = local_scope.get("__comparison_context__")
+
+    if comparison_context == "join" and not lhs_is_sub and not rhs_is_sub:
+        # For JOIN context with non-subquery expressions, use simple SQL operators
+        return and_(lhs, rhs) if operand == "and" else or_(lhs, rhs)
+
     # If neither are subqueries, the operation is happening in a simple WHERE clause
     # where standard `and_` and `or_` are sufficient.
-    if not lhs_is_sub and not rhs_is_sub:
-        return and_(lhs, rhs) if operand == "and" else or_(lhs, rhs)
+    # CRITICAL FIX: We MUST apply truthiness checks even for simple expressions
+    # because Python semantics differ from SQL (e.g. NULL handling).
+    # if not lhs_is_sub and not rhs_is_sub:
+    #     return and_(lhs, rhs) if operand == "and" else or_(lhs, rhs)
 
     # 1. Define the truthiness conditions for the CASE statement
     lhs_condition = _create_truthiness_condition(lhs, session)
@@ -534,8 +561,14 @@ def _arithmetic_expr(lval, rval, operand, lval_type, rval_type):
         expr = lval - rval
         result_type = "datetime"
     elif operand == "-" and lval_type == "datetime" and rval_type == "datetime":
-        lval = cast(cast(lval, Text), TIMESTAMP)
-        rval = cast(cast(rval, Text), TIMESTAMP)
+        # Strip timezone offset to compare "wall clock" times, not UTC instants.
+        # This ensures "2023-06-15T12:00:00-05:00" - "2023-06-15T12:00:00+00:00" = PT0S
+        # (both represent 12:00 local time) rather than PT5H (the UTC difference).
+        # Use regexp_replace to remove timezone offset pattern like +00:00 or -05:00
+        lval_text = func.regexp_replace(cast(lval, Text), r"[+-]\d{2}:\d{2}$", "", "g")
+        rval_text = func.regexp_replace(cast(rval, Text), r"[+-]\d{2}:\d{2}$", "", "g")
+        lval = cast(lval_text, TIMESTAMP)
+        rval = cast(rval_text, TIMESTAMP)
         expr = lval - rval
         result_type = "timedelta"
     elif operand == "-" and lval_type == "date" and rval_type == "date":
@@ -1142,6 +1175,8 @@ def _handle_index_operator(
     is_derived=False,
     local_scope=None,
     is_vector=False,
+    project_id=None,
+    context_id=None,
 ):
     """
     Handle the INDEX operator in a filter expression.
@@ -1153,6 +1188,7 @@ def _handle_index_operator(
 
     Returns:
         Subquery: A subquery that extracts the sub-value from the LHS JSON object/array using the RHS key/index.
+        Wraps in subqueries when needed for comprehension context.
     """
     lhs_node = filter_dict.get("lhs")
     rhs_node = filter_dict.get("rhs")
@@ -1165,6 +1201,8 @@ def _handle_index_operator(
         is_derived=is_derived,
         local_scope=local_scope,
         is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
     )
     rhs_expr = build_sql_query(
         rhs_node,
@@ -1174,7 +1212,53 @@ def _handle_index_operator(
         is_derived=is_derived,
         local_scope=local_scope,
         is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
     )
+
+    # Handle direct JSONB expressions
+    if _is_jsonb_expression(lhs_expr) and not isinstance(lhs_expr, Subquery):
+        lhs_type = jsonb_builder._infer_expression_type(
+            lhs_expr,
+            session,
+            project_id,
+            context_id,
+        )
+
+        # Get RHS value for indexing
+        if isinstance(rhs_expr, BindParameter):
+            rhs_val = rhs_expr.value
+        elif hasattr(rhs_expr, "value"):
+            rhs_val = rhs_expr.value
+        else:
+            rhs_val = rhs_expr
+
+        if lhs_type == "str":
+            # String indexing: use func.substring with 1-based index
+            if isinstance(rhs_val, int):
+                pg_index = rhs_val + 1  # Convert 0-based to 1-based
+                if rhs_val < 0:
+                    # Negative index: compute from end
+                    str_len = func.length(cast(lhs_expr, String))
+                    pg_index_expr = str_len + literal(rhs_val) + literal(1)
+                    return func.substring(cast(lhs_expr, String), pg_index_expr, 1)
+                return func.substring(cast(lhs_expr, String), literal(pg_index), 1)
+            else:
+                # Dynamic index
+                return func.substring(
+                    cast(lhs_expr, String),
+                    cast(rhs_val, Integer) + 1,
+                    1,
+                )
+
+        elif lhs_type in ("list", "dict"):
+            # JSONB array/object indexing using -> operator
+            if isinstance(rhs_val, int):
+                return lhs_expr.op("->")(literal(rhs_val))
+            else:
+                return lhs_expr.op("->")(cast(rhs_val, String))
+
+        # For other types, fall through to subquery handling
 
     if isinstance(lhs_expr, Subquery):
         lhs_valcol, lhs_type = _select_value(lhs_expr, session)
@@ -1317,7 +1401,7 @@ def _handle_slice_operator(
 
     Returns:
         Subquery: A subquery that extracts the substring from the LHS string or subarray from the LHS list
-        using the slice bounds.
+        using the slice bounds. Wraps in subqueries when needed for comprehension context.
     """
     lhs_node = filter_dict.get("lhs")
     rhs_bounds = filter_dict.get("rhs")
@@ -1334,6 +1418,57 @@ def _handle_slice_operator(
         local_scope=local_scope,
         is_vector=is_vector,
     )
+
+    # Handle direct JSONB expressions
+    if _is_jsonb_expression(lhs_expr) and not isinstance(lhs_expr, Subquery):
+        lhs_type = jsonb_builder._infer_expression_type(lhs_expr, session)
+
+        if lhs_type == "str":
+            # String slicing using substring
+            str_txt = cast(lhs_expr, String)
+            str_len = func.char_length(str_txt)
+
+            # Compute start position (1-based for PostgreSQL)
+            if lower is None:
+                start_expr = literal(1)
+                lower_index = 0
+            elif isinstance(lower, int) and lower >= 0:
+                start_expr = literal(lower + 1)
+                lower_index = lower
+            elif isinstance(lower, int):  # negative
+                start_expr = str_len + literal(lower) + literal(1)
+                lower_index = lower
+            else:
+                raise ValueError("Slice start must be int or None")
+
+            # Compute slice
+            if upper is None:
+                return func.substring(str_txt, start_expr)
+            elif isinstance(upper, int) and upper >= 0:
+                slice_len = max(upper - (lower or 0), 0)
+                return func.substring(str_txt, start_expr, literal(slice_len))
+            elif isinstance(upper, int):  # negative stop
+                end_index_expr = str_len + literal(upper)
+                slice_len_expr = end_index_expr - literal(lower_index)
+                return func.substring(str_txt, start_expr, slice_len_expr)
+            else:
+                raise ValueError("Slice stop must be int or None")
+
+        elif lhs_type == "list":
+            # JSONB array slicing using jsonb_path_query_array
+            start = lower if lower is not None else 0
+            end = (upper - 1) if upper is not None else "last"
+
+            # Build JSON path expression
+            if isinstance(end, int):
+                path_expr = f"'$[{start} to {end}]'"
+            else:
+                path_expr = f"'$[{start} to last]'"
+
+            return func.jsonb_path_query_array(
+                cast(lhs_expr, JSONB),
+                literal_column(path_expr),
+            )
 
     if isinstance(lhs_expr, Subquery):
         lhs_valcol, lhs_type = _select_value(lhs_expr, session)
@@ -1500,6 +1635,56 @@ def _vector_binary_op(
         select_cols.extend(
             [expr.label("value"), literal(result_type_label).label("inferred_type")],
         )
+        subq = alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(lsub),
+            prefix="vector_op",
+        )
+
+        # Debug: Pretty print results with instruction text
+        results = session.execute(select(subq)).fetchall()
+        if results:
+            print("\n" + "=" * 100)
+            print("COSINE SIMILARITY DEBUG - Top Results")
+            print("=" * 100)
+
+            # Get log_event_ids from results
+            log_event_ids = [row[0] for row in results]
+
+            # Fetch instruction texts by joining through LogEventLog association table
+            instructions = session.execute(
+                select(LogEventLog.log_event_id, Log.value)
+                .join(Log, LogEventLog.log_id == Log.id)
+                .where(LogEventLog.log_event_id.in_(log_event_ids))
+                .where(Log.key == "instruction"),
+            ).fetchall()
+
+            # Create a mapping of log_event_id -> instruction text
+            instruction_map = {
+                log_event_id: text for log_event_id, text in instructions
+            }
+
+            # Print formatted results
+            print(f"{'Rank':<6} {'Log Event ID':<15} {'Distance':<12} {'Instruction'}")
+            print("-" * 100)
+
+            for idx, (log_event_id, distance, _) in enumerate(
+                results[:20],
+                1,
+            ):  # Show top 20
+                instruction = instruction_map.get(log_event_id, "N/A")
+                # Truncate long instructions
+                if instruction and len(instruction) > 60:
+                    instruction = instruction[:57] + "..."
+                # Handle None distance values gracefully
+                distance_str = (
+                    f"{distance:<12.4f}" if distance is not None else "N/A".ljust(12)
+                )
+                print(f"{idx:<6} {log_event_id:<15} {distance_str} {instruction}")
+
+            if len(results) > 20:
+                print(f"\n... and {len(results) - 20} more results")
+            print("=" * 100 + "\n")
+
         return alias_utils.subquery_with_unique_alias(
             select(*select_cols).select_from(lsub),
             prefix=subquery_prefix,
@@ -1793,6 +1978,11 @@ def _handle_phash_distance(
         select_cols.extend(
             [expr.label("value"), literal("int").label("inferred_type")],
         )
+        subq = alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(lhs),
+            prefix="phash_distance",
+        )
+        print(session.execute(select(subq)).fetchall())
         return alias_utils.subquery_with_unique_alias(
             select(*select_cols).select_from(lhs),
             prefix="phash_distance",
