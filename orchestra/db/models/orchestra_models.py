@@ -1098,9 +1098,15 @@ class ContextVersion(Base):
 
     # Relationship to its ProjectVersion
     project_version = relationship("ProjectVersion", back_populates="context_versions")
-    # Relationship to its LogVersion snapshots
+    # Relationship to its LogVersion snapshots (EAV mode)
     log_versions = relationship(
         "LogVersion",
+        back_populates="context_version",
+        cascade="all, delete-orphan",
+    )
+    # Relationship to its LogEventVersion snapshots (JSONB mode)
+    log_event_versions = relationship(
+        "LogEventVersion",
         back_populates="context_version",
         cascade="all, delete-orphan",
     )
@@ -1116,6 +1122,10 @@ class LogEvent(Base):
         nullable=False,
         index=True,
     )
+    data = Column(JSONB, nullable=False, server_default=text("'{}'"))
+    # Stores original insertion order of nested dictionary keys
+    # Structure: {"_root": ["key1", "key2"], "key1.nested": ["a", "b"]}
+    key_order = Column(JSONB, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
     # Relationships
@@ -1150,7 +1160,11 @@ class LogEvent(Base):
         passive_deletes=True,
     )
 
-    __table_args__ = (Index("idx_log_event_project_id_id", "project_id", "id"),)
+    __table_args__ = (
+        Index("idx_log_event_project_id_id", "project_id", "id"),
+        # GIN index for JSON field filtering
+        Index("idx_log_event_data", "data", postgresql_using="gin"),
+    )
 
 
 class LogEventJSONLog(Base):
@@ -1264,6 +1278,38 @@ class LogVersion(Base):
 
     # Relationship back to the ContextVersion
     context_version = relationship("ContextVersion", back_populates="log_versions")
+
+
+class LogEventVersion(Base):
+    """Model class for storing JSONB snapshots of log events for versioning.
+
+    Stores complete JSONB document snapshots of log events for versioning.
+    """
+
+    __tablename__ = "log_event_version"
+
+    id = Column(Integer, primary_key=True)
+    context_version_id = Column(
+        Integer,
+        ForeignKey("context_version.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # Original log_event_id for reference (not a FK since original may be deleted)
+    log_event_id = Column(Integer, nullable=False, index=True)
+    # Snapshot of the JSONB data column
+    data = Column(JSONB, nullable=False)
+    # Snapshot of the key_order column for preserving dict ordering
+    key_order = Column(JSONB, nullable=True)
+    # Timestamps from the original LogEvent
+    created_at = Column(TIMESTAMP)
+    updated_at = Column(TIMESTAMP)
+
+    # Relationship back to ContextVersion
+    context_version = relationship(
+        "ContextVersion",
+        back_populates="log_event_versions",
+    )
 
 
 class ParamVersion(Base):
@@ -1405,6 +1451,8 @@ class ActiveDerivedLog(Base):
     referenced_logs = Column(JSONB, nullable=False)
     filter_expression = Column(JSONB, nullable=False)
     inferred_type = Column(String)
+    # Array of base field names this derived log depends on (e.g., ["score", "accuracy"])
+    referenced_keys = Column(JSONB, nullable=True)
     is_active = Column(Boolean, nullable=False, server_default="t")
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
