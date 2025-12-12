@@ -15,6 +15,7 @@ from orchestra.db.dao.organization_invite_dao import OrganizationInviteDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
+from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.organization.schema import (
     AcceptInviteResponse,
@@ -22,7 +23,12 @@ from orchestra.web.api.organization.schema import (
     InviteListResponse,
     InviteResponse,
     InviteUserRequest,
+    OrganizationBillingResponse,
+    OrganizationBillingUpdate,
+    OrganizationBusinessProfileResponse,
+    OrganizationBusinessProfileUpdate,
     OrganizationCreate,
+    OrganizationCreditsResponse,
     OrganizationMemberAdd,
     OrganizationMemberResponse,
     OrganizationMemberRoleUpdate,
@@ -1296,3 +1302,356 @@ async def decline_invite(
     session.commit()
 
     return DeclineInviteResponse(message="Invite declined")
+
+
+# ============== Organization Billing Endpoints ==============
+
+
+@router.get(
+    "/organizations/{organization_id}/billing",
+    tags=["organization-billing"],
+)
+async def get_organization_billing(
+    request_fastapi: Request,
+    organization_id: int,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """
+    Get billing information for an organization.
+
+    Returns billing mode (delegated or direct), credits, and billing settings.
+    Requires billing:read permission.
+    """
+    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
+
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    org_billing_dao = OrganizationBillingDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    # Get organization
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization not found",
+        )
+
+    # Check billing:read permission
+    has_permission = resource_access_dao.check_user_has_permission_in_org(
+        user_id,
+        organization_id,
+        "billing:read",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view billing for this organization",
+        )
+
+    # Determine billing mode
+    has_direct_billing = org_billing_dao.has_direct_billing(organization_id)
+    billing_mode = "direct" if has_direct_billing else "delegated"
+
+    # Get credits based on billing mode
+    if has_direct_billing:
+        credits = float(org_billing_dao.get_credits(organization_id))
+    else:
+        # For delegated billing, show 0 (credits are on the billing user's account)
+        credits = 0.0
+
+    return OrganizationBillingResponse(
+        organization_id=organization_id,
+        organization_name=org.name,
+        billing_mode=billing_mode,
+        credits=credits,
+        billing_user_id=org.billing_user_id if not has_direct_billing else None,
+        stripe_customer_id=org.stripe_customer_id if has_direct_billing else None,
+        autorecharge=org.autorecharge,
+        autorecharge_threshold=float(org.autorecharge_threshold),
+        autorecharge_qty=float(org.autorecharge_qty),
+        account_status=org.account_status,
+        billing_setup_complete=org.billing_setup_complete,
+    ).model_dump()
+
+
+@router.patch(
+    "/organizations/{organization_id}/billing",
+    tags=["organization-billing"],
+)
+async def update_organization_billing(
+    request_fastapi: Request,
+    organization_id: int,
+    billing_update: "OrganizationBillingUpdate",
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """
+    Update billing settings for an organization.
+
+    Requires billing:write permission.
+    Owners and Admins have this permission by default.
+    """
+    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
+
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    org_billing_dao = OrganizationBillingDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    # Get organization
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization not found",
+        )
+
+    # Check billing:write permission
+    has_permission = resource_access_dao.check_user_has_permission_in_org(
+        user_id,
+        organization_id,
+        "billing:write",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to update billing settings",
+        )
+
+    # Update settings
+    if billing_update.autorecharge is not None:
+        org_billing_dao.set_autorecharge(organization_id, billing_update.autorecharge)
+
+    if billing_update.autorecharge_threshold is not None:
+        org_billing_dao.set_autorecharge_threshold(
+            organization_id,
+            billing_update.autorecharge_threshold,
+        )
+
+    if billing_update.autorecharge_qty is not None:
+        org_billing_dao.set_autorecharge_qty(
+            organization_id,
+            billing_update.autorecharge_qty,
+        )
+
+    session.commit()
+
+    # Return updated billing info
+    has_direct_billing = org_billing_dao.has_direct_billing(organization_id)
+    billing_mode = "direct" if has_direct_billing else "delegated"
+    credits = (
+        float(org_billing_dao.get_credits(organization_id))
+        if has_direct_billing
+        else 0.0
+    )
+
+    # Refresh org to get updated values
+    session.refresh(org)
+
+    return OrganizationBillingResponse(
+        organization_id=organization_id,
+        organization_name=org.name,
+        billing_mode=billing_mode,
+        credits=credits,
+        billing_user_id=org.billing_user_id if not has_direct_billing else None,
+        stripe_customer_id=org.stripe_customer_id if has_direct_billing else None,
+        autorecharge=org.autorecharge,
+        autorecharge_threshold=float(org.autorecharge_threshold),
+        autorecharge_qty=float(org.autorecharge_qty),
+        account_status=org.account_status,
+        billing_setup_complete=org.billing_setup_complete,
+    ).model_dump()
+
+
+@router.get(
+    "/organizations/{organization_id}/billing/credits",
+    tags=["organization-billing"],
+)
+async def get_organization_credits(
+    request_fastapi: Request,
+    organization_id: int,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """
+    Get credit balance for an organization.
+
+    For direct billing orgs, returns the org's credit balance.
+    For delegated billing orgs, returns the billing user's credit balance.
+    Requires billing:read permission.
+    """
+    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
+
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    org_billing_dao = OrganizationBillingDAO(session)
+    users_dao = UsersDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    # Get organization
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization not found",
+        )
+
+    # Check billing:read permission
+    has_permission = resource_access_dao.check_user_has_permission_in_org(
+        user_id,
+        organization_id,
+        "billing:read",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view credits for this organization",
+        )
+
+    # Get credits based on billing mode
+    if org_billing_dao.has_direct_billing(organization_id):
+        credits = float(org_billing_dao.get_credits(organization_id))
+    else:
+        # Delegated billing - get from billing user
+        if org.billing_user_id:
+            billing_user = users_dao.get_user_with_id(org.billing_user_id)
+            credits = float(billing_user.credits)
+        else:
+            credits = 0.0
+
+    return OrganizationCreditsResponse(
+        organization_id=organization_id,
+        credits=credits,
+    ).model_dump()
+
+
+@router.get(
+    "/organizations/{organization_id}/billing/business-profile",
+    tags=["organization-billing"],
+)
+async def get_organization_business_profile(
+    request_fastapi: Request,
+    organization_id: int,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """
+    Get business profile for an organization (invoicing information).
+
+    Requires billing:read permission.
+    """
+    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
+
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    org_billing_dao = OrganizationBillingDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    # Get organization
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization not found",
+        )
+
+    # Check billing:read permission
+    has_permission = resource_access_dao.check_user_has_permission_in_org(
+        user_id,
+        organization_id,
+        "billing:read",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view business profile",
+        )
+
+    profile = org_billing_dao.get_business_profile(organization_id)
+    return OrganizationBusinessProfileResponse(**profile).model_dump()
+
+
+@router.patch(
+    "/organizations/{organization_id}/billing/business-profile",
+    tags=["organization-billing"],
+)
+async def update_organization_business_profile(
+    request_fastapi: Request,
+    organization_id: int,
+    profile_update: "OrganizationBusinessProfileUpdate",
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """
+    Update business profile for an organization.
+
+    Requires billing:write permission.
+    Owners and Admins have this permission by default.
+    """
+    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
+
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    org_billing_dao = OrganizationBillingDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    # Get organization
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization not found",
+        )
+
+    # Check billing:write permission
+    has_permission = resource_access_dao.check_user_has_permission_in_org(
+        user_id,
+        organization_id,
+        "billing:write",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to update business profile",
+        )
+
+    # Update profile
+    billing_address_dict = None
+    if profile_update.billing_address is not None:
+        billing_address_dict = profile_update.billing_address.model_dump(
+            exclude_none=True,
+        )
+
+    # Validate tax_id if provided along with country
+    if profile_update.tax_id is not None:
+        # Get country from billing_address (either new or existing)
+        country = None
+        if billing_address_dict and billing_address_dict.get("country"):
+            country = billing_address_dict["country"]
+        elif org.billing_address and org.billing_address.get("country"):
+            country = org.billing_address["country"]
+
+        if country:
+            from orchestra.web.api.utils.tax_id_validator import TaxIDValidator
+
+            is_valid, formatted_id, error = TaxIDValidator.validate_tax_id(
+                profile_update.tax_id,
+                country,
+            )
+            if not is_valid:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid tax ID for {country}: {error}",
+                )
+            # Use the formatted version if validation succeeded
+            profile_update.tax_id = formatted_id
+
+    org_billing_dao.update_business_profile(
+        organization_id,
+        billing_email=profile_update.billing_email,
+        business_name=profile_update.business_name,
+        tax_id=profile_update.tax_id,
+        billing_address=billing_address_dict,
+    )
+    session.commit()
+
+    # Return updated profile
+    profile = org_billing_dao.get_business_profile(organization_id)
+    return OrganizationBusinessProfileResponse(**profile).model_dump()

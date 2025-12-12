@@ -228,7 +228,19 @@ class Recharge(Base):
         server_default=func.now(),
         default=datetime.utcnow,
     )
-    user_id = Column(String(), ForeignKey("users.id"), nullable=False)
+    # User ID - nullable for organization recharges
+    user_id = Column(
+        String(),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    # Organization ID - nullable for user recharges
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     quantity = Column(Numeric(), nullable=False)
     amount_usd = Column(Numeric(), nullable=False)
     type = Column(String())
@@ -241,14 +253,21 @@ class Recharge(Base):
     stripe_invoice_id = Column(String)
     invoice_group = Column(Date)
 
-    # ORM relationship (handy: recharge.user.billing_state)
+    # ORM relationships
     user = relationship("Users", back_populates="recharges")
+    organization = relationship("Organization", back_populates="recharges")
 
     __table_args__ = (
         Index("idx_recharge_pending", "status", "invoice_group"),
         sa.CheckConstraint(
             "status IN ('PENDING_INVOICE','PAID','FAILED','INVOICE_CREATED','DISPUTED')",
             name="ck_recharge_status",
+        ),
+        # Ensure exactly one of user_id or organization_id is set
+        sa.CheckConstraint(
+            "(user_id IS NOT NULL AND organization_id IS NULL) OR "
+            "(user_id IS NULL AND organization_id IS NOT NULL)",
+            name="ck_recharge_entity_xor",
         ),
     )
 
@@ -598,13 +617,73 @@ class Organization(Base):
         ForeignKey("auth_user.id", ondelete="CASCADE"),
         nullable=False,
     )
+    # Legacy delegated billing - nullable when org has its own billing
     billing_user_id = Column(
         String,
         ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
     )
     name = Column(String, unique=True, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
+
+    # === WALLET FIELDS (direct org billing) ===
+    credits = Column(
+        Numeric,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    stripe_customer_id = Column(
+        String, nullable=True, unique=True, index=True
+    )  # NULL = legacy billing
+    autorecharge = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    autorecharge_threshold = Column(
+        Numeric,
+        nullable=False,
+        default=10,
+        server_default="10",
+    )
+    autorecharge_qty = Column(
+        Numeric,
+        nullable=False,
+        default=100,
+        server_default="100",
+    )
+    account_status = Column(
+        String,
+        nullable=False,
+        default="ACTIVE",
+        server_default="'ACTIVE'",
+    )  # ACTIVE, SUSPENDED, PAST_DUE, CLOSED
+
+    # === BUSINESS PROFILE FIELDS ===
+    billing_email = Column(String, nullable=True)
+    business_name = Column(String(255), nullable=True)
+    tax_id = Column(String(100), nullable=True)
+    # JSONB for flexible international address support
+    # Structure: {
+    #   "country": "US",  # ISO 3166-1 alpha-2 code
+    #   "formatted": "123 Main St, City, State 12345, USA",  # Display string
+    #   "line1": "123 Main St",
+    #   "line2": "Suite 100",
+    #   "city": "San Francisco",
+    #   "state": "CA",  # or province/region
+    #   "postal_code": "94105",
+    #   "locality": "...",  # For countries that use locality
+    #   "district": "...",  # For countries like India
+    # }
+    billing_address = Column(JSONB, nullable=True, default=dict)
+    billing_setup_complete = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
 
     # Relationships
     interfaces = relationship(
@@ -618,6 +697,19 @@ class Organization(Base):
         back_populates="organization",
         cascade="all, delete-orphan",
         passive_deletes=True,
+    )
+    recharges = relationship(
+        "Recharge",
+        back_populates="organization",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "account_status IN ('ACTIVE', 'SUSPENDED', 'PAST_DUE', 'CLOSED')",
+            name="ck_organization_account_status",
+        ),
     )
 
 
