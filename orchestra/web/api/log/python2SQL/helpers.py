@@ -10,24 +10,31 @@ import re
 import threading
 from typing import Optional, Union
 
+import httpx
 import unify
 from dotenv import load_dotenv
+from google.auth.transport.requests import Request
 from openai import OpenAI
 from PIL import Image
 from sqlalchemy import (
     TIMESTAMP,
     BindParameter,
     Boolean,
+    Date,
+    DateTime,
     Float,
     Integer,
+    Interval,
     String,
     Text,
+    Time,
     and_,
     case,
     cast,
     func,
     literal,
     literal_column,
+    null,
     or_,
     select,
 )
@@ -36,7 +43,7 @@ load_dotenv()
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
-from sqlalchemy.sql.elements import ColumnClause
+from sqlalchemy.sql.elements import BinaryExpression, Cast, ColumnClause
 from sqlalchemy.sql.selectable import CTE, Subquery
 
 from orchestra.db.dao.log_dao import LogDAO
@@ -67,6 +74,7 @@ __all__ = [
     "_get_embeddings_batch",
     "_get_image_embedding_batch",
     "_get_image_embedding_from_url",
+    "_is_jsonb_expression",
     "DEFAULT_EMBEDDING_MODEL",
     "DEFAULT_IMAGE_EMBEDDING_MODEL",
 ]
@@ -88,54 +96,63 @@ MAX_TOKENS_PER_INPUT = 8000
 VERTEXAI_PROJECT = os.getenv("ORCHESTRA_VERTEXAI_PROJECT")
 VERTEXAI_LOCATION = os.getenv("ORCHESTRA_VERTEXAI_LOCATION", "us-central1")
 
-# Load image embedding model globally (lazy loaded on first use)
-_image_embedding_model = None
-_vertexai_initialized = False
-_image_embedding_lock = threading.Lock()
+# Cache for Google Cloud credentials
+_vertexai_credentials = None
+_vertexai_credentials_lock = threading.Lock()
 
 
-def _get_image_embedding_model():
+def _reset_vertexai_credentials():
     """
-    Lazy load the Vertex AI multimodal embedding model.
-    Uses Google Cloud's Vertex AI which requires GCP credentials.
-    Returns the loaded model.
+    Reset the Vertex AI credentials cache. Used when connection or auth errors occur.
+    This forces credentials to be re-fetched on the next API call.
+    Thread-safe: Uses a lock to prevent race conditions.
+    """
+    global _vertexai_credentials
+    with _vertexai_credentials_lock:
+        _vertexai_credentials = None
+        logging.info("Reset Vertex AI credentials cache")
+
+
+def _get_vertexai_credentials():
+    """
+    Get Google Cloud credentials for Vertex AI API calls.
+    Credentials are cached and refreshed when needed.
 
     Thread-safe: Uses a lock to prevent race conditions during initialization.
+
+    Returns:
+        Credentials object with an access token
     """
-    global _image_embedding_model, _vertexai_initialized
+    global _vertexai_credentials
 
     # Double-checked locking pattern for thread safety
-    if _image_embedding_model is None:
-        with _image_embedding_lock:
-            # Check again inside the lock in case another thread initialized it
-            if _image_embedding_model is None:
+    if _vertexai_credentials is None:
+        with _vertexai_credentials_lock:
+            if _vertexai_credentials is None:
                 try:
-                    import vertexai
-                    from vertexai.vision_models import MultiModalEmbeddingModel
-
-                    # Initialize Vertex AI once
-                    if not _vertexai_initialized:
-                        if not VERTEXAI_PROJECT:
-                            raise RuntimeError(
-                                "ORCHESTRA_VERTEXAI_PROJECT environment variable must be set to use image embeddings",
-                            )
-
-                        vertexai.init(
-                            project=VERTEXAI_PROJECT,
-                            location=VERTEXAI_LOCATION,
+                    if not VERTEXAI_PROJECT:
+                        raise RuntimeError(
+                            "ORCHESTRA_VERTEXAI_PROJECT environment variable must be set to use image embeddings",
                         )
-                        _vertexai_initialized = True
 
-                    # Load the multimodal embedding model
-                    _image_embedding_model = MultiModalEmbeddingModel.from_pretrained(
-                        DEFAULT_IMAGE_EMBEDDING_MODEL,
-                    )
+                    # Get credentials with proper scopes for Vertex AI
+                    from google.auth import default
+
+                    # Request the cloud-platform scope which is needed for Vertex AI
+                    scopes = ["https://www.googleapis.com/auth/cloud-platform"]
+                    credentials, project = default(scopes=scopes)
+                    _vertexai_credentials = credentials
                 except Exception as e:
                     raise RuntimeError(
-                        f"Failed to load Vertex AI multimodal embedding model '{DEFAULT_IMAGE_EMBEDDING_MODEL}'. "
-                        f"Ensure vertexai library is installed and GCP credentials are configured. Error: {e}",
+                        f"Failed to get Google Cloud credentials for Vertex AI. "
+                        f"Ensure GOOGLE_APPLICATION_CREDENTIALS is set or default credentials are available. Error: {e}",
                     )
-    return _image_embedding_model
+
+    # Refresh token if expired
+    if not _vertexai_credentials.valid:
+        _vertexai_credentials.refresh(Request())
+
+    return _vertexai_credentials
 
 
 def count_tokens_per_utf_byte(document: str) -> int:
@@ -267,6 +284,7 @@ def _get_embeddings_batch(
 def _get_image_embedding_from_url(
     image_url: str,
     bucket_service=None,
+    _retry_count: int = 0,
 ) -> list[float] | None:
     """
     Get embedding vector for a single image from a GCS URL or base64 string.
@@ -276,15 +294,14 @@ def _get_image_embedding_from_url(
                    a base64 encoded image string (with or without data URI prefix)
         bucket_service: Optional BucketService instance for fetching GCS images.
                        If not provided, a new instance will be created (not recommended for batch operations).
+        _retry_count: Internal parameter for tracking retry attempts
 
     Returns:
         Embedding vector as a list of floats, or None if embedding fails
     """
     try:
-        from vertexai.vision_models import Image as VertexImage
-
-        # Get the Vertex AI model (lazy loaded, thread-safe)
-        model = _get_image_embedding_model()
+        # Get credentials for authentication
+        credentials = _get_vertexai_credentials()
 
         # Check if this is a GCS URL or base64 string
         if image_url and isinstance(image_url, str):
@@ -319,27 +336,89 @@ def _get_image_embedding_from_url(
             # Create a PIL Image and ensure RGB format
             pil_image = Image.open(io.BytesIO(image_data)).convert("RGB")
 
-            # Save to temporary bytes buffer (Vertex AI Image needs bytes)
+            # Save to temporary bytes buffer and re-encode as base64
             img_byte_arr = io.BytesIO()
             pil_image.save(img_byte_arr, format="PNG")
             img_byte_arr.seek(0)
+            image_base64 = base64.b64encode(img_byte_arr.read()).decode("utf-8")
 
-            # Load image using Vertex AI's Image wrapper
-            vertex_image = VertexImage(img_byte_arr.read())
-
-            # Get embeddings from Vertex AI
-            embeddings = model.get_embeddings(
-                image=vertex_image,
-                # dimension=1408  # Optional: specify dimension (default is 1408)
+            # Construct the REST API endpoint
+            endpoint = (
+                f"https://{VERTEXAI_LOCATION}-aiplatform.googleapis.com/v1/"
+                f"projects/{VERTEXAI_PROJECT}/locations/{VERTEXAI_LOCATION}/"
+                f"publishers/google/models/{DEFAULT_IMAGE_EMBEDDING_MODEL}:predict"
             )
 
-            # Extract the image embedding vector and convert to list of floats
-            return [float(val) for val in embeddings.image_embedding]
+            # Prepare the request payload
+            payload = {"instances": [{"image": {"bytesBase64Encoded": image_base64}}]}
+
+            # Make the REST API call
+            headers = {
+                "Authorization": f"Bearer {credentials.token}",
+                "Content-Type": "application/json",
+            }
+
+            response = httpx.post(
+                endpoint,
+                headers=headers,
+                json=payload,
+                timeout=30.0,  # 30 second timeout
+            )
+
+            # Check for errors
+            response.raise_for_status()
+
+            # Parse the response
+            result = response.json()
+
+            # Extract the image embedding from the response
+            if "predictions" in result and len(result["predictions"]) > 0:
+                prediction = result["predictions"][0]
+                if "imageEmbedding" in prediction:
+                    embedding = [float(val) for val in prediction["imageEmbedding"]]
+                    return embedding
+
+            logging.error(f"Unexpected response format from Vertex AI: {result}")
+            return None
 
         return None
 
     except Exception as e:
-        logging.error(f"Failed to compute image embedding for {image_url}: {e}")
+        error_msg = str(e).lower()
+        error_type = type(e).__name__
+
+        # Check if this is a connection/auth error that can be retried
+        is_retryable_error = any(
+            keyword in error_msg
+            for keyword in [
+                "unavailable",
+                "timeout",
+                "connection",
+                "503",
+                "502",
+                "401",  # Auth errors might need credential refresh
+                "invalid_scope",
+                "refresh",
+            ]
+        )
+
+        # Retry once with fresh credentials if it's a retryable error
+        if is_retryable_error and _retry_count == 0:
+            logging.warning(
+                f"Retryable error during image embedding ({error_type}), retrying with fresh credentials...",
+            )
+            _reset_vertexai_credentials()
+            return _get_image_embedding_from_url(
+                image_url,
+                bucket_service,
+                _retry_count=1,
+            )
+
+        # Log the error and return None
+        logging.error(
+            f"Failed to compute image embedding for {image_url[:100]}...: {error_type}: {e}",
+            exc_info=True,
+        )
         return None
 
 
@@ -413,6 +492,8 @@ def _substitute_placeholders(equation: str, single_ref: dict) -> tuple:
     new_expr = equation
     alias_to_key_map = {}
     placeholders = _extract_placeholders(equation)
+    # Characters that can be misinterpreted by the parser as operators
+    problematic_chars = {"-", "/", "+", "*", "&", "|", "^"}
     for ph in placeholders:
         var, key = ph.split(":", 1)
         alias_to_key_map[var] = key
@@ -420,23 +501,145 @@ def _substitute_placeholders(equation: str, single_ref: dict) -> tuple:
         # Even if base_ids is a single int, let's store it as a list for membership
         if not isinstance(base_ids, list):
             base_ids = [base_ids]
-        rep = f"BASE({json.dumps(base_ids)},{key})"
+        # Quote field names containing special characters to prevent parser misinterpretation
+        # e.g., "dt/est_time" would otherwise be parsed as "dt" divided by "est_time"
+        if any(char in key for char in problematic_chars):
+            key_repr = json.dumps(key)  # Produces a properly escaped JSON string
+        else:
+            key_repr = key
+        rep = f"BASE({json.dumps(base_ids)},{key_repr})"
         new_expr = new_expr.replace(f"{{{ph}}}", rep)
     return new_expr, alias_to_key_map
 
 
-def _select_value(subq, session, is_collection=False, is_vector=False):
+def _extract_field_name_from_jsonb_expr(expr) -> Optional[str]:
+    """
+    Extract field name from a JSONB extraction expression.
+
+    Only returns string field names, not integer array indices.
+    """
+    # This is tricky with SQLAlchemy expressions.
+    # e.g. col.op('->>')('field')
+    # The structure is BinaryExpression(left=col,    # Check for JSONB operators (-> returns jsonb, ->> returns text)
+    if isinstance(expr, BinaryExpression):
+        # Check for JSONB operators (-> returns jsonb, ->> returns text)
+        op_str = str(expr.operator)
+        if op_str == "->" or op_str == "->>":
+            if hasattr(expr.right, "value"):
+                # Only return string field names, not integer indices
+                val = expr.right.value
+                if isinstance(val, str):
+                    return val
+
+    # Handle cast wrapper: cast(expr, Type)
+    if isinstance(expr, Cast):
+        return _extract_field_name_from_jsonb_expr(expr.clause)
+
+    return None
+
+
+def _is_jsonb_expression(expr) -> bool:
+    """
+    Detect if an expression is a JSONB operation (BinaryExpression, Cast, or column reference) vs. a Subquery.
+
+    This function is used in comprehensions and methods to determine whether
+    to wrap expressions in subqueries or operate on them directly.
+    """
+    from sqlalchemy.sql.elements import ColumnElement
+
+    if isinstance(expr, Subquery):
+        return False
+
+    # If it's a Cast or BinaryExpression, it's an expression
+    if isinstance(expr, (BinaryExpression, Cast)):
+        return True
+
+    # Check for ColumnElement (covers most SQLAlchemy expressions)
+    if isinstance(expr, ColumnElement):
+        return True
+
+    # BindParameter is also an expression
+    if isinstance(expr, BindParameter):
+        return True
+
+    return False
+
+
+def _select_value(
+    subq,
+    session,
+    is_collection=False,
+    is_vector=False,
+    project_id: Optional[int] = None,
+    context_id: Optional[int] = None,
+):
     """
     Helper function to select the appropriate value column from a subquery.
     This version is deterministic, unifying all possible types in a subquery.
+    Now also handles JSONB expressions (data->>'field') by inferring type from cast or querying FieldType table.
     """
     from orchestra.web.api.log.utils.type_utils import get_base_storage_type
 
     if isinstance(subq, BindParameter):
         inferred = LogDAO.infer_type("", subq.value)
         return subq.value, (get_base_storage_type(inferred) or inferred)
-    if hasattr(subq, "element") and subq.name == "reduction_metric":
+
+    # Comment 4: Reorder reduction metric check before JSONB early-return
+    if hasattr(subq, "element") and getattr(subq, "name", "") == "reduction_metric":
         return subq.element, "float"
+
+    # Handle JSONB expressions by inferring type from structure
+    if not isinstance(subq, (Subquery, ColumnClause, BindParameter)):
+        # This is likely a JSONB expression (e.g., data->>'field' or cast(data->>'field', Float))
+        # Import locally to avoid circular dependency
+        try:
+            from .jsonb_builder import _infer_expression_type
+
+            # Comment 3: Pass project_id/context_id to improve inference
+            inferred = _infer_expression_type(
+                subq,
+                session,
+                project_id=project_id,
+                context_id=context_id,
+            )
+            return subq, inferred
+        except ImportError:
+            pass
+
+    # Handle JSONB expressions and Casts
+    if isinstance(subq, Cast):
+        type_map = {
+            Float: "float",
+            Integer: "int",
+            Boolean: "bool",
+            String: "str",
+            TIMESTAMP: "datetime",
+            Date: "date",
+            Time: "time",
+            Interval: "timedelta",
+            JSONB: "dict",  # Defaulting to dict, could be list
+        }
+        # Handle type classes vs instances
+        expr_type = type(subq.type) if not isinstance(subq.type, type) else subq.type
+        inferred = "str"
+        # Check against values in type_map keys (which are classes)
+        for sqla_type, str_type in type_map.items():
+            if issubclass(expr_type, sqla_type):
+                inferred = str_type
+                break
+        return subq, inferred
+
+    if isinstance(subq, BinaryExpression):
+        # If it's a JSONB extraction without cast (defaults to text)
+        field_name = _extract_field_name_from_jsonb_expr(subq)
+        if field_name:
+            # Without project_id, we can't query FieldType easily.
+            # But we know ->> returns text, -> returns jsonb.
+            if subq.operator == "->>":
+                return subq, "str"
+            elif subq.operator == "->":
+                # Could be list, dict, bool (if casted, but handled above)
+                return subq, "dict"
 
     if isinstance(subq, ColumnClause):
         # TODO(yusha): this is a hack to get the type of the column (susceptible to SQL ordering non-determinism)
@@ -535,7 +738,37 @@ def unify_inferred_types(t1: str, t2: str) -> str:
     For example, unify_inferred_types('int', 'float') -> 'float'
     unify_inferred_types('bool', 'float') -> 'float'
     unify_inferred_types('int', 'str') -> 'str'
+
+    Special handling for "Any" type: When one type is "Any" (meaning unknown/untyped),
+    we return the OTHER type since we want to use the known type for casting.
+    This handles cases like comparing JSONB fields with unknown types against typed literals.
     """
+    # Normalize types to base storage types
+    from orchestra.web.api.log.utils.type_utils import get_base_storage_type
+
+    t1 = get_base_storage_type(t1) or t1
+    t2 = get_base_storage_type(t2) or t2
+
+    # If either side is "none", we skip it or treat it as the other side
+    if t1 is None:
+        return t2
+    if t2 is None:
+        return t1
+
+    # Special handling for "Any": use the other type since "Any" means unknown
+    # This enables proper casting when comparing untyped JSONB fields with typed literals
+    if t1 == "Any" and t2 != "Any":
+        return t2
+    if t2 == "Any" and t1 != "Any":
+        return t1
+    # If both are "Any", default to "str" for safe string comparison
+    if t1 == "Any" and t2 == "Any":
+        return "str"
+
+    # Always prioritize vector type if either operand is a vector
+    if t1 == "vector" or t2 == "vector":
+        return "vector"
+
     # You can customize this ordering as you please
     precedence = [
         "NoneType",
@@ -543,6 +776,7 @@ def unify_inferred_types(t1: str, t2: str) -> str:
         "int",
         "float",
         "str",
+        "enum",  # Enum is treated like str for filtering/comparison purposes
         "datetime",
         "time",
         "date",
@@ -554,18 +788,9 @@ def unify_inferred_types(t1: str, t2: str) -> str:
         "union",
         "image",
         "audio",
+        "jsonb",
         "Any",
     ]
-
-    # If either side is "none", we skip it or treat it as the other side
-    if t1 is None:
-        return t2
-    if t2 is None:
-        return t1
-
-    # Always prioritize vector type if either operand is a vector
-    if t1 == "vector" or t2 == "vector":
-        return "vector"
 
     # Find each type's position in the precedence list
     try:
@@ -578,7 +803,13 @@ def unify_inferred_types(t1: str, t2: str) -> str:
     except ValueError:
         i2 = len(precedence)
 
-    return precedence[max(i1, i2)]
+    # Handle case where type is not in precedence list
+    # Default to "str" for safe comparison
+    max_index = max(i1, i2)
+    if max_index >= len(precedence):
+        return "str"
+
+    return precedence[max_index]
 
 
 def _safe_float(col):
@@ -586,7 +817,7 @@ def _safe_float(col):
     return cast(func.nullif(cast(col, String), "null"), Float)
 
 
-def cast_expr(expr, from_type: str, to_type: str):
+def cast_expr(expr, from_type: str, to_type: str, force_to_type: bool = False):
     """
     Casts SQLAlchemy `expr` from `from_type` to the unified final type
     after comparing `from_type` and `to_type`.
@@ -595,26 +826,146 @@ def cast_expr(expr, from_type: str, to_type: str):
     the final type is 'float' => cast(expr, Float).
     If from_type='float' and to_type='int',
     we still end up casting to float so we don't lose decimal data.
+
+    If force_to_type is True, we skip unification and force the target type.
+
+    This function also detects if the expression is already casted to the target
+    type and skips redundant re-casting to avoid patterns like:
+    CAST(CAST(data ->> 'a' AS INTEGER) AS INTEGER)
     """
-    final_type = unify_inferred_types(from_type, to_type)
+    if force_to_type:
+        final_type = to_type
+    else:
+        final_type = unify_inferred_types(from_type, to_type)
+
+    # Check if expression is already casted to the target type
+    # This prevents double-casting like CAST(CAST(x AS INTEGER) AS INTEGER)
+    if isinstance(expr, Cast):
+        # Map SQLAlchemy types to string type names
+        cast_type_map = {
+            Float: "float",
+            Integer: "int",
+            Boolean: "bool",
+            String: "str",
+            Text: "str",
+            TIMESTAMP: "datetime",
+            DateTime: "datetime",
+            Date: "date",
+            Time: "time",
+            Interval: "timedelta",
+            JSONB: "jsonb",
+        }
+        # Get the current cast target type
+        expr_type_class = (
+            type(expr.type) if not isinstance(expr.type, type) else expr.type
+        )
+        current_cast_type = None
+        for sqla_type, str_type in cast_type_map.items():
+            try:
+                if issubclass(expr_type_class, sqla_type):
+                    current_cast_type = str_type
+                    break
+            except TypeError:
+                pass
+
+        # If already casted to the target type, skip redundant casting
+        # Exception: for "str" type with quote stripping, we may still need processing
+        # but only if from_type indicates it's not already a clean string
+        if current_cast_type == final_type:
+            # For string type, we might need quote stripping via replace()
+            # but only if the source is JSONB scalar (not already str/list/dict)
+            if final_type == "str" and from_type not in (
+                "list",
+                "dict",
+                "tuple",
+                "set",
+                "vector",
+                "jsonb",
+                "str",
+            ):
+                # Need quote stripping, proceed with normal logic
+                pass
+            else:
+                return expr
 
     if final_type == "str":
         # Strings might still have quotes, so remove them via `replace()`
+        # BUT only if we think it's a scalar string that came from JSONB.
+        # If it's a structured type (list/dict/jsonb), we should preserve the JSON structure.
+        # If it's already a string (from_type == "str"), don't strip quotes from string literals.
+        if from_type in ("list", "dict", "tuple", "set", "vector", "jsonb", "str"):
+            return cast(expr, String)
+
         return func.replace(
             cast(expr, String),
             literal('"', type_=String),
             literal("", type_=String),
         )
+    elif final_type == "jsonb":
+        # Use to_jsonb for converting to JSONB, but handle None
+        if expr is None or (isinstance(expr, BindParameter) and expr.value is None):
+            return null()
+        if from_type == "jsonb":
+            return expr
+
+        # Cast to specific SQL type before to_jsonb to avoid "could not determine polymorphic type"
+        if from_type == "str":
+            expr = cast(expr, String)
+        elif from_type == "int":
+            expr = cast(expr, Integer)
+        elif from_type == "float":
+            expr = cast(expr, Float)
+        elif from_type == "bool":
+            expr = cast(expr, Boolean)
+
+        return func.to_jsonb(expr)
     elif final_type == "float":
         return cast(expr, Float)
     elif final_type == "int":
         return cast(expr, Integer)
     elif final_type == "bool":
-        return cast(expr, Boolean)
+        # For bool casting, use Python-like truthiness rules instead of PostgreSQL CAST
+        # PostgreSQL can't cast strings like "123" to BOOLEAN directly
+        # Instead, use CASE expressions that mimic Python truthiness:
+        # - Numbers: non-zero is truthy
+        # - Strings: non-empty is truthy
+        # - None/null: falsy
+        if from_type == "bool":
+            # Already boolean, just return as-is
+            return expr
+        elif from_type in ("int", "float"):
+            # Non-zero is truthy
+            return case(
+                (expr.is_(None), literal(False)),
+                (cast(expr, Float) != 0, literal(True)),
+                else_=literal(False),
+            )
+        elif from_type == "str":
+            # Non-empty string is truthy (excluding "false", "0", "null" for JSON compatibility)
+            str_expr = cast(expr, String)
+            str_lower = func.lower(func.btrim(str_expr))
+            return case(
+                (str_expr.is_(None), literal(False)),
+                (str_lower == "", literal(False)),
+                (str_lower == "false", literal(False)),
+                (str_lower == "null", literal(False)),
+                else_=literal(True),
+            )
+        else:
+            # For other types, check if not null and not empty
+            return case(
+                (expr.is_(None), literal(False)),
+                else_=literal(True),
+            )
     elif final_type == "datetime":
-        # Use custom PostgreSQL function that safely casts, returning NULL on error
-        # This works for all PostgreSQL versions and handles any invalid format generically
-        # Requires safe_cast_to_timestamptz() function to be created in the database
+        # If the expression is already a native TIMESTAMP column, use it directly
+        # This avoids unnecessary conversions for system columns like created_at/updated_at
+        if hasattr(expr, "type") and isinstance(expr.type, (TIMESTAMP, DateTime)):
+            return expr
+        # Use custom PostgreSQL function that safely casts to TIMESTAMP WITH TIME ZONE
+        # This preserves timezone information for comparisons (== and !=)
+        # Note: For datetime subtraction, use the separate naive timestamp handling
+        # in _arithmetic_expr which strips timezones to compare wall clock times
         cleaned_expr = func.replace(cast(expr, Text), '"', "")
         return func.safe_cast_to_timestamptz(cleaned_expr)
     elif final_type == "time":
@@ -933,6 +1284,7 @@ def _build_subquery_for_identifier(
             .select_from(log_alias_ref)
             .where(log_alias_ref.key == key)
             .cte(stage1_cte_name)
+            .prefix_with("MATERIALIZED")
         )
 
         # Stage 2: Join filtered logs/derived_logs to log_event_log/log_event_derived_log and event_ids_subq
@@ -1143,7 +1495,15 @@ def _build_subquery_for_identifier(
     )
 
 
-def _join_subqueries(lhs_subq, rhs_subq, expr, inferred_type, session=None):
+def _join_subqueries(
+    lhs_subq,
+    rhs_subq,
+    expr,
+    inferred_type,
+    session=None,
+    project_id: Optional[int] = None,
+    context_id: Optional[int] = None,
+):
     """
     Given two subqueries lhs_subq and rhs_subq and an expression expr that combines
     their respective columns, produce a new subquery that merges them (by log_event_id),
@@ -1161,8 +1521,18 @@ def _join_subqueries(lhs_subq, rhs_subq, expr, inferred_type, session=None):
     and the output will preserve the __parent_idx__ column.
     """
     # Get the value columns for both sides
-    lhs_val, lhs_type = _select_value(lhs_subq, session)
-    rhs_val, rhs_type = _select_value(rhs_subq, session)
+    lhs_val, lhs_type = _select_value(
+        lhs_subq,
+        session,
+        project_id=project_id,
+        context_id=context_id,
+    )
+    rhs_val, rhs_type = _select_value(
+        rhs_subq,
+        session,
+        project_id=project_id,
+        context_id=context_id,
+    )
 
     # Check if both sides have __comp_idx__ (used in comprehensions)
     has_idx_lhs = hasattr(lhs_subq.c, "__comp_idx__")
@@ -1269,6 +1639,365 @@ def _substring_expr(lhs, rhs):
     lhs_str = func.replace(cast(lhs, String), '"', "")
     rhs_str = func.replace(cast(rhs, String), '"', "")
     return rhs_str.like("%" + lhs_str + "%")
+
+
+def _cast_to_final_type(expr, final_type):
+    """
+    Cast a SQLAlchemy expression to a specific type.
+    """
+    from sqlalchemy import (
+        TIMESTAMP,
+        Boolean,
+        Date,
+        Float,
+        Integer,
+        Interval,
+        String,
+        Time,
+    )
+    from sqlalchemy.dialects.postgresql import JSONB
+
+    if final_type == "str":
+        return func.replace(cast(expr, String), '"', "")
+    elif final_type == "int":
+        return cast(expr, Integer)
+    elif final_type == "float":
+        return cast(expr, Float)
+    elif final_type == "bool":
+        return cast(expr, Boolean)
+    elif final_type == "datetime":
+        return cast(expr, TIMESTAMP)
+    elif final_type == "date":
+        return cast(expr, Date)
+    elif final_type == "time":
+        return cast(expr, Time)
+    elif final_type == "timedelta":
+        return cast(expr, Interval)
+    elif final_type == "jsonb":
+        return cast(expr, JSONB)
+
+    return expr
+
+
+def _get_field_type_from_db(
+    key: str,
+    session,
+    project_id: int,
+    context_id: Optional[int] = None,
+) -> Optional[str]:
+    """
+    Query FieldType table for type information.
+    """
+    from orchestra.db.models.orchestra_models import FieldType
+
+    if project_id is None:
+        return None
+
+    stmt = select(FieldType.field_type).where(
+        FieldType.project_id == project_id,
+        FieldType.field_name == key,
+    )
+    if context_id is not None:
+        stmt = stmt.where(FieldType.context_id == context_id)
+    else:
+        stmt = stmt.where(FieldType.context_id.is_(None))
+
+    return session.execute(stmt).scalar()
+
+
+def _extract_field_name_from_jsonb_expr(expr) -> Optional[str]:
+    """
+    Extract field name from a JSONB extraction expression.
+    """
+    from sqlalchemy import Column
+    from sqlalchemy.sql.functions import Function
+
+    # This is tricky with SQLAlchemy expressions.
+    # e.g. col.op('->>')('field')
+    # The structure is BinaryExpression(left=col, right='field', operator='->>')
+    if isinstance(expr, BinaryExpression):
+        if isinstance(expr.operator, str) and expr.operator in ("->>", "->"):
+            if hasattr(expr.right, "value"):
+                # Only return string field names, not integer indices
+                val = expr.right.value
+                if isinstance(val, str):
+                    return val
+        # Handle custom operators that might not be strings but stringify to -> or ->>
+        elif str(expr.operator) in ("->>", "->"):
+            if hasattr(expr.right, "value"):
+                # Only return string field names, not integer indices
+                val = expr.right.value
+                if isinstance(val, str):
+                    return val
+
+    # Handle cast wrapper: cast(expr, Type)
+    if isinstance(expr, Cast):
+        return _extract_field_name_from_jsonb_expr(expr.clause)
+
+    if isinstance(expr, BinaryExpression):
+        op_str = str(expr.operator)
+        if hasattr(expr.operator, "opstring"):
+            op_str = expr.operator.opstring
+
+        if hasattr(expr.right, "value") and op_str in ("->>", "->", "#>", "#>>"):
+            # Only return string field names, not integer indices
+            val = expr.right.value
+            if isinstance(val, str):
+                return val
+
+        # Fallback: if accessing LogEvent.data and returning non-boolean, assume extraction
+        # This handles cases where operator string might be ambiguous or custom
+        if isinstance(expr.left, Column) and expr.left.name == "data":
+            # Exclude boolean comparisons (like @>, ?, etc. which return Boolean)
+            # Extractions usually return JSONB, String, Text
+            from sqlalchemy import Boolean
+
+            if not isinstance(expr.type, Boolean):
+                if hasattr(expr.right, "value"):
+                    # Only return string field names, not integer indices
+                    val = expr.right.value
+                    if isinstance(val, str):
+                        return val
+
+    # Handle Function calls (recurse into arguments)
+    if isinstance(expr, Function):
+        for clause in expr.clauses:
+            res = _extract_field_name_from_jsonb_expr(clause)
+            if res:
+                return res
+
+    return None
+
+
+def _infer_expression_type(
+    expr,
+    session,
+    project_id: Optional[int] = None,
+    context_id: Optional[int] = None,
+) -> str:
+    """
+    Infer the type of a SQLAlchemy expression.
+    """
+    from sqlalchemy.orm.attributes import InstrumentedAttribute
+    from sqlalchemy.sql.functions import Function
+    from sqlalchemy.sql.schema import Column
+
+    # Check for annotations (e.g. from zip function or local_scope)
+    if hasattr(expr, "_annotations") and "inferred_type" in expr._annotations:
+        return expr._annotations["inferred_type"]
+
+    if hasattr(expr, "value"):  # BindParameter or similar
+        return LogDAO.infer_type("", expr.value)
+
+    # Check for ORM Column references (e.g., LogEvent.created_at)
+    # These have a `type` attribute with the SQL type
+    if isinstance(expr, (Column, InstrumentedAttribute)) or hasattr(expr, "type"):
+        col_type = getattr(expr, "type", None)
+        if col_type is not None:
+            type_map = {
+                TIMESTAMP: "datetime",
+                Date: "date",
+                Time: "time",
+                Interval: "timedelta",
+                Float: "float",
+                Integer: "int",
+                Boolean: "bool",
+                String: "str",
+            }
+            col_type_class = (
+                type(col_type) if not isinstance(col_type, type) else col_type
+            )
+            for sqla_type, str_type in type_map.items():
+                try:
+                    if issubclass(col_type_class, sqla_type):
+                        return str_type
+                except TypeError:
+                    pass
+
+    # Recognize labeled aggregation expressions
+    if hasattr(expr, "element") and getattr(expr, "name", "") == "reduction_metric":
+        return "float"
+
+    if isinstance(expr, Cast):
+        type_map = {
+            Float: "float",
+            Integer: "int",
+            Boolean: "bool",
+            String: "str",
+            TIMESTAMP: "datetime",
+            Date: "date",
+            Time: "time",
+            Interval: "timedelta",
+            JSONB: "dict",  # Defaulting to dict, could be list
+        }
+        # Handle type classes vs instances
+        expr_type = type(expr.type) if not isinstance(expr.type, type) else expr.type
+        # Check against values in type_map keys (which are classes)
+        for sqla_type, str_type in type_map.items():
+            if issubclass(expr_type, sqla_type):
+                return str_type
+        return "str"
+
+    # Check for JSONB-returning functions
+    if isinstance(expr, Function):
+        if expr.name.lower() == "to_jsonb":
+            return "jsonb"
+        if expr.name.lower() == "jsonb_build_object":
+            return "dict"
+        if expr.name.lower() in ("jsonb_build_array", "jsonb_agg"):
+            return "list"
+        if expr.name.lower() == "jsonb_array_length":
+            return "int"
+
+    field_name = _extract_field_name_from_jsonb_expr(expr)
+    if field_name and project_id is not None:
+        ft = _get_field_type_from_db(field_name, session, project_id, context_id)
+        if ft:
+            return ft
+
+    # Check for JSONB operators (-> returns jsonb, ->> returns text)
+    if isinstance(expr, BinaryExpression):
+        # Check if operator is "->" (string) or has string representation "->"
+        op_str = str(expr.operator)
+        op_s = getattr(expr.operator, "opstring", "")
+
+        if op_str == "->" or op_s == "->":
+            return "jsonb"
+
+        # Check for boolean comparison operators
+        if op_str in (
+            "=",
+            "!=",
+            "<",
+            ">",
+            "<=",
+            ">=",
+            "is",
+            "is not",
+            "in",
+            "not in",
+            "like",
+            "ilike",
+        ):
+            return "bool"
+        if op_s in (
+            "=",
+            "!=",
+            "<",
+            ">",
+            "<=",
+            ">=",
+            "is",
+            "is not",
+            "in",
+            "not in",
+            "like",
+            "ilike",
+        ):
+            return "bool"
+
+        # Check for arithmetic operators that return numeric types
+        # SQLAlchemy uses built-in function names like truediv, sub, mul, etc.
+        arithmetic_ops = ("+", "-", "*", "/", "%", "**", "//")
+        builtin_arithmetic = ("truediv", "sub", "mul", "add", "mod", "floordiv", "pow")
+        op_name = getattr(expr.operator, "__name__", "")
+
+        if (
+            op_str in arithmetic_ops
+            or op_s in arithmetic_ops
+            or op_name in builtin_arithmetic
+            or "truediv" in op_str
+            or "div" in op_str.lower()
+        ):
+            # Check if this is datetime/timestamp subtraction which returns interval
+            if op_str == "-" or op_s == "-" or op_name == "sub":
+                # Check operand types - if both are datetime/timestamp, result is timedelta
+                lhs_type = _infer_expression_type(
+                    expr.left,
+                    session,
+                    project_id,
+                    context_id,
+                )
+                rhs_type = _infer_expression_type(
+                    expr.right,
+                    session,
+                    project_id,
+                    context_id,
+                )
+                if lhs_type == "datetime" and rhs_type == "datetime":
+                    return "timedelta"
+                if lhs_type == "timedelta" and rhs_type == "timedelta":
+                    return "timedelta"
+            # Check for interval/timedelta operations
+            if op_str == "*" or op_s == "*" or op_name == "mul":
+                lhs_type = _infer_expression_type(
+                    expr.left,
+                    session,
+                    project_id,
+                    context_id,
+                )
+                rhs_type = _infer_expression_type(
+                    expr.right,
+                    session,
+                    project_id,
+                    context_id,
+                )
+                if lhs_type == "timedelta" or rhs_type == "timedelta":
+                    return "timedelta"
+            if (
+                op_str == "/"
+                or op_s == "/"
+                or op_name == "truediv"
+                or "truediv" in op_str
+            ):
+                lhs_type = _infer_expression_type(
+                    expr.left,
+                    session,
+                    project_id,
+                    context_id,
+                )
+                # interval / number returns interval
+                if lhs_type == "timedelta":
+                    return "timedelta"
+                return "float"
+            # Other arithmetic - check operand types
+            # For now, assume float to be safe (can be refined later)
+            return "float"
+
+    # Check for Unary operators (NOT)
+    from sqlalchemy.sql.expression import BooleanClauseList, UnaryExpression
+
+    if isinstance(expr, UnaryExpression):
+        if expr.operator.__name__ == "not_" or str(expr.operator) == "not":
+            return "bool"
+
+    # Check for BooleanClauseList (AND/OR)
+    if isinstance(expr, BooleanClauseList):
+        return "bool"
+
+    # Check for Subquery or Alias with inferred_type column
+    from sqlalchemy.sql.selectable import ScalarSelect
+
+    target_expr = expr
+    if isinstance(expr, ScalarSelect):
+        # Check if the selected column has annotations
+        if hasattr(expr.element, "selected_columns"):
+            for col in expr.element.selected_columns:
+                if hasattr(col, "_annotations") and "inferred_type" in col._annotations:
+                    return col._annotations["inferred_type"]
+                if hasattr(col, "inferred_type"):
+                    return col.inferred_type
+        target_expr = expr.element
+
+    if hasattr(target_expr, "c") and "inferred_type" in target_expr.c:
+        inferred_col = target_expr.c.inferred_type
+        # print(f"DEBUG: inferred_col type: {type(inferred_col)}")
+        if hasattr(inferred_col, "value"):
+            return str(inferred_col.value)
+        if hasattr(inferred_col, "element") and hasattr(inferred_col.element, "value"):
+            return str(inferred_col.element.value)
+
+    return "str"
 
 
 def _parse_rhs_list_or_dict_if_needed(rhs_dict, rhs_val):
@@ -1436,10 +2165,14 @@ def _build_subquery_for_base_call(
     is_derived=False,
     local_scope=None,
     is_vector=False,
+    project_id: Optional[int] = None,
+    context_id: Optional[int] = None,
 ):
     """
     Build a subselect that retrieves columns for a given list_of_ids and a key.
     e.g. log_event_id in [101,102] AND key='score'
+
+    EAV mode implementation.
     """
     # Evaluate the expressions if they are BindParameter or subquery
     # Typically, list_of_ids_expr might be a literal => e.g. [101,102]
@@ -1462,7 +2195,13 @@ def _build_subquery_for_base_call(
 
     # Filter the key_expr subquery to only include rows with log_event_id in base_ids
     # When is_vector is True, explicitly select the vector column
-    key_val, key_type = _select_value(key_expr, session, is_vector=is_vector)
+    key_val, key_type = _select_value(
+        key_expr,
+        session,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+    )
     parent_idx_col = None
     outer_base = None
     if local_scope and "__comp_idx__" in local_scope:
