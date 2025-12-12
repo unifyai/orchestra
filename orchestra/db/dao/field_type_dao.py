@@ -1,6 +1,6 @@
 from typing import Any, Dict, List, Optional, Union
 
-from sqlalchemy import select
+from sqlalchemy import case, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
@@ -97,8 +97,9 @@ class FieldTypeDAO:
             pydantic_schema_to_string,
         )
 
-        if infer_type and field_type is not None:
+        if field_type is not None:
             # Priority 1: Explicit type provided - support str or JSON schema
+            # This takes precedence regardless of infer_type value
             if is_pydantic_schema(field_type):
                 schema = normalize_pydantic_schema(field_type)
                 # Store full schema JSON string
@@ -279,7 +280,11 @@ class FieldTypeDAO:
         mutable: bool,
         context_id: int,
     ) -> None:
-        """Update only the mutability attribute of a field type using an upsert approach."""
+        """Update only the mutability attribute of a field type using an upsert approach.
+
+        Note: For batch operations, use `bulk_update_mutability` to avoid N+1 queries.
+        This method executes one query per call.
+        """
         # First get the existing field type if it exists
         existing = (
             self.session.query(FieldType)
@@ -295,6 +300,65 @@ class FieldTypeDAO:
             raise ValueError(f"Field type {field_name} does not exist")
 
         existing.mutable = mutable
+        self.session.commit()
+
+    def bulk_update_mutability(
+        self,
+        project_id: int,
+        context_id: int,
+        field_mutability_map: Dict[str, bool],
+    ) -> None:
+        """
+        Batch update mutability for multiple field types in a single operation.
+
+        Args:
+            project_id: The project ID
+            context_id: The context ID
+            field_mutability_map: Dictionary mapping field_name -> mutable (bool)
+
+        Raises:
+            ValueError: If any field type does not exist
+        """
+        if not field_mutability_map:
+            return
+
+        # Verify all fields exist first
+        field_names = list(field_mutability_map.keys())
+        existing_fields = (
+            self.session.query(FieldType)
+            .filter(
+                FieldType.project_id == project_id,
+                FieldType.context_id == context_id,
+                FieldType.field_name.in_(field_names),
+            )
+            .all()
+        )
+
+        existing_field_names = {f.field_name for f in existing_fields}
+        missing_fields = set(field_names) - existing_field_names
+        if missing_fields:
+            raise ValueError(f"Field types do not exist: {missing_fields}")
+
+        # Build CASE statement for batch update
+        # UPDATE field_type SET mutable = CASE
+        #   WHEN field_name = 'a' THEN true
+        #   WHEN field_name = 'b' THEN false
+        #   ...
+        # END WHERE project_id = X AND context_id = Y AND field_name IN (...)
+        case_conditions = []
+        for field_name, mutable in field_mutability_map.items():
+            case_conditions.append((FieldType.field_name == field_name, mutable))
+
+        stmt = (
+            update(FieldType)
+            .where(
+                FieldType.project_id == project_id,
+                FieldType.context_id == context_id,
+                FieldType.field_name.in_(field_names),
+            )
+            .values(mutable=case(*case_conditions, else_=FieldType.mutable))
+        )
+        self.session.execute(stmt)
         self.session.commit()
 
     def delete_field_type(
@@ -533,6 +597,9 @@ class FieldTypeDAO:
             self.session.execute(stmt)
             self.session.commit()
 
+    # Valid field categories for validation
+    VALID_FIELD_CATEGORIES = {"entry", "param", "derived_entry"}
+
     def bulk_create_field_types(
         self,
         field_types_data: list[dict],
@@ -547,7 +614,10 @@ class FieldTypeDAO:
                 - value: The value (not used for type inference anymore)
                 - context_id: The context ID
                 - mutable: Optional, defaults to False
-                - field_category: Optional, defaults to "entry"
+                - field_category: Optional, defaults to "entry". Valid values are:
+                    - "entry": Regular entry fields
+                    - "param": Parameter fields
+                    - "derived_entry": Derived field values
                 - unique: Optional, defaults to False
                 - field_type: Optional, the explicit type for this field
                 - enum_values: Optional, for enum types
@@ -560,6 +630,9 @@ class FieldTypeDAO:
 
             Uses PostgreSQL's insert with on_conflict_do_nothing to avoid inserting
             duplicate field types (based on project_id, field_name, and context_id).
+
+        Raises:
+            ValueError: If an invalid field_category is provided.
         """
         if not field_types_data:
             return
@@ -587,16 +660,23 @@ class FieldTypeDAO:
             unique = data.get("unique", False)
             field_description = data.get("description", description)
 
+            # Validate field_category
+            if field_category not in self.VALID_FIELD_CATEGORIES:
+                raise ValueError(
+                    f"Invalid field_category '{field_category}' for field '{field_name}'. "
+                    f"Valid values are: {', '.join(sorted(self.VALID_FIELD_CATEGORIES))}",
+                )
+
             # Validate individual field description
             self._validate_description(field_description)
 
             # Type precedence:
             # 1. Explicit type (from explicit_types) → Use it (strict typing)
-            # 2. No explicit type → Use "Any" (untyped/mixed-type field)
-            # Note: 'value' is NOT used for type inference anymore per policy
-            # Explicit types always take precedence over any inference
+            # 2. No explicit type → Infer from value using LogDAO.infer_type
+            # 3. Inference fails or no value → Fall back to "Any"
 
             field_type_raw = data.get("field_type")
+            value = data.get("value")
             enum_values = data.get("enum_values")
             enum_restrict = data.get("enum_restrict", False)
 
@@ -609,10 +689,18 @@ class FieldTypeDAO:
                     field_type = normalize_type_string(str(field_type_raw))
                 if not is_valid_field_type(field_type):
                     field_type = DEFAULT_FIELD_TYPE
+            elif value is not None:
+                # Priority 2: Infer type from value
+                from orchestra.db.dao.log_dao import LogDAO
+
+                try:
+                    inferred = LogDAO.infer_type(field_name, value, explicit_type=None)
+                    field_type = normalize_type_string(inferred)
+                except Exception:
+                    # Fall back to Any if inference fails
+                    field_type = DEFAULT_FIELD_TYPE
             else:
-                # Priority 2: No explicit type - default to "Any"
-                # The 'value' parameter is present but intentionally NOT used for inference
-                # per the policy that implicit field creation always results in "Any" type
+                # Priority 3: No explicit type and no value - default to "Any"
                 field_type = DEFAULT_FIELD_TYPE
 
             values_to_insert.append(
