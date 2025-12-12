@@ -27,25 +27,37 @@ class OrganizationMemberDAO:
         :param organization_id: Organization ID.
         :param user_id: User ID.
         :param level: Administrative level (owner, admin, user).
-        :param role_id: RBAC role ID (defaults to Member role if not provided).
+        :param role_id: RBAC role ID. If not provided, automatically mapped from level:
+                        - owner -> Owner role
+                        - admin -> Admin role
+                        - user -> Member role
         :return: Created OrganizationMember object.
-        :raises ValueError: If level is invalid or Member role not found.
+        :raises ValueError: If level is invalid or required role not found.
         """
         if level not in ["owner", "admin", "user"]:
             raise ValueError("User level must be one of [owner, admin, user].")
 
-        # If role_id not provided, default to Member system role
+        # If role_id not provided, map from level to appropriate role
         if role_id is None:
             from orchestra.db.dao.role_dao import RoleDAO
 
             role_dao = RoleDAO(self.session)
-            member_role = role_dao.get_by_name("Member", organization_id=None)
-            if not member_role:
+
+            # Map level to role name
+            level_to_role = {
+                "owner": "Owner",
+                "admin": "Admin",
+                "user": "Member",
+            }
+            role_name = level_to_role[level]
+
+            role = role_dao.get_by_name(role_name, organization_id=None)
+            if not role:
                 raise ValueError(
-                    "Member system role not found. "
+                    f"{role_name} system role not found. "
                     "Ensure RBAC foundation migration has been run.",
                 )
-            role_id = member_role.id
+            role_id = role.id
 
         member = OrganizationMember(
             user_id=user_id,
