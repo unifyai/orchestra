@@ -610,6 +610,9 @@ def _transform_ast(node: ast.AST, preserve_string_literals: bool = False) -> dic
             "exists",
             "version",
             "str",
+            "int",
+            "float",
+            "bool",
             "isNone",
             "time",
             "date",
@@ -727,6 +730,7 @@ def _transform_ast(node: ast.AST, preserve_string_literals: bool = False) -> dic
             "match",
             "replace",
             "substring",
+            "split",
         ):
             attr = node.func.attr
             # Validate argument counts per method
@@ -764,6 +768,11 @@ def _transform_ast(node: ast.AST, preserve_string_literals: bool = False) -> dic
                 raise HTTPException(
                     status_code=400,
                     detail=f"str.substring() invalid args: expected 1-2, got {len(node.args)}",
+                )
+            elif attr == "split" and len(node.args) > 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"str.split() invalid args: expected 0-1, got {len(node.args)}",
                 )
 
             # For string methods that take literal string arguments, preserve them exactly
@@ -1000,6 +1009,11 @@ def str_filter_exp_to_dict_using_ast(expr: str, field_names=None) -> dict:
                 elif isinstance(obj, list):
                     for i, item in enumerate(obj):
                         obj[i] = restore_field_names(item)
+                elif isinstance(obj, str):
+                    # Also restore placeholders in string values
+                    # This handles quoted field names in BASE() calls
+                    if obj in reverse_mapping:
+                        return reverse_mapping[obj]
                 return obj
 
             filter_dict = restore_field_names(filter_dict)
