@@ -1181,23 +1181,55 @@ async def test_delete_assistant_deletes_contexts(
     assistant_info = create_resp.json()["info"]
     assistant_id = assistant_info["agent_id"]
 
-    # Manually create a project and context to simulate logs being present
+    # Manually create a project and contexts to simulate logs being present
+    # Using 3-tier context structure: User/Assistant/Ctx, User/All/Ctx, All/Ctx
     project_name = "Assistants"
-    context_name = (
-        f"{assistant_info['first_name']}{assistant_info['surname']}/Transcripts"
-    )
+    user_name = "TestUser"
+    assistant_name = f"{assistant_info['first_name']}{assistant_info['surname']}"
+
+    # 3-tier contexts
+    user_assistant_context = f"{user_name}/{assistant_name}/Transcripts"
+    user_all_context = f"{user_name}/All/Transcripts"
+    global_all_context = "All/Transcripts"
+
     # The "Assistants" project is created automatically on first assistant creation
+    # Create a log with _user and _assistant fields in the user/assistant context
     log_payload = {
         "project": project_name,
-        "context": context_name,
-        "entries": [{"message": "test"}],
+        "context": user_assistant_context,
+        "entries": [
+            {
+                "message": "test",
+                "_user": user_name,
+                "_assistant": assistant_name,
+            },
+        ],
     }
     log_resp = await client.post("/v0/logs", json=log_payload, headers=HEADERS)
     assert log_resp.status_code == 200
+    log_id = log_resp.json()["log_event_ids"][0]
+
+    # Create the other tier contexts and add the log to them
+    for ctx in [user_all_context, global_all_context]:
+        # Create context
+        ctx_resp = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": ctx},
+            headers=HEADERS,
+        )
+        assert ctx_resp.status_code == 200, ctx_resp.json()
+
+        # Add log to context
+        add_resp = await client.post(
+            f"/v0/project/{project_name}/contexts/add_logs",
+            json={"context_name": ctx, "log_ids": [log_id]},
+            headers=HEADERS,
+        )
+        assert add_resp.status_code == 200, add_resp.json()
 
     # Verify context and logs exist before deletion
     logs_before_delete = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}",
+        f"/v0/logs?project={project_name}&context={user_assistant_context}",
         headers=HEADERS,
     )
     assert logs_before_delete.status_code == 200
@@ -1212,11 +1244,11 @@ async def test_delete_assistant_deletes_contexts(
     )
     assert delete_resp.status_code == 200, f"Delete failed: {delete_resp.text}"
 
-    # Verify the context is now gone.
+    # Verify the user/assistant context is now gone.
     # A successful deletion can result in either the context being empty (200 OK, count=0)
     # or the context itself being gone (404 Not Found). Both are valid success states.
     logs_after_delete = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}",
+        f"/v0/logs?project={project_name}&context={user_assistant_context}",
         headers=HEADERS,
     )
 
