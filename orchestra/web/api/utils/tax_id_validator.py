@@ -5,49 +5,101 @@ Provides comprehensive validation for various tax identification numbers
 worldwide, including format validation and checksum verification where applicable.
 """
 
+import importlib
+import pkgutil
 import re
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from stdnum.exceptions import InvalidChecksum, InvalidFormat, ValidationError
+
+# Try to import stdnum for module discovery
+try:
+    import stdnum
+except ImportError:
+    stdnum = None
 
 
 class TaxIDValidator:
     """Comprehensive tax ID validator using python-stdnum."""
 
-    # Country code to stdnum module mapping for common tax ID types
-    COUNTRY_MODULES = {
-        "US": "us.ein",  # US Employer Identification Number
-        "GB": "gb.vat",  # UK VAT number
-        "AU": "au.abn",  # Australian Business Number
-        "CA": "ca.gst_hst",  # Canadian GST/HST number
-        "DE": "de.vat",  # German VAT (uses eu.vat)
-        "FR": "fr.tva",  # French VAT (uses eu.vat)
-        "IT": "it.iva",  # Italian VAT (uses eu.vat)
-        "ES": "es.vat",  # Spanish VAT (uses eu.vat)
-        "NL": "nl.btw",  # Dutch VAT (uses eu.vat)
-        "BE": "be.vat",  # Belgian VAT (uses eu.vat)
-        "AT": "at.uid",  # Austrian VAT (uses eu.vat)
-        "SE": "se.vat",  # Swedish VAT (uses eu.vat)
-        "DK": "dk.cvr",  # Danish VAT number
-        "FI": "fi.alv",  # Finnish VAT (uses eu.vat)
-        "IE": "ie.vat",  # Irish VAT (uses eu.vat)
-        "PT": "pt.nif",  # Portuguese VAT (uses eu.vat)
-        "NO": "no.mva",  # Norwegian VAT number
-        "CH": "ch.vat",  # Swiss VAT number
-        "JP": "jp.cn",  # Japanese Corporate Number
-        "KR": "kr.brn",  # Korean Business Registration Number
-        "IN": "in.gstin",  # Indian GST number
-        "SG": "sg.uen",  # Singapore UEN
-        "MY": "my.nric",  # Malaysian NRIC
-        "TH": "th.moa",  # Thailand MOA number
-        "BR": "br.cnpj",  # Brazilian CNPJ
-        "MX": "mx.rfc",  # Mexican RFC number
-        "RU": "ru.inn",  # Russian INN
-        "CN": "cn.uscc",  # Chinese Unified Social Credit Code
-    }
+    # Preferred module order for business tax IDs (first match wins)
+    # VAT/GST are preferred for B2B billing
+    PREFERRED_MODULES = [
+        "vat",
+        "gstin",
+        "gst",
+        "btw",
+        "tva",
+        "iva",
+        "alv",
+        "mva",
+        "uid",
+        "abn",
+        "uen",
+        "cnpj",
+        "rfc",
+        "ein",
+        "tin",
+        "nif",
+        "cvr",
+        "brn",
+        "uscc",
+        "rut",
+        "inn",
+        "trn",
+    ]
 
-    # Cache for supported countries to avoid rebuilding on every call
-    _SUPPORTED_COUNTRIES_CACHE = None
+    # Cache for discovered modules
+    _COUNTRY_MODULES_CACHE: Optional[Dict[str, str]] = None
+    _SUPPORTED_COUNTRIES_CACHE: Optional[Dict[str, str]] = None
+
+    @classmethod
+    def _discover_country_modules(cls) -> Dict[str, str]:
+        """Auto-discover all available stdnum country modules."""
+        if cls._COUNTRY_MODULES_CACHE is not None:
+            return cls._COUNTRY_MODULES_CACHE
+
+        modules = {}
+
+        if stdnum is None:
+            # Fallback if stdnum not available
+            cls._COUNTRY_MODULES_CACHE = {}
+            return {}
+
+        # Iterate through all country packages in stdnum
+        for importer, modname, ispkg in pkgutil.iter_modules(stdnum.__path__):
+            # Handle 2-letter codes OR trailing underscore (e.g., 'in_' for India)
+            # Python keyword countries like 'in' use 'in_' in stdnum
+            if ispkg and (
+                len(modname) == 2 or (len(modname) == 3 and modname.endswith("_"))
+            ):
+                # Convert module name to country code (e.g., 'in_' -> 'IN')
+                country = modname.rstrip("_").upper()
+                try:
+                    country_pkg = importlib.import_module(f"stdnum.{modname}")
+                    # Find all submodules for this country
+                    available = []
+                    for _, subname, _ in pkgutil.iter_modules(country_pkg.__path__):
+                        available.append(subname)
+
+                    # Pick the best module based on preference order
+                    selected = None
+                    for preferred in cls.PREFERRED_MODULES:
+                        if preferred in available:
+                            selected = preferred
+                            break
+
+                    # If no preferred module found, pick the first one
+                    if selected is None and available:
+                        selected = available[0]
+
+                    if selected:
+                        modules[country] = f"{modname}.{selected}"
+                except Exception:
+                    pass
+
+        cls._COUNTRY_MODULES_CACHE = modules
+        return modules
 
     @classmethod
     def validate_tax_id(
@@ -69,20 +121,63 @@ class TaxIDValidator:
             return False, None, "Tax ID and country are required"
 
         country = country.upper()
+        tax_id = tax_id.strip()
 
         # Try EU VAT validation first for EU countries
         if cls._is_eu_country(country):
             is_valid, formatted_id, error = cls._validate_eu_vat(tax_id, country)
-            if is_valid or error != "Module not found":
+            if is_valid:
                 return is_valid, formatted_id, error
+            # If EU VAT fails, continue to try country-specific module
+
+        # Discover available modules
+        country_modules = cls._discover_country_modules()
 
         # Try country-specific module
-        module_name = cls.COUNTRY_MODULES.get(country)
+        module_name = country_modules.get(country)
+        if module_name:
+            is_valid, formatted_id, error = cls._validate_with_module(
+                tax_id, module_name
+            )
+            if is_valid:
+                return is_valid, formatted_id, error
+            # Return the error but continue to lenient fallback
+
+        # Lenient fallback for unsupported countries or when strict validation fails
+        return cls._lenient_validation(tax_id, country)
+
+    @classmethod
+    def validate_tax_id_strict(
+        cls,
+        tax_id: str,
+        country: str,
+    ) -> Tuple[bool, Optional[str], Optional[str]]:
+        """
+        Strictly validate a tax ID - no lenient fallback.
+
+        Use this when you want to enforce proper tax ID formats.
+        """
+        if not tax_id or not country:
+            return False, None, "Tax ID and country are required"
+
+        country = country.upper()
+        tax_id = tax_id.strip()
+
+        # Try EU VAT validation first for EU countries
+        if cls._is_eu_country(country):
+            is_valid, formatted_id, error = cls._validate_eu_vat(tax_id, country)
+            if is_valid:
+                return is_valid, formatted_id, error
+
+        # Discover available modules
+        country_modules = cls._discover_country_modules()
+
+        # Try country-specific module
+        module_name = country_modules.get(country)
         if module_name:
             return cls._validate_with_module(tax_id, module_name)
 
-        # Fallback to basic format validation
-        return cls._basic_validation(tax_id, country)
+        return False, None, f"No validation available for country: {country}"
 
     @classmethod
     def _validate_eu_vat(
@@ -109,8 +204,8 @@ class TaxIDValidator:
 
         except (ValidationError, InvalidFormat, InvalidChecksum) as e:
             return False, None, str(e)
-        except Exception as e:
-            return False, None, "Module not found"
+        except Exception:
+            return False, None, "EU VAT validation unavailable"
 
     @classmethod
     def _validate_with_module(
@@ -125,7 +220,6 @@ class TaxIDValidator:
                 country_mod = __import__(f"stdnum.{parts[0]}", fromlist=[parts[1]])
                 validator = getattr(country_mod, parts[1])
             else:
-                # Direct module import
                 validator = __import__(f"stdnum.{module_name}", fromlist=[""])
 
             # Clean the input (minimal cleaning - let stdnum handle format validation)
@@ -137,7 +231,7 @@ class TaxIDValidator:
             # Try to format if format function exists
             try:
                 formatted = validator.format(validated)
-            except AttributeError:
+            except (AttributeError, TypeError):
                 formatted = validated
 
             return True, formatted, None
@@ -148,36 +242,41 @@ class TaxIDValidator:
             return False, None, f"Validation error: {str(e)}"
 
     @classmethod
-    def _basic_validation(
+    def _lenient_validation(
         cls,
         tax_id: str,
         country: str,
     ) -> Tuple[bool, Optional[str], Optional[str]]:
-        """Basic format validation using regex patterns."""
-        patterns = {
-            "US": r"^\d{2}-?\d{7}$",  # US EIN: 12-3456789
-            "GB": r"^GB\d{9}$|^GB\d{12}$",  # UK VAT
-            "AU": r"^\d{11}$",  # Australian ABN
-            "CA": r"^\d{9}RT\d{4}$",  # Canadian GST/HST
-            "CH": r"^CHE-?\d{3}\.?\d{3}\.?\d{3}$",  # Swiss
-            "JP": r"^T?\d{13}$",  # Japanese
-            "SG": r"^[0-9]{8}[A-Z]$|^[0-9]{9}[A-Z]$",  # Singapore UEN
-        }
+        """
+        Lenient validation for unsupported countries or fallback.
 
-        pattern = patterns.get(country)
-        if not pattern:
+        Accepts alphanumeric tax IDs of reasonable length.
+        This allows businesses from any country to register,
+        with Stripe providing the final validation.
+        """
+        # Basic sanitization
+        clean_id = re.sub(r"[\s\-\.]", "", tax_id).upper()
+
+        # Must be alphanumeric
+        if not re.match(r"^[A-Z0-9]+$", clean_id):
             return (
                 False,
                 None,
-                f"No validation pattern available for country: {country}",
+                "Tax ID must contain only letters, numbers, spaces, hyphens, or dots",
             )
 
-        clean_id = tax_id.strip().replace(" ", "").replace("-", "").upper()
+        # Reasonable length (most tax IDs are 5-20 characters)
+        if len(clean_id) < 5:
+            return False, None, "Tax ID is too short (minimum 5 characters)"
+        if len(clean_id) > 25:
+            return False, None, "Tax ID is too long (maximum 25 characters)"
 
-        if re.match(pattern, clean_id):
-            return True, clean_id, None
-        else:
-            return False, None, f"Invalid format for {country} tax ID"
+        # Return success with warning that it wasn't strictly validated
+        return (
+            True,
+            clean_id,
+            None,
+        )
 
     @classmethod
     def _is_eu_country(cls, country: str) -> bool:
@@ -216,17 +315,17 @@ class TaxIDValidator:
     @classmethod
     def get_supported_countries(cls) -> Dict[str, str]:
         """Get list of supported countries and their validation types."""
-        # Use cached result if available
         if cls._SUPPORTED_COUNTRIES_CACHE is not None:
             return cls._SUPPORTED_COUNTRIES_CACHE
 
         supported = {}
 
-        # Add countries with specific modules
-        for country, module in cls.COUNTRY_MODULES.items():
+        # Discover all country modules
+        country_modules = cls._discover_country_modules()
+        for country, module in country_modules.items():
             supported[country] = f"Full validation ({module})"
 
-        # Add EU countries
+        # Add EU countries with VAT
         eu_countries = {
             "AT",
             "BE",
@@ -256,18 +355,34 @@ class TaxIDValidator:
             "ES",
             "SE",
         }
-
         for country in eu_countries:
             if country not in supported:
                 supported[country] = "EU VAT validation"
 
-        # Cache the result
+        # Note: All other countries get lenient validation
         cls._SUPPORTED_COUNTRIES_CACHE = supported
         return supported
 
     @classmethod
+    def get_validation_type(cls, country: str) -> str:
+        """Get the type of validation available for a country."""
+        country = country.upper()
+
+        # Check discovered modules first (includes EU countries with specific modules)
+        country_modules = cls._discover_country_modules()
+        if country in country_modules:
+            return "strict"
+
+        # Then check EU VAT
+        if cls._is_eu_country(country):
+            return "eu_vat"
+
+        return "lenient"
+
+    @classmethod
     def clear_cache(cls):
-        """Clear the supported countries cache (useful for testing)."""
+        """Clear all caches (useful for testing)."""
+        cls._COUNTRY_MODULES_CACHE = None
         cls._SUPPORTED_COUNTRIES_CACHE = None
 
 
@@ -290,4 +405,5 @@ def validate_tax_id_for_country(tax_id: str, country: str) -> Dict[str, any]:
         "error": error,
         "country": country.upper(),
         "original_input": tax_id,
+        "validation_type": TaxIDValidator.get_validation_type(country.upper()),
     }

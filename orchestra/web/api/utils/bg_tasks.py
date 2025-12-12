@@ -9,9 +9,17 @@ from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
+from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.lib.billing import get_billing_user_id, queue_auto_recharge
+from orchestra.lib.billing import (
+    deduct_credits,
+    get_billing_entity,
+    queue_auto_recharge,
+    queue_org_auto_recharge,
+)
+from orchestra.db.models.orchestra_models import Organization, Recharge, RechargeStatus
+from orchestra.lib.time import month_end_utc
 from orchestra.web.api.log.utils.logging_utils import log_chat_completion_event
 from orchestra.web.api.query.schema import QueryModelRequest
 from orchestra.web.api.query.views import create_query_model
@@ -179,51 +187,158 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
             )
 
         if not os.environ.get("ON_PREM") and status_code == 200:
-            # Determine who should be billed: user (personal) or org's billing_user
-            billing_user_id = get_billing_user_id(
+            # Get the billing entity (user or organization with direct billing)
+            from decimal import Decimal
+
+            billing_entity = get_billing_entity(
                 session=session,
                 user_id=user_id,
                 organization_id=organization_id,
             )
 
-            # Deduct credits from the billing user
-            users_dao.recharge_credit(billing_user_id, -cost)
+            # Deduct credits from the billing entity
+            new_balance = deduct_credits(session, billing_entity, Decimal(str(cost)))
             session.commit()  # Ensure credit deduction is committed
 
-            # Get the billing user for autorecharge checks
-            billing_user = users_dao.get_user_with_id(billing_user_id)
+            print(
+                f"[BG-TASK] Credits deducted - Entity: {billing_entity.entity_type.value} "
+                f"{billing_entity.entity_id}, Cost: {cost}, New balance: {new_balance}",
+            )
 
-            # Check autorecharge for the billing user
-            if (
-                billing_user.autorecharge
-                and billing_user.credits <= billing_user.autorecharge_threshold
-                and billing_user.autorecharge_qty > 0
-            ):
+            # Check if autorecharge should be triggered
+            if billing_entity.should_trigger_autorecharge(new_balance):
+                recharge_qty = int(billing_entity.autorecharge_qty)
                 print(
-                    f"[BG-TASK] AUTO-RECHARGE TRIGGERED! Billing User: {billing_user_id}, "
-                    f"Credits: {billing_user.credits} <= {billing_user.autorecharge_threshold}, "
-                    f"Recharging: {billing_user.autorecharge_qty}",
+                    f"[BG-TASK] AUTO-RECHARGE TRIGGERED! Entity: {billing_entity.entity_type.value} "
+                    f"{billing_entity.entity_id}, Balance: {new_balance} <= "
+                    f"{billing_entity.autorecharge_threshold}, Recharging: {recharge_qty}",
                 )
 
-                # Queue auto-recharge for monthly invoicing
-                queue_auto_recharge(
-                    session,
-                    billing_user,
-                    int(billing_user.autorecharge_qty),
-                )
-                print(f"[BG-TASK] Auto-recharge queued for user {billing_user_id}")
+                if billing_entity.is_user:
+                    # User autorecharge with race condition guard
+                    # Re-fetch with FOR UPDATE NOWAIT to prevent concurrent auto-recharges
+                    from sqlalchemy import select
+                    from sqlalchemy.exc import OperationalError
 
-                # Credit user immediately (they pay later via monthly invoice)
-                users_dao.recharge_credit(
-                    billing_user_id,
-                    int(billing_user.autorecharge_qty),
-                )
-                session.commit()
-                print(
-                    f"[BG-TASK] Credits added - User: {billing_user_id}, "
-                    f"Amount: {billing_user.autorecharge_qty}, "
-                    f"New balance: {billing_user.credits + billing_user.autorecharge_qty}",
-                )
+                    try:
+                        locked_user = session.execute(
+                            select(Users)
+                            .where(Users.id == billing_entity.entity_id)
+                            .with_for_update(nowait=True),
+                        ).scalar()
+                    except OperationalError:
+                        # Another worker is processing this user
+                        print(
+                            f"[BG-TASK] Skipping user auto-recharge (locked by another worker) - "
+                            f"User: {billing_entity.entity_id}",
+                        )
+                        locked_user = None
+
+                    if (
+                        locked_user
+                        and locked_user.credits <= locked_user.autorecharge_threshold
+                    ):
+                        # Idempotency check: skip if pending recharge already exists for this month
+                        current_month_end = month_end_utc(
+                            datetime.now(timezone.utc).date()
+                        )
+                        existing_recharge = (
+                            session.query(Recharge)
+                            .filter_by(
+                                user_id=billing_entity.entity_id,
+                                invoice_group=current_month_end,
+                                status=RechargeStatus.PENDING_INVOICE,
+                            )
+                            .first()
+                        )
+
+                        if existing_recharge:
+                            print(
+                                f"[BG-TASK] Skipping user auto-recharge (pending recharge exists) - "
+                                f"User: {billing_entity.entity_id}, Month: {current_month_end}",
+                            )
+                        else:
+                            billing_user = users_dao.get_user_with_id(
+                                billing_entity.entity_id
+                            )
+                            queue_auto_recharge(session, billing_user, recharge_qty)
+
+                            # Credit user immediately (they pay later via monthly invoice)
+                            users_dao.recharge_credit(
+                                billing_entity.entity_id, recharge_qty
+                            )
+                            session.commit()
+                            print(
+                                f"[BG-TASK] User credits added - User: {billing_entity.entity_id}, "
+                                f"Amount: {recharge_qty}",
+                            )
+                    elif locked_user:
+                        print(
+                            f"[BG-TASK] Skipping user auto-recharge (balance changed) - "
+                            f"User: {billing_entity.entity_id}",
+                        )
+
+                else:
+                    # Organization autorecharge with race condition guard
+                    # Re-fetch with FOR UPDATE NOWAIT to prevent concurrent auto-recharges
+                    from sqlalchemy import select
+                    from sqlalchemy.exc import OperationalError
+
+                    try:
+                        locked_org = session.execute(
+                            select(Organization)
+                            .where(Organization.id == billing_entity.entity_id)
+                            .with_for_update(nowait=True),
+                        ).scalar()
+                    except OperationalError:
+                        # Another worker is processing this org
+                        print(
+                            f"[BG-TASK] Skipping org auto-recharge (locked by another worker) - "
+                            f"Org: {billing_entity.entity_id}",
+                        )
+                        locked_org = None
+
+                    if (
+                        locked_org
+                        and locked_org.credits <= locked_org.autorecharge_threshold
+                    ):
+                        # Idempotency check: skip if pending recharge already exists for this month
+                        current_month_end = month_end_utc(
+                            datetime.now(timezone.utc).date()
+                        )
+                        existing_recharge = (
+                            session.query(Recharge)
+                            .filter_by(
+                                organization_id=billing_entity.entity_id,
+                                invoice_group=current_month_end,
+                                status=RechargeStatus.PENDING_INVOICE,
+                            )
+                            .first()
+                        )
+
+                        if existing_recharge:
+                            print(
+                                f"[BG-TASK] Skipping org auto-recharge (pending recharge exists) - "
+                                f"Org: {billing_entity.entity_id}, Month: {current_month_end}",
+                            )
+                        else:
+                            org_billing_dao = OrganizationBillingDAO(session)
+                            queue_org_auto_recharge(session, locked_org, recharge_qty)
+
+                            # Credit org immediately (they pay later via monthly invoice)
+                            org_billing_dao.add_credits(
+                                billing_entity.entity_id, recharge_qty
+                            )
+                            session.commit()
+                            print(
+                                f"[BG-TASK] Org credits added - Org: {billing_entity.entity_id}, "
+                                f"Amount: {recharge_qty}",
+                            )
+                    elif locked_org:
+                        print(
+                            f"[BG-TASK] Skipping org auto-recharge (balance changed) - "
+                            f"Org: {billing_entity.entity_id}",
+                        )
 
             telemetry_to_pub_sub(
                 user_id,

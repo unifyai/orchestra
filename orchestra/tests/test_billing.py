@@ -29,6 +29,7 @@ from httpx import AsyncClient
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
+    RECHARGE_TYPE_AUTO,
     Recharge,
     RechargeStatus,
     Users,
@@ -238,7 +239,9 @@ def test_invoicer_aggregates(dbsession: Session, mock_stripe):
     rows = dbsession.query(Recharge).filter_by(user_id=uid).all()
     assert {r.status for r in rows} == {RechargeStatus.INVOICE_CREATED}
     assert {r.stripe_invoice_id for r in rows} == {"in_test_123"}
-    assert len(mock_stripe["item"]) == 1 and len(mock_stripe["invoice"]) == 1
+    # Invoicer doesn't create InvoiceItems (they're created during auto-recharge)
+    # It only creates the Invoice with pending_invoice_items_behavior="include"
+    assert len(mock_stripe["invoice"]) == 1
 
 
 # --------------------------------------------------------------------------- #
@@ -624,6 +627,309 @@ def test_auto_recharge_zero_quantity_no_trigger(dbsession: Session):
     # Verify no recharge was created
     recharge = dbsession.query(Recharge).filter_by(user_id=uid).first()
     assert recharge is None
+
+
+# --------------------------------------------------------------------------- #
+# 5b. Organization Monthly Invoicing Tests                                    #
+# --------------------------------------------------------------------------- #
+def _create_org_for_invoicing_test(
+    dbsession: Session,
+    name: str,
+    stripe_customer_id: str | None,
+    **kwargs,
+):
+    """Helper to create an org with a valid owner for invoicing tests."""
+    from orchestra.db.models.orchestra_models import AuthUser, Organization
+
+    # Create owner in auth_user table (required FK for org.owner_id)
+    owner_id = f"owner_{name.replace(' ', '_').lower()}"
+    auth_user = AuthUser(
+        id=owner_id,
+        email=f"{owner_id}@test.com",
+    )
+    dbsession.add(auth_user)
+
+    # Also create in users table (for billing relationship)
+    user = Users(id=owner_id, credits=100)
+    dbsession.add(user)
+    dbsession.flush()
+
+    org = Organization(
+        name=name,
+        owner_id=owner_id,
+        stripe_customer_id=stripe_customer_id,
+        credits=kwargs.get("credits", Decimal("100")),
+        autorecharge=kwargs.get("autorecharge", True),
+        autorecharge_threshold=kwargs.get("autorecharge_threshold", Decimal("10")),
+        autorecharge_qty=kwargs.get("autorecharge_qty", Decimal("100")),
+        billing_email=kwargs.get("billing_email"),
+        billing_address=kwargs.get("billing_address"),
+        tax_id=kwargs.get("tax_id"),
+    )
+    dbsession.add(org)
+    dbsession.flush()
+    return org
+
+
+def test_monthly_invoicer_org_recharges(dbsession: Session, mock_stripe):
+    """Test that organization recharges are properly processed by monthly invoicer."""
+    # Create an org with Stripe customer ID and auto-recharge enabled
+    org = _create_org_for_invoicing_test(
+        dbsession,
+        name="Test Monthly Org",
+        stripe_customer_id="cus_org_monthly_test",
+        credits=Decimal("50"),
+        billing_email="billing@testorg.com",
+        billing_address={"country": "US", "postal_code": "94105"},
+        tax_id="12-3456789",
+    )
+    dbsession.commit()
+
+    org_id = org.id
+
+    # Create org recharges (simulating auto-recharge during the month)
+    for amount in [50, 100, 25]:
+        rec = Recharge(
+            organization_id=org_id,
+            user_id=None,  # Org recharge, not user
+            type=RECHARGE_TYPE_AUTO,
+            quantity=Decimal(str(amount)),
+            amount_usd=Decimal(str(amount)),
+            invoice_group=LAST_GROUP,
+            status=RechargeStatus.PENDING_INVOICE,
+        )
+        dbsession.add(rec)
+    dbsession.commit()
+
+    # Verify recharges are in PENDING_INVOICE status
+    recharges = dbsession.query(Recharge).filter_by(organization_id=org_id).all()
+    assert len(recharges) == 3
+    assert all(r.status == RechargeStatus.PENDING_INVOICE for r in recharges)
+
+    # Run the monthly invoicer
+    with _routine_uses_session(invoicer, dbsession):
+        invoicer.invoice_month(LAST_MONTH_END.year, LAST_MONTH_END.month)
+
+    # Expire all to see changes made by invoicer
+    dbsession.expire_all()
+
+    # Check that recharges were processed
+    recharges = dbsession.query(Recharge).filter_by(organization_id=org_id).all()
+    assert len(recharges) == 3
+    assert all(r.status == RechargeStatus.INVOICE_CREATED for r in recharges)
+    assert all(r.stripe_invoice_id == "in_test_123" for r in recharges)
+
+    # Verify Stripe invoice was created with org's stripe_customer_id
+    assert len(mock_stripe["invoice"]) == 1
+    invoice_params = mock_stripe["invoice"][0]
+    assert invoice_params["customer"] == "cus_org_monthly_test"
+    assert invoice_params["metadata"]["organization_id"] == str(org_id)
+    assert invoice_params["metadata"]["organization_name"] == "Test Monthly Org"
+
+
+def test_monthly_invoicer_mixed_user_and_org_recharges(dbsession: Session, mock_stripe):
+    """Test that both user and org recharges are processed in the same run."""
+    # Create a user with Stripe customer ID
+    user = Users(
+        id="mixed_test_user",
+        credits=100,
+        stripe_customer_id="cus_user_mixed_test",
+        autorecharge=True,
+        autorecharge_threshold=10,
+        autorecharge_qty=50,
+    )
+    dbsession.add(user)
+
+    # Create an org with Stripe customer ID
+    org = _create_org_for_invoicing_test(
+        dbsession,
+        name="Mixed Test Org",
+        stripe_customer_id="cus_org_mixed_test",
+    )
+    dbsession.commit()
+
+    org_id = org.id
+
+    # Create user recharges
+    rec_user = Recharge(
+        user_id="mixed_test_user",
+        type=RECHARGE_TYPE_AUTO,
+        quantity=Decimal("50"),
+        amount_usd=Decimal("50"),
+        invoice_group=LAST_GROUP,
+        status=RechargeStatus.PENDING_INVOICE,
+    )
+    dbsession.add(rec_user)
+
+    # Create org recharges
+    rec_org = Recharge(
+        organization_id=org_id,
+        user_id=None,
+        type=RECHARGE_TYPE_AUTO,
+        quantity=Decimal("100"),
+        amount_usd=Decimal("100"),
+        invoice_group=LAST_GROUP,
+        status=RechargeStatus.PENDING_INVOICE,
+    )
+    dbsession.add(rec_org)
+    dbsession.commit()
+
+    # Run the monthly invoicer
+    with _routine_uses_session(invoicer, dbsession):
+        invoicer.invoice_month(LAST_MONTH_END.year, LAST_MONTH_END.month)
+
+    # Expire all to see changes made by invoicer
+    dbsession.expire_all()
+
+    # Check that both were processed
+    user_recharges = (
+        dbsession.query(Recharge).filter_by(user_id="mixed_test_user").all()
+    )
+    org_recharges = dbsession.query(Recharge).filter_by(organization_id=org_id).all()
+
+    assert len(user_recharges) == 1
+    assert user_recharges[0].status == RechargeStatus.INVOICE_CREATED
+
+    assert len(org_recharges) == 1
+    assert org_recharges[0].status == RechargeStatus.INVOICE_CREATED
+
+    # Verify both Stripe invoices were created (2 separate invoices)
+    assert len(mock_stripe["invoice"]) == 2
+    customers = {inv["customer"] for inv in mock_stripe["invoice"]}
+    assert customers == {"cus_user_mixed_test", "cus_org_mixed_test"}
+
+
+def test_monthly_invoicer_org_without_stripe_customer_skipped(
+    dbsession: Session,
+    mock_stripe,
+):
+    """Test that orgs without stripe_customer_id are skipped with a warning."""
+    # Create an org WITHOUT Stripe customer ID
+    org = _create_org_for_invoicing_test(
+        dbsession,
+        name="No Stripe Org",
+        stripe_customer_id=None,  # No Stripe customer
+        credits=Decimal("50"),
+    )
+    dbsession.commit()
+
+    org_id = org.id
+
+    # Create org recharge (shouldn't happen in practice, but safety check)
+    rec = Recharge(
+        organization_id=org_id,
+        user_id=None,
+        type=RECHARGE_TYPE_AUTO,
+        quantity=Decimal("50"),
+        amount_usd=Decimal("50"),
+        invoice_group=LAST_GROUP,
+        status=RechargeStatus.PENDING_INVOICE,
+    )
+    dbsession.add(rec)
+    dbsession.commit()
+
+    # Run the monthly invoicer - should skip without error
+    with _routine_uses_session(invoicer, dbsession):
+        invoicer.invoice_month(LAST_MONTH_END.year, LAST_MONTH_END.month)
+
+    # Recharge should remain in PENDING_INVOICE (skipped)
+    rec = dbsession.query(Recharge).filter_by(organization_id=org_id).first()
+    assert rec.status == RechargeStatus.PENDING_INVOICE
+
+    # No Stripe invoice created
+    assert len(mock_stripe["invoice"]) == 0
+
+
+def test_monthly_invoicer_org_with_tax_id(dbsession: Session, mock_stripe):
+    """Test that org tax_id is included in invoice params with correct country type."""
+    # Create an org with tax info (India)
+    org = _create_org_for_invoicing_test(
+        dbsession,
+        name="Indian Test Org",
+        stripe_customer_id="cus_org_india",
+        tax_id="29ABCDE1234F1Z5",  # GST format
+        billing_address={"country": "IN", "state": "Karnataka", "city": "Bangalore"},
+    )
+    dbsession.commit()
+
+    org_id = org.id
+
+    # Create org recharge
+    rec = Recharge(
+        organization_id=org_id,
+        user_id=None,
+        type=RECHARGE_TYPE_AUTO,
+        quantity=Decimal("100"),
+        amount_usd=Decimal("100"),
+        invoice_group=LAST_GROUP,
+        status=RechargeStatus.PENDING_INVOICE,
+    )
+    dbsession.add(rec)
+    dbsession.commit()
+
+    # Run the monthly invoicer
+    with _routine_uses_session(invoicer, dbsession):
+        invoicer.invoice_month(LAST_MONTH_END.year, LAST_MONTH_END.month)
+
+    # Verify Stripe invoice was created with tax info
+    assert len(mock_stripe["invoice"]) == 1
+    invoice_params = mock_stripe["invoice"][0]
+
+    # Should have customer_tax_ids with in_gst type
+    assert "customer_tax_ids" in invoice_params
+    assert len(invoice_params["customer_tax_ids"]) == 1
+    assert invoice_params["customer_tax_ids"][0]["type"] == "in_gst"
+    assert invoice_params["customer_tax_ids"][0]["value"] == "29ABCDE1234F1Z5"
+
+
+def test_monthly_invoicer_org_aggregates_multiple_recharges(
+    dbsession: Session,
+    mock_stripe,
+):
+    """Test that multiple org recharges create ONE invoice with aggregated amount."""
+    org = _create_org_for_invoicing_test(
+        dbsession,
+        name="Aggregation Test Org",
+        stripe_customer_id="cus_org_aggregate",
+        credits=Decimal("200"),
+    )
+    dbsession.commit()
+
+    org_id = org.id
+
+    # Create multiple recharges throughout the month
+    amounts = [25, 50, 75, 100, 25]  # Total = 275
+    for amount in amounts:
+        rec = Recharge(
+            organization_id=org_id,
+            user_id=None,
+            type=RECHARGE_TYPE_AUTO,
+            quantity=Decimal(str(amount)),
+            amount_usd=Decimal(str(amount)),
+            invoice_group=LAST_GROUP,
+            status=RechargeStatus.PENDING_INVOICE,
+        )
+        dbsession.add(rec)
+    dbsession.commit()
+
+    # Run the monthly invoicer
+    with _routine_uses_session(invoicer, dbsession):
+        invoicer.invoice_month(LAST_MONTH_END.year, LAST_MONTH_END.month)
+
+    # Expire all to see changes made by invoicer
+    dbsession.expire_all()
+
+    # All recharges should be processed
+    recharges = dbsession.query(Recharge).filter_by(organization_id=org_id).all()
+    assert len(recharges) == 5
+    assert all(r.status == RechargeStatus.INVOICE_CREATED for r in recharges)
+    # All should have the same invoice ID (aggregated)
+    invoice_ids = {r.stripe_invoice_id for r in recharges}
+    assert len(invoice_ids) == 1
+    assert "in_test_123" in invoice_ids
+
+    # Only ONE invoice created for the org
+    assert len(mock_stripe["invoice"]) == 1
 
 
 # --------------------------------------------------------------------------- #
