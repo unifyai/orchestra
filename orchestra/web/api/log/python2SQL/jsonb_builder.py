@@ -370,3 +370,302 @@ def _build_jsonb_field_expression(
 
     # Default to text extraction
     return jsonb_col.op("->>")(key)
+
+def _handle_comparison_operator_jsonb(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+    project_id: Optional[int] = None,
+    context_id: Optional[int] = None,
+    query_context=None,
+):
+    """Handle comparison operators (==, !=, <, >, <=, >=, is, is not) in JSONB mode.
+
+    Translates Python comparison expressions to PostgreSQL JSONB queries. Supports
+    mixed compositions where one operand is a Subquery (from embed, phash, BASE)
+    and the other is a JSONB expression.
+
+    For simple field equality with scalar values, optimizes using GIN index via
+    the @> containment operator when possible.
+
+    Args:
+        filter_dict: Parsed filter expression with 'operand', 'lhs', and 'rhs' keys.
+        log_event_alias: SQLAlchemy alias for the LogEvent table.
+        session: Database session for field type lookups.
+        log_event_ids: Optional list of log event IDs to filter on.
+        is_derived: Whether this is for a derived field expression.
+        local_scope: Local variable bindings for comprehensions.
+        is_vector: Whether the expression involves vector types.
+        project_id: Project ID for field type lookups (required).
+        context_id: Optional context ID for field type lookups.
+        query_context: QueryContext for CTE-based aggregation optimization.
+
+    Returns:
+        SQLAlchemy expression representing the comparison, either as a boolean
+        expression or a Subquery with value and inferred_type columns.
+    """
+    from .core import _build_sql_query_jsonb
+
+    operand = filter_dict["operand"]
+    lhs_dict = filter_dict["lhs"]
+    rhs_dict = filter_dict["rhs"]
+
+    lhs_expr = _build_sql_query_jsonb(
+        lhs_dict,
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+    rhs_expr = _build_sql_query_jsonb(
+        rhs_dict,
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+
+    lhs_is_sub = isinstance(lhs_expr, Subquery)
+    rhs_is_sub = isinstance(rhs_expr, Subquery)
+
+    # If both are JSONB expressions (common case), use simple direct comparison
+    if not lhs_is_sub and not rhs_is_sub:
+        # Handle list/dict literals in comparison - cast to JSONB if needed
+        if isinstance(rhs_expr, BindParameter) and isinstance(
+            rhs_expr.value,
+            (list, dict),
+        ):
+            # If LHS is JSONB (which it usually is in this context), cast RHS to JSONB
+            # This fixes jsonb = integer[] errors
+            # Use func.to_jsonb for proper conversion of arrays/objects
+            rhs_expr = func.to_jsonb(rhs_expr)
+
+        if isinstance(lhs_expr, BindParameter) and isinstance(
+            lhs_expr.value,
+            (list, dict),
+        ):
+            lhs_expr = func.to_jsonb(lhs_expr)
+
+        # Use JSONB containment (@>) for simple equality to leverage GIN index
+        if operand == "==":
+            # Check if LHS is a simple field identifier (not nested, not from function)
+            lhs_is_simple, lhs_field_name = _is_simple_field_identifier(lhs_dict)
+
+            if lhs_is_simple and lhs_field_name:
+                # System columns (log_id, created_at, updated_at) are NOT in the JSONB
+                # data column - they are direct columns on LogEvent table. Skip containment
+                # optimization for these and fall through to regular comparison.
+                system_columns = {"log_id", "created_at", "updated_at"}
+                if lhs_field_name not in system_columns:
+                    # Check if RHS is a scalar literal (not list/dict, not subquery)
+                    rhs_type = _infer_expression_type(
+                        rhs_expr,
+                        session,
+                        project_id,
+                        context_id,
+                    )
+
+                    if _is_scalar_literal(rhs_expr, rhs_type):
+                        # Verify field type is compatible with containment operator
+                        # Containment works for: int, float, str, bool, NoneType
+                        # Does NOT work for: list, dict (these need special handling)
+                        lhs_type = _infer_expression_type(
+                            lhs_expr,
+                            session,
+                            project_id,
+                            context_id,
+                        )
+                        containment_compatible_types = {
+                            "int",
+                            "float",
+                            "str",
+                            "bool",
+                            "NoneType",
+                        }
+
+                        if (
+                            lhs_type in containment_compatible_types
+                            or lhs_type is None
+                            or lhs_type == "any"
+                        ):
+                            # Extract the literal value
+                            rhs_value = rhs_expr.value
+
+                            # Convert string "true"/"false" to Python bool for boolean field comparisons
+                            if lhs_type == "bool" and rhs_type == "str":
+                                if isinstance(rhs_value, str):
+                                    if rhs_value.lower() == "true":
+                                        rhs_value = True
+                                    elif rhs_value.lower() == "false":
+                                        rhs_value = False
+                                    # else: keep original string value, will likely not match
+
+                            # Use JSONB containment for GIN index acceleration
+                            # jsonb_build_object preserves Python types (int/float→number, str→string, bool→boolean, None→null)
+                            containment_check = log_event_alias.data.op("@>")(
+                                func.jsonb_build_object(lhs_field_name, rhs_value),
+                            )
+                            return containment_check
+
+        # Fall through to existing logic for complex cases
+        # (nested access, arithmetic, functions, non-equality operators)
+
+        lhs_type = _infer_expression_type(lhs_expr, session, project_id, context_id)
+        rhs_type = _infer_expression_type(rhs_expr, session, project_id, context_id)
+
+        # Special handling for `is None` / `is not None` in JSONB mode
+        # JSONB null values can be either SQL NULL or the JSONB literal "null"
+        # We need to check for both cases to properly match None comparisons
+        if operand in ("is", "is not") and rhs_type == "NoneType":
+            # Cast LHS to text for comparison (handles both SQL NULL and JSONB "null")
+            lhs_as_text = cast(lhs_expr, Text)
+            if operand == "is":
+                # `field is None` → field is SQL NULL OR field equals the string "null"
+                return or_(lhs_as_text.is_(None), lhs_as_text == "null")
+            else:
+                # `field is not None` → field is NOT SQL NULL AND field is not "null"
+                return and_(lhs_as_text.isnot(None), lhs_as_text != "null")
+
+        # Special handling for JSONB vs scalar comparison
+        # When one side is "jsonb" (from nested access) and the other is a scalar type
+        # (str, datetime, time, date, timedelta, int, float, bool), extracting JSONB
+        # as text avoids "to_jsonb(unknown)" errors. The values stored in JSONB are
+        # typically JSON strings that need to be extracted and compared as their target type.
+        scalar_types = {
+            "str",
+            "datetime",
+            "time",
+            "date",
+            "timedelta",
+            "int",
+            "float",
+            "bool",
+        }
+
+        # Use centralized type helpers to check for JSONB-like expressions
+        lhs_is_jsonb_like = _is_jsonb_like_type(lhs_type) if lhs_type else False
+        rhs_is_jsonb_like = _is_jsonb_like_type(rhs_type) if rhs_type else False
+
+        if lhs_is_jsonb_like and rhs_type in scalar_types:
+            # Extract JSONB as text for comparison
+            # Use hasattr to check if astext exists - BinaryExpressions from subscript don't have it
+            if hasattr(lhs_expr, "astext"):
+                lhs_as_text = lhs_expr.astext  # ->> operator
+            else:
+                # For BinaryExpression results (e.g., from JSONB array subscript), cast to text
+                # and strip JSON quotes to get the raw value for comparison
+                lhs_as_text = func.btrim(cast(lhs_expr, Text), literal('"'))
+            # Use the RHS type for proper comparison (e.g., datetime >= datetime)
+            # force_to_type=True bypasses type unification to ensure we cast to the target type
+            lhs_casted = cast_expr(lhs_as_text, "str", rhs_type, force_to_type=True)
+            rhs_casted = cast_expr(rhs_expr, rhs_type, rhs_type, force_to_type=True)
+        elif lhs_type in scalar_types and rhs_is_jsonb_like:
+            # Use hasattr to check if astext exists
+            if hasattr(rhs_expr, "astext"):
+                rhs_as_text = rhs_expr.astext
+            else:
+                # Strip JSON quotes from the text representation
+                rhs_as_text = func.btrim(cast(rhs_expr, Text), literal('"'))
+            lhs_casted = cast_expr(lhs_expr, lhs_type, lhs_type, force_to_type=True)
+            rhs_casted = cast_expr(rhs_as_text, "str", lhs_type, force_to_type=True)
+        else:
+            unified_type = unify_inferred_types(lhs_type, rhs_type)
+            lhs_casted = cast_expr(lhs_expr, lhs_type, unified_type)
+            rhs_casted = cast_expr(rhs_expr, rhs_type, unified_type)
+
+        if operand == "==":
+            return lhs_casted == rhs_casted
+        elif operand == "!=":
+            return lhs_casted != rhs_casted
+        elif operand == "<":
+            return lhs_casted < rhs_casted
+        elif operand == ">":
+            return lhs_casted > rhs_casted
+        elif operand == "<=":
+            return lhs_casted <= rhs_casted
+        elif operand == ">=":
+            return lhs_casted >= rhs_casted
+        elif operand == "is":
+            return _null_safe_eq(lhs_casted, rhs_casted)
+        elif operand == "is not":
+            return _null_safe_ne(lhs_casted, rhs_casted)
+        raise ValueError(f"Unknown comparison operand: {operand}")
+
+    # Mixed case: at least one side is a Subquery (from embed, phash, BASE, etc.)
+    # Join subquery with log_event_alias on log_event_id for mixed JSONB/subquery operands
+
+    # Extract values and types
+    lval, lval_type = _select_value(
+        lhs_expr,
+        session,
+        project_id=project_id,
+        context_id=context_id,
+    )
+    rval, rval_type = _select_value(
+        rhs_expr,
+        session,
+        project_id=project_id,
+        context_id=context_id,
+    )
+
+    unified_type = unify_inferred_types(lval_type, rval_type)
+    lval_casted = cast_expr(lval, lval_type, unified_type)
+    rval_casted = cast_expr(rval, rval_type, unified_type)
+
+    # Build the comparison expression
+    if operand == "==":
+        expr = lval_casted == rval_casted
+    elif operand == "!=":
+        expr = lval_casted != rval_casted
+    elif operand == "<":
+        expr = lval_casted < rval_casted
+    elif operand == ">":
+        expr = lval_casted > rval_casted
+    elif operand == "<=":
+        expr = lval_casted <= rval_casted
+    elif operand == ">=":
+        expr = lval_casted >= rval_casted
+    elif operand == "is":
+        expr = _null_safe_eq(lval_casted, rval_casted)
+    elif operand == "is not":
+        expr = _null_safe_ne(lval_casted, rval_casted)
+    else:
+        raise ValueError(f"Unknown comparison operand: {operand}")
+
+    # Wrap result in subquery to preserve log_event_id correlation
+    if lhs_is_sub and rhs_is_sub:
+        return _join_subqueries(lhs_expr, rhs_expr, expr, "bool", session=session)
+    elif lhs_is_sub:
+        # RHS is a JSONB expression - need to join subquery with log_event_alias
+        return build_result_subquery_with_join(
+            base_subq=lhs_expr,
+            join_target=log_event_alias,
+            join_condition=lhs_expr.c.log_event_id == log_event_alias.id,
+            value_expr=expr,
+            result_type="bool",
+            prefix="comparison_op",
+        )
+    else:  # rhs_is_sub
+        # LHS is a JSONB expression - need to join subquery with log_event_alias
+        return build_result_subquery_with_join(
+            base_subq=rhs_expr,
+            join_target=log_event_alias,
+            join_condition=rhs_expr.c.log_event_id == log_event_alias.id,
+            value_expr=expr,
+            result_type="bool",
+            prefix="comparison_op",
+        )
