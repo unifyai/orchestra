@@ -10,8 +10,9 @@ from . import HEADERS, _create_project, _create_several_logs
 
 
 @pytest.mark.anyio
-async def test_get_logs_w_sorting(client: AsyncClient):
-    project_name = "eval-project"
+async def test_get_logs_w_sorting(client: AsyncClient, use_jsonb_mode):
+    """Test sorting by numeric field (temperature) in ascending/descending order."""
+    project_name = f"eval-project-sorting-{'jsonb' if use_jsonb_mode else 'eav'}"
     _ = await _create_project(client, project_name)
     _ = await _create_several_logs(client, project_name)
 
@@ -178,15 +179,17 @@ async def test_get_logs_w_sorting(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_get_logs_w_timestamp_sorting(client: AsyncClient):
-    project_name = "eval-project"
+async def test_get_logs_w_timestamp_sorting(client: AsyncClient, use_jsonb_mode):
+    """Test sorting by timestamp field with dynamically created timestamps."""
+    project_name = f"eval-project-ts-sort-{'jsonb' if use_jsonb_mode else 'eav'}"
     _ = await _create_project(client, project_name)
     data = log_data["logs_for_various"]
     timestamps = list()
     for i in range(len(data)):
         ts = datetime.now(timezone.utc).isoformat()
         timestamps.append(ts)
-        entries = data[i]
+        # Use copy to avoid mutating shared log_data
+        entries = dict(data[i])
         entries["_/timestamp"] = ts
         response = await client.post(
             "/v0/logs",
@@ -255,15 +258,17 @@ async def test_get_logs_w_timestamp_sorting(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_get_logs_w_date_sorting(client: AsyncClient):
-    project_name = "eval-project"
+async def test_get_logs_w_date_sorting(client: AsyncClient, use_jsonb_mode):
+    """Test sorting by date field with fixed dates."""
+    project_name = f"eval-project-date-sort-{'jsonb' if use_jsonb_mode else 'eav'}"
     _ = await _create_project(client, project_name)
     data = log_data["logs_for_various"]
     dates = list()
     for i in range(len(data)):
         date = datetime(1993, 3, i + 1, tzinfo=timezone.utc).isoformat()
         dates.append(date)
-        entries = data[i]
+        # Use copy to avoid mutating shared log_data
+        entries = dict(data[i])
         entries["_/timestamp"] = date
         response = await client.post(
             "/v0/logs",
@@ -332,8 +337,12 @@ async def test_get_logs_w_date_sorting(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_get_logs_w_dynamic_expression_sorting(client: AsyncClient):
-    project_name = "expr-project"
+async def test_get_logs_w_dynamic_expression_sorting(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """Test sorting by a dynamic expression (e.g., round(_/temperature, 1))."""
+    project_name = f"expr-project-sort-{'jsonb' if use_jsonb_mode else 'eav'}"
     await _create_project(client, project_name)
     await _create_several_logs(client, project_name)
 
@@ -343,7 +352,7 @@ async def test_get_logs_w_dynamic_expression_sorting(client: AsyncClient):
         params={"sorting": json.dumps({expr: "ascending"})},
         headers=HEADERS,
     )
-    assert response.status_code == 200
+    assert response.status_code == 200, response.json()
     logs = response.json()["logs"]
     temps = [
         log["entries"]["_/temperature"]
@@ -351,4 +360,30 @@ async def test_get_logs_w_dynamic_expression_sorting(client: AsyncClient):
         if "_/temperature" in log["entries"]
     ]
     # temperature values should be sorted in ascending order
-    assert temps == [-210.0, 0.0, 100.0, 6000.0]
+    assert temps == [
+        -210.0,
+        0.0,
+        100.0,
+        6000.0,
+    ], f"Expected ascending temps, got {temps}"
+
+    # Also test descending
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={"sorting": json.dumps({expr: "descending"})},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    logs = response.json()["logs"]
+    temps = [
+        log["entries"]["_/temperature"]
+        for log in logs
+        if "_/temperature" in log["entries"]
+    ]
+    # temperature values should be sorted in descending order
+    assert temps == [
+        6000.0,
+        100.0,
+        0.0,
+        -210.0,
+    ], f"Expected descending temps, got {temps}"
