@@ -940,14 +940,21 @@ def delete_assistant(
             )
             if assistants_project:
                 assistant_context_prefix = f"{assistant.first_name}{assistant.surname}"
-                # Find all contexts related to the assistant (e.g., "AdaLovelace", "AdaLovelace/Transcripts")
+                # Find all contexts related to the assistant
+                # Supports both old 2-tier and new 3-tier context structures:
+                # - 2-tier: "AdaLovelace", "AdaLovelace/Transcripts"
+                # - 3-tier: "User/AdaLovelace", "User/AdaLovelace/Transcripts"
                 contexts_to_delete = (
                     session.query(Context)
                     .filter(
                         Context.project_id == assistants_project.id,
                         or_(
+                            # Old 2-tier patterns
                             Context.name == assistant_context_prefix,
                             Context.name.like(f"{assistant_context_prefix}/%"),
+                            # New 3-tier patterns: User/Assistant or User/Assistant/*
+                            Context.name.like(f"%/{assistant_context_prefix}"),
+                            Context.name.like(f"%/{assistant_context_prefix}/%"),
                         ),
                     )
                     .all()
