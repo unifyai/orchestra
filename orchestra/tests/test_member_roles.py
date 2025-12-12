@@ -45,8 +45,11 @@ async def test_create_organization_assigns_owner_role(client: AsyncClient, dbses
 
 
 @pytest.mark.anyio
-async def test_add_member_with_default_role(client: AsyncClient, dbsession):
-    """Test that adding a member without specifying a role assigns the Member role."""
+async def test_add_member_with_level_user_gets_member_role(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test that adding a member with level='user' assigns the Member role."""
     owner = await create_test_user(client, "member_default_owner@test.com")
     user = await create_test_user(client, "member_default_user@test.com")
 
@@ -58,7 +61,7 @@ async def test_add_member_with_default_role(client: AsyncClient, dbsession):
     )
     org_id = org_response.json()["id"]
 
-    # Add member without specifying role_id
+    # Add member with level="user" without specifying role_id
     add_response = await client.post(
         f"/v0/organizations/{org_id}/members",
         json={"user_id": user["id"], "level": "user"},
@@ -76,6 +79,121 @@ async def test_add_member_with_default_role(client: AsyncClient, dbsession):
 
     role = role_dao.get(member.role_id)
     assert role.name == "Member"
+
+
+@pytest.mark.anyio
+async def test_add_member_with_level_admin_gets_admin_role(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test that adding a member with level='admin' assigns the Admin role.
+
+    This tests the level-to-role auto-mapping: when role_id is not specified,
+    level='admin' should automatically map to the Admin role.
+    """
+    owner = await create_test_user(client, "admin_level_owner@test.com")
+    admin_user = await create_test_user(client, "admin_level_user@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Test Admin Level Role Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Add member with level="admin" without specifying role_id
+    add_response = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": admin_user["id"], "level": "admin"},
+        headers=owner["headers"],
+    )
+    assert add_response.status_code == status.HTTP_201_CREATED
+
+    # Verify member has Admin role (auto-mapped from level="admin")
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
+
+    member = org_member_dao.get_member(admin_user["id"], org_id)
+    assert member is not None
+    assert member.role_id is not None
+
+    role = role_dao.get(member.role_id)
+    assert role.name == "Admin"
+
+    # Verify Admin role has org:write permission (essential for role update issue)
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    has_org_write = resource_access_dao.check_org_member_permission(
+        admin_user["id"],
+        org_id,
+        "org:write",
+    )
+    assert has_org_write is True
+
+
+@pytest.mark.anyio
+async def test_level_to_role_mapping_via_dao(client: AsyncClient, dbsession):
+    """Test that OrganizationMemberDAO.create() correctly maps level to role_id.
+
+    This directly tests the DAO method to ensure the level-to-role mapping works:
+    - level='owner' -> Owner role
+    - level='admin' -> Admin role
+    - level='user' -> Member role
+    """
+    # Create real users to satisfy foreign key constraints
+    owner_user = await create_test_user(client, "dao_mapping_owner@test.com")
+    admin_user = await create_test_user(client, "dao_mapping_admin@test.com")
+    regular_user = await create_test_user(client, "dao_mapping_user@test.com")
+    explicit_user = await create_test_user(client, "dao_mapping_explicit@test.com")
+
+    # Create organization via API (which handles all the setup correctly)
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Level To Role Mapping Test Org"},
+        headers=owner_user["headers"],
+    )
+    assert org_response.status_code == 201
+    org_id = org_response.json()["id"]
+
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
+
+    # Get expected role IDs
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+    admin_role = role_dao.get_by_name("Admin", organization_id=None)
+    member_role = role_dao.get_by_name("Member", organization_id=None)
+
+    # Verify owner was created with Owner role (by the API)
+    owner_member = org_member_dao.get_member(owner_user["id"], org_id)
+    assert owner_member is not None
+    assert owner_member.role_id == owner_role.id
+
+    # Test level='admin' -> Admin role (via DAO directly)
+    admin_member = org_member_dao.create(
+        organization_id=org_id,
+        user_id=admin_user["id"],
+        level="admin",
+        role_id=None,  # Should auto-map to Admin
+    )
+    assert admin_member.role_id == admin_role.id
+
+    # Test level='user' -> Member role (via DAO directly)
+    user_member = org_member_dao.create(
+        organization_id=org_id,
+        user_id=regular_user["id"],
+        level="user",
+        role_id=None,  # Should auto-map to Member
+    )
+    assert user_member.role_id == member_role.id
+
+    # Test explicit role_id overrides level mapping
+    explicit_member = org_member_dao.create(
+        organization_id=org_id,
+        user_id=explicit_user["id"],
+        level="admin",  # Level says admin
+        role_id=member_role.id,  # But explicit role is Member
+    )
+    assert explicit_member.role_id == member_role.id  # Explicit wins
 
 
 @pytest.mark.anyio
