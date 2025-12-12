@@ -471,6 +471,27 @@ async def _create_logs_for_grouping(client, project_name, user=1):
         assert response.status_code == 200, response.json()
 
 
+async def _create_logs_for_grouping_entries(client, project_name, user=1):
+    """Entry-based version for dual-mode testing (no params)."""
+    _headers = HEADERS if user == 1 else HEADERS_2
+    data = log_data["logs_for_grouping"]
+    for i in range(len(data)):
+        # Put system_prompt in entries instead of params
+        entries = {"system_prompt": data[i]["system_prompt"]}
+        if "a/input" in data[i]:
+            entries["a/input"] = data[i]["a/input"]
+        elif "input" in data[i]:
+            entries["a/input"] = data[i]["input"]
+
+        response = await _create_log(
+            client,
+            project_name,
+            params={},
+            entries=entries,
+        )
+        assert response.status_code == 200, response.json()
+
+
 async def _create_logs_for_group_threshold(client, project_name, user=1):
     data = log_data["logs_for_group_threshold"]
     for i in range(len(data)):
