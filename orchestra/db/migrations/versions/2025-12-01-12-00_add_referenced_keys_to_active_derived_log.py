@@ -1,7 +1,7 @@
 """Add referenced_keys column to active_derived_log_template table
 
 Revision ID: add_ref_keys_derived_tpl
-Revises: add_foreign_keys_to_context
+Revises: b8ccd66119a2
 Create Date: 2025-12-01 12:00:00.000000
 
 """
@@ -11,7 +11,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
 revision = "add_ref_keys_derived_tpl"
-down_revision = "add_foreign_keys_to_context"
+down_revision = "b8ccd66119a2"
 branch_labels = None
 depends_on = None
 
