@@ -93,7 +93,7 @@ $$;
         """,
             ),
         )
-        # Create safe temporal casting functions for tests (from migration)
+        # Create safe temporal casting functions for tests
         conn.execute(
             text(
                 """
@@ -211,10 +211,29 @@ def fastapi_app(
     return application  # noqa: WPS331
 
 
+class TestAwareAsyncClient(AsyncClient):
+    """AsyncClient wrapper that injects test name into requests for SQL capture."""
+
+    def __init__(self, *args, test_name: str = "unknown", **kwargs):
+        super().__init__(*args, **kwargs)
+        self._test_name = test_name
+
+    async def request(self, method, url, **kwargs):
+        # Inject test name header for SQL capture
+        headers = kwargs.get("headers", {})
+        if headers is None:
+            headers = {}
+        headers = dict(headers)  # Make mutable copy
+        headers["X-Test-Name"] = self._test_name
+        kwargs["headers"] = headers
+        return await super().request(method, url, **kwargs)
+
+
 @pytest.fixture
 async def client(
     fastapi_app: FastAPI,
     anyio_backend: Any,
+    request: pytest.FixtureRequest,
 ) -> AsyncGenerator[AsyncClient, None]:
     """
     Fixture that creates client for requesting server.
@@ -224,6 +243,327 @@ async def client(
     """
     async with AsyncClient(app=fastapi_app, base_url="http://test") as ac:
         yield ac
+
+
+# ============================================================================
+# Storage Mode Testing Infrastructure
+# ============================================================================
+"""
+Parametrized testing infrastructure for running tests across different storage modes.
+
+Fixtures:
+- use_jsonb_mode: Parametrized fixture that runs tests in both storage modes
+- enable_jsonb_mode: Force JSONB storage mode for a single test
+- enable_eav_mode: Force EAV storage mode for a single test
+
+Decorators:
+- @requires_eav_mode: Skip test when JSONB storage mode is active
+- @skip_if_eav_mode: Skip test when EAV storage mode is active
+
+Helper Functions:
+- assert_mode_specific(): Different assertions per storage mode
+- get_mode_specific_value(): Different expected values per storage mode
+
+IMPORTANT: Do not change the fixture ids ("eav_mode", "jsonb_mode") in use_jsonb_mode
+as the test result tracking relies on these identifiers.
+"""
+
+
+@pytest.fixture(params=[False, True], ids=["eav_mode", "jsonb_mode"])
+def use_jsonb_mode(request, monkeypatch):
+    """
+    Parametrized fixture that runs tests in both storage modes for compatibility verification.
+
+    Usage:
+        @pytest.mark.anyio
+        async def test_something(client, use_jsonb_mode):
+            # Test runs in both modes
+            pass
+    """
+    import orchestra.settings as settings_module
+
+    monkeypatch.setattr(
+        settings_module,
+        "_use_jsonb_override",
+        request.param,
+        raising=False,
+    )
+    yield request.param
+
+
+@pytest.fixture
+def enable_jsonb_mode(monkeypatch):
+    """
+    Force JSONB storage mode for a single test.
+
+    Usage:
+        @pytest.mark.usefixtures("enable_jsonb_mode")
+        def test_jsonb_only_feature(client):
+            # Test runs only in JSONB mode
+            pass
+    """
+    import orchestra.settings as settings_module
+
+    monkeypatch.setattr(settings_module, "_use_jsonb_override", True, raising=False)
+    yield True
+
+
+@pytest.fixture
+def enable_eav_mode(monkeypatch):
+    """
+    Force EAV storage mode for a single test.
+
+    Usage:
+        @pytest.mark.usefixtures("enable_eav_mode")
+        def test_eav_only_feature(client):
+            # Test runs only in EAV mode
+            pass
+    """
+    import orchestra.settings as settings_module
+
+    monkeypatch.setattr(settings_module, "_use_jsonb_override", False, raising=False)
+    yield False
+
+
+def requires_eav_mode(func):
+    """
+    Skip test when JSONB storage mode is active.
+
+    Checks storage mode at execution time, compatible with parametrized fixtures.
+
+    Usage:
+        @requires_eav_mode
+        @pytest.mark.anyio
+        async def test_param_versioning(client):
+            pass
+    """
+    import asyncio
+    import functools
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        # Check mode at execution time, not decoration time
+        if settings.use_jsonb_queries:
+            pytest.skip(
+                "Test requires EAV mode (param versioning not supported in JSONB)",
+            )
+        return func(*args, **kwargs)
+
+    @functools.wraps(func)
+    async def async_wrapper(*args, **kwargs):
+        # Check mode at execution time, not decoration time
+        if settings.use_jsonb_queries:
+            pytest.skip(
+                "Test requires EAV mode (param versioning not supported in JSONB)",
+            )
+        return await func(*args, **kwargs)
+
+    # Return appropriate wrapper based on whether the function is async
+    if asyncio.iscoroutinefunction(func):
+        return async_wrapper
+    return wrapper
+
+
+# ============================================================================
+# Test Results Tracking
+# ============================================================================
+
+# Global dictionary to track test results by mode
+TEST_RESULTS_BY_MODE = {
+    "eav_mode": {"passed": [], "failed": [], "skipped": []},
+    "jsonb_mode": {"passed": [], "failed": [], "skipped": []},
+}
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(item, call):
+    """
+    Capture test results and categorize by storage mode.
+
+    Detects storage mode from test parametrization. Only parametrized tests are tracked in reports.
+    """
+    outcome = yield
+    report = outcome.get_result()
+
+    # Only track test call phase (not setup/teardown)
+    if report.when == "call":
+        mode = None
+
+        # Strategy 1: Check item.callspec.params for use_jsonb_mode parameter
+        # This is the most reliable method as it directly accesses the parametrized value
+        if hasattr(item, "callspec") and hasattr(item.callspec, "params"):
+            params = item.callspec.params
+            if "use_jsonb_mode" in params:
+                mode = "jsonb_mode" if params["use_jsonb_mode"] else "eav_mode"
+
+        # Strategy 2: Fallback to nodeid string matching for compatibility
+        # This handles cases where the parametrization ids might be in the nodeid
+        if mode is None:
+            if "[eav_mode]" in item.nodeid:
+                mode = "eav_mode"
+            elif "[jsonb_mode]" in item.nodeid:
+                mode = "jsonb_mode"
+
+        # Only track if we detected a parametrized test
+        if mode:
+            # Extract test name as module path + function name (up to first '[')
+            # This ensures unique identification even for same-named functions in different modules
+            # Example: "orchestra/tests/test_log/test_log_join.py::test_inner_join_logs"
+            test_name = item.nodeid.split("[")[0] if "[" in item.nodeid else item.nodeid
+
+            if report.passed:
+                TEST_RESULTS_BY_MODE[mode]["passed"].append(test_name)
+            elif report.failed:
+                TEST_RESULTS_BY_MODE[mode]["failed"].append(
+                    {
+                        "name": test_name,
+                        "error": str(report.longrepr)[:200],  # Truncate long errors
+                    },
+                )
+            elif report.skipped:
+                TEST_RESULTS_BY_MODE[mode]["skipped"].append(test_name)
+
+
+# ============================================================================
+# Helper Functions for Conditional Assertions
+# ============================================================================
+
+
+def assert_mode_specific(eav_condition, jsonb_condition, message=""):
+    """
+    Assert different conditions based on current storage mode.
+
+    Args:
+        eav_condition: Boolean condition to assert in EAV mode
+        jsonb_condition: Boolean condition to assert in JSONB mode
+        message: Optional assertion message
+
+    Usage:
+        assert_mode_specific(
+            eav_condition=len(derived_log_rows) > 0,
+            jsonb_condition=len(derived_log_rows) == 0,
+            message="DerivedLog rows should only exist in EAV mode"
+        )
+    """
+    if settings.use_jsonb_queries:
+        assert jsonb_condition, f"[JSONB Mode] {message}"
+    else:
+        assert eav_condition, f"[EAV Mode] {message}"
+
+
+def get_mode_specific_value(eav_value, jsonb_value):
+    """
+    Return different values based on storage mode.
+
+    Args:
+        eav_value: Value to return in EAV mode
+        jsonb_value: Value to return in JSONB mode
+
+    Returns:
+        The appropriate value for the current storage mode
+
+    Usage:
+        expected_count = get_mode_specific_value(eav_value=10, jsonb_value=0)
+    """
+    return jsonb_value if settings.use_jsonb_queries else eav_value
+
+
+def skip_if_eav_mode(reason="Feature only available in JSONB mode"):
+    """
+    Skip test when EAV storage mode is active.
+
+    Usage:
+        @skip_if_eav_mode("JSONB-specific optimization")
+        def test_something():
+            pass
+    """
+    return pytest.mark.skipif(not settings.use_jsonb_queries, reason=reason)
+
+
+### SQL CAPTURE FOR TEST ANALYSIS ###
+
+
+@pytest.fixture(autouse=True)
+def sql_capture_context(request, use_jsonb_mode=None):
+    """
+    Auto-use fixture that sets up SQL capture context for each test.
+
+    Captures test name, filter expression (if available), and storage mode for SQL query analysis.
+    Enable SQL capture by setting: SQL_CAPTURE_ENABLED=1
+
+    Captured SQL queries are written to:
+    orchestra/tests/test_log/captured_sql/sql_capture_{mode}.jsonl
+
+    Usage:
+        SQL_CAPTURE_ENABLED=1 pytest orchestra/tests/test_log/test_log_filtering.py -v
+    """
+    try:
+        from orchestra.tests.test_log.sql_capture import (
+            clear_test_context,
+            is_capture_enabled,
+            set_test_context,
+        )
+
+        if not is_capture_enabled():
+            yield
+            return
+
+        # Determine mode from fixture or test name
+        mode = "unknown"
+        if (
+            hasattr(request, "fixturenames")
+            and "use_jsonb_mode" in request.fixturenames
+        ):
+            try:
+                jsonb_mode = request.getfixturevalue("use_jsonb_mode")
+                mode = "jsonb" if jsonb_mode else "eav"
+            except Exception:
+                pass
+
+        # Fallback: check node ID for mode markers
+        if mode == "unknown":
+            if (
+                "[jsonb_mode]" in request.node.nodeid
+                or "jsonb" in request.node.nodeid.lower()
+            ):
+                mode = "jsonb"
+            elif (
+                "[eav_mode]" in request.node.nodeid
+                or "eav" in request.node.nodeid.lower()
+            ):
+                mode = "eav"
+            elif "enable_jsonb_mode" in getattr(request, "fixturenames", []):
+                mode = "jsonb"
+            elif "enable_eav_mode" in getattr(request, "fixturenames", []):
+                mode = "eav"
+
+        # Try to extract filter expression from test parameters
+        filter_expr = None
+        if hasattr(request, "node") and hasattr(request.node, "callspec"):
+            params = getattr(request.node.callspec, "params", {})
+            # Common parameter names for filter expressions
+            filter_expr = (
+                params.get("expression")
+                or params.get("filter_expr")
+                or params.get("expr")
+            )
+
+        # Set context for SQL capture
+        set_test_context(
+            test_name=request.node.nodeid,
+            filter_expr=filter_expr,
+            mode=mode,
+            extra={"test_function": request.node.name},
+        )
+
+        yield
+
+        # Clear context after test
+        clear_test_context()
+
+    except ImportError:
+        # sql_capture module not available
+        yield
 
 
 ### PERF TESTS FIXTURES ###
