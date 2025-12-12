@@ -905,7 +905,7 @@ async def list_resource_access(
         grantee_name = None
         if entry.grantee_type == "user":
             user = auth_user_dao.get_by_id(entry.grantee_id)
-            grantee_name = user.email if user else entry.grantee_id
+            grantee_name = user[0].email if user else entry.grantee_id
         elif entry.grantee_type == "team":
             try:
                 team = team_dao.get(int(entry.grantee_id))
