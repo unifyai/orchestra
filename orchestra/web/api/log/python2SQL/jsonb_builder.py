@@ -371,6 +371,7 @@ def _build_jsonb_field_expression(
     # Default to text extraction
     return jsonb_col.op("->>")(key)
 
+
 def _handle_comparison_operator_jsonb(
     filter_dict,
     log_event_alias,
@@ -670,6 +671,7 @@ def _handle_comparison_operator_jsonb(
             prefix="comparison_op",
         )
 
+
 def _value_or_coalesce_jsonb(
     or_filter_dict,
     log_event_alias,
@@ -965,6 +967,7 @@ def _handle_arithmetic_operator_jsonb(
             prefix="arithmetic_op",
         )
 
+
 def _handle_membership_operator_jsonb(
     filter_dict,
     log_event_alias,
@@ -1154,6 +1157,7 @@ def _handle_membership_operator_jsonb(
             result_type="bool",
             prefix="membership_op",
         )
+
 
 def _handle_logical_operator_jsonb(
     filter_dict,
@@ -1345,6 +1349,7 @@ def _handle_logical_operator_jsonb(
             result_type="bool",
             prefix="logical_op",
         )
+
 
 def _handle_functions_jsonb(
     filter_dict,
@@ -2452,7 +2457,6 @@ def _handle_functions_jsonb(
     raise NotImplementedError(f"JSONB support for function {operand} not implemented")
 
 
-
 def _handle_date_function_jsonb(
     operand,
     filter_dict,
@@ -2718,7 +2722,6 @@ def _is_jsonb_expression(expr) -> bool:
     return False
 
 
-
 def _handle_list_comp_jsonb(
     filter_dict,
     log_event_alias,
@@ -2857,6 +2860,7 @@ def _handle_dict_comp_jsonb(
         project_id=project_id,
         context_id=context_id,
     )
+
 
 def _handle_if_expr_jsonb(
     filter_dict,
@@ -3866,3 +3870,1003 @@ def _handle_zip_jsonb(
     # Return the subquery directly (not scalar_subquery!)
     # scalar_subquery() fails with CardinalityViolation when there are multiple log events
     return zipped
+
+
+def _handle_embed_jsonb(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+    project_id=None,
+    context_id=None,
+    query_context=None,
+):
+    """
+    Handle embed() function in JSONB mode.
+
+    embed(text, model?, dimensions?) - Converts text to a vector embedding
+
+    In JSONB mode:
+    - LogEvent.data contains all fields as JSONB
+    - Embedding table stores computed vectors
+    - NO Log/DerivedLog tables
+
+    Handles two cases:
+    1. Literal text: Create embedding directly and return vector literal
+    2. Field references: Extract text from LogEvent.data, create embeddings, return from Embedding table
+    """
+    from .core import _build_sql_query_jsonb
+    from .helpers import _ensure_vectors_exist
+
+    rhs_dict = filter_dict.get("rhs")
+    if not isinstance(rhs_dict, list):
+        rhs_dict = [rhs_dict]
+
+    if len(rhs_dict) < 1 or len(rhs_dict) > 3:
+        raise ValueError(
+            "embed() requires 1-3 arguments: (text, [model], [dimensions])",
+        )
+
+    # Build expressions for each argument
+    text_expr = _build_sql_query_jsonb(
+        rhs_dict[0],
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+
+    # Process optional model parameter
+    model = None
+    if len(rhs_dict) >= 2:
+        model_expr = _build_sql_query_jsonb(
+            rhs_dict[1],
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+            query_context=query_context,
+        )
+        if isinstance(model_expr, BindParameter):
+            model = model_expr.value
+            if not isinstance(model, str):
+                raise ValueError(
+                    f"embed() model must be a string, got {type(model).__name__}",
+                )
+        elif hasattr(model_expr, "value"):
+            model = model_expr.value
+
+    # Process optional dimensions parameter
+    dimensions = None
+    if len(rhs_dict) == 3:
+        dim_expr = _build_sql_query_jsonb(
+            rhs_dict[2],
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+            query_context=query_context,
+        )
+        if isinstance(dim_expr, BindParameter):
+            dimensions = dim_expr.value
+            if not isinstance(dimensions, int):
+                raise ValueError(
+                    f"embed() dimensions must be an integer, got {type(dimensions).__name__}",
+                )
+        elif hasattr(dim_expr, "value"):
+            dimensions = dim_expr.value
+
+    # Case 1: Handle literal text values (BindParameter)
+    if isinstance(text_expr, BindParameter):
+        text = text_expr.value
+        if not isinstance(text, str):
+            raise ValueError(f"embed() requires a string, got {type(text).__name__}")
+
+        if not _embeddable(text):
+            raise ValueError(f"embed() requires a valid embeddable string, got {text}")
+
+        # Get the embedding vector
+        embedding = _get_embedding(text, model, dimensions)
+
+        # Create a vector literal using pgvector
+        return literal(embedding, type_=Vector(len(embedding)))
+
+    # Case 2: Handle field references - JSONB native approach
+    # Get the key from the original filter dict
+    first_arg = rhs_dict[0]
+    key = None
+    if isinstance(first_arg, dict) and first_arg.get("type") == "identifier":
+        key = first_arg["value"]
+    elif (
+        isinstance(first_arg, dict)
+        and first_arg.get("operand") == "BASE"
+        and len(first_arg.get("rhs", [])) >= 2
+        and isinstance(first_arg["rhs"][1], dict)
+        and first_arg["rhs"][1].get("type") == "identifier"
+    ):
+        key = first_arg["rhs"][1]["value"]
+
+    if key is None:
+        raise ValueError("embed(): could not resolve key from first argument")
+
+    # JSONB-native: Query LogEvent.data directly to get text values
+    # Build query: SELECT id, data->>'key' FROM log_event WHERE id IN (log_event_ids)
+    text_query = select(
+        log_event_alias.id.label("log_event_id"),
+        log_event_alias.data.op("->>")(key).label("text_value"),
+    ).select_from(log_event_alias)
+
+    # Execute to get id_to_text mapping
+    rows = session.execute(text_query).fetchall()
+    id_to_text = {}
+    for row in rows:
+        if row.text_value and isinstance(row.text_value, str):
+            id_to_text[row.log_event_id] = row.text_value
+
+    # Ensure vectors exist for this key (stores in Embedding table)
+    if id_to_text:
+        _ensure_vectors_exist(
+            session=session,
+            id_to_text=id_to_text,
+            model=model,
+            dimensions=dimensions,
+            key=key,
+        )
+
+    # JSONB-native: Build subquery joining LogEvent with Embedding table
+    # to return vectors for each log_event_id
+    model_name = model or "text-embedding-3-small"  # Default model
+
+    vector_subq = (
+        select(
+            log_event_alias.id.label("log_event_id"),
+            Embedding.vector.label("value"),
+            literal("vector").label("inferred_type"),
+        )
+        .select_from(log_event_alias)
+        .outerjoin(
+            Embedding,
+            and_(
+                Embedding.ref_id == log_event_alias.id,
+                Embedding.key == literal(key),
+                Embedding.model == literal(model_name),
+            ),
+        )
+    )
+
+    return alias_utils.subquery_with_unique_alias(
+        vector_subq,
+        prefix="embed_result",
+    )
+
+
+def _handle_embed_image_jsonb(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+    project_id=None,
+    context_id=None,
+    query_context=None,
+):
+    """
+    Handle embed_image() function in JSONB mode.
+
+    embed_image(image_url_or_base64) - Converts image to vector embedding
+
+    In JSONB mode, image URLs are stored in LogEvent.data and we compute
+    embeddings on-the-fly (not stored in Embedding table since they're image-based).
+
+    Handles three cases:
+    1. Subquery: Execute query, compute embeddings in parallel
+    2. JSONB expression (field reference): Query LogEvent.data, compute embeddings
+    3. Literal (base64/URL): Compute embedding directly
+    """
+    from .core import _build_sql_query_jsonb
+
+    rhs_dict = filter_dict.get("rhs")
+
+    # Build expression for the argument
+    image_expr = _build_sql_query_jsonb(
+        rhs_dict,
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+
+    # Helper to process rows and compute embeddings
+    def _compute_embeddings_for_rows(rows):
+        if not rows:
+            return None
+
+        bucket_service = BucketService()
+
+        def compute_image_embedding(log_event_id, image_url, bucket_svc):
+            embedding_vector = None
+            error_msg = None
+
+            # Handle image dict format (e.g., {'type': 'image', 'value': 'data:...'})
+            if isinstance(image_url, dict) and image_url.get("type") == "image":
+                image_url = image_url.get("value")
+
+            if image_url and isinstance(image_url, str):
+                embedding_vector = _get_image_embedding_from_url(image_url, bucket_svc)
+                if embedding_vector is None:
+                    error_msg = (
+                        f"Failed to compute embedding for log_event_id={log_event_id}"
+                    )
+            return {
+                "log_event_id": log_event_id,
+                "value": embedding_vector,
+                "error": error_msg,
+            }
+
+        formatted_args = [
+            ((log_event_id, image_url, bucket_service), {})
+            for log_event_id, image_url in rows
+        ]
+        results = unify.map(
+            compute_image_embedding,
+            formatted_args,
+            mode="threading",
+            name="compute_image_embeddings_jsonb",
+        )
+
+        failed_count = sum(1 for r in results if r["value"] is None)
+        success_count = len(results) - failed_count
+
+        if failed_count > 0:
+            logging.warning(
+                f"embed_image: {failed_count}/{len(results)} images failed. "
+                f"Successfully processed {success_count}/{len(results)} images.",
+            )
+
+        selects = [
+            select(
+                literal(r["log_event_id"]).label("log_event_id"),
+                _literal_vector_jsonb(r["value"], len(r["value"])).label("value"),
+                literal("vector").label("inferred_type"),
+            )
+            for r in results
+            if r["value"] is not None
+        ]
+
+        if not selects:
+            logging.error(f"embed_image: All {len(results)} image embeddings failed!")
+            return None
+
+        return alias_utils.subquery_with_unique_alias(
+            union_all(*selects).select(),
+            prefix="embed_image_result",
+        )
+
+    # Case 1: Handle Subquery
+    if isinstance(image_expr, Subquery):
+        rows = session.execute(
+            select(image_expr.c.log_event_id, image_expr.c.value),
+        ).fetchall()
+        return _compute_embeddings_for_rows(rows)
+
+    # Case 2: Handle BindParameter (literal base64 strings or GCS URLs)
+    # Check BindParameter before _is_jsonb_expression (BindParameter returns True but needs special handling)
+    elif isinstance(image_expr, BindParameter):
+        image_value = image_expr.value
+
+        # Handle image type dict (from parser: {"type": "image", "value": "data:..."})
+        if isinstance(image_value, dict) and image_value.get("type") == "image":
+            image_string = image_value.get("value")
+        else:
+            image_string = image_value
+
+        if not isinstance(image_string, str):
+            raise ValueError("embed_image() requires a string URL or base64 image")
+
+        embedding = _get_image_embedding_from_url(image_string)
+        if embedding is None:
+            raise RuntimeError("Failed to generate image embedding")
+
+        return literal(embedding, type_=Vector(len(embedding)))
+
+    # Case 3: Handle JSONB expression (field reference)
+    # In JSONB mode, identifiers return JSONB expressions, not subqueries
+    elif _is_jsonb_expression(image_expr):
+        # Query LogEvent.data directly to get image URLs
+        # Filter by log_event_ids to only process relevant logs
+        query = select(
+            log_event_alias.id.label("log_event_id"),
+            image_expr.label("value"),
+        ).select_from(log_event_alias)
+
+        # Apply log_event_ids filter if provided
+        if log_event_ids is not None:
+            query = query.where(log_event_alias.id.in_(select(log_event_ids)))
+
+        rows = session.execute(query).fetchall()
+        return _compute_embeddings_for_rows(rows)
+
+    else:
+        raise ValueError(
+            "embed_image() expects a GCS URL, base64 string, or a field reference.",
+        )
+
+
+def _handle_phash_jsonb(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+    project_id=None,
+    context_id=None,
+    query_context=None,
+):
+    """
+    Handle phash() function in JSONB mode.
+
+    phash(image_url) - Converts image URL to a perceptual hash hex string
+
+    In JSONB mode, image URLs are stored in LogEvent.data and we compute
+    perceptual hashes on-the-fly.
+
+    Handles three cases:
+    1. Subquery: Execute query, compute hashes in parallel
+    2. JSONB expression (field reference): Query LogEvent.data, compute hashes
+    3. Literal (URL): Compute hash directly
+    """
+    from .core import _build_sql_query_jsonb
+
+    rhs_dict = filter_dict.get("rhs")
+
+    # Build expression for the argument
+    image_expr = _build_sql_query_jsonb(
+        rhs_dict,
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+
+    # Helper to process rows and compute hashes
+    def _compute_hashes_for_rows(rows):
+        if not rows:
+            return None
+
+        bucket_service = BucketService()
+
+        def compute_image_hash(log_event_id, image_url, bucket_svc):
+            phash_hex = None
+            error_msg = None
+
+            # Handle image dict format (e.g., {'type': 'image', 'value': 'data:...'})
+            if isinstance(image_url, dict) and image_url.get("type") == "image":
+                image_url = image_url.get("value")
+
+            if image_url and isinstance(image_url, str):
+                try:
+                    # Check if this is a base64 data URI or a GCS URL
+                    if image_url.startswith("data:image/") and ";base64," in image_url:
+                        # Base64 data URI - extract and decode directly
+                        b64_string = image_url.split(",", 1)[1]
+                        image_data = base64.b64decode(b64_string)
+                    else:
+                        # GCS URL - fetch from bucket service
+                        base64_image = bucket_svc.get_media(image_url.split("/")[-1])
+                        if not base64_image:
+                            error_msg = (
+                                f"Failed to fetch image for log_event_id={log_event_id}"
+                            )
+                            return {
+                                "log_event_id": log_event_id,
+                                "value": None,
+                                "error": error_msg,
+                            }
+                        image_data = base64.b64decode(base64_image)
+
+                    image = Image.open(io.BytesIO(image_data))
+                    hash_value = imagehash.phash(image)
+                    phash_hex = format(int(str(hash_value), 16), "016x")
+                except Exception as e:
+                    error_msg = (
+                        f"Failed to compute phash for log_event_id={log_event_id}: {e}"
+                    )
+            return {
+                "log_event_id": log_event_id,
+                "value": phash_hex,
+                "error": error_msg,
+            }
+
+        formatted_args = [
+            ((log_event_id, image_url, bucket_service), {})
+            for log_event_id, image_url in rows
+        ]
+        results = unify.map(
+            compute_image_hash,
+            formatted_args,
+            mode="threading",
+            name="compute_image_hashes_jsonb",
+        )
+
+        failed_count = sum(1 for r in results if r["value"] is None)
+        success_count = len(results) - failed_count
+
+        if failed_count > 0:
+            logging.warning(
+                f"phash: {failed_count}/{len(results)} images failed. "
+                f"Successfully processed {success_count}/{len(results)} images.",
+            )
+
+        selects = [
+            select(
+                literal(r["log_event_id"]).label("log_event_id"),
+                literal(r["value"]).label("value"),
+                literal("str").label("inferred_type"),
+            )
+            for r in results
+            if r["value"] is not None
+        ]
+
+        if not selects:
+            logging.error(f"phash: All {len(results)} image hashes failed!")
+            return None
+
+        return alias_utils.subquery_with_unique_alias(
+            union_all(*selects).select(),
+            prefix="phash_result",
+        )
+
+    # Case 1: Handle Subquery
+    if isinstance(image_expr, Subquery):
+        rows = session.execute(
+            select(image_expr.c.log_event_id, image_expr.c.value),
+        ).fetchall()
+        return _compute_hashes_for_rows(rows)
+
+    # Case 2: Handle BindParameter (literal URL or image dict)
+    # Check BindParameter before _is_jsonb_expression (BindParameter returns True but needs special handling)
+    elif isinstance(image_expr, BindParameter):
+        image_value = image_expr.value
+
+        # Handle image type dict (from parser: {"type": "image", "value": "data:..."})
+        if isinstance(image_value, dict) and image_value.get("type") == "image":
+            image_url = image_value.get("value")
+        elif isinstance(image_value, str):
+            image_url = image_value
+        else:
+            raise ValueError("phash() requires a string URL or base64 image")
+
+        try:
+            # Check if this is a base64 data URI or a GCS URL
+            if image_url.startswith("data:image/") and ";base64," in image_url:
+                # Base64 data URI - extract and decode directly
+                b64_string = image_url.split(",", 1)[1]
+                image_data = base64.b64decode(b64_string)
+            else:
+                # GCS URL - fetch from bucket service
+                bucket_service = BucketService()
+                base64_image = bucket_service.get_media(image_url.split("/")[-1])
+                if not base64_image:
+                    return literal(None)
+                image_data = base64.b64decode(base64_image)
+
+            image = Image.open(io.BytesIO(image_data))
+            hash_value = imagehash.phash(image)
+            return literal(format(int(str(hash_value), 16), "016x"))
+        except Exception:
+            return literal(None)
+
+    # Case 3: Handle JSONB expression (field reference)
+    # In JSONB mode, identifiers return JSONB expressions, not subqueries
+    elif _is_jsonb_expression(image_expr):
+        # Query LogEvent.data directly to get image URLs
+        rows = session.execute(
+            select(
+                log_event_alias.id.label("log_event_id"),
+                image_expr.label("value"),
+            ).select_from(log_event_alias),
+        ).fetchall()
+        return _compute_hashes_for_rows(rows)
+
+    else:
+        raise ValueError("phash() expects a string URL or a field reference")
+
+
+def _ensure_numeric_iterable_jsonb(name: str, val: Iterable) -> Tuple[list, int]:
+    """Validate and convert iterables to float lists for vector operations."""
+    try:
+        seq = list(val)
+    except Exception:
+        raise TypeError(
+            f"{name}: expected a numeric iterable, got {type(val).__name__}.",
+        )
+    if not seq:
+        raise ValueError(f"{name}: empty vector is not allowed.")
+    try:
+        vec = [float(x) for x in seq]
+    except Exception:
+        raise ValueError(f"{name}: vector must contain only numeric values.")
+    return vec, len(vec)
+
+
+def _literal_vector_jsonb(vec: Iterable[float], dim: int) -> ClauseElement:
+    """Create pgvector literal from Python list."""
+    return cast(literal(list(vec), type_=ARRAY(Float())), Vector(dim))
+
+
+def _coerce_to_vector_sql_jsonb(
+    expr: object,
+    inferred_type: Optional[str],
+    side_label: str,
+) -> ClauseElement:
+    """Convert various types to Vector SQL expressions."""
+    if hasattr(expr, "op"):
+        if _is_list_type(inferred_type):
+            return cast(expr.op("#>>")("{}"), Vector())
+        return expr
+    if _is_list_type(inferred_type) and isinstance(expr, (list, tuple)):
+        vec, dim = _ensure_numeric_iterable_jsonb(side_label, expr)
+        return _literal_vector_jsonb(vec, dim)
+    if isinstance(expr, (list, tuple)):
+        vec, dim = _ensure_numeric_iterable_jsonb(side_label, expr)
+        return _literal_vector_jsonb(vec, dim)
+    raise TypeError(
+        f"Vector operand {side_label}: expected a vector-compatible value "
+        f"(numeric list/tuple or SQL expression), got {type(expr).__name__}.",
+    )
+
+
+def _vector_binary_op_jsonb(
+    lhs_src: Union[ClauseElement, Subquery, object],
+    rhs_src: Union[ClauseElement, Subquery, object],
+    session,
+    operator_symbol: str,
+    result_type_label: str,
+    subquery_prefix: str,
+) -> Union[ClauseElement, Subquery]:
+    """
+    Apply a binary vector operator (e.g., <->, <=>, <#>, <+>, <%>) between two operands.
+
+    Applies binary vector operators between two operands in JSONB mode.
+    """
+    lhs_is_sub = isinstance(lhs_src, Subquery)
+    rhs_is_sub = isinstance(rhs_src, Subquery)
+
+    def _value_from_source(src, side_name: str):
+        val, val_type = _select_value(src, session, is_vector=True)
+        return (
+            _coerce_to_vector_sql_jsonb(val, val_type, side_name),
+            val_type,
+            (src if isinstance(src, Subquery) else None),
+        )
+
+    lval, _, lsub = _value_from_source(lhs_src, "lhs")
+    rval, _, rsub = _value_from_source(rhs_src, "rhs")
+
+    expr = lval.op(operator_symbol)(rval).cast(Float)
+
+    # Both sides are subqueries
+    if lsub is not None and rsub is not None:
+        return _join_subqueries(lsub, rsub, expr, result_type_label, session=session)
+
+    # Only LHS is subquery
+    if lsub is not None:
+        return build_result_subquery(
+            base_subq=lsub,
+            value_expr=expr,
+            result_type=result_type_label,
+            prefix=subquery_prefix,
+        )
+
+    # Only RHS is subquery
+    if rsub is not None:
+        return build_result_subquery(
+            base_subq=rsub,
+            value_expr=expr,
+            result_type=result_type_label,
+            prefix=subquery_prefix,
+        )
+
+    # Neither side is subquery
+    return expr
+
+
+def _handle_l2_jsonb(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+    project_id=None,
+    context_id=None,
+    query_context=None,
+):
+    """Handle L2/Euclidean distance operator between two vectors: v1 <-> v2."""
+    from .core import _build_sql_query_jsonb
+
+    lhs = _build_sql_query_jsonb(
+        filter_dict.get("lhs"),
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=True,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+    rhs = _build_sql_query_jsonb(
+        filter_dict.get("rhs"),
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=True,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+    return _vector_binary_op_jsonb(lhs, rhs, session, "<->", "float", "l2_distance")
+
+
+def _handle_cosine_jsonb(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+    project_id=None,
+    context_id=None,
+    query_context=None,
+):
+    """Handle cosine similarity operator between two vectors: v1 <=> v2."""
+    from .core import _build_sql_query_jsonb
+
+    lhs = _build_sql_query_jsonb(
+        filter_dict.get("lhs"),
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=True,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+    rhs = _build_sql_query_jsonb(
+        filter_dict.get("rhs"),
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=True,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+    return _vector_binary_op_jsonb(
+        lhs,
+        rhs,
+        session,
+        "<=>",
+        "float",
+        "cosine_similarity",
+    )
+
+
+def _handle_ip_jsonb(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+    project_id=None,
+    context_id=None,
+    query_context=None,
+):
+    """Handle inner product operator between two vectors: v1 <#> v2."""
+    from .core import _build_sql_query_jsonb
+
+    lhs = _build_sql_query_jsonb(
+        filter_dict.get("lhs"),
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=True,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+    rhs = _build_sql_query_jsonb(
+        filter_dict.get("rhs"),
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=True,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+    return _vector_binary_op_jsonb(lhs, rhs, session, "<#>", "float", "inner_product")
+
+
+def _handle_l1_jsonb(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+    project_id=None,
+    context_id=None,
+    query_context=None,
+):
+    """Handle L1/Manhattan distance operator between two vectors: v1 <+> v2."""
+    from .core import _build_sql_query_jsonb
+
+    lhs = _build_sql_query_jsonb(
+        filter_dict.get("lhs"),
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=True,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+    rhs = _build_sql_query_jsonb(
+        filter_dict.get("rhs"),
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=True,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+    return _vector_binary_op_jsonb(lhs, rhs, session, "<+>", "float", "l1_distance")
+
+
+def _handle_euclidean_distance_jsonb(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+    project_id=None,
+    context_id=None,
+    query_context=None,
+):
+    """Alias for L2 distance."""
+    return _handle_l2_jsonb(
+        filter_dict,
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived,
+        local_scope,
+        is_vector,
+        project_id,
+        context_id,
+        query_context,
+    )
+
+
+def _handle_jaccard_distance_jsonb(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+    project_id=None,
+    context_id=None,
+    query_context=None,
+):
+    """Handle Jaccard distance operator between two vectors: v1 <%> v2."""
+    from .core import _build_sql_query_jsonb
+
+    lhs = _build_sql_query_jsonb(
+        filter_dict.get("lhs"),
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=True,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+    rhs = _build_sql_query_jsonb(
+        filter_dict.get("rhs"),
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=True,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+    return _vector_binary_op_jsonb(
+        lhs,
+        rhs,
+        session,
+        "<%>",
+        "float",
+        "jaccard_distance",
+    )
+
+
+def _handle_phash_distance_jsonb(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+    project_id=None,
+    context_id=None,
+    query_context=None,
+):
+    """
+    Handle Hamming distance operator between two pHash hex strings.
+
+    Uses PostgreSQL's hamming_distance function to compute the distance.
+    """
+    from .core import _build_sql_query_jsonb
+
+    lhs_dict = filter_dict.get("lhs")
+    rhs_dict = filter_dict.get("rhs")
+
+    # Check for raw image literals and compute their pHash on the fly
+    # Use image_utils for pHash computation
+    lhs_phash = get_phash_from_node(lhs_dict)
+    if lhs_phash is not None:
+        lhs = literal(lhs_phash)
+    else:
+        lhs = _build_sql_query_jsonb(
+            lhs_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+            query_context=query_context,
+        )
+
+    rhs_phash = get_phash_from_node(rhs_dict)
+    if rhs_phash is not None:
+        rhs = literal(rhs_phash)
+    else:
+        rhs = _build_sql_query_jsonb(
+            rhs_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+            query_context=query_context,
+        )
+
+    lhs_is_sub = isinstance(lhs, Subquery)
+    rhs_is_sub = isinstance(rhs, Subquery)
+
+    if lhs_is_sub and rhs_is_sub:
+        lval, _ = _select_value(lhs, session)
+        rval, _ = _select_value(rhs, session)
+        # Convert hex phash strings to bit(64) for hamming_distance
+        lval_bit = cast(func.concat(literal("x"), lval), Bit(64))
+        rval_bit = cast(func.concat(literal("x"), rval), Bit(64))
+        expr = func.hamming_distance(lval_bit, rval_bit)
+        return _join_subqueries(lhs, rhs, expr, "int", session=session)
+
+    if lhs_is_sub:
+        lval, _ = _select_value(lhs, session)
+        rval, _ = _select_value(rhs, session)
+
+        # For BindParameter/literal rhs, need to convert to SQL literal
+        # _select_value returns Python value for BindParameter, we need SQL expression
+        if isinstance(rhs, BindParameter) or isinstance(rval, str):
+            rval = literal(rval)
+
+        # Convert hex phash strings to bit(64) for hamming_distance
+        lval_bit = cast(func.concat(literal("x"), lval), Bit(64))
+        rval_bit = cast(func.concat(literal("x"), rval), Bit(64))
+        expr = func.hamming_distance(lval_bit, rval_bit)
+
+        return build_result_subquery(
+            base_subq=lhs,
+            value_expr=expr,
+            result_type="int",
+            prefix="phash_distance",
+        )
+
+    if rhs_is_sub:
+        rval, _ = _select_value(rhs, session)
+        lval, _ = _select_value(lhs, session)
+
+        # For BindParameter/literal lhs, need to convert to SQL literal
+        if isinstance(lhs, BindParameter) or isinstance(lval, str):
+            lval = literal(lval)
+
+        # Convert hex phash strings to bit(64) for hamming_distance
+        lval_bit = cast(func.concat(literal("x"), lval), Bit(64))
+        rval_bit = cast(func.concat(literal("x"), rval), Bit(64))
+        expr = func.hamming_distance(lval_bit, rval_bit)
+
+        return build_result_subquery(
+            base_subq=rhs,
+            value_expr=expr,
+            result_type="int",
+            prefix="phash_distance",
+        )
+
+    # Neither side is a subquery - return scalar expression
+    # Convert hex phash strings to bit(64) for hamming_distance
+    # hamming_distance expects bit strings, not hex strings
+    # Use ('x' || hex_string)::bit(64) to convert hex to binary
+    lhs_bit = cast(func.concat(literal("x"), lhs), Bit(64))
+    rhs_bit = cast(func.concat(literal("x"), rhs), Bit(64))
+    return func.hamming_distance(lhs_bit, rhs_bit)
