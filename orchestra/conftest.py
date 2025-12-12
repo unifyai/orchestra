@@ -10,12 +10,20 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 from typing import Any, AsyncGenerator, Generator
 
-import matplotlib
-
-matplotlib.use("Agg")  # Use non-interactive backend for headless rendering
-import matplotlib.pyplot as plt
 import numpy as np
 import pytest
+
+# Optional matplotlib for performance charts
+try:
+    import matplotlib
+
+    matplotlib.use("Agg")  # Use non-interactive backend for headless rendering
+    import matplotlib.pyplot as plt
+
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
+    plt = None
 from fastapi import FastAPI
 from google.cloud import storage
 from httpx import AsyncClient
@@ -1806,10 +1814,10 @@ def pytest_sessionfinish(session, exitstatus):
         # =====================================================================
         chart_images = {}
 
-        # Only generate charts if we have paired test data
+        # Only generate charts if we have paired test data and matplotlib is available
         paired_tests = [p for p in test_pairs if p["eav"] and p["jsonb"]]
 
-        if paired_tests:
+        if paired_tests and HAS_MATPLOTLIB:
             # Chart 1: Bar chart comparing storage mode query times
             try:
                 fig, ax = plt.subplots(figsize=(14, 8))
