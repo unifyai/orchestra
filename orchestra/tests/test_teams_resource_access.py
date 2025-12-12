@@ -1014,8 +1014,8 @@ async def test_explicit_grant_overrides_implicit_access(client: AsyncClient, dbs
 
 
 @pytest.mark.anyio
-async def test_only_project_org_resource_types_allowed(client: AsyncClient, dbsession):
-    """Test that only 'project' and 'org' resource types are allowed."""
+async def test_only_project_resource_type_allowed(client: AsyncClient, dbsession):
+    """Test that only 'project' resource type is allowed for ResourceAccess."""
     owner = await create_test_user(client, "invalid_resource_owner@test.com")
 
     # Create organization
@@ -1040,8 +1040,8 @@ async def test_only_project_org_resource_types_allowed(client: AsyncClient, dbse
     role_dao = RoleDAO(dbsession)
     viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
 
-    # Try to grant access to invalid resource types
-    invalid_types = ["interface", "tab", "tile", "invalid"]
+    # Try to grant access to invalid resource types (including "org" which is no longer supported)
+    invalid_types = ["interface", "tab", "tile", "invalid", "org"]
 
     for invalid_type in invalid_types:
         response = await client.post(
@@ -1055,7 +1055,7 @@ async def test_only_project_org_resource_types_allowed(client: AsyncClient, dbse
         )
         assert response.status_code == status.HTTP_400_BAD_REQUEST
         assert "Invalid resource type" in response.json()["detail"]
-        assert "Only 'project' and 'org' are supported" in response.json()["detail"]
+        assert "Only 'project' is supported" in response.json()["detail"]
 
 
 @pytest.mark.anyio
@@ -1278,12 +1278,27 @@ async def test_update_resource_access_invalid_id(client: AsyncClient, dbsession)
     )
     org_id = org_response.json()["id"]
 
+    # Create a project to test with (since "org" resource type is no longer supported)
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    project_dao.create(
+        name="Invalid_Update_Project",
+        user_id=None,
+        organization_id=org_id,
+    )
+    dbsession.commit()
+
+    projects = project_dao.filter(organization_id=org_id, name="Invalid_Update_Project")
+    project = projects[0][0]
+
     role_dao = RoleDAO(dbsession)
     viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
 
-    # Try to update non-existent access grant
+    # Try to update non-existent access grant on project
     response = await client.patch(
-        f"/v0/resources/org/{org_id}/access/99999",
+        f"/v0/resources/project/{project.id}/access/99999",
         json={"role_id": viewer_role.id},
         headers=owner["headers"],
     )
@@ -1296,39 +1311,61 @@ async def test_update_resource_access_wrong_resource(client: AsyncClient, dbsess
     """Test updating an access grant with mismatched resource returns 404."""
     owner = await create_test_user(client, "wrong_resource_owner@test.com")
 
-    # Create two orgs
-    org1_response = await client.post(
+    # Create organization
+    org_response = await client.post(
         "/v0/organizations",
-        json={"name": "Wrong Resource Org 1"},
+        json={"name": "Wrong Resource Org"},
         headers=owner["headers"],
     )
-    org1_id = org1_response.json()["id"]
+    org_id = org_response.json()["id"]
 
-    org2_response = await client.post(
-        "/v0/organizations",
-        json={"name": "Wrong Resource Org 2"},
-        headers=owner["headers"],
-    )
-    org2_id = org2_response.json()["id"]
-
-    # Grant access to org1
+    # Create two projects
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
     resource_access_dao = ResourceAccessDAO(dbsession)
     role_dao = RoleDAO(dbsession)
+
+    project_dao.create(
+        name="Wrong_Resource_Project_1",
+        user_id=None,
+        organization_id=org_id,
+    )
+    project_dao.create(
+        name="Wrong_Resource_Project_2",
+        user_id=None,
+        organization_id=org_id,
+    )
+    dbsession.commit()
+
+    projects1 = project_dao.filter(
+        organization_id=org_id,
+        name="Wrong_Resource_Project_1",
+    )
+    project1 = projects1[0][0]
+
+    projects2 = project_dao.filter(
+        organization_id=org_id,
+        name="Wrong_Resource_Project_2",
+    )
+    project2 = projects2[0][0]
+
+    # Grant access to project1
     viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
 
     access = resource_access_dao.grant_access(
-        resource_type="org",
-        resource_id=org1_id,
+        resource_type="project",
+        resource_id=project1.id,
         role_id=viewer_role.id,
         grantee_type="user",
         grantee_id=owner["id"],
     )
     dbsession.commit()
 
-    # Try to update via org2's access endpoint (wrong resource)
+    # Try to update via project2's access endpoint (wrong resource)
     member_role = role_dao.get_by_name("Member", organization_id=None)
     response = await client.patch(
-        f"/v0/resources/org/{org2_id}/access/{access.id}",
+        f"/v0/resources/project/{project2.id}/access/{access.id}",
         json={"role_id": member_role.id},
         headers=owner["headers"],
     )
@@ -1544,7 +1581,7 @@ async def test_update_resource_access_invalid_resource_type(
     )
     assert response.status_code == 400
     assert "Invalid resource type" in response.json()["detail"]
-    assert "Only 'project' and 'org' are supported" in response.json()["detail"]
+    assert "Only 'project' is supported" in response.json()["detail"]
 
 
 @pytest.mark.anyio
@@ -2192,56 +2229,42 @@ async def test_list_resource_access_invalid_resource_type(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_list_resource_access_org(client: AsyncClient, dbsession):
-    """Test listing access entries for an organization."""
-    owner = await create_test_user(client, "list_org_access_owner@test.com")
-    member = await create_test_user(client, "list_org_access_member@test.com")
+async def test_resource_access_org_type_not_supported(client: AsyncClient, dbsession):
+    """Test that 'org' resource type is not supported for ResourceAccess operations.
+
+    Org-level permissions should be managed via OrganizationMember roles,
+    not ResourceAccess grants. The API should reject 'org' as a resource type.
+    """
+    owner = await create_test_user(client, "org_type_not_supported@test.com")
 
     # Create organization
     org_response = await client.post(
         "/v0/organizations",
-        json={"name": "List Org Access Test"},
+        json={"name": "Org Type Not Supported Test"},
         headers=owner["headers"],
     )
     org_id = org_response.json()["id"]
 
-    # Add member to org
-    await client.post(
-        f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
-        headers=owner["headers"],
-    )
-
-    # Grant explicit access to member on the org
-    resource_access_dao = ResourceAccessDAO(dbsession)
-    role_dao = RoleDAO(dbsession)
-
-    viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
-    resource_access_dao.grant_access(
-        resource_type="org",
-        resource_id=org_id,
-        role_id=viewer_role.id,
-        grantee_type="user",
-        grantee_id=member["id"],
-    )
-    dbsession.commit()
-
-    # List access entries for org
+    # Try to list access entries for org - should fail with 400
     response = await client.get(
         f"/v0/resources/org/{org_id}/access",
         headers=owner["headers"],
     )
-    assert response.status_code == status.HTTP_200_OK
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "Only 'project' is supported" in response.json()["detail"]
 
-    data = response.json()
-    assert data["resource_type"] == "org"
-    assert data["resource_id"] == org_id
-    # Should have at least the explicit grant we made
-    assert len(data["access_entries"]) >= 1
+    # Try to grant access to org - should fail with 400
+    role_dao = RoleDAO(dbsession)
+    viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
 
-    # Find member's entry
-    member_entries = [
-        e for e in data["access_entries"] if e["grantee_id"] == member["id"]
-    ]
-    assert len(member_entries) == 1
-    assert member_entries[0]["role_name"] == "Viewer"
+    grant_response = await client.post(
+        f"/v0/resources/org/{org_id}/access",
+        json={
+            "role_id": viewer_role.id,
+            "grantee_type": "user",
+            "grantee_id": owner["id"],
+        },
+        headers=owner["headers"],
+    )
+    assert grant_response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "Only 'project' is supported" in grant_response.json()["detail"]
