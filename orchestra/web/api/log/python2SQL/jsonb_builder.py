@@ -2858,3 +2858,446 @@ def _handle_dict_comp_jsonb(
         context_id=context_id,
     )
 
+def _handle_if_expr_jsonb(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+    project_id=None,
+    context_id=None,
+    query_context=None,
+):
+    """
+    Handle conditional expressions (ternary if-else) in JSONB mode.
+
+    Processes expressions like 'x if condition else y' by:
+    1. Evaluating test/then/else branches using JSONB builder
+    2. If all branches are direct expressions, use SQL CASE directly
+    3. If any branch is a subquery, delegate to shared handler
+    """
+    from .core import _build_sql_query_jsonb
+    from .functions import _handle_if_expr
+
+    # Build all three branches
+    test_expr = _build_sql_query_jsonb(
+        filter_dict["test"],
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+
+    body_expr = _build_sql_query_jsonb(
+        filter_dict["body"],
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+
+    else_expr = _build_sql_query_jsonb(
+        filter_dict["orelse"],
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+
+    # Check if all branches are direct expressions (not subqueries)
+    all_expressions = (
+        _is_jsonb_expression(test_expr)
+        and _is_jsonb_expression(body_expr)
+        and _is_jsonb_expression(else_expr)
+    )
+
+    if all_expressions:
+        # Use direct CASE expression for efficiency
+        test_type = _infer_expression_type(test_expr, session, project_id, context_id)
+        body_type = _infer_expression_type(body_expr, session, project_id, context_id)
+        else_type = _infer_expression_type(else_expr, session, project_id, context_id)
+
+        # Unify types for then/else branches
+        result_type = unify_inferred_types(body_type, else_type)
+
+        # Cast branches to unified type
+        body_casted = cast_expr(body_expr, body_type, result_type)
+        else_casted = cast_expr(else_expr, else_type, result_type)
+
+        # Cast test to boolean
+        test_bool = cast(test_expr, Boolean) if test_type != "bool" else test_expr
+
+        # Build CASE expression
+        return case((test_bool, body_casted), else_=else_casted)
+
+    # If any branch is a subquery, delegate to shared handler
+    return _handle_if_expr(
+        filter_dict,
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+    )
+
+
+def _handle_index_operator_jsonb(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+    project_id=None,
+    context_id=None,
+    query_context=None,
+):
+    """
+    Handle the INDEX operator in JSONB mode.
+
+    For JSONB expressions, applies indexing operators directly:
+    - Arrays: lhs_expr.op('->')( rhs_expr) for integer index
+    - Objects: lhs_expr.op('->')( rhs_expr) for string key
+    - Strings: func.substring() with 1-based indexing
+
+    Negative indices are supported for strings and JSONB arrays, following Python semantics.
+    Out-of-range indices return NULL (for arrays) or empty string (for strings).
+
+    Returns direct expression when possible, only wraps in subquery if needed.
+    """
+    from sqlalchemy import BindParameter
+    from sqlalchemy.sql.selectable import Subquery
+
+    from .core import _build_sql_query_jsonb
+    from .operators import _handle_index_operator
+
+    lhs_node = filter_dict.get("lhs")
+    rhs_node = filter_dict.get("rhs")
+
+    # Build LHS and RHS expressions
+    lhs_expr = _build_sql_query_jsonb(
+        lhs_node,
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+
+    rhs_expr = _build_sql_query_jsonb(
+        rhs_node,
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+
+    # If LHS is a subquery, delegate to shared handler
+    if isinstance(lhs_expr, Subquery):
+        return _handle_index_operator(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+        )
+
+    # Handle JSONB expressions directly
+    lhs_type = _infer_expression_type(lhs_expr, session, project_id, context_id)
+
+    # Get RHS value for indexing
+    if isinstance(rhs_expr, BindParameter):
+        rhs_val = rhs_expr.value
+    elif hasattr(rhs_expr, "value"):
+        rhs_val = rhs_expr.value
+    else:
+        rhs_val = rhs_expr
+
+    # String keys indicate dict property access, not string indexing
+    # Even if lhs_type is "str" (default when type is unknown), we should treat
+    # string key access as JSONB object property access, not string character indexing.
+    # This handles cases like d.a where d is a dict field stored as JSONB.
+    is_string_key = isinstance(rhs_val, str)
+
+    # Use centralized type helpers for consistent normalization
+    lhs_is_list = _is_list_type(lhs_type) if lhs_type else False
+    lhs_is_dict = _is_dict_type(lhs_type) if lhs_type else False
+
+    if lhs_type == "str" and isinstance(rhs_val, int) and not lhs_is_list:
+        # String indexing: use func.substring with 1-based index
+        # Only apply when RHS is an integer (character index)
+        str_val = cast(lhs_expr, String)
+        str_len = func.length(str_val)
+
+        if rhs_val < 0:
+            # Negative index: compute from end (Python semantics)
+            # str_len + rhs_val + 1 gives the 1-based position
+            pg_index_expr = str_len + literal(rhs_val) + literal(1)
+            return func.substring(str_val, pg_index_expr, 1)
+        else:
+            # Positive index: convert 0-based to 1-based
+            pg_index = rhs_val + 1
+            return func.substring(str_val, literal(pg_index), 1)
+
+    elif lhs_is_list or lhs_is_dict or lhs_type == "jsonb" or is_string_key:
+        # JSONB array/object indexing using -> operator
+        # Note: JSONB -> with negative int does NOT work like Python
+        # For lists, we need to handle negative indices specially
+
+        # Ensure LHS is JSONB for -> operator
+        # If lhs_expr came from ->> (TEXT), cast it back to JSONB
+        from sqlalchemy.sql.expression import BinaryExpression
+
+        lhs_jsonb = lhs_expr
+        if isinstance(lhs_expr, BinaryExpression):
+            op_str = getattr(lhs_expr.operator, "opstring", str(lhs_expr.operator))
+            if op_str == "->>":
+                # Cast TEXT back to JSONB for property access
+                lhs_jsonb = cast(lhs_expr, JSONB)
+
+        if lhs_is_list and isinstance(rhs_val, int) and rhs_val < 0:
+            # Negative index for JSONB array: compute from end
+            # jsonb_array_length(arr) + rhs_val gives the actual index
+            arr_len = func.jsonb_array_length(cast(lhs_jsonb, JSONB))
+            actual_idx = arr_len + literal(rhs_val)
+            return lhs_jsonb.op("->")(actual_idx)
+        elif isinstance(rhs_val, int):
+            return lhs_jsonb.op("->")(literal(rhs_val))
+        else:
+            return lhs_jsonb.op("->")(rhs_val)
+
+    # Fallback: return null for unsupported types
+    return literal(None)
+
+
+def _handle_slice_operator_jsonb(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+    project_id=None,
+    context_id=None,
+    query_context=None,
+):
+    """
+    Handle the SLICE operator in JSONB mode.
+
+    For strings: uses func.substring() with proper 1-based indexing
+    For JSONB arrays: uses jsonb_path_query_array for slicing
+
+    Computes start_expr and slice length:
+    - lower=None interpreted as 0
+    - upper=None interpreted as end of string/array
+    - Negative bounds compute from end
+
+    Returns direct expression when possible.
+    """
+    from sqlalchemy import literal_column
+    from sqlalchemy.sql.selectable import Subquery
+
+    from .core import _build_sql_query_jsonb
+    from .operators import _handle_slice_operator
+
+    lhs_node = filter_dict.get("lhs")
+    rhs_bounds = filter_dict.get("rhs")
+
+    # Unpack the slice bounds
+    lower, upper = rhs_bounds
+
+    # Build LHS expression
+    lhs_expr = _build_sql_query_jsonb(
+        lhs_node,
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+
+    # If LHS is a subquery, delegate to shared handler
+    if isinstance(lhs_expr, Subquery):
+        return _handle_slice_operator(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+        )
+
+    # Handle JSONB expressions directly
+    lhs_type = _infer_expression_type(lhs_expr, session, project_id, context_id)
+
+    # Normalize list types - handle List[int], list, array, etc.
+    # Use centralized type helper for consistent normalization
+    lhs_is_list = _is_list_type(lhs_type) if lhs_type else False
+
+    if lhs_type == "str" and not lhs_is_list:
+        # String slicing using substring
+        str_txt = cast(lhs_expr, String)
+        str_len = func.char_length(str_txt)
+
+        # Compute start position (1-based for PostgreSQL)
+        # lower_index_expr tracks 0-based position for length calculation
+        if lower is None:
+            start_expr = literal(1)
+            lower_index_expr = literal(0)
+        elif isinstance(lower, int) and lower >= 0:
+            start_expr = literal(lower + 1)  # 1-based
+            lower_index_expr = literal(lower)
+        elif isinstance(lower, int):  # negative
+            start_expr = str_len + literal(lower) + literal(1)
+            lower_index_expr = str_len + literal(lower)  # 0-based
+        else:
+            raise ValueError("Slice start must be int or None")
+
+        # Compute slice length
+        if upper is None:
+            # No upper bound: go to end of string
+            return func.substring(str_txt, start_expr)
+        elif isinstance(upper, int) and upper >= 0:
+            # Positive upper: compute length as upper - lower
+            slice_len = max(
+                upper - (lower if lower is not None and lower >= 0 else 0),
+                0,
+            )
+            return func.substring(str_txt, start_expr, literal(slice_len))
+        elif isinstance(upper, int):  # negative stop
+            # Negative upper: compute end position from string length
+            end_index_expr = str_len + literal(upper)
+            slice_len_expr = end_index_expr - lower_index_expr
+            return func.substring(str_txt, start_expr, slice_len_expr)
+        else:
+            raise ValueError("Slice stop must be int or None")
+
+    elif lhs_is_list:
+        # JSONB array slicing using jsonb_path_query_array with full negative index support
+        # Note: JSON path uses 0-based indexing and inclusive 'to'
+
+        # For dynamic negative index handling, we need to compute array length
+        arr_len_expr = func.jsonb_array_length(cast(lhs_expr, JSONB))
+
+        # Compute actual start index
+        if lower is None:
+            start_expr = literal(0)
+            start_is_dynamic = False
+        elif isinstance(lower, int) and lower >= 0:
+            start_expr = literal(lower)
+            start_is_dynamic = False
+        elif isinstance(lower, int):  # negative start
+            # Compute: arr_len + lower, but ensure non-negative
+            start_expr = func.greatest(literal(0), arr_len_expr + literal(lower))
+            start_is_dynamic = True
+        else:
+            raise ValueError("Slice start must be int or None")
+
+        # Compute actual end index (inclusive for JSON path)
+        if upper is None:
+            # Use 'last' keyword in JSON path for unbounded end
+            end_is_last = True
+            end_expr = None
+        elif isinstance(upper, int) and upper >= 0:
+            # JSON path 'to' is inclusive, Python slice upper is exclusive
+            end_expr = literal(upper - 1)
+            end_is_last = False
+        elif isinstance(upper, int):  # negative upper
+            # Compute: arr_len + upper - 1 (because 'to' is inclusive)
+            end_expr = arr_len_expr + literal(upper) - literal(1)
+            end_is_last = False
+        else:
+            raise ValueError("Slice stop must be int or None")
+
+        # For static indices (no negative), use simple path expression
+        if not start_is_dynamic and (end_is_last or (upper is not None and upper >= 0)):
+            if end_is_last:
+                path_expr = f"'$[{lower if lower is not None else 0} to last]'"
+            else:
+                end_val = upper - 1
+                start_val = lower if lower is not None else 0
+                if end_val < start_val:
+                    # Empty slice - return empty array
+                    return func.jsonb_build_array()
+                path_expr = f"'$[{start_val} to {end_val}]'"
+
+            return func.jsonb_path_query_array(
+                cast(lhs_expr, JSONB),
+                literal_column(path_expr),
+            )
+
+        # For dynamic indices (negative), we need to use a CASE expression
+        # Build dynamic path using string concatenation
+        if end_is_last:
+            # '$[' || start || ' to last]'
+            dynamic_path = func.concat(
+                literal("$["),
+                start_expr,
+                literal(" to last]"),
+            )
+        else:
+            # '$[' || start || ' to ' || end || ']'
+            dynamic_path = func.concat(
+                literal("$["),
+                start_expr,
+                literal(" to "),
+                end_expr,
+                literal("]"),
+            )
+
+        # Handle edge case where end < start (empty slice)
+        if not end_is_last:
+            return case(
+                (end_expr < start_expr, func.jsonb_build_array()),
+                else_=func.jsonb_path_query_array(
+                    cast(lhs_expr, JSONB),
+                    dynamic_path.cast(Text),
+                ),
+            )
+
+        return func.jsonb_path_query_array(
+            cast(lhs_expr, JSONB),
+            dynamic_path.cast(Text),
+        )
+
+    raise ValueError("Slice operation is only supported on string or list values")
