@@ -1155,3 +1155,194 @@ def _handle_membership_operator_jsonb(
             prefix="membership_op",
         )
 
+def _handle_logical_operator_jsonb(
+    filter_dict,
+    log_event_alias,
+    session,
+    log_event_ids,
+    is_derived=False,
+    local_scope=None,
+    is_vector=False,
+    project_id: Optional[int] = None,
+    context_id: Optional[int] = None,
+    query_context=None,
+):
+    """Handle logical operators (and, or, not) in JSONB mode.
+
+    Implements Python truthiness semantics for JSONB expressions:
+    - False values: None, False, 0, '', [], {}
+    - True values: Everything else
+
+    Uses CASE-based short-circuiting for performance optimization and
+    handles mixed Subquery/JSONB compositions with proper outer joins.
+
+    Args:
+        filter_dict: Parsed filter expression with 'operand' and operands.
+        log_event_alias: SQLAlchemy alias for the LogEvent table.
+        session: Database session for field type lookups.
+        log_event_ids: Optional list of log event IDs to filter on.
+        is_derived: Whether this is for a derived field expression.
+        local_scope: Local variable bindings for comprehensions.
+        is_vector: Whether the expression involves vector types.
+        project_id: Project ID for field type lookups (required).
+        context_id: Optional context ID for field type lookups.
+        query_context: QueryContext for CTE-based aggregation optimization.
+
+    Returns:
+        Boolean expression or Subquery representing the logical result.
+    """
+    from .core import _build_sql_query_jsonb
+
+    operand = filter_dict["operand"]
+
+    if operand == "not":
+        rhs_dict = filter_dict["rhs"]
+        rhs_expr = _build_sql_query_jsonb(
+            rhs_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+            query_context=query_context,
+        )
+
+        # Use JSONB-aware truthiness
+        is_truthy = _create_truthiness_condition_jsonb(
+            rhs_expr,
+            session,
+            project_id,
+            context_id,
+        )
+
+        if isinstance(rhs_expr, Subquery):
+            select_cols = [
+                rhs_expr.c.log_event_id.label("log_event_id"),
+                not_(is_truthy).label("value"),
+                literal("bool").label("inferred_type"),
+            ]
+            return alias_utils.subquery_with_unique_alias(
+                select(*select_cols).select_from(rhs_expr),
+                prefix="logical_not",
+            )
+        return not_(is_truthy)
+
+    lhs_dict = filter_dict["lhs"]
+    rhs_dict = filter_dict["rhs"]
+
+    lhs_expr = _build_sql_query_jsonb(
+        lhs_dict,
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+    rhs_expr = _build_sql_query_jsonb(
+        rhs_dict,
+        log_event_alias,
+        session,
+        log_event_ids,
+        is_derived=is_derived,
+        local_scope=local_scope,
+        is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
+        query_context=query_context,
+    )
+
+    lhs_is_sub = isinstance(lhs_expr, Subquery)
+    rhs_is_sub = isinstance(rhs_expr, Subquery)
+
+    # If both are JSONB expressions (common case), use simple direct logic
+    if not lhs_is_sub and not rhs_is_sub:
+        # Use JSONB-aware truthiness conditions for proper boolean semantics
+        lhs_cond = _create_truthiness_condition_jsonb(
+            lhs_expr,
+            session,
+            project_id,
+            context_id,
+        )
+        rhs_cond = _create_truthiness_condition_jsonb(
+            rhs_expr,
+            session,
+            project_id,
+            context_id,
+        )
+
+        if operand == "and":
+            return and_(lhs_cond, rhs_cond)
+        elif operand == "or":
+            return or_(lhs_cond, rhs_cond)
+        raise ValueError(f"Unknown logical operand: {operand}")
+
+    # Mixed case: at least one side is a Subquery
+    # When one side is a JSONB expression, we need to join with log_event_alias
+    # Use JSONB-aware truthiness conditions for proper short-circuit semantics
+    lhs_cond = _create_truthiness_condition_jsonb(
+        lhs_expr,
+        session,
+        project_id,
+        context_id,
+    )
+    rhs_cond = _create_truthiness_condition_jsonb(
+        rhs_expr,
+        session,
+        project_id,
+        context_id,
+    )
+
+    if operand == "and":
+        case_expr = case((lhs_cond, rhs_cond), else_=literal(False))
+    elif operand == "or":
+        case_expr = case((lhs_cond, literal(True)), else_=rhs_cond)
+    else:
+        raise ValueError(f"Unknown logical operand: {operand}")
+
+    # Build subquery with proper join
+    if lhs_is_sub and rhs_is_sub:
+        is_full_join = operand == "or"
+        from_clause = lhs_expr.outerjoin(
+            rhs_expr,
+            lhs_expr.c.log_event_id == rhs_expr.c.log_event_id,
+            full=is_full_join,
+        )
+        select_cols = [
+            func.coalesce(lhs_expr.c.log_event_id, rhs_expr.c.log_event_id).label(
+                "log_event_id",
+            ),
+            case_expr.label("value"),
+            literal("bool").label("inferred_type"),
+        ]
+        return alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(from_clause),
+            prefix="logical_op",
+        )
+    elif lhs_is_sub:
+        # RHS is a JSONB expression - join subquery with log_event_alias
+        return build_result_subquery_with_join(
+            base_subq=lhs_expr,
+            join_target=log_event_alias,
+            join_condition=lhs_expr.c.log_event_id == log_event_alias.id,
+            value_expr=case_expr,
+            result_type="bool",
+            prefix="logical_op",
+        )
+    else:  # rhs_is_sub
+        # LHS is a JSONB expression - join subquery with log_event_alias
+        return build_result_subquery_with_join(
+            base_subq=rhs_expr,
+            join_target=log_event_alias,
+            join_condition=rhs_expr.c.log_event_id == log_event_alias.id,
+            value_expr=case_expr,
+            result_type="bool",
+            prefix="logical_op",
+        )
+
