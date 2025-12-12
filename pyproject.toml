@@ -87,6 +87,7 @@ anyio = "^3.6.2"
 pytest-env = "^0.8.1"
 httpx = "^0.24.0"
 hypothesis = "^6.130.3"
+matplotlib = "^3.7.0"
 
 [tool.isort]
 profile = "black"
