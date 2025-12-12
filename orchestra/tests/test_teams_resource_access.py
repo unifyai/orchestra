@@ -1924,3 +1924,324 @@ async def test_viewer_cannot_manage_teams(client: AsyncClient, dbsession):
     )
     assert team_response.status_code == status.HTTP_403_FORBIDDEN
     assert "permission" in team_response.json()["detail"].lower()
+
+
+# ==================== List Resource Access Tests ====================
+
+
+@pytest.mark.anyio
+async def test_list_resource_access(client: AsyncClient, dbsession):
+    """Test listing access entries for a resource."""
+    owner = await create_test_user(client, "list_access_owner@test.com")
+    member1 = await create_test_user(client, "list_access_member1@test.com")
+    member2 = await create_test_user(client, "list_access_member2@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "List Access Test Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Add members to org
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member1["id"], "level": "user"},
+        headers=owner["headers"],
+    )
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member2["id"], "level": "user"},
+        headers=owner["headers"],
+    )
+
+    # Create project
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
+
+    project_dao.create(
+        name="List_Access_Project",
+        user_id=None,
+        organization_id=org_id,
+    )
+    dbsession.commit()
+    projects = project_dao.filter(organization_id=org_id, name="List_Access_Project")
+    project = projects[0][0]
+
+    # Grant Owner to owner, Member to member1, Viewer to member2
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+    member_role = role_dao.get_by_name("Member", organization_id=None)
+    viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
+
+    resource_access_dao.grant_access(
+        resource_type="project",
+        resource_id=project.id,
+        role_id=owner_role.id,
+        grantee_type="user",
+        grantee_id=owner["id"],
+    )
+    resource_access_dao.grant_access(
+        resource_type="project",
+        resource_id=project.id,
+        role_id=member_role.id,
+        grantee_type="user",
+        grantee_id=member1["id"],
+    )
+    resource_access_dao.grant_access(
+        resource_type="project",
+        resource_id=project.id,
+        role_id=viewer_role.id,
+        grantee_type="user",
+        grantee_id=member2["id"],
+    )
+    dbsession.commit()
+
+    # List access entries
+    response = await client.get(
+        f"/v0/resources/project/{project.id}/access",
+        headers=owner["headers"],
+    )
+    assert response.status_code == status.HTTP_200_OK
+
+    data = response.json()
+    assert data["resource_type"] == "project"
+    assert data["resource_id"] == project.id
+    assert len(data["access_entries"]) == 3
+
+    # Verify all entries are present with correct roles
+    entries_by_grantee = {e["grantee_id"]: e for e in data["access_entries"]}
+
+    assert owner["id"] in entries_by_grantee
+    assert entries_by_grantee[owner["id"]]["role_name"] == "Owner"
+    assert entries_by_grantee[owner["id"]]["grantee_type"] == "user"
+    assert (
+        entries_by_grantee[owner["id"]]["grantee_name"] == "list_access_owner@test.com"
+    )
+
+    assert member1["id"] in entries_by_grantee
+    assert entries_by_grantee[member1["id"]]["role_name"] == "Member"
+
+    assert member2["id"] in entries_by_grantee
+    assert entries_by_grantee[member2["id"]]["role_name"] == "Viewer"
+
+
+@pytest.mark.anyio
+async def test_list_resource_access_with_team(client: AsyncClient, dbsession):
+    """Test listing access entries includes team grants."""
+    owner = await create_test_user(client, "list_team_access_owner@test.com")
+    member = await create_test_user(client, "list_team_access_member@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "List Team Access Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Add member to org
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"], "level": "user"},
+        headers=owner["headers"],
+    )
+
+    # Create team
+    team_response = await client.post(
+        f"/v0/organizations/{org_id}/teams",
+        json={"name": "Access Test Team"},
+        headers=owner["headers"],
+    )
+    team_id = team_response.json()["id"]
+
+    # Add member to team
+    await client.post(
+        f"/v0/organizations/{org_id}/teams/{team_id}/members",
+        json={"user_ids": [member["id"]]},
+        headers=owner["headers"],
+    )
+
+    # Create project
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
+
+    project_dao.create(
+        name="Team_List_Access_Project",
+        user_id=None,
+        organization_id=org_id,
+    )
+    dbsession.commit()
+    projects = project_dao.filter(
+        organization_id=org_id,
+        name="Team_List_Access_Project",
+    )
+    project = projects[0][0]
+
+    # Grant Owner to owner (user), Viewer to team
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+    viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
+
+    resource_access_dao.grant_access(
+        resource_type="project",
+        resource_id=project.id,
+        role_id=owner_role.id,
+        grantee_type="user",
+        grantee_id=owner["id"],
+    )
+    resource_access_dao.grant_access(
+        resource_type="project",
+        resource_id=project.id,
+        role_id=viewer_role.id,
+        grantee_type="team",
+        grantee_id=str(team_id),
+    )
+    dbsession.commit()
+
+    # List access entries
+    response = await client.get(
+        f"/v0/resources/project/{project.id}/access",
+        headers=owner["headers"],
+    )
+    assert response.status_code == status.HTTP_200_OK
+
+    data = response.json()
+    assert len(data["access_entries"]) == 2
+
+    # Find team entry
+    team_entries = [e for e in data["access_entries"] if e["grantee_type"] == "team"]
+    assert len(team_entries) == 1
+    assert team_entries[0]["grantee_id"] == str(team_id)
+    assert team_entries[0]["role_name"] == "Viewer"
+    assert team_entries[0]["grantee_name"] == "Access Test Team"
+
+
+@pytest.mark.anyio
+async def test_list_resource_access_requires_read_permission(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test that listing access requires read permission on the resource."""
+    owner = await create_test_user(client, "list_perm_owner@test.com")
+    outsider = await create_test_user(client, "list_perm_outsider@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "List Perm Test Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Create project (outsider is NOT a member of the org)
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
+
+    project_dao.create(
+        name="Restricted_List_Project",
+        user_id=None,
+        organization_id=org_id,
+    )
+    dbsession.commit()
+    projects = project_dao.filter(
+        organization_id=org_id,
+        name="Restricted_List_Project",
+    )
+    project = projects[0][0]
+
+    # Grant Owner to owner
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+    resource_access_dao.grant_access(
+        resource_type="project",
+        resource_id=project.id,
+        role_id=owner_role.id,
+        grantee_type="user",
+        grantee_id=owner["id"],
+    )
+    dbsession.commit()
+
+    # Outsider tries to list access - should fail (no read permission)
+    response = await client.get(
+        f"/v0/resources/project/{project.id}/access",
+        headers=outsider["headers"],
+    )
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert "permission" in response.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_list_resource_access_invalid_resource_type(client: AsyncClient):
+    """Test that listing access with invalid resource type returns 400."""
+    user = await create_test_user(client, "list_invalid_type@test.com")
+
+    response = await client.get(
+        "/v0/resources/interface/123/access",
+        headers=user["headers"],
+    )
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "Invalid resource type" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_list_resource_access_org(client: AsyncClient, dbsession):
+    """Test listing access entries for an organization."""
+    owner = await create_test_user(client, "list_org_access_owner@test.com")
+    member = await create_test_user(client, "list_org_access_member@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "List Org Access Test"},
+        headers=owner["headers"],
+    )
+    org_id = org_response.json()["id"]
+
+    # Add member to org
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"], "level": "user"},
+        headers=owner["headers"],
+    )
+
+    # Grant explicit access to member on the org
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
+
+    viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
+    resource_access_dao.grant_access(
+        resource_type="org",
+        resource_id=org_id,
+        role_id=viewer_role.id,
+        grantee_type="user",
+        grantee_id=member["id"],
+    )
+    dbsession.commit()
+
+    # List access entries for org
+    response = await client.get(
+        f"/v0/resources/org/{org_id}/access",
+        headers=owner["headers"],
+    )
+    assert response.status_code == status.HTTP_200_OK
+
+    data = response.json()
+    assert data["resource_type"] == "org"
+    assert data["resource_id"] == org_id
+    # Should have at least the explicit grant we made
+    assert len(data["access_entries"]) >= 1
+
+    # Find member's entry
+    member_entries = [
+        e for e in data["access_entries"] if e["grantee_id"] == member["id"]
+    ]
+    assert len(member_entries) == 1
+    assert member_entries[0]["role_name"] == "Viewer"
