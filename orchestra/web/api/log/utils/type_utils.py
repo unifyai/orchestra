@@ -31,6 +31,7 @@ SUPPORTED_BASE_TYPES = [
     "list",
     "image",  # Base64-encoded images (detected via magic bytes)
     "audio",  # Base64-encoded audio (detected via magic bytes)
+    "vector",  # Embedding vectors (stored in Embedding table, not JSONB)
 ]
 
 # Special types that don't map to SQL but are valid field types
@@ -64,8 +65,7 @@ DEFAULT_FIELD_TYPE = "Any"
 # Supported:
 #   * Arbitrary nesting: List[Dict[str, List[int]]]
 #   * Heterogeneous containers: List[int, str, image], Set[float, NoneType]
-#       - NOTE: Dict remains Dict[K, V] (two args). If values/keys are themselves heterogeneous,
-#         represent that at their own type, or coalesce to Any.
+#       - Dict remains Dict[K, V] (two args). Heterogeneous values/keys should be represented at their own type level or coalesced to Any.
 #   * Optional[T] -> Union[T, NoneType] (only allowed union)
 #   * Tuple[int, ...] (variadic) and fixed tuples (Tuple[T1, T2, ...])
 #   * No `|` operator; only explicit Union[T, NoneType] is allowed for union semantics.
