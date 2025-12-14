@@ -627,30 +627,56 @@ def add_logs_to_context(
         if hasattr(request, "log_ids") and request.log_ids:
             log_ids = request.log_ids
         elif hasattr(request, "log_args") and request.log_args:
-            from orchestra.web.api.log.views import _get_logs_query
+            from orchestra.settings import settings
+            from orchestra.web.api.log.utils.logging_utils import (
+                _get_logs_query,
+                _get_logs_query_jsonb,
+            )
 
             # Use log_args to query for matching logs
             log_args = request.log_args
-            raw_rows, _, _ = _get_logs_query(
-                request_fastapi,
-                project_name,
-                column_context=log_args.get("column_context"),
-                context=log_args.get("context"),
-                filter_expr=log_args.get("filter_expr"),
-                sorting=log_args.get("sorting"),
-                from_ids=log_args.get("from_ids"),
-                exclude_ids=log_args.get("exclude_ids"),
-                from_fields=log_args.get("from_fields"),
-                exclude_fields=log_args.get("exclude_fields"),
-                limit=log_args.get("limit"),
-                offset=log_args.get("offset", 0),
-                project_dao=project_dao,
-                field_type_dao=field_type_dao,
-                context_dao=context_dao,
-                session=session,
-            )
 
-            log_ids = list({row[7] for row in raw_rows})
+            if settings.use_jsonb_queries:
+                # JSONB mode: returns (rows, count) where rows are (id, data, created_at)
+                rows, _ = _get_logs_query_jsonb(
+                    request_fastapi=request_fastapi,
+                    project=project_name,
+                    context=log_args.get("context"),
+                    filter_expr=log_args.get("filter_expr"),
+                    sorting=log_args.get("sorting"),
+                    from_ids=log_args.get("from_ids"),
+                    exclude_ids=log_args.get("exclude_ids"),
+                    from_fields=log_args.get("from_fields"),
+                    exclude_fields=log_args.get("exclude_fields"),
+                    limit=log_args.get("limit"),
+                    offset=log_args.get("offset", 0),
+                    project_dao=project_dao,
+                    field_type_dao=field_type_dao,
+                    context_dao=context_dao,
+                    session=session,
+                )
+                log_ids = list({row[0] for row in rows})  # row[0] is log_event_id
+            else:
+                # EAV mode: returns (raw_rows, _, count)
+                raw_rows, _, _ = _get_logs_query(
+                    request_fastapi=request_fastapi,
+                    project=project_name,
+                    column_context=log_args.get("column_context"),
+                    context=log_args.get("context"),
+                    filter_expr=log_args.get("filter_expr"),
+                    sorting=log_args.get("sorting"),
+                    from_ids=log_args.get("from_ids"),
+                    exclude_ids=log_args.get("exclude_ids"),
+                    from_fields=log_args.get("from_fields"),
+                    exclude_fields=log_args.get("exclude_fields"),
+                    limit=log_args.get("limit"),
+                    offset=log_args.get("offset", 0),
+                    project_dao=project_dao,
+                    field_type_dao=field_type_dao,
+                    context_dao=context_dao,
+                    session=session,
+                )
+                log_ids = list({row[7] for row in raw_rows})  # row[7] is log_event_id
 
             if not log_ids:
                 raise HTTPException(
