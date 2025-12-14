@@ -2147,20 +2147,30 @@ def admin_duplicate_project(
             stats["field_types_copied"] = len(field_type_values)
 
     # 7. Duplicate Log Events using bulk insert with RETURNING
-    log_events = log_event_dao.filter(project_id=source_project.id)
+    # In JSONB mode: copies data and key_order fields (primary storage)
+    # In EAV mode: only copies metadata (data stored in Log/JSONLog tables)
+    log_events = (
+        session.query(LogEvent).filter(LogEvent.project_id == source_project.id).all()
+    )
     log_event_values = []
     old_log_event_ids = []
 
-    for le_tuple in log_events:
-        le = le_tuple[0]
+    for le in log_events:
         old_log_event_ids.append(le.id)
-        log_event_values.append(
-            {
-                "project_id": new_project.id,
-                "created_at": datetime.now(timezone.utc),
-                "updated_at": datetime.now(timezone.utc),
-            },
-        )
+
+        # Build base fields
+        new_event_data = {
+            "project_id": new_project.id,
+            "created_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+        }
+
+        # Conditionally add JSONB fields in JSONB mode
+        if settings.use_jsonb_queries:
+            new_event_data["data"] = le.data
+            new_event_data["key_order"] = le.key_order
+
+        log_event_values.append(new_event_data)
 
     if log_event_values:
         # Bulk insert log events and get back the new IDs
