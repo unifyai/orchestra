@@ -3210,6 +3210,14 @@ class ContextDAO:
         This method creates new copies of the specified log events and their associated
         Log and JSONLog entries, then associates these copies with the context.
 
+        In JSONB mode (settings.use_jsonb_queries=True):
+            - Copies LogEvent.data and LogEvent.key_order JSONB fields
+            - Also copies Log/JSONLog entries for backward compatibility
+
+        In EAV mode (settings.use_jsonb_queries=False):
+            - Copies Log and JSONLog entries (primary data source)
+            - LogEvent.data remains empty (default: {})
+
         Args:
             context_id: ID of the context to associate logs with
             log_ids: List of log event IDs to copy and associate with the context
@@ -3218,6 +3226,8 @@ class ContextDAO:
             ValueError: If context_id doesn't exist or any log_ids don't exist
             ValueError: If duplicates are found and context doesn't allow duplicates
         """
+        from orchestra.settings import settings
+
         try:
             # Get the context to check if duplicates are allowed
             context = self.session.query(Context).filter_by(id=context_id).one_or_none()
@@ -3246,11 +3256,18 @@ class ContextDAO:
                         )
 
                 # Create a new LogEvent by copying necessary fields
-                new_log_event = LogEvent(
-                    project_id=original_log_event.project_id,
-                    created_at=current_time,
-                    updated_at=current_time,
-                )
+                new_log_event_data = {
+                    "project_id": original_log_event.project_id,
+                    "created_at": current_time,
+                    "updated_at": current_time,
+                }
+
+                # In JSONB mode, copy the data and key_order fields
+                if settings.use_jsonb_queries:
+                    new_log_event_data["data"] = original_log_event.data
+                    new_log_event_data["key_order"] = original_log_event.key_order
+
+                new_log_event = LogEvent(**new_log_event_data)
                 self.session.add(new_log_event)
                 self.session.flush()  # Get the new ID
 

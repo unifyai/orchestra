@@ -212,16 +212,38 @@ def _get_assistants_sibling_context_info(
             sibling_map[log_id].append(ctx_id)
 
     def _get_log_field_values(field_name: str) -> Dict[int, str]:
-        """Get field values for all log events."""
-        values = (
-            session.query(LogEventLog.log_event_id, Log.value)
-            .join(Log, Log.id == LogEventLog.log_id)
-            .filter(
-                LogEventLog.log_event_id.in_(log_event_ids),
-                Log.key == field_name,
+        """Get field values for all log events.
+
+        Queries the appropriate storage based on current mode:
+        - JSONB mode: LogEvent.data JSONB column
+        - EAV mode: Log/LogEventLog tables
+
+        Returns:
+            Dict mapping log_event_id to field value string.
+        """
+        if settings.use_jsonb_queries:
+            values = (
+                session.query(
+                    LogEvent.id,
+                    LogEvent.data[field_name].astext,
+                )
+                .filter(
+                    LogEvent.id.in_(log_event_ids),
+                    LogEvent.data.has_key(field_name),
+                )
+                .all()
             )
-            .all()
-        )
+        else:
+            values = (
+                session.query(LogEventLog.log_event_id, Log.value)
+                .join(Log, Log.id == LogEventLog.log_id)
+                .filter(
+                    LogEventLog.log_event_id.in_(log_event_ids),
+                    Log.key == field_name,
+                )
+                .all()
+            )
+
         result = {}
         for log_event_id, value in values:
             if value:
@@ -3304,12 +3326,17 @@ def _delete_logs_jsonb(
     log_event_dao: LogEventDAO,
     field_type_dao: FieldTypeDAO,
     context_dao: ContextDAO,
+    is_assistants_dual_context: bool = False,
 ):
     """
     JSONB-based log deletion helper function.
 
     This function handles log deletions when settings.use_jsonb_queries is True.
     It operates directly on LogEvent.data JSONB column instead of the EAV tables.
+
+    For Assistants/UnityTests projects with 3-tier context hierarchies, this function
+    also handles cascading deletions across sibling contexts (All/X, User/All/X,
+    User/Assistant/X).
 
     Args:
         session: Database session
@@ -3323,6 +3350,7 @@ def _delete_logs_jsonb(
         log_event_dao: LogEventDAO instance
         field_type_dao: FieldTypeDAO instance
         context_dao: ContextDAO instance
+        is_assistants_dual_context: If True, enables 3-tier context cascade deletion
 
     Returns:
         Dict with deletion result info
@@ -3472,32 +3500,41 @@ def _delete_logs_jsonb(
             field_names=None,  # Check all media fields
         )
 
-        # Check which logs exist in other contexts using a SINGLE BULK QUERY
-        # Query all log_event_ids that have associations with contexts other than current
-        logs_with_other_contexts = set(
-            row[0]
-            for row in session.query(LogEventContext.log_event_id)
-            .filter(
-                LogEventContext.log_event_id.in_(entire_log_deletions),
-                LogEventContext.context_id != context_id,
+        # Get sibling context IDs for 3-tier context cascade (Assistants/UnityTests)
+        sibling_context_map: Dict[int, List[int]] = {}
+        if is_assistants_dual_context:
+            sibling_context_map = _get_assistants_sibling_context_info(
+                session=session,
+                project_id=project_id,
+                context_id=context_id,
+                context_name=context_name,
+                log_event_ids=entire_log_deletions,
+                context_dao=context_dao,
             )
-            .distinct()
-            .all()
-        )
 
-        # Partition logs based on whether they exist in other contexts
-        logs_in_other_contexts = [
-            log_id
-            for log_id in entire_log_deletions
-            if log_id in logs_with_other_contexts
-        ]
-        logs_to_delete = [
-            log_id
-            for log_id in entire_log_deletions
-            if log_id not in logs_with_other_contexts
-        ]
+        # Partition logs: those in other contexts vs those to delete entirely
+        # For 3-tier projects, sibling contexts don't count as "other" contexts
+        logs_in_other_contexts = []
+        logs_to_delete = []
 
-        # Remove logs from this context only
+        for log_id in entire_log_deletions:
+            exclude_context_ids = [context_id] + sibling_context_map.get(log_id, [])
+
+            other_contexts = (
+                session.query(LogEventContext.context_id)
+                .filter(
+                    LogEventContext.log_event_id == log_id,
+                    LogEventContext.context_id.notin_(exclude_context_ids),
+                )
+                .all()
+            )
+
+            if other_contexts:
+                logs_in_other_contexts.append(log_id)
+            else:
+                logs_to_delete.append(log_id)
+
+        # Remove logs from current context
         if logs_in_other_contexts:
             removed_count = (
                 session.query(LogEventContext)
@@ -3512,6 +3549,40 @@ def _delete_logs_jsonb(
                     f"Removed {removed_count} log events from context '{context_name}'",
                 )
                 context_updated = True
+
+        # Cascade deletion to sibling contexts (3-tier hierarchy)
+        if is_assistants_dual_context and sibling_context_map:
+            sibling_removals = [
+                log_id
+                for log_id in logs_in_other_contexts
+                if log_id in sibling_context_map
+            ]
+            if sibling_removals:
+                sibling_ctx_to_logs: Dict[int, List[int]] = {}
+                for log_id in sibling_removals:
+                    for sib_ctx_id in sibling_context_map[log_id]:
+                        sibling_ctx_to_logs.setdefault(sib_ctx_id, []).append(log_id)
+
+                for sib_ctx_id, log_ids in sibling_ctx_to_logs.items():
+                    sibling_removed = (
+                        session.query(LogEventContext)
+                        .filter(
+                            LogEventContext.log_event_id.in_(log_ids),
+                            LogEventContext.context_id == sib_ctx_id,
+                        )
+                        .delete(synchronize_session=False)
+                    )
+                    if sibling_removed > 0:
+                        sib_ctx = context_dao.filter(
+                            project_id=project_id,
+                            id=sib_ctx_id,
+                        )
+                        sib_ctx_name = (
+                            sib_ctx[0][0].name if sib_ctx else f"id={sib_ctx_id}"
+                        )
+                        context_description.append(
+                            f"Removed {sibling_removed} log events from sibling context '{sib_ctx_name}'",
+                        )
 
         # Delete logs that don't exist in other contexts
         if logs_to_delete:
@@ -3856,6 +3927,7 @@ def delete_logs(
             log_event_dao=log_event_dao,
             field_type_dao=field_type_dao,
             context_dao=context_dao,
+            is_assistants_dual_context=is_assistants_dual_context,
         )
 
     # =========================================================================
