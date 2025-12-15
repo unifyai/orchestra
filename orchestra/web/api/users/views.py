@@ -541,6 +541,7 @@ async def create_organization_api_key(
     user_id: str,
     organization_id: int,
     name: str = "",
+    custom_key: Optional[str] = None,
     session: Session = Depends(get_db_session),
 ):
     """
@@ -548,6 +549,13 @@ async def create_organization_api_key(
 
     This key will have organization context and billing will be charged to
     the organization's billing_user_id.
+
+    Args:
+        user_id: The user ID to create the key for.
+        organization_id: The organization ID.
+        name: Optional name for the API key.
+        custom_key: Optional custom API key value. If not provided, a random key
+                    will be generated. Must be unique across all API keys.
     """
     api_key_dao = ApiKeyDAO(session)
     org_dao = OrganizationDAO(session)
@@ -572,7 +580,7 @@ async def create_organization_api_key(
             detail=f"User {user_id} is not a member of organization {organization_id}",
         )
 
-    # Check if org API key already exists
+    # Check if org API key already exists for this user+org
     existing_key = api_key_dao.filter(
         user_id=user_id,
         organization_id=organization_id,
@@ -583,8 +591,17 @@ async def create_organization_api_key(
             detail="User already has an organization API key for this organization",
         )
 
-    # Create organization API key
-    new_api_key = generate_key()
+    # If custom key provided, verify it doesn't already exist
+    if custom_key:
+        existing_custom = api_key_dao.filter(key=custom_key)
+        if existing_custom:
+            raise HTTPException(
+                status_code=400,
+                detail="This API key value is already in use",
+            )
+
+    # Create organization API key (use custom key or generate one)
+    new_api_key = custom_key or generate_key()
     api_key_dao.create(
         key=new_api_key,
         name=name or f"org_{org.name}",
