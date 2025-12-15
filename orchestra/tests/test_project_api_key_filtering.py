@@ -17,23 +17,7 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
-
-
-async def create_test_user(client: AsyncClient, email: str):
-    """Create a test user and return user info with headers."""
-    response = await client.post("/v0/users", json={"email": email, "name": "Test"})
-    assert response.status_code == status.HTTP_200_OK
-    data = response.json()
-    return {
-        "id": data["id"],
-        "email": email,
-        "api_key": data["apiKey"],
-        "headers": {
-            "accept": "application/json",
-            "Authorization": f"Bearer {data['apiKey']}",
-        },
-    }
-
+from orchestra.tests.utils import create_test_user
 
 # ==================== Project Listing Tests ====================
 
@@ -161,7 +145,7 @@ async def test_list_projects_tree_respects_api_key_context(
     response = await client.get("/v0/projects/tree", headers=owner["headers"])
     assert response.status_code == status.HTTP_200_OK
     personal_tree = response.json()
-    personal_names = [p["name"] for p in personal_tree]
+    personal_names = [p["project"] for p in personal_tree]  # tree uses "project" key
     assert "TreePersonal" in personal_names
     assert "TreeOrg" not in personal_names
 
@@ -169,7 +153,7 @@ async def test_list_projects_tree_respects_api_key_context(
     response = await client.get("/v0/projects/tree", headers=org_headers)
     assert response.status_code == status.HTTP_200_OK
     org_tree = response.json()
-    org_names = [p["name"] for p in org_tree]
+    org_names = [p["project"] for p in org_tree]  # tree uses "project" key
     assert "TreeOrg" in org_names
     assert "TreePersonal" not in org_names
 

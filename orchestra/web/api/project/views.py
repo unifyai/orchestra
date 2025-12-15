@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.derived_log_dao import DerivedLogDAO
@@ -70,6 +71,7 @@ from orchestra.web.api.project.schema import (
     TransferResponse,
     TransferToOrganizationRequest,
 )
+from orchestra.web.api.users.views import generate_key
 from orchestra.web.api.utils.http_responses import not_found
 
 router = APIRouter()
@@ -1896,6 +1898,7 @@ def admin_share_project(
     auth_user_dao = AuthUserDAO(session)
     organization_dao = OrganizationDAO(session)
     role_dao = RoleDAO(session)
+    api_key_dao = ApiKeyDAO(session)
 
     # Lookup the from_user and to_user
     from_user = auth_user_dao.get_by_id(request.from_user_id)
@@ -1904,13 +1907,12 @@ def admin_share_project(
     if not from_user or not to_user:
         raise not_found("User")
 
-    # Retrieve the project
-    try:
-        project = project_dao.get_by_user_and_name(
-            user_id=request.from_user_id,
-            name=request.project_name,
-        )
-    except HTTPException:
+    # Retrieve the project (using any_context for admin operations)
+    project = project_dao.get_by_user_and_name_any_context(
+        user_id=request.from_user_id,
+        name=request.project_name,
+    )
+    if not project:
         raise not_found(f"Project {request.project_name}")
 
     # Handle organization assignment
@@ -1955,6 +1957,21 @@ def admin_share_project(
         user_id=request.to_user_id,
         role_id=admin_role.id,
     )
+
+    # Create org API keys for both users if they don't have them
+    for user_id in [request.from_user_id, request.to_user_id]:
+        existing_key = api_key_dao.filter(
+            user_id=user_id,
+            organization_id=organization.id,
+        )
+        if not existing_key:
+            new_api_key = generate_key()
+            api_key_dao.create(
+                key=new_api_key,
+                name=f"org_{organization.name}",
+                user_id=user_id,
+                organization_id=organization.id,
+            )
 
     # Commit all changes
     organization_member_dao.session.commit()
