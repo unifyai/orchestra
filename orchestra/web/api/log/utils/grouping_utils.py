@@ -638,10 +638,15 @@ def _get_all_filtered_log_event_ids(
         (event_ids, total_count)
     """
     user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
 
     # Validate project
     try:
-        project_obj = project_dao.get_by_user_and_name(name=project, user_id=user_id)
+        project_obj = project_dao.get_by_user_and_name(
+            name=project,
+            user_id=user_id,
+            organization_id=organization_id,
+        )
         project_id = project_obj.id
     except (IndexError, AttributeError):
         raise HTTPException(status_code=404, detail=f"Project {project} not found.")

@@ -69,9 +69,11 @@ def create_interface(
     interface_dao = LegacyInterfaceDAO(session)
     temp_interface_dao = TempInterfaceDAO(session)
 
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
         name=request.project,
+        organization_id=organization_id,
     )
     if not project:
         raise HTTPException(
@@ -174,9 +176,11 @@ def update_interface(
     interface_dao = LegacyInterfaceDAO(session)
     temp_interface_dao = TempInterfaceDAO(session)
 
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
         name=request.project,
+        organization_id=organization_id,
     )
     if not project:
         raise HTTPException(
@@ -288,9 +292,11 @@ def get_interfaces(
     interface_dao = LegacyInterfaceDAO(session)
     temp_interface_dao = TempInterfaceDAO(session)
 
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
     project_obj = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
         name=project,
+        organization_id=organization_id,
     )
     if not project_obj:
         raise HTTPException(
@@ -400,9 +406,11 @@ def delete_interface(
     interface_dao = LegacyInterfaceDAO(session)
     temp_interface_dao = TempInterfaceDAO(session)
 
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
     project_obj = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
         name=project,
+        organization_id=organization_id,
     )
     if not project_obj:
         raise HTTPException(
