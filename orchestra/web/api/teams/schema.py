@@ -89,3 +89,26 @@ class ResourceAccessListResponse(BaseModel):
     resource_type: str
     resource_id: int
     access_entries: List[ResourceAccessResponse]
+
+
+class UserResourceAccessEntry(BaseModel):
+    """Schema for a single user access entry with source info."""
+
+    id: int
+    role_id: int
+    role_name: str
+    grantee_type: str  # 'user' or 'team'
+    source: str  # 'direct' or 'team'
+    team_id: Optional[int] = None
+    team_name: Optional[str] = None
+    created_at: datetime
+
+
+class UserResourceAccessResponse(BaseModel):
+    """Schema for a user's access on a specific resource."""
+
+    user_id: str
+    resource_type: str
+    resource_id: int
+    access_entries: List[UserResourceAccessEntry]
+    effective_role: Optional[str] = None  # Highest permission level

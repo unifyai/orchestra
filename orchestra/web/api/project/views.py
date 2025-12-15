@@ -1899,6 +1899,7 @@ def admin_share_project(
     organization_dao = OrganizationDAO(session)
     role_dao = RoleDAO(session)
     api_key_dao = ApiKeyDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
 
     # Lookup the from_user and to_user
     from_user = auth_user_dao.get_by_id(request.from_user_id)
@@ -1972,6 +1973,35 @@ def admin_share_project(
                 user_id=user_id,
                 organization_id=organization.id,
             )
+
+    # Grant explicit project access to both users
+    # from_user gets Owner, to_user gets Admin access
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+    admin_grant_role = role_dao.get_by_name("Admin", organization_id=None)
+
+    # Check if from_user already has a grant (might exist if project was already org-owned)
+    existing_from_grant = resource_access_dao.get_user_access(
+        user_id=request.from_user_id,
+        resource_type="project",
+        resource_id=project.id,
+    )
+    if not existing_from_grant:
+        resource_access_dao.grant_access(
+            resource_type="project",
+            resource_id=project.id,
+            role_id=owner_role.id,
+            grantee_type="user",
+            grantee_id=request.from_user_id,
+        )
+
+    # Grant Admin access to to_user for this project
+    resource_access_dao.grant_access(
+        resource_type="project",
+        resource_id=project.id,
+        role_id=admin_grant_role.id,
+        grantee_type="user",
+        grantee_id=request.to_user_id,
+    )
 
     # Commit all changes
     organization_member_dao.session.commit()
