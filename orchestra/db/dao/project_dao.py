@@ -14,7 +14,6 @@ from orchestra.db.models.orchestra_models import (
     Log,
     LogEvent,
     LogEventLog,
-    OrganizationMember,
     Project,
     ProjectVersion,
     ResourceAccess,
@@ -203,11 +202,12 @@ class ProjectDAO:
 
         When organization_id is None (personal API key):
             - Returns only personal projects (user_id set, organization_id NULL)
-            - Plus projects with explicit ResourceAccess grants (personal projects only)
+            - Plus personal projects with explicit ResourceAccess grants
 
         When organization_id is set (org API key):
-            - Returns only projects for that specific organization
-            - Via org membership OR explicit ResourceAccess grants
+            - Returns only projects in that organization WITH explicit ResourceAccess grants
+            - Org membership alone does NOT grant project access (explicit grants required)
+            - Grants can be direct (user) or via team membership
 
         Args:
             user_id: The ID of the user
@@ -258,33 +258,16 @@ class ProjectDAO:
                 ),
             )
         else:
-            # Org API key: only projects for this specific organization
-            # Check if user is member of this org
-            is_member = (
-                self.session.query(OrganizationMember)
-                .filter(
-                    OrganizationMember.user_id == user_id,
-                    OrganizationMember.organization_id == organization_id,
-                )
-                .first()
-                is not None
-            )
-
-            if is_member:
-                # User is member - show all org projects
-                query = select(Project).where(
+            # Org API key: only projects with explicit ResourceAccess grants
+            # Org membership alone does not grant project access (Option B)
+            query = select(Project).where(
+                and_(
                     Project.organization_id == organization_id,
-                )
-            else:
-                # User is not member - only show explicitly granted projects in this org
-                query = select(Project).where(
-                    and_(
-                        Project.organization_id == organization_id,
-                        Project.id.in_(explicit_project_ids)
-                        if explicit_project_ids
-                        else False,
-                    ),
-                )
+                    Project.id.in_(explicit_project_ids)
+                    if explicit_project_ids
+                    else False,
+                ),
+            )
 
         # Apply additional filters if provided
         if id:
