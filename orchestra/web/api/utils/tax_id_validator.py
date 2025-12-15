@@ -8,7 +8,7 @@ worldwide, including format validation and checksum verification where applicabl
 import importlib
 import pkgutil
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 from stdnum.exceptions import InvalidChecksum, InvalidFormat, ValidationError
 
@@ -137,7 +137,8 @@ class TaxIDValidator:
         module_name = country_modules.get(country)
         if module_name:
             is_valid, formatted_id, error = cls._validate_with_module(
-                tax_id, module_name
+                tax_id,
+                module_name,
             )
             if is_valid:
                 return is_valid, formatted_id, error

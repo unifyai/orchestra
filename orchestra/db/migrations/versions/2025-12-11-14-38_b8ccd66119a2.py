@@ -23,7 +23,8 @@ def upgrade() -> None:
         sa.Column("credits", sa.Numeric(), server_default="0", nullable=False),
     )
     op.add_column(
-        "organization", sa.Column("stripe_customer_id", sa.String(), nullable=True)
+        "organization",
+        sa.Column("stripe_customer_id", sa.String(), nullable=True),
     )
     op.add_column(
         "organization",
@@ -32,34 +33,48 @@ def upgrade() -> None:
     op.add_column(
         "organization",
         sa.Column(
-            "autorecharge_threshold", sa.Numeric(), server_default="10", nullable=False
+            "autorecharge_threshold",
+            sa.Numeric(),
+            server_default="10",
+            nullable=False,
         ),
     )
     op.add_column(
         "organization",
         sa.Column(
-            "autorecharge_qty", sa.Numeric(), server_default="100", nullable=False
+            "autorecharge_qty",
+            sa.Numeric(),
+            server_default="100",
+            nullable=False,
         ),
     )
     op.add_column(
         "organization",
         sa.Column(
-            "account_status", sa.String(), server_default="ACTIVE", nullable=False
+            "account_status",
+            sa.String(),
+            server_default="ACTIVE",
+            nullable=False,
         ),
     )
     op.add_column(
-        "organization", sa.Column("billing_email", sa.String(), nullable=True)
+        "organization",
+        sa.Column("billing_email", sa.String(), nullable=True),
     )
     op.add_column(
-        "organization", sa.Column("business_name", sa.String(length=255), nullable=True)
+        "organization",
+        sa.Column("business_name", sa.String(length=255), nullable=True),
     )
     op.add_column(
-        "organization", sa.Column("tax_id", sa.String(length=100), nullable=True)
+        "organization",
+        sa.Column("tax_id", sa.String(length=100), nullable=True),
     )
     op.add_column(
         "organization",
         sa.Column(
-            "billing_address", postgresql.JSONB(astext_type=sa.Text()), nullable=True
+            "billing_address",
+            postgresql.JSONB(astext_type=sa.Text()),
+            nullable=True,
         ),
     )
     op.add_column(
@@ -72,7 +87,10 @@ def upgrade() -> None:
         ),
     )
     op.alter_column(
-        "organization", "billing_user_id", existing_type=sa.VARCHAR(), nullable=True
+        "organization",
+        "billing_user_id",
+        existing_type=sa.VARCHAR(),
+        nullable=True,
     )
     op.create_index(
         op.f("ix_organization_stripe_customer_id"),
@@ -113,7 +131,12 @@ def upgrade() -> None:
         ondelete="CASCADE",
     )
     op.create_foreign_key(
-        None, "recharge", "users", ["user_id"], ["id"], ondelete="CASCADE"
+        None,
+        "recharge",
+        "users",
+        ["user_id"],
+        ["id"],
+        ondelete="CASCADE",
     )
     op.alter_column(
         "resource_access",
@@ -160,7 +183,7 @@ def upgrade() -> None:
             (user_id IS NOT NULL AND organization_id IS NULL) OR
             (user_id IS NULL AND organization_id IS NOT NULL)
         )
-    """
+    """,
     )
 
     # Add account_status check constraint
@@ -169,7 +192,7 @@ def upgrade() -> None:
         ALTER TABLE organization
         ADD CONSTRAINT ck_organization_account_status
         CHECK (account_status IN ('ACTIVE', 'SUSPENDED', 'PAST_DUE', 'CLOSED'))
-    """
+    """,
     )
 
     # Seed billing permissions
@@ -180,7 +203,7 @@ def upgrade() -> None:
             ('billing:read', 'View billing information, credits, and invoices', 'billing', 'read'),
             ('billing:write', 'Update billing settings, autorecharge, and business profile', 'billing', 'write')
         ON CONFLICT (name) DO NOTHING;
-    """
+    """,
     )
 
     # Owner gets all permissions (billing:read and billing:write)
@@ -192,7 +215,7 @@ def upgrade() -> None:
         WHERE r.name = 'Owner' AND r.is_system_role = true
           AND p.name IN ('billing:read', 'billing:write')
         ON CONFLICT DO NOTHING;
-    """
+    """,
     )
 
     # Admin gets billing:read and billing:write
@@ -204,7 +227,7 @@ def upgrade() -> None:
         WHERE r.name = 'Admin' AND r.is_system_role = true
           AND p.name IN ('billing:read', 'billing:write')
         ON CONFLICT DO NOTHING;
-    """
+    """,
     )
 
     # Member gets billing:read only
@@ -216,7 +239,7 @@ def upgrade() -> None:
         WHERE r.name = 'Member' AND r.is_system_role = true
           AND p.name = 'billing:read'
         ON CONFLICT DO NOTHING;
-    """
+    """,
     )
 
     # Viewer gets billing:read only
@@ -228,7 +251,7 @@ def upgrade() -> None:
         WHERE r.name = 'Viewer' AND r.is_system_role = true
           AND p.name = 'billing:read'
         ON CONFLICT DO NOTHING;
-    """
+    """,
     )
     # ### end Alembic commands ###
 
@@ -243,19 +266,19 @@ def downgrade() -> None:
         WHERE permission_id IN (
             SELECT id FROM permission WHERE name IN ('billing:read', 'billing:write')
         );
-    """
+    """,
     )
 
     # Remove billing permissions
     op.execute(
         """
         DELETE FROM permission WHERE name IN ('billing:read', 'billing:write');
-    """
+    """,
     )
 
     # Remove account_status check constraint
     op.execute(
-        "ALTER TABLE organization DROP CONSTRAINT ck_organization_account_status"
+        "ALTER TABLE organization DROP CONSTRAINT ck_organization_account_status",
     )
 
     # Remove XOR constraint
@@ -299,7 +322,11 @@ def downgrade() -> None:
     op.drop_constraint("recharge_organization_id_fkey", "recharge", type_="foreignkey")
     op.drop_constraint("recharge_user_id_fkey", "recharge", type_="foreignkey")
     op.create_foreign_key(
-        "recharge_user_id_fkey", "recharge", "users", ["user_id"], ["id"]
+        "recharge_user_id_fkey",
+        "recharge",
+        "users",
+        ["user_id"],
+        ["id"],
     )
     op.drop_index(op.f("ix_recharge_organization_id"), table_name="recharge")
     op.alter_column("recharge", "user_id", existing_type=sa.VARCHAR(), nullable=False)
@@ -326,7 +353,10 @@ def downgrade() -> None:
     )
     op.drop_index(op.f("ix_organization_stripe_customer_id"), table_name="organization")
     op.alter_column(
-        "organization", "billing_user_id", existing_type=sa.VARCHAR(), nullable=False
+        "organization",
+        "billing_user_id",
+        existing_type=sa.VARCHAR(),
+        nullable=False,
     )
     op.drop_column("organization", "billing_setup_complete")
     op.drop_column("organization", "billing_address")
