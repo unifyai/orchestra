@@ -1612,6 +1612,10 @@ def _get_logs_query_jsonb(
             query = query.join(LogEventContext).filter(
                 LogEventContext.context_id == context_id,
             )
+        else:
+            # No default context exists - return empty results
+            # This matches EAV behavior: logs are always bound to a context
+            return [], 0
 
     # =========================================================================
     # STEP 4: Get field types for validation and type casting
