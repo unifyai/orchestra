@@ -20,7 +20,7 @@ def create_phone_number(phone_country: str = "US", is_staging: bool = False):
         JSON response from the phone creation endpoint
     """
     voice_url = ADAPTERS_URL + "/twilio/call"
-    sms_url = ADAPTERS_URL + "/twilio/msg"
+    sms_url = ADAPTERS_URL + "/twilio/sms"
     status_callback = ADAPTERS_URL + "/twilio/call-status"
     return requests.post(
         f"{COMMS_URL}/phone/create",
@@ -252,7 +252,7 @@ def log_pre_hire_chat(assistant_id: str, messages: list, is_staging: bool = Fals
     Returns:
         The JSON response from the webhook.
     """
-    log_pre_hire_chat_url = ADAPTERS_URL + "/log-pre-hire-chats"
+    log_pre_hire_chat_url = ADAPTERS_URL + "/unity/pre-hire"
     payload = {"assistant_id": assistant_id, "body": messages}
     response = requests.post(
         log_pre_hire_chat_url,
