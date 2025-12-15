@@ -1855,6 +1855,7 @@ def admin_share_project(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     auth_user_dao = AuthUserDAO(session)
     organization_dao = OrganizationDAO(session)
+    role_dao = RoleDAO(session)
 
     # Lookup the from_user and to_user
     from_user = auth_user_dao.get_by_id(request.from_user_id)
@@ -1902,11 +1903,17 @@ def admin_share_project(
         orgs = organization_dao.filter(id=project.organization_id)
         organization = orgs[0][0]
 
-    # Add the to_user to the organization
+    # Add the to_user to the organization with Admin role
+    admin_role = role_dao.get_by_name("Admin", organization_id=None)
+    if not admin_role:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Admin system role not found",
+        )
     organization_member_dao.create(
         organization_id=organization.id,
         user_id=request.to_user_id,
-        level="admin",  # Give admin access to the shared user
+        role_id=admin_role.id,
     )
 
     # Commit all changes
