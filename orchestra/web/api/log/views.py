@@ -7462,22 +7462,33 @@ async def process_traffic_logs(
             return {"message": "No new traffic-log messages", "status": "success"}
 
         try:
-            # batch ingestion
-            create_logs_internal(
-                project_id=project_id,
-                context_id=context_id,
-                request=CreateLogConfig(
-                    entries=entries,
-                    project=PROJ_NAME,
-                    context=None,
-                ),
-                project_dao=project_dao,
-                field_type_dao=field_type_dao,
-                log_event_dao=log_event_dao,
-                log_dao=log_dao,
-                context_dao=context_dao,
-                context_obj=context_obj,
-            )
+            # Force EAV mode for Production Traffic project since it has existing
+            # EAV data that hasn't been backfilled to JSONB yet.
+            # TODO(yusha): Remove this override after data backfill is complete.
+            from orchestra.settings import set_jsonb_mode
+
+            original_mode = settings.use_jsonb_queries
+            set_jsonb_mode(False)
+            try:
+                # batch ingestion
+                create_logs_internal(
+                    project_id=project_id,
+                    context_id=context_id,
+                    request=CreateLogConfig(
+                        entries=entries,
+                        project=PROJ_NAME,
+                        context=None,
+                    ),
+                    project_dao=project_dao,
+                    field_type_dao=field_type_dao,
+                    log_event_dao=log_event_dao,
+                    log_dao=log_dao,
+                    context_dao=context_dao,
+                    context_obj=context_obj,
+                )
+            finally:
+                # Restore original mode
+                set_jsonb_mode(original_mode if original_mode else None)
         except Exception as e:
             logger = logging.getLogger(__name__)
             logger.error(f"Failed to insert batch of traffic logs: {e}")
