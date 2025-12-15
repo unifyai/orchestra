@@ -1656,7 +1656,8 @@ def write_files(
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    project = project_dao.get_by_user_and_name(
+    # Admin endpoint - use any context lookup
+    project = project_dao.get_by_user_and_name_any_context(
         user_id=request.user_id,
         name=request.project,
     )
@@ -1736,7 +1737,8 @@ def get_files(
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    project_obj = project_dao.get_by_user_and_name(
+    # Admin endpoint - use any context lookup
+    project_obj = project_dao.get_by_user_and_name_any_context(
         user_id=user_id,
         name=project,
     )
@@ -1826,7 +1828,8 @@ def get_file_contents(
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    project_obj = project_dao.get_by_user_and_name(
+    # Admin endpoint - use any context lookup
+    project_obj = project_dao.get_by_user_and_name_any_context(
         user_id=user_id,
         name=project,
     )
@@ -1913,7 +1916,8 @@ def delete_file_or_folder(
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    project_obj = project_dao.get_by_user_and_name(
+    # Admin endpoint - use any context lookup
+    project_obj = project_dao.get_by_user_and_name_any_context(
         user_id=user_id,
         name=project,
     )
@@ -1995,7 +1999,8 @@ def create_upload_url(
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    project = project_dao.get_by_user_and_name(
+    # Admin endpoint - use any context lookup
+    project = project_dao.get_by_user_and_name_any_context(
         user_id=request.user_id,
         name=request.project,
     )
@@ -2080,7 +2085,8 @@ def create_download_url(
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    project_obj = project_dao.get_by_user_and_name(
+    # Admin endpoint - use any context lookup
+    project_obj = project_dao.get_by_user_and_name_any_context(
         user_id=user_id,
         name=project,
     )

@@ -772,13 +772,8 @@ async def test_member_can_create_org_project(client: AsyncClient, dbsession):
 
 
 # ============== Project Listing API Key Context Tests ==============
-# NOTE: These tests are skipped because project listing scoping by API key context
-# is on the roadmap but blocked by Unity/AssistantJobs dependencies (confirmed with Julia)
 
 
-@pytest.mark.skip(
-    reason="Project scoping by API key context not yet implemented - blocked by Unity deps",
-)
 @pytest.mark.anyio
 async def test_list_projects_personal_api_key_shows_only_personal(client: AsyncClient):
     """Test that listing projects with personal API key shows only personal projects."""
@@ -815,9 +810,6 @@ async def test_list_projects_personal_api_key_shows_only_personal(client: AsyncC
     assert "Org_List_Test" not in projects
 
 
-@pytest.mark.skip(
-    reason="Project scoping by API key context not yet implemented - blocked by Unity deps",
-)
 @pytest.mark.anyio
 async def test_list_projects_org_api_key_shows_only_org_projects(client: AsyncClient):
     """Test that listing projects with org API key shows only that org's projects."""
@@ -854,9 +846,6 @@ async def test_list_projects_org_api_key_shows_only_org_projects(client: AsyncCl
     assert "Personal_Not_Listed" not in projects
 
 
-@pytest.mark.skip(
-    reason="Project scoping by API key context not yet implemented - blocked by Unity deps",
-)
 @pytest.mark.anyio
 async def test_list_projects_multiple_orgs_shows_correct_org(client: AsyncClient):
     """Test that org API key only shows projects from its specific organization."""
@@ -907,9 +896,6 @@ async def test_list_projects_multiple_orgs_shows_correct_org(client: AsyncClient
     assert "Org1_Project" not in projects_org2
 
 
-@pytest.mark.skip(
-    reason="Project scoping by API key context not yet implemented - blocked by Unity deps",
-)
 @pytest.mark.anyio
 async def test_list_projects_tree_personal_api_key(client: AsyncClient):
     """Test that /projects/tree with personal API key shows only personal projects."""
@@ -947,9 +933,6 @@ async def test_list_projects_tree_personal_api_key(client: AsyncClient):
     assert "Org_Tree_Test" not in project_names
 
 
-@pytest.mark.skip(
-    reason="Project scoping by API key context not yet implemented - blocked by Unity deps",
-)
 @pytest.mark.anyio
 async def test_list_projects_tree_org_api_key(client: AsyncClient):
     """Test that /projects/tree with org API key shows only that org's projects."""

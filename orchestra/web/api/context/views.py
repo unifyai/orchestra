@@ -132,10 +132,12 @@ def create_context(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
         project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
             name=project_name,
+            organization_id=organization_id,
         )
         if not project:
             raise IndexError
@@ -304,10 +306,12 @@ def get_contexts(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
         project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
             name=project_name,
+            organization_id=organization_id,
         )
         if not project:
             raise IndexError
@@ -360,8 +364,13 @@ def get_context_commits(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
 
-    project = project_dao.get_by_user_and_name(user_id=user_id, name=project_name)
+    project = project_dao.get_by_user_and_name(
+        user_id=user_id,
+        name=project_name,
+        organization_id=organization_id,
+    )
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -425,10 +434,12 @@ def get_context(
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
         project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
             name=project_name,
+            organization_id=organization_id,
         )
         if not project:
             raise IndexError("Project not found")
@@ -518,10 +529,12 @@ def delete_context(
             status_code=403,
             detail="Cannot delete built-in Tasks context.",
         )
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
         project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
             name=project_name,
+            organization_id=organization_id,
         )
         if not project:
             raise IndexError("Project not found")
@@ -588,10 +601,12 @@ def add_logs_to_context(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
     log_dao = LogDAO(session, context_dao)
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
         project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
             name=project_name,
+            organization_id=organization_id,
         )
         if not project:
             raise IndexError("Project not found")
@@ -869,9 +884,11 @@ def rename_context(
             detail="Cannot modify built-in Tasks context.",
         )
     # 1) Verify project
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
         name=project_name,
+        organization_id=organization_id,
     )
     if not project:
         raise not_found("Project")
@@ -914,8 +931,13 @@ def commit_context_version(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
 
-    project = project_dao.get_by_user_and_name(user_id=user_id, name=project_name)
+    project = project_dao.get_by_user_and_name(
+        user_id=user_id,
+        name=project_name,
+        organization_id=organization_id,
+    )
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -949,8 +971,13 @@ def rollback_context_version(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
 
-    project = project_dao.get_by_user_and_name(user_id=user_id, name=project_name)
+    project = project_dao.get_by_user_and_name(
+        user_id=user_id,
+        name=project_name,
+        organization_id=organization_id,
+    )
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
