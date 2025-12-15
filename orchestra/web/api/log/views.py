@@ -2129,24 +2129,43 @@ def update_logs(
 
         if columns_being_updated:
             # Get OLD values for these columns from logs being updated
-            from orchestra.db.models.orchestra_models import Log, LogEventLog
-
             columns_values_map = {}  # {column_name: [old_values...]}
 
-            for log_id in ids_to_update:
-                # Query current log values for columns being updated
-                old_values_query = (
-                    session.query(Log.key, Log.value)
-                    .join(LogEventLog, LogEventLog.log_id == Log.id)
-                    .filter(
-                        LogEventLog.log_event_id == log_id,
-                        Log.key.in_(columns_being_updated),
+            if settings.use_jsonb_queries:
+                # JSONB mode: Query LogEvent.data directly
+                for log_id in ids_to_update:
+                    log_event = (
+                        session.query(LogEvent.data)
+                        .filter(LogEvent.id == log_id)
+                        .one_or_none()
                     )
-                )
+                    if log_event and log_event.data:
+                        for key in columns_being_updated:
+                            if (
+                                key in log_event.data
+                                and log_event.data[key] is not None
+                            ):
+                                columns_values_map.setdefault(key, []).append(
+                                    log_event.data[key],
+                                )
+            else:
+                # EAV mode: Query Log and LogEventLog tables
+                from orchestra.db.models.orchestra_models import Log, LogEventLog
 
-                for key, value in old_values_query.all():
-                    if value is not None:
-                        columns_values_map.setdefault(key, []).append(value)
+                for log_id in ids_to_update:
+                    # Query current log values for columns being updated
+                    old_values_query = (
+                        session.query(Log.key, Log.value)
+                        .join(LogEventLog, LogEventLog.log_id == Log.id)
+                        .filter(
+                            LogEventLog.log_event_id == log_id,
+                            Log.key.in_(columns_being_updated),
+                        )
+                    )
+
+                    for key, value in old_values_query.all():
+                        if value is not None:
+                            columns_values_map.setdefault(key, []).append(value)
 
             # Check for RESTRICT constraint violations
             # DISABLED: RESTRICT and NO ACTION are not currently supported
@@ -3110,6 +3129,41 @@ def _update_logs_jsonb(
 
     successful_update_ids: Set[int] = set()
 
+    # Apply FK CASCADE and SET NULL actions before updates
+    if ctx_id and all_flat_updates:
+        # Determine which columns are being updated
+        columns_being_updated = set(u["key"] for u in all_flat_updates)
+        log_ids_being_updated = list(set(u["log_event_id"] for u in all_flat_updates))
+
+        # Get OLD values for these columns from logs being updated
+        columns_values_map: Dict[str, List[Any]] = {}
+        for log_id in log_ids_being_updated:
+            log_event = (
+                session.query(LogEvent.data).filter(LogEvent.id == log_id).one_or_none()
+            )
+            if log_event and log_event.data:
+                for key in columns_being_updated:
+                    if key in log_event.data and log_event.data[key] is not None:
+                        columns_values_map.setdefault(key, []).append(
+                            log_event.data[key],
+                        )
+
+        # Apply FK actions (CASCADE UPDATE, SET NULL)
+        if columns_values_map:
+            # Extract new values for CASCADE UPDATE
+            new_values = {}
+            if body.entries:
+                if isinstance(body.entries, dict):
+                    new_values.update(body.entries)
+
+            context_dao.apply_fk_actions(
+                project_id=project_id,
+                context_id=ctx_id,
+                columns_values=columns_values_map,
+                action="UPDATE",
+                new_values=new_values,
+            )
+
     # First, handle flat updates using JSONB method
     if all_flat_updates:
         try:
@@ -3432,6 +3486,26 @@ def _delete_logs_jsonb(
         all_log_event_ids_for_media.extend(context_log_ids)
         all_field_names_for_media.extend(fields)
 
+        # Apply FK CASCADE and SET NULL actions before deletion
+        columns_values_to_delete: Dict[str, List[Any]] = {}
+        logs_data = (
+            session.query(LogEvent.data).filter(LogEvent.id.in_(context_log_ids)).all()
+        )
+        for (data,) in logs_data:
+            if data:
+                for key in fields:
+                    if key in data and data[key] is not None:
+                        columns_values_to_delete.setdefault(key, []).append(data[key])
+
+        # Apply FK actions (CASCADE DELETE, SET NULL)
+        if columns_values_to_delete:
+            context_dao.apply_fk_actions(
+                project_id=project_id,
+                context_id=context_id,
+                columns_values=columns_values_to_delete,
+                action="DELETE",
+            )
+
         # Delete GCS files BEFORE any DB operations
         log_dao._bulk_delete_gcs_media_jsonb(
             log_event_ids=context_log_ids,
@@ -3584,6 +3658,30 @@ def _delete_logs_jsonb(
                             f"Removed {sibling_removed} log events from sibling context '{sib_ctx_name}'",
                         )
 
+        # Apply FK CASCADE and SET NULL actions before deletion
+        if logs_to_delete:
+            # Collect all field values from logs being deleted for FK cascade
+            columns_values_to_delete: Dict[str, List[Any]] = {}
+            logs_data = (
+                session.query(LogEvent.data)
+                .filter(LogEvent.id.in_(logs_to_delete))
+                .all()
+            )
+            for (data,) in logs_data:
+                if data:
+                    for key, value in data.items():
+                        if value is not None:
+                            columns_values_to_delete.setdefault(key, []).append(value)
+
+            # Apply FK actions (CASCADE DELETE, SET NULL)
+            if columns_values_to_delete:
+                context_dao.apply_fk_actions(
+                    project_id=project_id,
+                    context_id=context_id,
+                    columns_values=columns_values_to_delete,
+                    action="DELETE",
+                )
+
         # Delete logs that don't exist in other contexts
         if logs_to_delete:
             deleted_count = (
@@ -3640,6 +3738,31 @@ def _delete_logs_jsonb(
 
             # Add all valid log_ids to potential empty logs
             potential_empty_logs = list(valid_partial_deletions.keys())
+
+            # Apply FK CASCADE and SET NULL actions before deletion
+            columns_values_to_delete: Dict[str, List[Any]] = {}
+            logs_data = (
+                session.query(LogEvent.id, LogEvent.data)
+                .filter(LogEvent.id.in_(potential_empty_logs))
+                .all()
+            )
+            for log_id, data in logs_data:
+                if data:
+                    fields_for_this_log = valid_partial_deletions.get(log_id, [])
+                    for key in fields_for_this_log:
+                        if key in data and data[key] is not None:
+                            columns_values_to_delete.setdefault(key, []).append(
+                                data[key],
+                            )
+
+            # Apply FK actions (CASCADE DELETE, SET NULL)
+            if columns_values_to_delete:
+                context_dao.apply_fk_actions(
+                    project_id=project_id,
+                    context_id=context_id,
+                    columns_values=columns_values_to_delete,
+                    action="DELETE",
+                )
 
             # Delete GCS files BEFORE any DB operations - SINGLE BULK CALL
             log_dao._bulk_delete_gcs_media_jsonb(
