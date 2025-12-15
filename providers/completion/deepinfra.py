@@ -38,6 +38,11 @@ supported_models = {
         "context_window": 128000,
         "cost": {"prompt": 0.039, "completion": 0.19},
     },
+    "deepseek-v3.2": {
+        "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3.2",
+        "context_window": 160000,
+        "cost": {"prompt": 0.26, "completion": 0.39},
+    },
     "deepseek-v3.1": {
         "endpoint": "deepinfra/deepseek-ai/DeepSeek-V3.1",
         "context_window": 160000,
