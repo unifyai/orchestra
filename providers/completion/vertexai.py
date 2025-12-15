@@ -188,7 +188,7 @@ supported_models = {
         "endpoint": "vertex_ai/qwen/qwen3-235b-a22b-instruct-2507-maas",
         "region": "us-south1",
         "context_window": 256000,
-        "cost": {"prompt": 0.25, "completion": 1},
+        "cost": {"prompt": 0.22, "completion": 0.88},
     },
     "deepseek-v3.1": {
         "endpoint": "vertex_ai/deepseek-ai/deepseek-v3.1-maas",
