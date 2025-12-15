@@ -2284,65 +2284,85 @@ def compute_metric_bulk_jsonb(
         "mode": func.mode().within_group,
     }
 
-    # 3) Compute metric for each key individually
-    # This avoids Cartesian product issues with UNNEST
-    result = {}
+    # 3) Build cast expressions for all keys upfront
+    cast_exprs = {}
     for key in keys:
-        # Build the cast expression for this key
-        cast_expr = _build_jsonb_cast_expr(key, field_types.get(key), LogEvent)
+        cast_exprs[key] = _build_jsonb_cast_expr(key, field_types.get(key), LogEvent)
 
-        # Build and execute the aggregation query
-        metric_query = (
-            session.query(reduction_methods[metric](cast_expr))
-            .select_from(LogEvent)
-            .filter(LogEvent.id.in_(select(filtered_events_subq.c.id)))
-            # Filter to only rows where the key exists
-            .filter(LogEvent.data.op("?")(literal(key)))
+    # 4) Build aggregate columns for the single batched query
+    aggregate_columns = []
+    for key in keys:
+        cast_expr = cast_exprs[key]
+
+        # Handle median/mode specially (they use .within_group())
+        if metric == "median":
+            agg_col = func.percentile_cont(0.5).within_group(cast_expr.asc()).label(key)
+        elif metric == "mode":
+            agg_col = func.mode().within_group(cast_expr.asc()).label(key)
+        else:
+            # Standard aggregates (mean, sum, min, max, count, var, std)
+            agg_col = reduction_methods[metric](cast_expr).label(key)
+
+        aggregate_columns.append(agg_col)
+
+    # 5) Construct the single batched query
+    metric_query = (
+        session.query(*aggregate_columns)
+        .select_from(LogEvent)
+        .filter(LogEvent.id.in_(select(filtered_events_subq.c.id)))
+    )
+
+    # Capture SQL for test analysis (if enabled) - ONCE for the batched query
+    try:
+        from sqlalchemy import text
+
+        from orchestra.tests.test_log.sql_capture import (
+            capture_sql,
+            is_capture_enabled,
+            set_test_context,
         )
 
-        # Capture SQL for test analysis (if enabled)
-        try:
-            from sqlalchemy import text
+        if is_capture_enabled():
+            from orchestra.settings import settings
 
-            from orchestra.tests.test_log.sql_capture import (
-                capture_sql,
-                is_capture_enabled,
-                set_test_context,
+            mode = "jsonb" if settings.use_jsonb_queries else "eav"
+            # Compile SQL for capture
+            compiled_sql = metric_query.statement.compile(
+                dialect=session.bind.dialect,
+                compile_kwargs={"literal_binds": True},
+            ).string
+            # Execute EXPLAIN ANALYZE
+            explain_sql = (
+                "EXPLAIN (ANALYZE, BUFFERS, TIMING, COSTS, VERBOSE, FORMAT JSON) "
+                + compiled_sql
             )
+            explain_result = session.execute(text(explain_sql))
+            explain_output = explain_result.fetchone()[0]
+            # Set context with all keys
+            keys_str = ", ".join(keys)
+            set_test_context(
+                test_name="metric_bulk_query",
+                filter_expr=f"metric_bulk({metric}, {keys_str})",
+                mode=mode,
+            )
+            capture_sql(
+                sql=compiled_sql,
+                explain_analyze=explain_output,
+                filter_expr_override=f"metric_bulk({metric}, {keys_str})",
+            )
+    except ImportError:
+        pass  # sql_capture module not available (production environment)
+    except Exception:
+        pass  # Silently ignore capture errors
 
-            if is_capture_enabled():
-                from orchestra.settings import settings
+    # 6) Execute the batched query once
+    row = metric_query.first()
 
-                mode = "jsonb" if settings.use_jsonb_queries else "eav"
-                # Compile SQL for capture
-                compiled_sql = metric_query.statement.compile(
-                    dialect=session.bind.dialect,
-                    compile_kwargs={"literal_binds": True},
-                ).string
-                # Execute EXPLAIN ANALYZE
-                explain_sql = (
-                    "EXPLAIN (ANALYZE, BUFFERS, TIMING, COSTS, VERBOSE, FORMAT JSON) "
-                    + compiled_sql
-                )
-                explain_result = session.execute(text(explain_sql))
-                explain_output = explain_result.fetchone()[0]
-                # Set context and capture
-                set_test_context(
-                    test_name="metric_bulk_query",
-                    filter_expr=f"metric_bulk({metric}, {key})",
-                    mode=mode,
-                )
-                capture_sql(
-                    sql=compiled_sql,
-                    explain_analyze=explain_output,
-                    filter_expr_override=f"metric_bulk({metric}, {key})",
-                )
-        except ImportError:
-            pass  # sql_capture module not available (production environment)
-        except Exception:
-            pass  # Silently ignore capture errors
-
-        value = metric_query.scalar()
+    # 7) Extract and post-process results for each key
+    result = {}
+    for key in keys:
+        # Get the value from the row (will be None if key doesn't exist in any event)
+        value = getattr(row, key) if row else None
 
         # Post-process the value based on field type
         field_type = field_types.get(key)
