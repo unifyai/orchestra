@@ -719,32 +719,80 @@ def add_logs_to_context(
             context_id=context_id,
         )
         existing_field_names = set(existing_fields)
-        logs = log_dao.filter(
-            project_id=project_id,
-            log_event_id=log_ids,
-        )
 
-        # Create field types for each field found, but only if not already existing
-        for row in logs:
-            field_name = row[0].key
-            value = row[0].value
-            param_version = row[0].param_version
-            inferred_type = row[0].inferred_type
-            field_category = "param" if param_version is not None else "entry"
+        from orchestra.settings import settings
 
-            # Skip if field already exists in this context
-            if field_name not in existing_field_names:
-                field_type_dao.create_field_type_if_absent(
-                    project_id=project_id,
-                    field_name=field_name,
-                    value=value,
-                    context_id=context_id,
-                    mutable=False,
-                    field_category=field_category,
-                    field_type=inferred_type,
+        if settings.use_jsonb_queries:
+            # JSONB mode: query LogEvent.data directly
+            from orchestra.db.models.orchestra_models import LogEvent
+
+            log_events = (
+                session.query(LogEvent.id, LogEvent.data, LogEvent.key_order)
+                .filter(
+                    LogEvent.id.in_(log_ids),
+                    LogEvent.project_id == project_id,
                 )
-                # Add to set to prevent duplicate creation in this batch
-                existing_field_names.add(field_name)
+                .all()
+            )
+            # Create field types for each field found in LogEvent.data
+            for log_event_id, data, key_order in log_events:
+                if not data:
+                    continue
+
+                for field_name, value in data.items():
+                    # Skip if field already exists in this context
+                    if field_name in existing_field_names:
+                        continue
+
+                    # In JSONB mode, we can't determine param vs entry from stored data
+                    # (unlike EAV mode which uses Log.param_version).
+                    # Default to "entry" which matches the typical use case.
+                    # If logs were originally created with a context, field types
+                    # would already exist from that creation.
+                    field_category = "entry"
+
+                    # Infer type using LogDAO's static method
+                    inferred_type = LogDAO.infer_type(field_name, value)
+
+                    field_type_dao.create_field_type_if_absent(
+                        project_id=project_id,
+                        field_name=field_name,
+                        value=value,
+                        context_id=context_id,
+                        mutable=False,
+                        field_category=field_category,
+                        field_type=inferred_type,
+                    )
+                    # Add to set to prevent duplicate creation in this batch
+                    existing_field_names.add(field_name)
+        else:
+            # EAV mode: query Log table
+            logs = log_dao.filter(
+                project_id=project_id,
+                log_event_id=log_ids,
+            )
+
+            # Create field types for each field found, but only if not already existing
+            for row in logs:
+                field_name = row[0].key
+                value = row[0].value
+                param_version = row[0].param_version
+                inferred_type = row[0].inferred_type
+                field_category = "param" if param_version is not None else "entry"
+
+                # Skip if field already exists in this context
+                if field_name not in existing_field_names:
+                    field_type_dao.create_field_type_if_absent(
+                        project_id=project_id,
+                        field_name=field_name,
+                        value=value,
+                        context_id=context_id,
+                        mutable=False,
+                        field_category=field_category,
+                        field_type=inferred_type,
+                    )
+                    # Add to set to prevent duplicate creation in this batch
+                    existing_field_names.add(field_name)
 
         return {"info": "Logs added to context successfully!"}
     except IndexError as e:
