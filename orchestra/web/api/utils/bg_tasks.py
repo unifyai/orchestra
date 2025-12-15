@@ -12,13 +12,13 @@ from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
 from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.dao.users_dao import UsersDAO
+from orchestra.db.models.orchestra_models import Organization, Recharge, RechargeStatus
 from orchestra.lib.billing import (
     deduct_credits,
     get_billing_entity,
     queue_auto_recharge,
     queue_org_auto_recharge,
 )
-from orchestra.db.models.orchestra_models import Organization, Recharge, RechargeStatus
 from orchestra.lib.time import month_end_utc
 from orchestra.web.api.log.utils.logging_utils import log_chat_completion_event
 from orchestra.web.api.query.schema import QueryModelRequest
@@ -240,7 +240,7 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
                     ):
                         # Idempotency check: skip if pending recharge already exists for this month
                         current_month_end = month_end_utc(
-                            datetime.now(timezone.utc).date()
+                            datetime.now(timezone.utc).date(),
                         )
                         existing_recharge = (
                             session.query(Recharge)
@@ -259,13 +259,14 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
                             )
                         else:
                             billing_user = users_dao.get_user_with_id(
-                                billing_entity.entity_id
+                                billing_entity.entity_id,
                             )
                             queue_auto_recharge(session, billing_user, recharge_qty)
 
                             # Credit user immediately (they pay later via monthly invoice)
                             users_dao.recharge_credit(
-                                billing_entity.entity_id, recharge_qty
+                                billing_entity.entity_id,
+                                recharge_qty,
                             )
                             session.commit()
                             print(
@@ -304,7 +305,7 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
                     ):
                         # Idempotency check: skip if pending recharge already exists for this month
                         current_month_end = month_end_utc(
-                            datetime.now(timezone.utc).date()
+                            datetime.now(timezone.utc).date(),
                         )
                         existing_recharge = (
                             session.query(Recharge)
@@ -327,7 +328,8 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
 
                             # Credit org immediately (they pay later via monthly invoice)
                             org_billing_dao.add_credits(
-                                billing_entity.entity_id, recharge_qty
+                                billing_entity.entity_id,
+                                recharge_qty,
                             )
                             session.commit()
                             print(

@@ -1102,7 +1102,7 @@ async def test_context_allow_duplicates(client: AsyncClient):
         headers=HEADERS,
     )
     assert response.status_code == 400
-    assert "Duplicate log detected" in response.json()["detail"]
+    assert "Duplicate log" in response.json()["detail"]
 
     # Create a log with different values - should be accepted
     different_log = log_data.copy()

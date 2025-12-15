@@ -408,5 +408,6 @@ def _invoice_org_recharges(
             r.stripe_invoice_id = invoice.id
 
         INVOICE_CREATED_TOTAL.labels(
-            entity_type="organization", entity_id=str(org_id)
+            entity_type="organization",
+            entity_id=str(org_id),
         ).inc()

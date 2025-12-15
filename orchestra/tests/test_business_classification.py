@@ -1500,7 +1500,8 @@ def test_tax_id_validator_unsupported_country():
 
     # Strict validation fails for unsupported countries
     is_valid, formatted, error = TaxIDValidator.validate_tax_id_strict(
-        "123456789", "ZZ"
+        "123456789",
+        "ZZ",
     )
     assert is_valid is False
     assert "No validation available" in error
