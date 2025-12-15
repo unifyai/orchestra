@@ -242,9 +242,11 @@ def create_assistant(
     # Phase 1: Pre-checks and prepare assistant data
     try:
         ASSISTANTS_PROJECT_NAME = "Assistants"
+        # Assistants project is always personal for now
         assistants_project = project_dao.get_by_user_and_name(
             user_id=user_id,
             name=ASSISTANTS_PROJECT_NAME,
+            organization_id=None,
         )
         if not assistants_project:
             project_dao.create(
@@ -257,6 +259,7 @@ def create_assistant(
             assistants_project = project_dao.get_by_user_and_name(
                 user_id=user_id,
                 name=ASSISTANTS_PROJECT_NAME,
+                organization_id=None,
             )
 
         if not settings.is_staging:
@@ -467,6 +470,7 @@ def create_assistant(
                             assistants_project = project_dao.get_by_user_and_name(
                                 user_id=user_id,
                                 name="Assistants",
+                                organization_id=None,
                             )
                             if assistants_project:
                                 context_to_delete = context_dao.filter(
@@ -937,6 +941,7 @@ def delete_assistant(
             assistants_project = project_dao.get_by_user_and_name(
                 user_id=request.state.user_id,
                 name=ASSISTANTS_PROJECT_NAME,
+                organization_id=None,
             )
             if assistants_project:
                 assistant_context_prefix = f"{assistant.first_name}{assistant.surname}"

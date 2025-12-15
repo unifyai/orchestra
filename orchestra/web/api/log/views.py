@@ -468,9 +468,11 @@ def create_logs(
     # check if the project exists
     try:
         user_id = request_fastapi.state.user_id
+        organization_id = getattr(request_fastapi.state, "organization_id", None)
         project = project_dao.get_by_user_and_name(
             user_id=user_id,
             name=request.project,
+            organization_id=organization_id,
         )
         project_id = project.id
     except (IndexError, AttributeError):
@@ -777,12 +779,14 @@ def create_from_logs(
     log_dao = LogDAO(session, context_dao)
 
     user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
 
     # 1) Validate the project
     try:
         project_obj = project_dao.get_by_user_and_name(
             name=body.project,
             user_id=user_id,
+            organization_id=organization_id,
         )
         project_id = project_obj.id
     except (IndexError, AttributeError):
@@ -1432,12 +1436,14 @@ def update_derived_log(
     derived_log_dao = DerivedLogDAO(session)
 
     user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
 
     # 1) Validate the project
     try:
         project_obj = project_dao.get_by_user_and_name(
             name=body.project,
             user_id=user_id,
+            organization_id=organization_id,
         )
         project_id = project_obj.id
     except (IndexError, AttributeError):
@@ -1927,10 +1933,12 @@ def update_logs(
                 )
 
             # Get project ID first for filtering
+            organization_id = getattr(request_fastapi.state, "organization_id", None)
             try:
                 project_obj = project_dao.get_by_user_and_name(
                     name=body.project,
                     user_id=user_id,
+                    organization_id=organization_id,
                 )
                 project_id = project_obj.id
             except (IndexError, AttributeError):
@@ -3976,10 +3984,12 @@ def delete_logs(
 
     # Validate project existence
     user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
         project_id = project_dao.get_by_user_and_name(
             user_id=user_id,
             name=body.project,
+            organization_id=organization_id,
         ).id
     except (IndexError, AttributeError):
         raise HTTPException(
@@ -4895,10 +4905,12 @@ def get_logs(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
 
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
         project_id = project_dao.get_by_user_and_name(
             name=project,
             user_id=request_fastapi.state.user_id,
+            organization_id=organization_id,
         ).id
     except Exception as e:
         raise HTTPException(
@@ -5328,10 +5340,12 @@ def query_logs_post(
     field_type_dao = FieldTypeDAO(session)
 
     # Validate project
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
         project_id = project_dao.get_by_user_and_name(
             name=body.project,
             user_id=request_fastapi.state.user_id,
+            organization_id=organization_id,
         ).id
     except Exception as e:
         raise HTTPException(
@@ -5815,7 +5829,12 @@ def get_logs_metric(
     # Get project and context
     try:
         user_id = request_fastapi.state.user_id
-        project_obj = project_dao.get_by_user_and_name(name=project, user_id=user_id)
+        organization_id = getattr(request_fastapi.state, "organization_id", None)
+        project_obj = project_dao.get_by_user_and_name(
+            name=project,
+            user_id=user_id,
+            organization_id=organization_id,
+        )
         project_id = project_obj.id
     except (IndexError, AttributeError):
         raise not_found(f"Project {project}")
@@ -6210,9 +6229,11 @@ def rename_field(
 
         # Validate project and permissions
         user_id = request_fastapi.state.user_id
+        organization_id = getattr(request_fastapi.state, "organization_id", None)
         project = project_dao.get_by_user_and_name(
             user_id=user_id,
             name=request.project,
+            organization_id=organization_id,
         )
 
         if not project:
@@ -6368,10 +6389,12 @@ def join_logs(
     user_id = request_fastapi.state.user_id
 
     # Validate project
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
         project_obj = project_dao.get_by_user_and_name(
             user_id=user_id,
             name=request.project,
+            organization_id=organization_id,
         )
         project_id = project_obj.id
     except (IndexError, AttributeError):
@@ -6534,7 +6557,12 @@ def get_fields(
 
     try:
         user_id = request_fastapi.state.user_id
-        project_obj = project_dao.get_by_user_and_name(name=project, user_id=user_id)
+        organization_id = getattr(request_fastapi.state, "organization_id", None)
+        project_obj = project_dao.get_by_user_and_name(
+            name=project,
+            user_id=user_id,
+            organization_id=organization_id,
+        )
         project_id = project_obj.id
     except (IndexError, AttributeError):
         raise not_found(f"Project {project}")
@@ -6694,9 +6722,11 @@ def create_fields(
     # Validate project
     try:
         user_id = request_fastapi.state.user_id
+        organization_id = getattr(request_fastapi.state, "organization_id", None)
         project = project_dao.get_by_user_and_name(
             user_id=user_id,
             name=request.project,
+            organization_id=organization_id,
         )
         project_id = project.id
     except (IndexError, AttributeError):
@@ -6934,9 +6964,11 @@ def delete_fields(
     # Validate project
     try:
         user_id = request_fastapi.state.user_id
+        organization_id = getattr(request_fastapi.state, "organization_id", None)
         project = project_dao.get_by_user_and_name(
             user_id=user_id,
             name=request.project,
+            organization_id=organization_id,
         )
         project_id = project.id
     except (IndexError, AttributeError):

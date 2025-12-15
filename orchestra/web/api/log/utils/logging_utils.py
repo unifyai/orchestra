@@ -451,16 +451,19 @@ def get_or_create_usage_project(
     Returns:
         The Project instance for the Usage project
     """
+    # Usage project is always personal (organization_id=None)
     project = project_dao.get_by_user_and_name(
-        user_id,
-        settings.chat_completions_project_name,
+        user_id=user_id,
+        name=settings.chat_completions_project_name,
+        organization_id=None,
     )
     if not project:
         project_dao.create(user_id=user_id, name=settings.chat_completions_project_name)
         project_dao.session.commit()
         project = project_dao.get_by_user_and_name(
-            user_id,
-            settings.chat_completions_project_name,
+            user_id=user_id,
+            name=settings.chat_completions_project_name,
+            organization_id=None,
         )
     return project
 
@@ -886,10 +889,15 @@ def _get_logs_query(
     that match the given user filters. See docstring above for details.
     """
     user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
 
     # 1) Validate the project
     try:
-        project_id = project_dao.get_by_user_and_name(name=project, user_id=user_id).id
+        project_id = project_dao.get_by_user_and_name(
+            name=project,
+            user_id=user_id,
+            organization_id=organization_id,
+        ).id
     except (IndexError, AttributeError):
         raise not_found(f"Project {project}")
 

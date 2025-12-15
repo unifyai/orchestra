@@ -84,19 +84,38 @@ def get_project_or_404(
     ),
     session: Session = Depends(get_db_session),
 ) -> Project:
+    """
+    Get a project by name, validating API key context.
 
+    When using a personal API key, only personal projects are accessible.
+    When using an organization API key, only that organization's projects are accessible.
+
+    Raises 404 if project not found or not accessible with the current API key context.
+    """
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+
+    # Get API key context (None = personal, int = org-specific)
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
+
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
         name=project_name,
+        organization_id=organization_id,
     )
     if not project:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project {project_name} not found.",
-        )
+        # Provide helpful error message based on context
+        if organization_id is not None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Project '{project_name}' not found in organization. Use the correct organization API key.",
+            )
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Project '{project_name}' not found in personal workspace. Use a personal API key for personal projects or an organization API key for organization projects.",
+            )
     return project
 
 
@@ -1367,13 +1386,20 @@ def list_projects(
 ):
     """
     Returns the names of all projects stored in your account.
+
+    When using a personal API key, returns only personal projects.
+    When using an organization API key, returns only that organization's projects.
     """
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
+    # Get API key context (None = personal, int = org-specific)
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
+
     raw_projects = project_dao.filter_by_user_access(
         user_id=request_fastapi.state.user_id,
+        organization_id=organization_id,
     )
     return [p[0].name for p in raw_projects]
 
@@ -1383,7 +1409,12 @@ async def list_projects_tree(
     request_fastapi: Request,
     session: Session = Depends(get_db_session),
 ):
-    """Return all projects the user can access with their icons and interface names."""
+    """
+    Return all projects the user can access with their icons and interface names.
+
+    When using a personal API key, returns only personal projects.
+    When using an organization API key, returns only that organization's projects.
+    """
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
@@ -1391,7 +1422,13 @@ async def list_projects_tree(
     tab_dao = TabDAO(session)
     favorite_project_dao = FavoriteProjectDAO(session)
 
-    projects = project_dao.filter_by_user_access(user_id=request_fastapi.state.user_id)
+    # Get API key context (None = personal, int = org-specific)
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
+
+    projects = project_dao.filter_by_user_access(
+        user_id=request_fastapi.state.user_id,
+        organization_id=organization_id,
+    )
     favorites = favorite_project_dao.filter_by_user(request_fastapi.state.user_id)
     fav_map = {f.project_id: f for f in favorites}
 
@@ -1657,10 +1694,12 @@ def import_project_template(
 
     # Validate template if requested
     if request.validate_first:
+        organization_id = getattr(request_fastapi.state, "organization_id", None)
         validator = TemplateValidator(session)
         validation_schema = validator.get_project_validation_schema(
             user_id=request_fastapi.state.user_id,
             project_name=request.project,
+            organization_id=organization_id,
         )
 
     # Import each interface from the project template

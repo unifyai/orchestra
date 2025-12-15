@@ -2,7 +2,7 @@ import hashlib
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.context_dao import ContextDAO
@@ -14,8 +14,11 @@ from orchestra.db.models.orchestra_models import (
     Log,
     LogEvent,
     LogEventLog,
+    OrganizationMember,
     Project,
     ProjectVersion,
+    ResourceAccess,
+    TeamMember,
 )
 from orchestra.db.utils import get_next_order_value
 
@@ -191,35 +194,97 @@ class ProjectDAO:
     def filter_by_user_access(
         self,
         user_id: str,
+        organization_id: Optional[int] = None,
         id: Optional[int] = None,
         name: Optional[str] = None,
     ) -> List[Project]:
         """
-        Filter projects that a user has access to, either as owner or through organization membership.
+        Filter projects that a user has access to based on API key context.
+
+        When organization_id is None (personal API key):
+            - Returns only personal projects (user_id set, organization_id NULL)
+            - Plus projects with explicit ResourceAccess grants (personal projects only)
+
+        When organization_id is set (org API key):
+            - Returns only projects for that specific organization
+            - Via org membership OR explicit ResourceAccess grants
 
         Args:
             user_id: The ID of the user
+            organization_id: API key context (None = personal, int = org-specific)
             id: Optional project ID filter
             name: Optional project name filter
 
         Returns:
             List of projects the user has access to
         """
-        # Get all organization IDs the user is a member of
-        org_memberships = self.organization_member_dao.filter(user_id=user_id)
-        org_ids = (
-            [membership[0].organization_id for membership in org_memberships]
-            if org_memberships
-            else []
+        # Get project IDs the user has explicit access to via ResourceAccess
+        # (either direct user grants or via team membership)
+        team_memberships = (
+            self.session.query(TeamMember.team_id)
+            .filter(TeamMember.user_id == user_id)
+            .all()
         )
+        team_id_strs = [str(tm[0]) for tm in team_memberships]
 
-        # Build query with access conditions
-        query = select(Project).where(
+        explicit_access_query = self.session.query(ResourceAccess.resource_id).filter(
+            ResourceAccess.resource_type == "project",
             or_(
-                Project.user_id == user_id,
-                Project.organization_id.in_(org_ids) if org_ids else False,
+                and_(
+                    ResourceAccess.grantee_type == "user",
+                    ResourceAccess.grantee_id == user_id,
+                ),
+                and_(
+                    ResourceAccess.grantee_type == "team",
+                    ResourceAccess.grantee_id.in_(team_id_strs),
+                )
+                if team_id_strs
+                else False,
             ),
         )
+        explicit_project_ids = [row[0] for row in explicit_access_query.all()]
+
+        if organization_id is None:
+            # Personal API key: only personal projects + explicitly granted personal projects
+            query = select(Project).where(
+                and_(
+                    Project.organization_id.is_(None),  # Personal projects only
+                    or_(
+                        Project.user_id == user_id,  # Owned by user
+                        Project.id.in_(explicit_project_ids)
+                        if explicit_project_ids
+                        else False,  # Explicitly granted
+                    ),
+                ),
+            )
+        else:
+            # Org API key: only projects for this specific organization
+            # Check if user is member of this org
+            is_member = (
+                self.session.query(OrganizationMember)
+                .filter(
+                    OrganizationMember.user_id == user_id,
+                    OrganizationMember.organization_id == organization_id,
+                )
+                .first()
+                is not None
+            )
+
+            if is_member:
+                # User is member - show all org projects
+                query = select(Project).where(
+                    Project.organization_id == organization_id,
+                )
+            else:
+                # User is not member - only show explicitly granted projects in this org
+                query = select(Project).where(
+                    and_(
+                        Project.organization_id == organization_id,
+                        Project.id.in_(explicit_project_ids)
+                        if explicit_project_ids
+                        else False,
+                    ),
+                )
 
         # Apply additional filters if provided
         if id:
@@ -230,9 +295,40 @@ class ProjectDAO:
         rows = self.session.execute(query)
         return rows.fetchall()
 
-    def get_by_user_and_name(self, user_id: str, name: str) -> Optional[Project]:
+    def get_by_user_and_name(
+        self,
+        user_id: str,
+        name: str,
+        organization_id: Optional[int] = None,
+    ) -> Optional[Project]:
         """
         Get a project by name that a user has access to.
+
+        Args:
+            user_id: The ID of the user
+            name: The name of the project
+            organization_id: API key context (None = personal, int = org-specific)
+
+        Returns:
+            The project if found, None otherwise
+        """
+        projects = self.filter_by_user_access(
+            user_id=user_id,
+            organization_id=organization_id,
+            name=name,
+        )
+        return projects[0][0] if projects else None
+
+    def get_by_user_and_name_any_context(
+        self,
+        user_id: str,
+        name: str,
+    ) -> Optional[Project]:
+        """
+        Get a project by name that a user has access to (ignoring API key context).
+
+        This is used for internal operations that need to find any accessible project
+        regardless of the current API key context (e.g., project transfer operations).
 
         Args:
             user_id: The ID of the user
@@ -241,8 +337,57 @@ class ProjectDAO:
         Returns:
             The project if found, None otherwise
         """
-        projects = self.filter_by_user_access(user_id=user_id, name=name)
-        return projects[0][0] if projects else None
+        # Get all organization IDs the user is a member of
+        org_memberships = self.organization_member_dao.filter(user_id=user_id)
+        org_ids = (
+            [membership[0].organization_id for membership in org_memberships]
+            if org_memberships
+            else []
+        )
+
+        # Get explicit access grants
+        team_memberships = (
+            self.session.query(TeamMember.team_id)
+            .filter(TeamMember.user_id == user_id)
+            .all()
+        )
+        team_id_strs = [str(tm[0]) for tm in team_memberships]
+
+        explicit_access_query = self.session.query(ResourceAccess.resource_id).filter(
+            ResourceAccess.resource_type == "project",
+            or_(
+                and_(
+                    ResourceAccess.grantee_type == "user",
+                    ResourceAccess.grantee_id == user_id,
+                ),
+                and_(
+                    ResourceAccess.grantee_type == "team",
+                    ResourceAccess.grantee_id.in_(team_id_strs),
+                )
+                if team_id_strs
+                else False,
+            ),
+        )
+        explicit_project_ids = [row[0] for row in explicit_access_query.all()]
+
+        # Build query with all access conditions
+        query = select(Project).where(
+            and_(
+                Project.name == name,
+                or_(
+                    Project.user_id == user_id,  # Personal ownership
+                    Project.organization_id.in_(org_ids)
+                    if org_ids
+                    else False,  # Org membership
+                    Project.id.in_(explicit_project_ids)
+                    if explicit_project_ids
+                    else False,  # Explicit grant
+                ),
+            ),
+        )
+
+        result = self.session.execute(query).fetchall()
+        return result[0][0] if result else None
 
     def commit(self, project_id: int, commit_message: Optional[str] = None) -> str:
         """

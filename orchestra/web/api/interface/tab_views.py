@@ -1031,9 +1031,11 @@ def import_tab_template(
         interface = interface_dao.get(request.interface_id)
     elif request.interface_name:
         # Get project first
+        organization_id = getattr(request_fastapi.state, "organization_id", None)
         project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
             name=request.project,
+            organization_id=organization_id,
         )
         if not project:
             raise HTTPException(
@@ -1060,10 +1062,12 @@ def import_tab_template(
     if request.validate_first:
         # Get project for validation
         project = project_dao.get(interface.project_id)
+        organization_id = getattr(request_fastapi.state, "organization_id", None)
         validator = TemplateValidator(session)
         validation_schema = validator.get_project_validation_schema(
             user_id=request_fastapi.state.user_id,
             project_name=project.name,
+            organization_id=organization_id,
         )
 
         # Create a minimal interface template for validation
