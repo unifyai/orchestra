@@ -6,7 +6,7 @@ from orchestra.tests.utils import ADMIN_HEADERS, create_test_user
 
 
 @pytest.mark.anyio
-async def test_admin_list_contacts_empty(client: AsyncClient):
+async def test_admin_list_contacts_empty(client: AsyncClient, use_jsonb_mode):
     # When no contact logs exist, the endpoint should return an empty list
     resp = await client.get("/v0/admin/contacts", headers=ADMIN_HEADERS)
     assert resp.status_code == status.HTTP_200_OK
@@ -14,7 +14,7 @@ async def test_admin_list_contacts_empty(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_admin_list_contacts_basic(client: AsyncClient):
+async def test_admin_list_contacts_basic(client: AsyncClient, use_jsonb_mode):
     # 1) Create a test user and project
     user = await create_test_user(client, "contacts@example.com")
     project_name = "contacts_proj"
@@ -85,7 +85,7 @@ async def test_admin_list_contacts_basic(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_admin_list_contacts_across_contexts(client: AsyncClient):
+async def test_admin_list_contacts_across_contexts(client: AsyncClient, use_jsonb_mode):
     # Create a test user and project
     user = await create_test_user(client, "multi@example.com")
     project_name = "multi_proj"
@@ -152,7 +152,7 @@ async def test_admin_list_contacts_across_contexts(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_admin_list_contacts_multiple_users(client: AsyncClient):
+async def test_admin_list_contacts_multiple_users(client: AsyncClient, use_jsonb_mode):
     # Create two users and separate projects
     user1 = await create_test_user(client, "user1@example.com")
     user2 = await create_test_user(client, "user2@example.com")
