@@ -35,6 +35,9 @@ warnings.filterwarnings("ignore", category=UserWarning)
 # Global list to store timing records
 TIMING_RECORDS = []
 
+# Global to track current test info for timing records
+CURRENT_TEST_INFO = {"name": None, "mode": None}
+
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.utils import create_database, drop_database
 from orchestra.settings import settings
@@ -246,6 +249,67 @@ class TestAwareAsyncClient(AsyncClient):
         return await super().request(method, url, **kwargs)
 
 
+class TimedAsyncClient(AsyncClient):
+    """
+    AsyncClient wrapper that records timing information for each request.
+
+    Captures:
+    - Request method and path
+    - Response time (duration)
+    - Test name and mode (from CURRENT_TEST_INFO global)
+    - Status code
+
+    Also injects X-Test-Name and X-Test-Mode headers for SQL capture.
+
+    Used for performance comparison between EAV and JSONB storage modes.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    async def request(self, method, url, **kwargs):
+        # Get current test info from global (set by pytest_runtest_setup hook)
+        test_name = CURRENT_TEST_INFO.get("name", "unknown")
+        mode = CURRENT_TEST_INFO.get("mode", "unknown")
+
+        # Inject test name and mode headers for SQL capture
+        headers = kwargs.get("headers", {})
+        if headers is None:
+            headers = {}
+        headers = dict(headers)  # Make mutable copy
+        headers["X-Test-Name"] = test_name
+        headers["X-Test-Mode"] = mode or "unknown"
+        kwargs["headers"] = headers
+
+        # Capture timing
+        start = time.monotonic()
+        response = await super().request(method, url, **kwargs)
+        duration = time.monotonic() - start
+
+        # Build timing record - only store JSON-serializable data
+        path = str(url)
+        # Extract params if present (for debugging), converting to dict if needed
+        params = kwargs.get("params", {})
+        if hasattr(params, "items"):
+            params = dict(params)
+        else:
+            params = {}
+
+        TIMING_RECORDS.append(
+            {
+                "method": method,
+                "path": f"{method} {path}",
+                "duration": duration,
+                "status_code": response.status_code,
+                "test_name": test_name,
+                "mode": mode,
+                "params": params,  # Only store serializable params
+            },
+        )
+
+        return response
+
+
 @pytest.fixture
 async def client(
     fastapi_app: FastAPI,
@@ -398,6 +462,45 @@ TEST_RESULTS_BY_MODE = {
 }
 
 
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item):
+    """
+    Hook to capture test name and mode before each test runs.
+    This allows timing records to include the test function name.
+    """
+    global CURRENT_TEST_INFO
+
+    # Extract test function name (without module path and parameters)
+    # e.g., "test_filter_closed_jobs" from "orchestra/tests/.../test_repairs_performance.py::test_filter_closed_jobs[eav]"
+    nodeid = item.nodeid
+    # Get the function name part (after :: and before [)
+    if "::" in nodeid:
+        func_part = nodeid.split("::")[-1]
+        test_name = func_part.split("[")[0] if "[" in func_part else func_part
+    else:
+        test_name = nodeid
+
+    # Determine mode from parametrization or nodeid
+    mode = None
+    if hasattr(item, "callspec") and hasattr(item.callspec, "params"):
+        params = item.callspec.params
+        # Check for 'mode' parameter (used in test_repairs_performance.py)
+        if "mode" in params:
+            mode = params["mode"]
+        # Check for 'use_jsonb_mode' parameter (used in other tests)
+        elif "use_jsonb_mode" in params:
+            mode = "jsonb" if params["use_jsonb_mode"] else "eav"
+
+    # Fallback: check nodeid for mode markers
+    if mode is None:
+        if "[eav]" in nodeid or "[eav-" in nodeid:
+            mode = "eav"
+        elif "[jsonb]" in nodeid or "[jsonb-" in nodeid:
+            mode = "jsonb"
+
+    CURRENT_TEST_INFO = {"name": test_name, "mode": mode}
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
     """
@@ -418,13 +521,20 @@ def pytest_runtest_makereport(item, call):
             params = item.callspec.params
             if "use_jsonb_mode" in params:
                 mode = "jsonb_mode" if params["use_jsonb_mode"] else "eav_mode"
+            # Also check for 'mode' parameter (used in test_repairs_performance.py)
+            elif "mode" in params:
+                mode_val = params["mode"]
+                if mode_val == "eav":
+                    mode = "eav_mode"
+                elif mode_val == "jsonb":
+                    mode = "jsonb_mode"
 
         # Strategy 2: Fallback to nodeid string matching for compatibility
         # This handles cases where the parametrization ids might be in the nodeid
         if mode is None:
-            if "[eav_mode]" in item.nodeid:
+            if "[eav_mode]" in item.nodeid or "[eav]" in item.nodeid:
                 mode = "eav_mode"
-            elif "[jsonb_mode]" in item.nodeid:
+            elif "[jsonb_mode]" in item.nodeid or "[jsonb]" in item.nodeid:
                 mode = "jsonb_mode"
 
         # Only track if we detected a parametrized test
@@ -611,170 +721,30 @@ async def prod_client() -> AsyncGenerator[AsyncClient, None]:
 
 
 @pytest.fixture
-async def timed_client(
-    prod_client: AsyncClient,
-) -> AsyncGenerator[AsyncClient, None]:
+async def timed_client() -> AsyncGenerator[AsyncClient, None]:
     """
-    Fixture that wraps the production client to record timing information for each request.
+    Fixture that creates a timed client for performance testing.
+
+    Uses TimedAsyncClient which automatically records timing for each request,
+    along with test name and mode from CURRENT_TEST_INFO (set by pytest_runtest_setup).
 
     Used for performance tests that need real production data.
     Requires the server to be running at localhost:8000.
 
-    :param prod_client: AsyncClient connected to the running local server.
-    :yield: The wrapped client with timing instrumentation.
+    :yield: TimedAsyncClient connected to localhost:8000 with timing instrumentation.
     """
-    # Save original methods
-    original_get = prod_client.get
-    original_post = prod_client.post
-    original_put = prod_client.put
-    original_delete = prod_client.delete
-    original_patch = prod_client.patch
-    original_head = prod_client.head
-    original_options = prod_client.options
+    import httpx
 
-    # Wrap each method to record timing
-    async def timed_get(*args, **kwargs):
-        start = time.monotonic()
-        response = await original_get(*args, **kwargs)
-        duration = time.monotonic() - start
-        path = args[0] if args else kwargs.get("url", "")
-        TIMING_RECORDS.append(
-            {
-                "method": "GET",
-                "path": f"GET {path}",
-                "duration": duration,
-                "status_code": response.status_code,
-                "args": args,
-                "kwargs": kwargs,
-            },
-        )
-        return response
+    # Use a longer timeout for performance tests against real data
+    timeout = httpx.Timeout(timeout=120.0)  # 2 minutes
 
-    async def timed_post(*args, **kwargs):
-        start = time.monotonic()
-        response = await original_post(*args, **kwargs)
-        duration = time.monotonic() - start
-        path = args[0] if args else kwargs.get("url", "")
-        TIMING_RECORDS.append(
-            {
-                "method": "POST",
-                "path": f"POST {path}",
-                "duration": duration,
-                "status_code": response.status_code,
-                "args": args,
-                "kwargs": kwargs,
-            },
-        )
-        return response
-
-    async def timed_put(*args, **kwargs):
-        start = time.monotonic()
-        response = await original_put(*args, **kwargs)
-        duration = time.monotonic() - start
-        path = args[0] if args else kwargs.get("url", "")
-        TIMING_RECORDS.append(
-            {
-                "method": "PUT",
-                "path": f"PUT {path}",
-                "duration": duration,
-                "status_code": response.status_code,
-                "args": args,
-                "kwargs": kwargs,
-            },
-        )
-        return response
-
-    async def timed_delete(*args, **kwargs):
-        start = time.monotonic()
-        response = await original_delete(*args, **kwargs)
-        duration = time.monotonic() - start
-        path = args[0] if args else kwargs.get("url", "")
-        TIMING_RECORDS.append(
-            {
-                "method": "DELETE",
-                "path": f"DELETE {path}",
-                "duration": duration,
-                "status_code": response.status_code,
-                "args": args,
-                "kwargs": kwargs,
-            },
-        )
-        return response
-
-    async def timed_patch(*args, **kwargs):
-        start = time.monotonic()
-        response = await original_patch(*args, **kwargs)
-        duration = time.monotonic() - start
-        path = args[0] if args else kwargs.get("url", "")
-        TIMING_RECORDS.append(
-            {
-                "method": "PATCH",
-                "path": f"PATCH {path}",
-                "duration": duration,
-                "status_code": response.status_code,
-                "args": args,
-                "kwargs": kwargs,
-            },
-        )
-        return response
-
-    async def timed_head(*args, **kwargs):
-        start = time.monotonic()
-        response = await original_head(*args, **kwargs)
-        duration = time.monotonic() - start
-        path = args[0] if args else kwargs.get("url", "")
-        TIMING_RECORDS.append(
-            {
-                "method": "HEAD",
-                "path": f"HEAD {path}",
-                "duration": duration,
-                "status_code": response.status_code,
-                "args": args,
-                "kwargs": kwargs,
-            },
-        )
-        return response
-
-    async def timed_options(*args, **kwargs):
-        start = time.monotonic()
-        response = await original_options(*args, **kwargs)
-        duration = time.monotonic() - start
-        path = args[0] if args else kwargs.get("url", "")
-        TIMING_RECORDS.append(
-            {
-                "method": "OPTIONS",
-                "path": f"OPTIONS {path}",
-                "duration": duration,
-                "status_code": response.status_code,
-                "args": args,
-                "kwargs": kwargs,
-            },
-        )
-        return response
-
-    # Replace methods with timed versions
-    prod_client.get = timed_get
-    prod_client.post = timed_post
-    prod_client.put = timed_put
-    prod_client.delete = timed_delete
-    prod_client.patch = timed_patch
-    prod_client.head = timed_head
-    prod_client.options = timed_options
-
-    # Add records reference to client
-    prod_client.records = TIMING_RECORDS
-
-    try:
-        yield prod_client
-    finally:
-        # Restore original methods
-        prod_client.get = original_get
-        prod_client.post = original_post
-        prod_client.put = original_put
-        prod_client.delete = original_delete
-        prod_client.patch = original_patch
-        prod_client.head = original_head
-        prod_client.options = original_options
+    async with TimedAsyncClient(
+        base_url="http://localhost:8000",
+        timeout=timeout,
+    ) as client:
+        # Add records reference to client for backward compatibility
+        client.records = TIMING_RECORDS
+        yield client
 
 
 def _make_value(key: str, id: int, offset: int, rng: random.Random):
@@ -1600,40 +1570,25 @@ def pytest_sessionfinish(session, exitstatus):
             json.dump(output_data, f, indent=2)
 
         # =====================================================================
-        # 2. PARSE AND GROUP TEST RECORDS BY STEM
+        # 2. PARSE AND GROUP TEST RECORDS BY TEST NAME
         # =====================================================================
         test_groups = defaultdict(lambda: {"eav": [], "jsonb": []})
 
         for record in TIMING_RECORDS:
-            path = record.get("path", "")
-            # Extract test name from path (e.g., "GET /v0/logs" from test_xxx[eav])
-            # The test name is stored in args/kwargs of the record
-            test_name = path
+            # Use the test_name and mode captured by TimedAsyncClient
+            test_name = record.get("test_name", "unknown")
+            mode = record.get("mode", "unknown")
 
-            # Determine mode from the path or context
-            # Tests are parametrized with [eav] or [jsonb] suffix
-            if "[eav]" in str(record.get("args", "")) or "[eav]" in str(
-                record.get("kwargs", ""),
-            ):
-                mode = "eav"
-            elif "[jsonb]" in str(record.get("args", "")) or "[jsonb]" in str(
-                record.get("kwargs", ""),
-            ):
-                mode = "jsonb"
-            else:
-                # Try to infer from project name in params
-                kwargs = record.get("kwargs", {})
-                params = kwargs.get("params", {})
+            # Fallback: try to infer mode from project name in params (backward compat)
+            if mode == "unknown" or mode is None:
+                params = record.get("params", {})
                 project = params.get("project", "") if isinstance(params, dict) else ""
                 if "EAV" in str(project):
                     mode = "eav"
                 elif "JSONB" in str(project):
                     mode = "jsonb"
-                else:
-                    # Default: check if we can parse from path patterns
-                    mode = "unknown"
 
-            if mode in ("eav", "jsonb"):
+            if mode in ("eav", "jsonb") and test_name != "unknown":
                 test_groups[test_name][mode].append(record)
 
         # =====================================================================
@@ -1818,57 +1773,94 @@ def pytest_sessionfinish(session, exitstatus):
         paired_tests = [p for p in test_pairs if p["eav"] and p["jsonb"]]
 
         if paired_tests and HAS_MATPLOTLIB:
-            # Chart 1: Bar chart comparing storage mode query times
+            # Chart 1: Horizontal double bar chart comparing EAV vs JSONB per test
+            # Shows speedup annotations for easy comparison
             try:
-                fig, ax = plt.subplots(figsize=(14, 8))
+                # Sort by speedup for better visualization
+                sorted_paired = sorted(
+                    paired_tests,
+                    key=lambda x: x["speedup"] if x["speedup"] else 0,
+                    reverse=True,
+                )
+
+                # Limit to top 30 tests for readability
+                display_tests = sorted_paired[:30]
+                num_tests = len(display_tests)
+
+                # Calculate figure height based on number of tests
+                fig_height = max(10, num_tests * 0.4)
+                fig, ax = plt.subplots(figsize=(14, fig_height))
+
                 test_names = [
-                    p["test_name"][:35] + "..."
-                    if len(p["test_name"]) > 35
+                    p["test_name"][:50] + "..."
+                    if len(p["test_name"]) > 50
                     else p["test_name"]
-                    for p in paired_tests[:20]
-                ]  # Limit to top 20
-                eav_times = [p["eav"]["avg_ms"] for p in paired_tests[:20]]
-                jsonb_times = [p["jsonb"]["avg_ms"] for p in paired_tests[:20]]
+                    for p in display_tests
+                ]
+                eav_times = [p["eav"]["avg_ms"] for p in display_tests]
+                jsonb_times = [p["jsonb"]["avg_ms"] for p in display_tests]
+                speedups = [p["speedup"] for p in display_tests]
 
-                x = np.arange(len(test_names))
-                width = 0.35
+                y = np.arange(num_tests)
+                height = 0.35
 
-                bars1 = ax.bar(
-                    x - width / 2,
+                # Create horizontal bars
+                bars1 = ax.barh(
+                    y - height / 2,
                     eav_times,
-                    width,
+                    height,
                     label="EAV",
                     color="#e74c3c",
                     alpha=0.8,
                 )
-                bars2 = ax.bar(
-                    x + width / 2,
+                bars2 = ax.barh(
+                    y + height / 2,
                     jsonb_times,
-                    width,
+                    height,
                     label="JSONB",
                     color="#27ae60",
                     alpha=0.8,
                 )
 
-                ax.set_xlabel("Test Name", fontsize=12)
-                ax.set_ylabel("Duration (ms)", fontsize=12)
+                # Add speedup annotations at the end of each bar group
+                for i, (eav_t, jsonb_t, speedup) in enumerate(
+                    zip(eav_times, jsonb_times, speedups),
+                ):
+                    max_time = max(eav_t, jsonb_t)
+                    if speedup and speedup != float("inf"):
+                        color = "#27ae60" if speedup >= 1.0 else "#e74c3c"
+                        label = f"{speedup:.1f}x"
+                        ax.annotate(
+                            label,
+                            xy=(max_time, i),
+                            xytext=(5, 0),
+                            textcoords="offset points",
+                            va="center",
+                            fontsize=9,
+                            fontweight="bold",
+                            color=color,
+                        )
+
+                ax.set_ylabel("Test Name", fontsize=12)
+                ax.set_xlabel("Duration (ms)", fontsize=12)
                 ax.set_title(
-                    "Storage Mode Query Performance Comparison",
+                    "EAV vs JSONB Performance Comparison (Per Test)\n"
+                    "Speedup shown at right (green = JSONB faster, red = EAV faster)",
                     fontsize=14,
                     fontweight="bold",
                 )
-                ax.set_xticks(x)
-                ax.set_xticklabels(test_names, rotation=45, ha="right", fontsize=8)
-                ax.legend()
-                ax.grid(axis="y", alpha=0.3)
+                ax.set_yticks(y)
+                ax.set_yticklabels(test_names, fontsize=8)
+                ax.legend(loc="lower right")
+                ax.grid(axis="x", alpha=0.3)
 
                 # Use log scale if range is large
-                if (
-                    max(eav_times + jsonb_times)
-                    / (min(eav_times + jsonb_times) + 0.001)
-                    > 100
-                ):
-                    ax.set_yscale("log")
+                all_times = eav_times + jsonb_times
+                if max(all_times) / (min(all_times) + 0.001) > 100:
+                    ax.set_xscale("log")
+
+                # Invert y-axis so highest speedup is at top
+                ax.invert_yaxis()
 
                 plt.tight_layout()
                 # Save to file FIRST, before closing
