@@ -228,7 +228,7 @@ class Settings(BaseSettings):
         """
         if _use_jsonb_override is not None:
             return _use_jsonb_override
-        return os.environ.get("ORCHESTRA_USE_JSONB_QUERIES", "false").lower() == "true"
+        return os.environ.get("ORCHESTRA_USE_JSONB_QUERIES", "true").lower() == "true"
 
     @use_jsonb_queries.setter
     def use_jsonb_queries(self, value: bool) -> None:
