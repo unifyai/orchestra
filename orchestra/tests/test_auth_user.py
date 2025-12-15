@@ -318,7 +318,7 @@ async def test_add_organization_member(client: AsyncClient):
     response = await client.get(url, headers=HEADERS)
     assert response.status_code == 200, response.json()
     assert response.json()["organization"]["name"] == None
-    assert response.json()["organization"]["level"] == None
+    assert response.json()["organization"]["role_name"] == None
 
     # add member to org
     url = "/v0/admin/organization/member"
@@ -331,7 +331,7 @@ async def test_add_organization_member(client: AsyncClient):
     response = await client.get(url, headers=HEADERS)
     assert response.status_code == 200, response.json()
     assert response.json()["organization"]["name"] == "Org1"
-    assert response.json()["organization"]["level"] == "user"
+    assert response.json()["organization"]["role_name"] == "Member"
 
     # check member with user id
     url = f"/v0/admin/auth-user/by-user-id?user_id={user_id}"
@@ -339,11 +339,11 @@ async def test_add_organization_member(client: AsyncClient):
     assert response.status_code == 200, response.json()
     assert response.json()["id"] == user_id
     assert response.json()["organization"]["name"] == "Org1"
-    assert response.json()["organization"]["level"] == "user"
+    assert response.json()["organization"]["role_name"] == "Member"
 
-    # update user level within the org
-    url = "/v0/admin/organization/member/level"
-    params = {"organization": "Org1", "member_email": email, "new_level": "admin"}
+    # update user role within the org (need role_id for Admin role = 2)
+    url = "/v0/admin/organization/member/role"
+    params = {"organization": "Org1", "member_email": email, "role_id": 2}  # Admin role
     response = await client.put(url, params=params, headers=HEADERS)
     assert response.status_code == 200, response.json()
 
@@ -352,16 +352,17 @@ async def test_add_organization_member(client: AsyncClient):
     response = await client.get(url, headers=HEADERS)
     assert response.status_code == 200, response.json()
     assert response.json()["organization"]["name"] == "Org1"
-    assert response.json()["organization"]["level"] == "admin"
+    assert response.json()["organization"]["role_name"] == "Admin"
 
     # list users in a given org
     url = f"/v0/admin/organization/list?name=Org1"
     response = await client.get(url, headers=HEADERS)
-    expected_result = [
-        {"email": "owner@org1.com", "level": "owner"},
-        {"email": "user@org1.co", "level": "admin"},
-    ]
-    assert response.json() == expected_result
+    # Verify we get expected members with role_name
+    members = response.json()
+    assert len(members) == 2
+    emails_to_roles = {m["email"]: m["role_name"] for m in members}
+    assert emails_to_roles["owner@org1.com"] == "Owner"
+    assert emails_to_roles["user@org1.co"] == "Admin"
 
 
 @pytest.mark.anyio

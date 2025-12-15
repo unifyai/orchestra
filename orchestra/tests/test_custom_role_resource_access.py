@@ -29,7 +29,7 @@ async def test_grant_project_access_with_custom_role(client: AsyncClient, dbsess
     # Add member to organization
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 
@@ -104,7 +104,7 @@ async def test_custom_role_grants_read_permission_via_resource_access(
     # Add member
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 
@@ -187,7 +187,7 @@ async def test_custom_role_denies_unpermitted_actions(client: AsyncClient, dbses
     # Add member
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 
@@ -275,7 +275,7 @@ async def test_explicit_grant_overrides_implicit_membership(
     # Add member with default Member role (has project:read, project:write)
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 
@@ -373,7 +373,7 @@ async def test_revoke_custom_role_access(client: AsyncClient, dbsession):
     # Add member
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 
@@ -460,12 +460,12 @@ async def test_multiple_custom_roles_on_same_project(client: AsyncClient, dbsess
     # Add members
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": reader["id"], "level": "user"},
+        json={"user_id": reader["id"]},
         headers=owner["headers"],
     )
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": writer["id"], "level": "user"},
+        json={"user_id": writer["id"]},
         headers=owner["headers"],
     )
 
@@ -588,7 +588,7 @@ async def test_owner_always_has_full_access_despite_explicit_grants(
     # Add member
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 
@@ -680,12 +680,12 @@ async def test_user_without_explicit_grant_has_no_access_when_grants_exist(
     # Add both users as members
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": granted_user["id"], "level": "user"},
+        json={"user_id": granted_user["id"]},
         headers=owner["headers"],
     )
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": not_granted_user["id"], "level": "user"},
+        json={"user_id": not_granted_user["id"]},
         headers=owner["headers"],
     )
 
@@ -770,7 +770,7 @@ async def test_update_resource_access_role(client: AsyncClient, dbsession):
     # Add member
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 

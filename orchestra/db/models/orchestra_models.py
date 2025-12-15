@@ -634,7 +634,10 @@ class Organization(Base):
         server_default="0",
     )
     stripe_customer_id = Column(
-        String, nullable=True, unique=True, index=True
+        String,
+        nullable=True,
+        unique=True,
+        index=True,
     )  # NULL = legacy billing
     autorecharge = Column(
         Boolean,
@@ -727,15 +730,11 @@ class OrganizationMember(Base):
         ForeignKey("auth_user.id", ondelete="CASCADE"),
         nullable=False,
     )
-    level = Column(
-        String,
-        nullable=False,
-    )  # owner, admin, user -> owner is duplicated info? :/
     role_id = Column(
         Integer,
         ForeignKey("role.id", ondelete="RESTRICT"),
         nullable=False,
-    )  # RBAC role for this member (explicit, never NULL - defaults to "Member" system role)
+    )  # RBAC role for this member (Owner, Admin, Member, Viewer, or custom roles)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
 
@@ -772,7 +771,6 @@ class OrganizationInvite(Base):
         ForeignKey("role.id", ondelete="RESTRICT"),
         nullable=False,
     )  # Role to assign when invite is accepted
-    level = Column(String, nullable=False, default="user")  # Level to assign on accept
     expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 

@@ -176,7 +176,7 @@ async def test_non_owner_cannot_create_role(client: AsyncClient):
 
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 

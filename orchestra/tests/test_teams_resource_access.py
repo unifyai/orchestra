@@ -87,7 +87,7 @@ async def test_non_owner_cannot_create_team(client: AsyncClient):
 
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 
@@ -157,12 +157,12 @@ async def test_add_team_members(client: AsyncClient):
     # Add users to organization
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": user1["id"], "level": "user"},
+        json={"user_id": user1["id"]},
         headers=owner["headers"],
     )
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": user2["id"], "level": "user"},
+        json={"user_id": user2["id"]},
         headers=owner["headers"],
     )
 
@@ -253,7 +253,7 @@ async def test_remove_team_member(client: AsyncClient):
 
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": user["id"], "level": "user"},
+        json={"user_id": user["id"]},
         headers=owner["headers"],
     )
 
@@ -513,7 +513,7 @@ async def test_share_org_project_with_user(client: AsyncClient, dbsession):
     # Add collaborator to org
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": collaborator["id"], "level": "user"},
+        json={"user_id": collaborator["id"]},
         headers=owner["headers"],
     )
 
@@ -597,7 +597,7 @@ async def test_share_org_project_with_team(client: AsyncClient, dbsession):
     # Add team member to org
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": team_member["id"], "level": "user"},
+        json={"user_id": team_member["id"]},
         headers=owner["headers"],
     )
 
@@ -752,7 +752,7 @@ async def test_revoke_resource_access(client: AsyncClient, dbsession):
     # Add user to org
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": user["id"], "level": "user"},
+        json={"user_id": user["id"]},
         headers=owner["headers"],
     )
 
@@ -856,7 +856,7 @@ async def test_org_member_implicit_access_no_teams(client: AsyncClient, dbsessio
     # Add member to organization (no teams, no explicit resource sharing)
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 
@@ -956,7 +956,7 @@ async def test_explicit_grant_overrides_implicit_access(client: AsyncClient, dbs
 
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 
@@ -1075,7 +1075,7 @@ async def test_update_resource_access_role(client: AsyncClient, dbsession):
     # Add member to org
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 
@@ -1178,7 +1178,7 @@ async def test_update_resource_access_team(client: AsyncClient, dbsession):
     # Add member to org
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 
@@ -1396,7 +1396,7 @@ async def test_update_resource_access_requires_permission(
 
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": viewer_user["id"], "level": "user"},
+        json={"user_id": viewer_user["id"]},
         headers=owner["headers"],
     )
 
@@ -1465,7 +1465,7 @@ async def test_update_resource_access_duplicate_constraint(
     # Add member to org
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 
@@ -1601,12 +1601,12 @@ async def test_update_resource_access_preserves_grantee(client: AsyncClient, dbs
 
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member1["id"], "level": "user"},
+        json={"user_id": member1["id"]},
         headers=owner["headers"],
     )
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member2["id"], "level": "user"},
+        json={"user_id": member2["id"]},
         headers=owner["headers"],
     )
 
@@ -1697,7 +1697,7 @@ async def test_admin_can_create_team(client: AsyncClient, dbsession):
 
     add_member_response = await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": admin["id"], "level": "admin", "role_id": admin_role.id},
+        json={"user_id": admin["id"], "role_id": admin_role.id},
         headers=owner["headers"],
     )
     assert add_member_response.status_code == status.HTTP_201_CREATED
@@ -1735,7 +1735,7 @@ async def test_admin_can_update_team(client: AsyncClient, dbsession):
 
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": admin["id"], "level": "admin", "role_id": admin_role.id},
+        json={"user_id": admin["id"], "role_id": admin_role.id},
         headers=owner["headers"],
     )
 
@@ -1777,7 +1777,7 @@ async def test_admin_can_delete_team(client: AsyncClient, dbsession):
 
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": admin["id"], "level": "admin", "role_id": admin_role.id},
+        json={"user_id": admin["id"], "role_id": admin_role.id},
         headers=owner["headers"],
     )
 
@@ -1818,12 +1818,12 @@ async def test_admin_can_add_team_members(client: AsyncClient, dbsession):
 
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": admin["id"], "level": "admin", "role_id": admin_role.id},
+        json={"user_id": admin["id"], "role_id": admin_role.id},
         headers=owner["headers"],
     )
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 
@@ -1866,12 +1866,12 @@ async def test_admin_can_remove_team_members(client: AsyncClient, dbsession):
 
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": admin["id"], "level": "admin", "role_id": admin_role.id},
+        json={"user_id": admin["id"], "role_id": admin_role.id},
         headers=owner["headers"],
     )
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 
@@ -1915,7 +1915,7 @@ async def test_member_cannot_manage_teams(client: AsyncClient, dbsession):
     # Add member with default Member role (no org:write)
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 
@@ -1949,7 +1949,7 @@ async def test_viewer_cannot_manage_teams(client: AsyncClient, dbsession):
 
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": viewer["id"], "level": "user", "role_id": viewer_role.id},
+        json={"user_id": viewer["id"], "role_id": viewer_role.id},
         headers=owner["headers"],
     )
 
@@ -1984,12 +1984,12 @@ async def test_list_resource_access(client: AsyncClient, dbsession):
     # Add members to org
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member1["id"], "level": "user"},
+        json={"user_id": member1["id"]},
         headers=owner["headers"],
     )
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member2["id"], "level": "user"},
+        json={"user_id": member2["id"]},
         headers=owner["headers"],
     )
 
@@ -2083,7 +2083,7 @@ async def test_list_resource_access_with_team(client: AsyncClient, dbsession):
     # Add member to org
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 

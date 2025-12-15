@@ -330,7 +330,7 @@ async def test_organization_query_billing(client: AsyncClient, dbsession):
     # Add member to the organization (this creates org API key for member)
     add_member_response = await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
     org_api_key = add_member_response.json()["api_key"]
@@ -421,7 +421,7 @@ async def test_transfer_ownership_success(client: AsyncClient, dbsession):
     # Add new_owner as member
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": new_owner["id"], "level": "user"},
+        json={"user_id": new_owner["id"]},
         headers=owner["headers"],
     )
 
@@ -449,8 +449,6 @@ async def test_transfer_ownership_success(client: AsyncClient, dbsession):
 
     assert new_owner_role.name == "Owner"
     assert old_owner_role.name == "Admin"
-    assert new_owner_member.level == "owner"
-    assert old_owner_member.level == "admin"
 
 
 @pytest.mark.anyio
@@ -471,7 +469,7 @@ async def test_transfer_ownership_only_owner_can_transfer(client: AsyncClient):
     # Add member
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 
@@ -647,7 +645,7 @@ async def test_create_org_project_requires_permission(client: AsyncClient, dbses
 
     add_member_response = await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": viewer["id"], "level": "user", "role_id": viewer_role.id},
+        json={"user_id": viewer["id"], "role_id": viewer_role.id},
         headers=owner["headers"],
     )
     assert add_member_response.status_code == status.HTTP_201_CREATED
@@ -723,7 +721,7 @@ async def test_member_can_create_org_project(client: AsyncClient, dbsession):
     # Add member to org (default Member role has project:write)
     add_member_response = await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
     assert add_member_response.status_code == status.HTTP_201_CREATED
@@ -779,7 +777,7 @@ async def test_member_can_create_org_project(client: AsyncClient, dbsession):
 
 
 @pytest.mark.skip(
-    reason="Project scoping by API key context not yet implemented - blocked by Unity deps"
+    reason="Project scoping by API key context not yet implemented - blocked by Unity deps",
 )
 @pytest.mark.anyio
 async def test_list_projects_personal_api_key_shows_only_personal(client: AsyncClient):
@@ -818,7 +816,7 @@ async def test_list_projects_personal_api_key_shows_only_personal(client: AsyncC
 
 
 @pytest.mark.skip(
-    reason="Project scoping by API key context not yet implemented - blocked by Unity deps"
+    reason="Project scoping by API key context not yet implemented - blocked by Unity deps",
 )
 @pytest.mark.anyio
 async def test_list_projects_org_api_key_shows_only_org_projects(client: AsyncClient):
@@ -857,7 +855,7 @@ async def test_list_projects_org_api_key_shows_only_org_projects(client: AsyncCl
 
 
 @pytest.mark.skip(
-    reason="Project scoping by API key context not yet implemented - blocked by Unity deps"
+    reason="Project scoping by API key context not yet implemented - blocked by Unity deps",
 )
 @pytest.mark.anyio
 async def test_list_projects_multiple_orgs_shows_correct_org(client: AsyncClient):
@@ -910,7 +908,7 @@ async def test_list_projects_multiple_orgs_shows_correct_org(client: AsyncClient
 
 
 @pytest.mark.skip(
-    reason="Project scoping by API key context not yet implemented - blocked by Unity deps"
+    reason="Project scoping by API key context not yet implemented - blocked by Unity deps",
 )
 @pytest.mark.anyio
 async def test_list_projects_tree_personal_api_key(client: AsyncClient):
@@ -950,7 +948,7 @@ async def test_list_projects_tree_personal_api_key(client: AsyncClient):
 
 
 @pytest.mark.skip(
-    reason="Project scoping by API key context not yet implemented - blocked by Unity deps"
+    reason="Project scoping by API key context not yet implemented - blocked by Unity deps",
 )
 @pytest.mark.anyio
 async def test_list_projects_tree_org_api_key(client: AsyncClient):
@@ -1136,8 +1134,6 @@ async def test_recharge_model_supports_organization(client: AsyncClient, dbsessi
 async def test_recharge_requires_exactly_one_owner(client: AsyncClient, dbsession):
     """Test that recharge must have either user_id OR organization_id, not both or neither."""
     from decimal import Decimal
-
-    from sqlalchemy.exc import IntegrityError
 
     from orchestra.db.models.orchestra_models import Recharge
 
@@ -1692,7 +1688,7 @@ async def test_get_billing_entity_org_delegated(client: AsyncClient, dbsession):
     # Add member
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 
@@ -1711,7 +1707,6 @@ async def test_get_billing_entity_org_direct(client: AsyncClient, dbsession):
     """Test get_billing_entity returns org for direct org billing."""
     from decimal import Decimal
 
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
     from orchestra.db.models.orchestra_models import Organization
     from orchestra.lib.billing import BillingEntityType, get_billing_entity
 
@@ -1812,12 +1807,13 @@ async def test_deduct_credits_from_org(client: AsyncClient, dbsession):
 
 @pytest.mark.anyio
 async def test_billing_entity_should_trigger_autorecharge(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     """Test BillingEntity.should_trigger_autorecharge method."""
     from decimal import Decimal
 
-    from orchestra.db.models.orchestra_models import Organization, Users
+    from orchestra.db.models.orchestra_models import Organization
     from orchestra.lib.billing import get_billing_entity
 
     owner = await create_test_user(client, "autorecharge_trigger@test.com")
@@ -1896,8 +1892,6 @@ async def test_billing_entity_no_autorecharge_without_stripe(
 async def test_webhook_checkout_org_credits(client: AsyncClient, dbsession):
     """Test that checkout.session.completed with organization_id credits the org."""
     from decimal import Decimal
-
-    from fastapi import Response
 
     from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
     from orchestra.db.models.orchestra_models import Organization
@@ -2260,7 +2254,7 @@ async def test_update_organization_billing_non_owner(client: AsyncClient, dbsess
     # Add member
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 
@@ -2390,7 +2384,6 @@ async def test_e2e_org_direct_billing_flow(client: AsyncClient, dbsession):
     """
     from decimal import Decimal
 
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
     from orchestra.db.models.orchestra_models import Organization
     from orchestra.lib.billing import deduct_credits, get_billing_entity
     from orchestra.web.api.webhooks.stripe import process_checkout_session_event
@@ -2491,7 +2484,7 @@ async def test_e2e_org_delegated_billing_flow(client: AsyncClient, dbsession):
     # Add member
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 
@@ -2520,7 +2513,6 @@ async def test_e2e_transition_delegated_to_direct(client: AsyncClient, dbsession
     """
     from decimal import Decimal
 
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
     from orchestra.db.models.orchestra_models import Organization
     from orchestra.lib.billing import BillingEntityType, get_billing_entity
 
@@ -2633,7 +2625,7 @@ async def test_billing_permissions_admin_has_read_write(client: AsyncClient, dbs
     # Add admin as member with Admin role
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": admin["id"], "level": "admin", "role_id": admin_role.id},
+        json={"user_id": admin["id"], "role_id": admin_role.id},
         headers=owner["headers"],
     )
 
@@ -2723,7 +2715,7 @@ async def test_billing_api_admin_can_update(client: AsyncClient, dbsession):
     # Add admin as member with Admin role
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": admin["id"], "level": "admin", "role_id": admin_role.id},
+        json={"user_id": admin["id"], "role_id": admin_role.id},
         headers=owner["headers"],
     )
 
@@ -2755,7 +2747,7 @@ async def test_billing_api_member_cannot_update(client: AsyncClient, dbsession):
     # Add member with default Member role
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 
@@ -2785,7 +2777,7 @@ async def test_billing_api_member_can_read(client: AsyncClient, dbsession):
     # Add member with default Member role
     add_response = await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
     assert (
@@ -3073,9 +3065,10 @@ def test_frozen_org_cannot_spend_credits(dbsession):
 
 def test_invalid_account_status_rejected(dbsession):
     """Test that invalid account status values are rejected (H4/M3 fix)."""
+    import pytest
+
     from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
     from orchestra.db.models.orchestra_models import AuthUser, Organization
-    import pytest
 
     # Create owner
     owner = AuthUser(
@@ -3114,15 +3107,17 @@ def test_invalid_account_status_rejected(dbsession):
 
 def test_recharge_xor_constraint(dbsession):
     """Test that recharge table enforces exactly one of user_id/organization_id (XOR fix)."""
+    from decimal import Decimal
+
     from sqlalchemy.exc import IntegrityError
+
     from orchestra.db.models.orchestra_models import (
         AuthUser,
         Organization,
         Recharge,
         RechargeStatus,
+        Users,
     )
-    from orchestra.db.models.orchestra_models import Users
-    from decimal import Decimal
 
     # Create user
     user = Users(
@@ -3201,9 +3196,10 @@ def test_recharge_xor_constraint(dbsession):
 
 def test_duplicate_stripe_customer_id_rejected(dbsession):
     """Test that duplicate stripe_customer_id is rejected (H3 fix)."""
-    from sqlalchemy.exc import IntegrityError
-    from orchestra.db.models.orchestra_models import AuthUser, Organization
     import pytest
+    from sqlalchemy.exc import IntegrityError
+
+    from orchestra.db.models.orchestra_models import AuthUser, Organization
 
     # Create owners
     owner1 = AuthUser(id="dup_owner1", email="dup1@test.com", name="Owner 1")
@@ -3286,6 +3282,9 @@ async def test_checkout_webhook_enables_direct_billing(client: AsyncClient, dbse
 
 def test_duplicate_autorecharge_prevented(dbsession):
     """Test that duplicate auto-recharges in same month are prevented (M2 fix)."""
+    from datetime import datetime, timezone
+    from decimal import Decimal
+
     from orchestra.db.models.orchestra_models import (
         AuthUser,
         Organization,
@@ -3293,8 +3292,6 @@ def test_duplicate_autorecharge_prevented(dbsession):
         RechargeStatus,
     )
     from orchestra.lib.time import month_end_utc
-    from datetime import datetime, timezone
-    from decimal import Decimal
 
     # Create owner and org
     owner = AuthUser(

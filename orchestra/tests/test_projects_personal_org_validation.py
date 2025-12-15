@@ -183,7 +183,7 @@ async def test_personal_org_project_isolation(client: AsyncClient, dbsession):
     # Add org_member to organization
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": org_member["id"], "level": "user"},
+        json={"user_id": org_member["id"]},
         headers=org_owner["headers"],
     )
 
@@ -286,13 +286,13 @@ async def test_org_a_org_b_isolation(client: AsyncClient, dbsession):
     # Add members
     await client.post(
         f"/v0/organizations/{org_a_id}/members",
-        json={"user_id": org_a_member["id"], "level": "user"},
+        json={"user_id": org_a_member["id"]},
         headers=org_a_owner["headers"],
     )
 
     await client.post(
         f"/v0/organizations/{org_b_id}/members",
-        json={"user_id": org_b_member["id"], "level": "user"},
+        json={"user_id": org_b_member["id"]},
         headers=org_b_owner["headers"],
     )
 
@@ -408,21 +408,21 @@ async def test_permission_based_not_role_based_access(client: AsyncClient, dbses
     # Add admin (has org:write)
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": admin_user["id"], "level": "admin", "role_id": admin_role.id},
+        json={"user_id": admin_user["id"], "role_id": admin_role.id},
         headers=owner["headers"],
     )
 
     # Add viewer (no org:write)
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": viewer_user["id"], "level": "user", "role_id": viewer_role.id},
+        json={"user_id": viewer_user["id"], "role_id": viewer_role.id},
         headers=owner["headers"],
     )
 
     # ADMIN (has org:write) CAN add members
     add_as_admin = await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": new_member["id"], "level": "user"},
+        json={"user_id": new_member["id"]},
         headers=admin_user["headers"],
     )
     assert (
@@ -438,7 +438,7 @@ async def test_permission_based_not_role_based_access(client: AsyncClient, dbses
     # VIEWER (no org:write) CANNOT add members
     add_as_viewer = await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": new_member["id"], "level": "user"},
+        json={"user_id": new_member["id"]},
         headers=viewer_user["headers"],
     )
     assert (

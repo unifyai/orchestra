@@ -45,11 +45,11 @@ async def test_create_organization_assigns_owner_role(client: AsyncClient, dbses
 
 
 @pytest.mark.anyio
-async def test_add_member_with_level_user_gets_member_role(
+async def test_add_member_with_default_role(
     client: AsyncClient,
     dbsession,
 ):
-    """Test that adding a member with level='user' assigns the Member role."""
+    """Test that adding a member without role_id assigns the Member role."""
     owner = await create_test_user(client, "member_default_owner@test.com")
     user = await create_test_user(client, "member_default_user@test.com")
 
@@ -61,10 +61,10 @@ async def test_add_member_with_level_user_gets_member_role(
     )
     org_id = org_response.json()["id"]
 
-    # Add member with level="user" without specifying role_id
+    # Add member without specifying role_id (defaults to Member)
     add_response = await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": user["id"], "level": "user"},
+        json={"user_id": user["id"]},
         headers=owner["headers"],
     )
     assert add_response.status_code == status.HTTP_201_CREATED
@@ -82,15 +82,11 @@ async def test_add_member_with_level_user_gets_member_role(
 
 
 @pytest.mark.anyio
-async def test_add_member_with_level_admin_gets_admin_role(
+async def test_add_member_with_admin_role(
     client: AsyncClient,
     dbsession,
 ):
-    """Test that adding a member with level='admin' assigns the Admin role.
-
-    This tests the level-to-role auto-mapping: when role_id is not specified,
-    level='admin' should automatically map to the Admin role.
-    """
+    """Test that adding a member with Admin role_id works correctly."""
     owner = await create_test_user(client, "admin_level_owner@test.com")
     admin_user = await create_test_user(client, "admin_level_user@test.com")
 
@@ -102,26 +98,26 @@ async def test_add_member_with_level_admin_gets_admin_role(
     )
     org_id = org_response.json()["id"]
 
-    # Add member with level="admin" without specifying role_id
+    # Get Admin role ID
+    role_dao = RoleDAO(dbsession)
+    admin_role = role_dao.get_by_name("Admin", organization_id=None)
+
+    # Add member with Admin role_id
     add_response = await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": admin_user["id"], "level": "admin"},
+        json={"user_id": admin_user["id"], "role_id": admin_role.id},
         headers=owner["headers"],
     )
     assert add_response.status_code == status.HTTP_201_CREATED
 
-    # Verify member has Admin role (auto-mapped from level="admin")
+    # Verify member has Admin role
     org_member_dao = OrganizationMemberDAO(dbsession)
-    role_dao = RoleDAO(dbsession)
 
     member = org_member_dao.get_member(admin_user["id"], org_id)
     assert member is not None
-    assert member.role_id is not None
+    assert member.role_id == admin_role.id
 
-    role = role_dao.get(member.role_id)
-    assert role.name == "Admin"
-
-    # Verify Admin role has org:write permission (essential for role update issue)
+    # Verify Admin role has org:write permission
     resource_access_dao = ResourceAccessDAO(dbsession)
     has_org_write = resource_access_dao.check_org_member_permission(
         admin_user["id"],
@@ -132,24 +128,17 @@ async def test_add_member_with_level_admin_gets_admin_role(
 
 
 @pytest.mark.anyio
-async def test_level_to_role_mapping_via_dao(client: AsyncClient, dbsession):
-    """Test that OrganizationMemberDAO.create() correctly maps level to role_id.
-
-    This directly tests the DAO method to ensure the level-to-role mapping works:
-    - level='owner' -> Owner role
-    - level='admin' -> Admin role
-    - level='user' -> Member role
-    """
+async def test_create_member_via_dao(client: AsyncClient, dbsession):
+    """Test that OrganizationMemberDAO.create() correctly creates members with role_id."""
     # Create real users to satisfy foreign key constraints
     owner_user = await create_test_user(client, "dao_mapping_owner@test.com")
     admin_user = await create_test_user(client, "dao_mapping_admin@test.com")
     regular_user = await create_test_user(client, "dao_mapping_user@test.com")
-    explicit_user = await create_test_user(client, "dao_mapping_explicit@test.com")
 
     # Create organization via API (which handles all the setup correctly)
     org_response = await client.post(
         "/v0/organizations",
-        json={"name": "Level To Role Mapping Test Org"},
+        json={"name": "DAO Member Test Org"},
         headers=owner_user["headers"],
     )
     assert org_response.status_code == 201
@@ -158,7 +147,7 @@ async def test_level_to_role_mapping_via_dao(client: AsyncClient, dbsession):
     org_member_dao = OrganizationMemberDAO(dbsession)
     role_dao = RoleDAO(dbsession)
 
-    # Get expected role IDs
+    # Get role IDs
     owner_role = role_dao.get_by_name("Owner", organization_id=None)
     admin_role = role_dao.get_by_name("Admin", organization_id=None)
     member_role = role_dao.get_by_name("Member", organization_id=None)
@@ -168,32 +157,21 @@ async def test_level_to_role_mapping_via_dao(client: AsyncClient, dbsession):
     assert owner_member is not None
     assert owner_member.role_id == owner_role.id
 
-    # Test level='admin' -> Admin role (via DAO directly)
+    # Create admin member via DAO
     admin_member = org_member_dao.create(
         organization_id=org_id,
         user_id=admin_user["id"],
-        level="admin",
-        role_id=None,  # Should auto-map to Admin
+        role_id=admin_role.id,
     )
     assert admin_member.role_id == admin_role.id
 
-    # Test level='user' -> Member role (via DAO directly)
+    # Create regular member via DAO
     user_member = org_member_dao.create(
         organization_id=org_id,
         user_id=regular_user["id"],
-        level="user",
-        role_id=None,  # Should auto-map to Member
+        role_id=member_role.id,
     )
     assert user_member.role_id == member_role.id
-
-    # Test explicit role_id overrides level mapping
-    explicit_member = org_member_dao.create(
-        organization_id=org_id,
-        user_id=explicit_user["id"],
-        level="admin",  # Level says admin
-        role_id=member_role.id,  # But explicit role is Member
-    )
-    assert explicit_member.role_id == member_role.id  # Explicit wins
 
 
 @pytest.mark.anyio
@@ -220,7 +198,6 @@ async def test_add_member_with_specific_role(client: AsyncClient, dbsession):
         f"/v0/organizations/{org_id}/members",
         json={
             "user_id": viewer["id"],
-            "level": "user",
             "role_id": viewer_role.id,
         },
         headers=owner["headers"],
@@ -256,12 +233,12 @@ async def test_list_members_shows_roles(client: AsyncClient, dbsession):
     # Add members with different roles
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": admin["id"], "level": "admin", "role_id": admin_role.id},
+        json={"user_id": admin["id"], "role_id": admin_role.id},
         headers=owner["headers"],
     )
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": viewer["id"], "level": "user", "role_id": viewer_role.id},
+        json={"user_id": viewer["id"], "role_id": viewer_role.id},
         headers=owner["headers"],
     )
 
@@ -299,7 +276,7 @@ async def test_update_member_role(client: AsyncClient, dbsession):
     # Add member with Member role (default)
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": user["id"], "level": "user"},
+        json={"user_id": user["id"]},
         headers=owner["headers"],
     )
 
@@ -371,17 +348,17 @@ async def test_role_update_requires_org_write_permission(
     # Add admin, viewer, and member
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": admin["id"], "level": "admin", "role_id": admin_role.id},
+        json={"user_id": admin["id"], "role_id": admin_role.id},
         headers=owner["headers"],
     )
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": viewer["id"], "level": "user", "role_id": viewer_role.id},
+        json={"user_id": viewer["id"], "role_id": viewer_role.id},
         headers=owner["headers"],
     )
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 
@@ -425,12 +402,12 @@ async def test_member_permissions_use_assigned_role(client: AsyncClient, dbsessi
     # Add members with different roles
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": viewer_user["id"], "level": "user", "role_id": viewer_role.id},
+        json={"user_id": viewer_user["id"], "role_id": viewer_role.id},
         headers=owner["headers"],
     )
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": admin_user["id"], "level": "admin", "role_id": admin_role.id},
+        json={"user_id": admin_user["id"], "role_id": admin_role.id},
         headers=owner["headers"],
     )
 
@@ -556,9 +533,13 @@ async def test_personal_projects_unaffected_by_org_roles(
     )
     org_id = org_response.json()["id"]
 
+    # Get Admin role for the other_user
+    role_dao = RoleDAO(dbsession)
+    admin_role = role_dao.get_by_name("Admin", organization_id=None)
+
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": other_user["id"], "level": "admin"},
+        json={"user_id": other_user["id"], "role_id": admin_role.id},
         headers=user["headers"],
     )
 
@@ -600,7 +581,7 @@ async def test_only_system_roles_can_be_assigned(client: AsyncClient, dbsession)
     # Add member
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": user["id"], "level": "user"},
+        json={"user_id": user["id"]},
         headers=owner["headers"],
     )
 
@@ -637,7 +618,6 @@ async def test_cannot_add_member_with_owner_role(client: AsyncClient, dbsession)
         f"/v0/organizations/{org_id}/members",
         json={
             "user_id": user["id"],
-            "level": "user",
             "role_id": owner_role.id,
         },
         headers=owner["headers"],
@@ -664,7 +644,7 @@ async def test_cannot_update_member_to_owner_role(client: AsyncClient, dbsession
     # Add member with default role
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": user["id"], "level": "user"},
+        json={"user_id": user["id"]},
         headers=owner["headers"],
     )
 
@@ -736,7 +716,6 @@ async def test_role_affects_implicit_permissions_only(client: AsyncClient, dbses
         f"/v0/organizations/{org_id}/members",
         json={
             "user_id": viewer_member["id"],
-            "level": "user",
             "role_id": viewer_role.id,
         },
         headers=owner["headers"],
@@ -841,12 +820,12 @@ async def test_check_org_member_permission(client: AsyncClient, dbsession):
     # Add members with different roles
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": admin_user["id"], "level": "admin", "role_id": admin_role.id},
+        json={"user_id": admin_user["id"], "role_id": admin_role.id},
         headers=owner["headers"],
     )
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": viewer_user["id"], "level": "user", "role_id": viewer_role.id},
+        json={"user_id": viewer_user["id"], "role_id": viewer_role.id},
         headers=owner["headers"],
     )
 
@@ -951,12 +930,12 @@ async def test_org_member_permission_for_team_operations(
     # Add admin and viewer
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": admin_user["id"], "level": "admin", "role_id": admin_role.id},
+        json={"user_id": admin_user["id"], "role_id": admin_role.id},
         headers=owner["headers"],
     )
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": viewer_user["id"], "level": "user", "role_id": viewer_role.id},
+        json={"user_id": viewer_user["id"], "role_id": viewer_role.id},
         headers=owner["headers"],
     )
 
