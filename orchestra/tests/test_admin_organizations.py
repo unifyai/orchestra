@@ -74,14 +74,14 @@ async def test_admin_list_organizations_with_members(client: AsyncClient, dbsess
     # Add two members to the organization
     add_member1 = await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member1["id"], "level": "user"},
+        json={"user_id": member1["id"]},
         headers=owner["headers"],
     )
     assert add_member1.status_code == status.HTTP_201_CREATED
 
     add_member2 = await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member2["id"], "level": "user"},
+        json={"user_id": member2["id"]},
         headers=owner["headers"],
     )
     assert add_member2.status_code == status.HTTP_201_CREATED

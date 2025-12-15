@@ -14,55 +14,23 @@ class OrganizationMemberDAO:
     def __init__(self, session: Session):
         self.session = session
 
-    def create(  # noqa: WPS211
+    def create(
         self,
         organization_id: int,
         user_id: str,
-        level: str,
-        role_id: Optional[int] = None,
+        role_id: int,
     ) -> OrganizationMember:
         """
         Create an organization member.
 
         :param organization_id: Organization ID.
         :param user_id: User ID.
-        :param level: Administrative level (owner, admin, user).
-        :param role_id: RBAC role ID. If not provided, automatically mapped from level:
-                        - owner -> Owner role
-                        - admin -> Admin role
-                        - user -> Member role
+        :param role_id: RBAC role ID (Owner, Admin, Member, Viewer, or custom role).
         :return: Created OrganizationMember object.
-        :raises ValueError: If level is invalid or required role not found.
         """
-        if level not in ["owner", "admin", "user"]:
-            raise ValueError("User level must be one of [owner, admin, user].")
-
-        # If role_id not provided, map from level to appropriate role
-        if role_id is None:
-            from orchestra.db.dao.role_dao import RoleDAO
-
-            role_dao = RoleDAO(self.session)
-
-            # Map level to role name
-            level_to_role = {
-                "owner": "Owner",
-                "admin": "Admin",
-                "user": "Member",
-            }
-            role_name = level_to_role[level]
-
-            role = role_dao.get_by_name(role_name, organization_id=None)
-            if not role:
-                raise ValueError(
-                    f"{role_name} system role not found. "
-                    "Ensure RBAC foundation migration has been run.",
-                )
-            role_id = role.id
-
         member = OrganizationMember(
             user_id=user_id,
             organization_id=organization_id,
-            level=level,
             role_id=role_id,
         )
         self.session.add(member)
@@ -74,7 +42,7 @@ class OrganizationMemberDAO:
         id: Optional[int] = None,
         user_id: Optional[str] = None,
         organization_id: Optional[int] = None,
-        level: Optional[str] = None,
+        role_id: Optional[int] = None,
     ) -> List[OrganizationMember]:
         query = select(OrganizationMember)
         if id:
@@ -83,8 +51,8 @@ class OrganizationMemberDAO:
             query = query.where(OrganizationMember.user_id == user_id)
         if organization_id:
             query = query.where(OrganizationMember.organization_id == organization_id)
-        if level:
-            query = query.where(OrganizationMember.level == level)
+        if role_id:
+            query = query.where(OrganizationMember.role_id == role_id)
         rows = self.session.execute(query)
         return rows.fetchall()
 
@@ -93,7 +61,6 @@ class OrganizationMemberDAO:
         id: int,
         user_id: Optional[str] = None,
         organization_id: Optional[int] = None,
-        level: Optional[str] = None,
         role_id: Optional[int] = None,
     ) -> None:
         """
@@ -102,7 +69,6 @@ class OrganizationMemberDAO:
         :param id: Member ID.
         :param user_id: New user ID.
         :param organization_id: New organization ID.
-        :param level: New administrative level.
         :param role_id: New RBAC role ID.
         """
         query = select(OrganizationMember)
@@ -110,8 +76,6 @@ class OrganizationMemberDAO:
         raw = self.session.execute(query)
         entry = raw.scalars().first()
         if entry is not None:
-            if level:
-                setattr(entry, "level", level)
             if user_id:
                 setattr(entry, "user_id", user_id)
             if organization_id:
@@ -120,15 +84,27 @@ class OrganizationMemberDAO:
                 setattr(entry, "role_id", role_id)
 
     def list_members(self, name: str):
+        from orchestra.db.models.orchestra_models import Role
+
         query = (
-            select(AuthUser.email, OrganizationMember.level)
+            select(
+                AuthUser.email,
+                OrganizationMember.role_id,
+                Role.name.label("role_name"),
+            )
             .join(OrganizationMember, OrganizationMember.user_id == AuthUser.id)
             .join(Organization, OrganizationMember.organization_id == Organization.id)
+            .join(Role, OrganizationMember.role_id == Role.id)
             .where(Organization.name == name)
         )
         raw = self.session.execute(query)
         entries = [
-            {"email": entry.email, "level": entry.level} for entry in raw.fetchall()
+            {
+                "email": entry.email,
+                "role_id": entry.role_id,
+                "role_name": entry.role_name,
+            }
+            for entry in raw.fetchall()
         ]
         return entries
 

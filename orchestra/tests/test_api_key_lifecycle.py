@@ -47,7 +47,7 @@ async def test_list_api_keys_with_org_keys(client: AsyncClient):
     # Add member to organization (automatically creates org API key)
     add_member_response = await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
     assert add_member_response.status_code == status.HTTP_201_CREATED
@@ -108,7 +108,7 @@ async def test_revoke_organization_api_key(client: AsyncClient):
     # Add member (automatically creates org API key)
     add_response = await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
     assert add_response.status_code == status.HTTP_201_CREATED
@@ -178,7 +178,7 @@ async def test_add_member_creates_org_api_key(client: AsyncClient):
     # Add member (should create org API key)
     add_response = await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": new_member["id"], "level": "user"},
+        json={"user_id": new_member["id"]},
         headers=owner["headers"],
     )
     assert add_response.status_code == status.HTTP_201_CREATED
@@ -210,7 +210,7 @@ async def test_remove_member_revokes_org_keys_only(client: AsyncClient):
     # Add member (automatically creates org API key)
     add_response = await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
     assert add_response.status_code == status.HTTP_201_CREATED
@@ -262,12 +262,12 @@ async def test_member_with_multiple_orgs(client: AsyncClient):
     # Add member to both organizations (automatically creates org API keys)
     await client.post(
         f"/v0/organizations/{org1_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner1["headers"],
     )
     await client.post(
         f"/v0/organizations/{org2_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner2["headers"],
     )
 
@@ -316,7 +316,7 @@ async def test_org_key_has_org_context(client: AsyncClient):
     # Add member (automatically creates org API key)
     add_response = await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
     org_api_key = add_response.json()["api_key"]
@@ -349,7 +349,7 @@ async def test_cannot_add_duplicate_member(client: AsyncClient):
     # Add member first time
     add_response1 = await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
     assert add_response1.status_code == status.HTTP_201_CREATED
@@ -357,7 +357,7 @@ async def test_cannot_add_duplicate_member(client: AsyncClient):
     # Try to add same member again
     add_response2 = await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
     assert add_response2.status_code == status.HTTP_409_CONFLICT
@@ -411,7 +411,7 @@ async def test_adding_members_requires_org_write_permission(
     # Add viewer (automatically creates org API key)
     add_viewer_response = await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": viewer["id"], "level": "user", "role_id": viewer_role.id},
+        json={"user_id": viewer["id"], "role_id": viewer_role.id},
         headers=owner["headers"],
     )
     assert add_viewer_response.status_code == status.HTTP_201_CREATED
@@ -420,7 +420,7 @@ async def test_adding_members_requires_org_write_permission(
     # Try to add new user as viewer (no org:write) - should fail
     add_response = await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": new_user["id"], "level": "user"},
+        json={"user_id": new_user["id"]},
         headers={"Authorization": f"Bearer {viewer_org_api_key}"},
     )
     assert add_response.status_code == status.HTTP_403_FORBIDDEN
@@ -473,7 +473,7 @@ async def test_admin_regenerate_org_api_key(client: AsyncClient, dbsession):
     # Add member (automatically creates org API key)
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 
