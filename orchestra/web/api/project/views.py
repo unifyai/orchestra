@@ -7,6 +7,7 @@ from typing import List
 
 import sqlalchemy
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.auth_user_dao import AuthUserDAO
@@ -2186,6 +2187,26 @@ def admin_duplicate_project(
 
         stats["log_events_copied"] = len(log_event_values)
 
+        # In JSONB mode, all log data (logs, json_logs, derived_logs) is in LogEvent.data
+        # Set these stats to reflect that the data was copied via LogEvent
+        if settings.use_jsonb_queries:
+            stats["logs_copied"] = len(log_event_values)
+            stats["json_logs_copied"] = 0  # Data is in LogEvent.data
+            # Count derived_entry fields in source to estimate derived logs copied
+            # In JSONB mode, derived values are stored in LogEvent.data
+            derived_field_count = (
+                session.query(func.count(FieldType.id))
+                .filter(
+                    FieldType.project_id == source_project.id,
+                    FieldType.field_category == "derived_entry",
+                )
+                .scalar()
+            )
+            # If derived fields exist, derived values were copied with LogEvent.data
+            stats["derived_logs_copied"] = (
+                len(log_event_values) if derived_field_count > 0 else 0
+            )
+
     # 8. Duplicate Log Event Context relationships using bulk insert
     if log_event_id_map and context_id_map:
         log_event_contexts = (
@@ -2215,7 +2236,8 @@ def admin_duplicate_project(
             session.execute(stmt)
 
     # 9. Duplicate Logs using batched bulk insert
-    if log_event_id_map:
+    # In JSONB mode, log data is stored in LogEvent.data, so we skip EAV table copying
+    if log_event_id_map and not settings.use_jsonb_queries:
         # Query for Log objects directly
         logs = (
             session.query(Log, LogEventLog.log_event_id)
@@ -2277,7 +2299,8 @@ def admin_duplicate_project(
         stats["logs_copied"] = len(log_values)
 
     # 10. Duplicate JSON Logs using batched bulk insert
-    if log_event_id_map:
+    # In JSONB mode, JSON log data is stored in LogEvent.data, so we skip EAV table copying
+    if log_event_id_map and not settings.use_jsonb_queries:
         # Query for JSONLog objects via LogEventJSONLog association
         json_logs_with_event_ids = (
             session.query(JSONLog, LogEventJSONLog.log_event_id)
@@ -2338,7 +2361,8 @@ def admin_duplicate_project(
         stats["json_logs_copied"] = len(json_log_values)
 
     # 11. Duplicate Derived Logs using bulk insert
-    if log_event_id_map:
+    # In JSONB mode, derived log values are stored in LogEvent.data, so we skip EAV table copying
+    if log_event_id_map and not settings.use_jsonb_queries:
         derived_log_values = []
         derived_log_associations = (
             []
