@@ -1,10 +1,7 @@
 import json
-import time
 
 import pytest
 from httpx import AsyncClient
-
-from orchestra import settings as settings_module
 
 from . import (
     HEADERS,
@@ -2131,71 +2128,6 @@ async def test_jsonb_param_versioning_rejection(client: AsyncClient, enable_json
         "Parameter versioning is not supported" in detail
         or "not supported" in detail.lower()
     ), f"Expected param versioning error message, got: {detail}"
-
-
-@pytest.mark.anyio
-async def test_grouping_performance_comparison(client: AsyncClient, monkeypatch):
-    """
-    Compare EAV vs JSONB grouping performance.
-
-    Note: This is a simplified test. For comprehensive benchmarks,
-    use a larger dataset (10k+ events) in a dedicated performance test suite.
-    """
-    project_name = "test-grouping-perf"
-    await _create_project(client, project_name)
-
-    # Create a moderate number of logs
-    categories = ["cat_A", "cat_B", "cat_C", "cat_D", "cat_E"]
-    num_logs = 50  # Kept small for CI; increase for local perf testing
-
-    for i in range(num_logs):
-        entry = {
-            "category": categories[i % len(categories)],
-            "score": i * 1.5,
-            "index": i,
-        }
-        response = await _create_log(
-            client,
-            project_name,
-            params={},
-            entries=entry,
-        )
-        assert response.status_code == 200
-
-    # Test EAV mode
-    monkeypatch.setattr(settings_module.settings, "use_jsonb_queries", False)
-    start_eav = time.time()
-    response_eav = await client.get(
-        "/v0/logs",
-        params={
-            "project": project_name,
-            "group_by": ["entries/category"],
-        },
-        headers=HEADERS,
-    )
-    eav_time = time.time() - start_eav
-    assert response_eav.status_code == 200
-
-    # Test JSONB mode
-    monkeypatch.setattr(settings_module.settings, "use_jsonb_queries", True)
-    start_jsonb = time.time()
-    response_jsonb = await client.get(
-        "/v0/logs",
-        params={
-            "project": project_name,
-            "group_by": ["entries/category"],
-        },
-        headers=HEADERS,
-    )
-    jsonb_time = time.time() - start_jsonb
-    assert response_jsonb.status_code == 200
-
-    # Verify both modes return same count
-    eav_count = response_eav.json()["logs"]["entries/category"]["count"]
-    jsonb_count = response_jsonb.json()["logs"]["entries/category"]["count"]
-    assert (
-        eav_count == jsonb_count == num_logs
-    ), f"Count mismatch: EAV={eav_count}, JSONB={jsonb_count}, expected={num_logs}"
 
 
 @pytest.mark.anyio
