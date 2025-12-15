@@ -315,7 +315,7 @@ async def test_viewer_cannot_transfer_but_member_can(client: AsyncClient, dbsess
 
     add_member_response = await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": user["id"], "level": "user", "role_id": viewer_role.id},
+        json={"user_id": user["id"], "role_id": viewer_role.id},
         headers=org_owner["headers"],
     )
     assert add_member_response.status_code == status.HTTP_201_CREATED
@@ -398,7 +398,7 @@ async def test_org_to_personal_deletes_resource_access(client: AsyncClient, dbse
     # Add member
     await client.post(
         f"/v0/organizations/{org_id}/members",
-        json={"user_id": member["id"], "level": "user"},
+        json={"user_id": member["id"]},
         headers=owner["headers"],
     )
 

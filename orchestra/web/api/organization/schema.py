@@ -43,7 +43,6 @@ class OrganizationMemberAdd(BaseModel):
     """Schema for adding a member to an organization."""
 
     user_id: str
-    level: str = "user"  # owner, admin, user
     role_id: Optional[int] = None  # RBAC role (defaults to Member role if not provided)
 
 
@@ -65,8 +64,7 @@ class OrganizationMemberResponse(BaseModel):
     id: int
     user_id: str
     organization_id: int
-    level: str
-    role_id: Optional[int]
+    role_id: int
     role_name: Optional[str] = None
     created_at: datetime
     # User info fields (populated from AuthUser)
@@ -85,7 +83,6 @@ class InviteUserRequest(BaseModel):
 
     email: str
     role_id: Optional[int] = None  # Defaults to Member role if not provided
-    level: str = "user"  # owner, admin, user
     expires_in_days: int = 7  # Default 7 days
 
 
@@ -104,7 +101,6 @@ class InviteResponse(BaseModel):
     invited_by_name: Optional[str] = None
     role_id: int
     role_name: Optional[str] = None
-    level: str
     expires_at: datetime
     created_at: datetime
 

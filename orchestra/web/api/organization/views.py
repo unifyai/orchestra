@@ -92,7 +92,6 @@ async def create_organization(
         org_member_dao.create(
             organization_id=org.id,
             user_id=user_id,
-            level="owner",
             role_id=owner_role.id,
         )
 
@@ -345,9 +344,19 @@ async def add_organization_member(
             detail="User is already a member of this organization",
         )
 
-    # Block Owner role assignment via add_member
-    if member_data.role_id:
-        requested_role = role_dao.get(member_data.role_id)
+    # Determine role_id - default to Member role if not provided
+    role_id = member_data.role_id
+    if role_id is None:
+        member_role = role_dao.get_by_name("Member", organization_id=None)
+        if not member_role:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Member system role not found",
+            )
+        role_id = member_role.id
+    else:
+        # Block Owner role assignment via add_member
+        requested_role = role_dao.get(role_id)
         if requested_role and requested_role.name == "Owner":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -357,12 +366,10 @@ async def add_organization_member(
 
     # Add member
     try:
-        # DAO will default to Member role if role_id is None
         org_member_dao.create(
             organization_id=organization_id,
             user_id=member_data.user_id,
-            level=member_data.level,
-            role_id=member_data.role_id,
+            role_id=role_id,
         )
 
         # Create organization API key for the new member
@@ -548,7 +555,6 @@ async def list_organization_members(
                 id=member.id,
                 user_id=member.user_id,
                 organization_id=member.organization_id,
-                level=member.level,
                 role_id=member.role_id,
                 role_name=role_name,
                 created_at=member.created_at,
@@ -654,7 +660,6 @@ async def update_member_role(
             id=updated_member.id,
             user_id=updated_member.user_id,
             organization_id=updated_member.organization_id,
-            level=updated_member.level,
             role_id=updated_member.role_id,
             role_name=role.name,
             created_at=updated_member.created_at,
@@ -753,20 +758,6 @@ async def transfer_organization_ownership(
             role_id=admin_role.id,
         )
 
-        # Update old owner's level to admin
-        old_owner_member = org_member_dao.get_member(user_id, organization_id)
-        if old_owner_member:
-            org_member_dao.update(
-                id=old_owner_member.id,
-                level="admin",
-            )
-
-        # Update new owner's level to owner
-        org_member_dao.update(
-            id=new_owner_member.id,
-            level="owner",
-        )
-
         session.commit()
 
         updated_org = org_dao.get(organization_id)
@@ -816,7 +807,6 @@ def _build_invite_response(
         invited_by_name=invited_by_name,
         role_id=invite.role_id,
         role_name=role_name,
-        level=invite.level,
         expires_at=invite.expires_at,
         created_at=invite.created_at,
     )
@@ -925,7 +915,6 @@ async def invite_user_to_organization(
             invitee_email=email,
             invited_by_user_id=user_id,
             role_id=role_id,
-            level=invite_request.level,
             expires_in_days=invite_request.expires_in_days,
             invitee_user_id=invitee_user_id,
         )
@@ -1224,7 +1213,6 @@ async def accept_invite(
         org_member_dao.create(
             organization_id=invite.organization_id,
             user_id=user_id,
-            level=invite.level,
             role_id=invite.role_id,
         )
 
