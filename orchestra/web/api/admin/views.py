@@ -55,6 +55,7 @@ from orchestra.db.models.orchestra_models import (
     Task,
     Users,
 )
+from orchestra.settings import settings
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
     BenchmarkRunModelResponse,
     Contact,
@@ -870,17 +871,27 @@ def admin_list_contacts(
         return []
 
     # 6) Fetch log entries and assemble contacts per event
-    # Create a custom query to get log_event_id along with log data
-    query = (
-        select(Log, LogEventLog.log_event_id)
-        .join(LogEventLog, LogEventLog.log_id == Log.id)
-        .where(LogEventLog.log_event_id.in_(event_ids))
-    )
-    raw_entries = session.execute(query).all()
-
     grouped: Dict[int, Dict[str, Any]] = {}
-    for log_rec, eid in raw_entries:
-        grouped.setdefault(eid, {})[log_rec.key] = log_rec.value
+
+    if settings.use_jsonb_queries:
+        # JSONB mode: Query LogEvent.data directly
+        query = select(LogEvent.id, LogEvent.data).where(LogEvent.id.in_(event_ids))
+        rows = session.execute(query).all()
+
+        for event_id, data in rows:
+            # data is already a dict from JSONB column
+            grouped[event_id] = dict(data) if data else {}
+    else:
+        # EAV mode: Query Log and LogEventLog tables
+        query = (
+            select(Log, LogEventLog.log_event_id)
+            .join(LogEventLog, LogEventLog.log_id == Log.id)
+            .where(LogEventLog.log_event_id.in_(event_ids))
+        )
+        raw_entries = session.execute(query).all()
+
+        for log_rec, eid in raw_entries:
+            grouped.setdefault(eid, {})[log_rec.key] = log_rec.value
 
     # 7) Fetch user_id for each log_event via project
     rows = session.execute(
