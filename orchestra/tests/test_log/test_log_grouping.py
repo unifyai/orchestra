@@ -2370,3 +2370,1032 @@ async def test_log_structure_preserved_both_modes(client: AsyncClient, use_jsonb
             assert "value" in log["entries"], f"Missing value in entries"
             # Note: category might or might not be present depending on mode
             # EAV mode removes grouped-by fields, JSONB mode may keep them
+
+
+# =============================================================================
+# GROUPING SETS Integration Tests
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_grouping_sets_integration_depth_0(client: AsyncClient, use_jsonb_mode):
+    """Test GROUPING SETS integration at depth=0 produces correct results."""
+    if not use_jsonb_mode:
+        pytest.skip("GROUPING SETS optimization only applies to JSONB mode")
+
+    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
+    project_name = f"test-gs-integration-d0-{mode_suffix}"
+    await _create_project(client, project_name)
+
+    # Create test data with distinct status values
+    test_data = [
+        {"status": "Open", "value": 1},
+        {"status": "Open", "value": 2},
+        {"status": "Open", "value": 3},
+        {"status": "Closed", "value": 4},
+        {"status": "Closed", "value": 5},
+        {"status": "Pending", "value": 6},
+    ]
+
+    for entry in test_data:
+        response = await _create_log(client, project_name, params={}, entries=entry)
+        assert response.status_code == 200
+
+    # Query with group_depth=0 (should use GROUPING SETS optimization)
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/status"],
+            "group_depth": 0,
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    result = response.json()
+
+    # Verify structure
+    assert "logs" in result
+    assert "entries/status" in result["logs"]
+
+    status_group = result["logs"]["entries/status"]
+    assert status_group["group_count"] == 3  # Open, Closed, Pending
+    assert status_group["count"] == 6  # Total events
+
+    # Verify counts per status
+    groups_by_key = {item["key"]: item["value"] for item in status_group["group"]}
+    assert groups_by_key["Open"] == 3
+    assert groups_by_key["Closed"] == 2
+    assert groups_by_key["Pending"] == 1
+
+
+@pytest.mark.anyio
+async def test_grouping_sets_integration_depth_1(client: AsyncClient, use_jsonb_mode):
+    """Test GROUPING SETS integration at depth=1 produces correct nested results."""
+    if not use_jsonb_mode:
+        pytest.skip("GROUPING SETS optimization only applies to JSONB mode")
+
+    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
+    project_name = f"test-gs-integration-d1-{mode_suffix}"
+    await _create_project(client, project_name)
+
+    # Create test data with status × priority combinations
+    test_data = [
+        {"status": "Open", "priority": "High"},
+        {"status": "Open", "priority": "High"},
+        {"status": "Open", "priority": "Low"},
+        {"status": "Closed", "priority": "High"},
+        {"status": "Closed", "priority": "Medium"},
+    ]
+
+    for entry in test_data:
+        response = await _create_log(client, project_name, params={}, entries=entry)
+        assert response.status_code == 200
+
+    # Query with group_depth=1 (should use GROUPING SETS optimization)
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/status", "entries/priority"],
+            "group_depth": 1,
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    result = response.json()
+
+    # Verify top-level structure
+    assert "logs" in result
+    assert "entries/status" in result["logs"]
+
+    status_group = result["logs"]["entries/status"]
+    assert status_group["group_count"] == 2  # Open, Closed
+    assert status_group["count"] == 5  # Total events
+
+    # Find and verify "Open" group
+    open_group = next(
+        (item for item in status_group["group"] if item["key"] == "Open"),
+        None,
+    )
+    assert open_group is not None
+    assert isinstance(open_group["value"], dict)
+    # Nested values don't include key wrapper - check for group structure
+    assert "group" in open_group["value"]
+    assert "count" in open_group["value"]
+
+    open_priority = open_group["value"]
+    assert open_priority["group_count"] == 2  # High, Low
+    assert open_priority["count"] == 3
+
+
+@pytest.mark.anyio
+async def test_grouping_sets_fallback_for_groups_only(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """Test that groups_only=True falls back to recursive path (not GROUPING SETS)."""
+    if not use_jsonb_mode:
+        pytest.skip("GROUPING SETS optimization only applies to JSONB mode")
+
+    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
+    project_name = f"test-gs-fallback-groups-{mode_suffix}"
+    await _create_project(client, project_name)
+
+    # Create test data
+    for status in ["Open", "Closed"]:
+        response = await _create_log(
+            client,
+            project_name,
+            params={},
+            entries={"status": status},
+        )
+        assert response.status_code == 200
+
+    # Query with groups_only=True (should NOT use GROUPING SETS)
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/status"],
+            "group_depth": 0,
+            "groups_only": True,
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    result = response.json()
+
+    # groups_only returns event IDs, not nested structure
+    assert "logs" in result
+    # The structure for groups_only is different (returns IDs per group)
+    assert "entries/status" in result["logs"]
+
+
+@pytest.mark.anyio
+async def test_grouping_sets_with_sorting(client: AsyncClient, use_jsonb_mode):
+    """Test that group_sorting works via GROUPING SETS path."""
+    if not use_jsonb_mode:
+        pytest.skip("GROUPING SETS optimization only applies to JSONB mode")
+
+    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
+    project_name = f"test-gs-sorting-{mode_suffix}"
+    await _create_project(client, project_name)
+
+    # Create test data with different scores for sorting
+    for i, status in enumerate(["Open", "Closed", "Pending"]):
+        response = await _create_log(
+            client,
+            project_name,
+            params={},
+            entries={"status": status, "score": float(i * 10)},
+        )
+        assert response.status_code == 200
+
+    # Query with group_sorting (now uses GROUPING SETS path)
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/status"],
+            "group_depth": 0,
+            "group_sorting": json.dumps(
+                {
+                    "entries/status": {
+                        "field": "entries/score",
+                        "sort_type": "sort_groups",
+                        "metric": "mean",
+                        "direction": "descending",
+                    },
+                },
+            ),
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    result = response.json()
+
+    # Should work via GROUPING SETS path
+    assert "logs" in result
+    assert "entries/status" in result["logs"]
+    assert result["logs"]["entries/status"]["count"] == 3
+
+
+@pytest.mark.anyio
+async def test_grouping_sets_with_pagination(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """Test that group_limit/offset works via GROUPING SETS path."""
+    if not use_jsonb_mode:
+        pytest.skip("GROUPING SETS optimization only applies to JSONB mode")
+
+    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
+    project_name = f"test-gs-pagination-{mode_suffix}"
+    await _create_project(client, project_name)
+
+    # Create test data
+    for status in ["A", "B", "C", "D", "E"]:
+        response = await _create_log(
+            client,
+            project_name,
+            params={},
+            entries={"status": status},
+        )
+        assert response.status_code == 200
+
+    # Query with group_limit (now uses GROUPING SETS path)
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/status"],
+            "group_depth": 0,
+            "group_limit": 2,
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    result = response.json()
+
+    # Should work via GROUPING SETS path with pagination applied
+    assert "logs" in result
+    assert "entries/status" in result["logs"]
+    # With group_limit=2, should have at most 2 groups
+    assert result["logs"]["entries/status"]["group_count"] == 5  # Total groups
+    assert len(result["logs"]["entries/status"]["group"]) == 2  # Paginated to 2
+
+
+@pytest.mark.anyio
+async def test_grouping_sets_matches_recursive_baseline_depth_0(
+    client: AsyncClient,
+    use_jsonb_mode,
+    monkeypatch,
+):
+    """Test that GROUPING SETS produces identical output to recursive baseline at depth=0.
+
+    This test compares the optimized GROUPING SETS path directly against the
+    recursive array_agg path for the same dataset to ensure correctness.
+    """
+    if not use_jsonb_mode:
+        pytest.skip("GROUPING SETS optimization only applies to JSONB mode")
+
+    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
+    project_name = f"test-gs-vs-recursive-d0-{mode_suffix}"
+    await _create_project(client, project_name)
+
+    # Create moderately sized dataset with multiple distinct status values
+    # 30 events across 5 status values to ensure meaningful grouping
+    test_data = (
+        [{"status": "Open", "value": i} for i in range(10)]
+        + [{"status": "Closed", "value": i} for i in range(8)]
+        + [{"status": "Pending", "value": i} for i in range(6)]
+        + [{"status": "In Progress", "value": i} for i in range(4)]
+        + [{"status": "Blocked", "value": i} for i in range(2)]
+    )
+
+    for entry in test_data:
+        response = await _create_log(client, project_name, params={}, entries=entry)
+        assert response.status_code == 200
+
+    # Run 1: GROUPING SETS path (normal operation)
+    # _can_use_grouping_sets returns True, so GROUPING SETS is used
+    response_optimized = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/status"],
+            "group_depth": 0,
+        },
+        headers=HEADERS,
+    )
+    assert response_optimized.status_code == 200, response_optimized.json()
+    result_optimized = response_optimized.json()
+
+    # Run 2: Recursive baseline path
+    # Patch _can_use_grouping_sets to always return False
+    from orchestra.web.api.log.utils import grouping_utils
+
+    monkeypatch.setattr(
+        grouping_utils,
+        "_can_use_grouping_sets",
+        lambda *args, **kwargs: False,
+    )
+
+    response_baseline = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/status"],
+            "group_depth": 0,
+        },
+        headers=HEADERS,
+    )
+    assert response_baseline.status_code == 200, response_baseline.json()
+    result_baseline = response_baseline.json()
+
+    # Compare the two outputs deeply
+    assert "logs" in result_optimized
+    assert "logs" in result_baseline
+    assert "entries/status" in result_optimized["logs"]
+    assert "entries/status" in result_baseline["logs"]
+
+    opt_status = result_optimized["logs"]["entries/status"]
+    base_status = result_baseline["logs"]["entries/status"]
+
+    # Verify top-level metadata matches
+    assert (
+        opt_status["group_count"] == base_status["group_count"]
+    ), f"group_count mismatch: {opt_status['group_count']} vs {base_status['group_count']}"
+    assert (
+        opt_status["count"] == base_status["count"]
+    ), f"count mismatch: {opt_status['count']} vs {base_status['count']}"
+
+    # Verify group lists have same length
+    assert len(opt_status["group"]) == len(
+        base_status["group"],
+    ), f"group list length mismatch: {len(opt_status['group'])} vs {len(base_status['group'])}"
+
+    # Build dicts for comparison (order may differ)
+    opt_groups = {g["key"]: g["value"] for g in opt_status["group"]}
+    base_groups = {g["key"]: g["value"] for g in base_status["group"]}
+
+    # Verify same keys exist
+    assert set(opt_groups.keys()) == set(
+        base_groups.keys(),
+    ), f"group keys mismatch: {set(opt_groups.keys())} vs {set(base_groups.keys())}"
+
+    # Verify counts match for each key
+    for key in opt_groups:
+        assert (
+            opt_groups[key] == base_groups[key]
+        ), f"count mismatch for key '{key}': {opt_groups[key]} vs {base_groups[key]}"
+
+
+@pytest.mark.anyio
+async def test_grouping_sets_matches_recursive_baseline_depth_1(
+    client: AsyncClient,
+    use_jsonb_mode,
+    monkeypatch,
+):
+    """Test that GROUPING SETS produces identical output to recursive baseline at depth=1.
+
+    This test compares the optimized GROUPING SETS path directly against the
+    recursive array_agg path for a two-level grouping scenario.
+    """
+    if not use_jsonb_mode:
+        pytest.skip("GROUPING SETS optimization only applies to JSONB mode")
+
+    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
+    project_name = f"test-gs-vs-recursive-d1-{mode_suffix}"
+    await _create_project(client, project_name)
+
+    # Create moderately sized dataset with status × priority combinations
+    # 36 events across 3 statuses × 3 priorities
+    test_data = []
+    statuses = ["Open", "Closed", "Pending"]
+    priorities = ["High", "Medium", "Low"]
+    counts = {
+        ("Open", "High"): 8,
+        ("Open", "Medium"): 5,
+        ("Open", "Low"): 3,
+        ("Closed", "High"): 6,
+        ("Closed", "Medium"): 4,
+        ("Closed", "Low"): 2,
+        ("Pending", "High"): 4,
+        ("Pending", "Medium"): 3,
+        ("Pending", "Low"): 1,
+    }
+
+    for (status, priority), count in counts.items():
+        for i in range(count):
+            test_data.append({"status": status, "priority": priority, "value": i})
+
+    for entry in test_data:
+        response = await _create_log(client, project_name, params={}, entries=entry)
+        assert response.status_code == 200
+
+    # Run 1: GROUPING SETS path (normal operation)
+    response_optimized = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/status", "entries/priority"],
+            "group_depth": 1,
+        },
+        headers=HEADERS,
+    )
+    assert response_optimized.status_code == 200, response_optimized.json()
+    result_optimized = response_optimized.json()
+
+    # Run 2: Recursive baseline path
+    from orchestra.web.api.log.utils import grouping_utils
+
+    monkeypatch.setattr(
+        grouping_utils,
+        "_can_use_grouping_sets",
+        lambda *args, **kwargs: False,
+    )
+
+    response_baseline = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/status", "entries/priority"],
+            "group_depth": 1,
+        },
+        headers=HEADERS,
+    )
+    assert response_baseline.status_code == 200, response_baseline.json()
+    result_baseline = response_baseline.json()
+
+    # Compare the two outputs deeply
+    assert "logs" in result_optimized
+    assert "logs" in result_baseline
+    assert "entries/status" in result_optimized["logs"]
+    assert "entries/status" in result_baseline["logs"]
+
+    opt_status = result_optimized["logs"]["entries/status"]
+    base_status = result_baseline["logs"]["entries/status"]
+
+    # Verify top-level metadata matches
+    assert (
+        opt_status["group_count"] == base_status["group_count"]
+    ), f"group_count mismatch: {opt_status['group_count']} vs {base_status['group_count']}"
+    assert (
+        opt_status["count"] == base_status["count"]
+    ), f"count mismatch: {opt_status['count']} vs {base_status['count']}"
+
+    # Build dicts for comparison
+    def extract_nested_groups(status_group, label=""):
+        """Extract nested group structure as comparable dict.
+
+        Handles two different structures:
+        - GROUPING SETS: {"entries/priority": {"group": [...], "count": N}}
+        - Recursive: {"count": N, "group": [...], "group_count": M} (no key wrapper)
+        """
+        result = {}
+        for g in status_group["group"]:
+            key = g["key"]
+            value = g["value"]
+            if isinstance(value, dict):
+                # Nested structure for depth > 0
+                # Check if it's wrapped with a key (GROUPING SETS) or direct (recursive)
+                if "group" in value and "count" in value:
+                    # Direct structure (recursive path): {"count": N, "group": [...]}
+                    nested_data = value
+                else:
+                    # Wrapped structure (GROUPING SETS): {"entries/priority": {...}}
+                    nested_key = list(value.keys())[0]
+                    nested_data = value[nested_key]
+
+                # nested_data["group"] contains the priority groups with counts
+                nested_groups = {}
+                for ng in nested_data["group"]:
+                    ng_key = ng["key"]
+                    ng_value = ng["value"]
+                    # At depth=1, the value should be a count (int)
+                    if isinstance(ng_value, int):
+                        nested_groups[ng_key] = ng_value
+                    elif isinstance(ng_value, list):
+                        # Recursive path might return logs list, use length as count
+                        nested_groups[ng_key] = len(ng_value)
+                    else:
+                        nested_groups[ng_key] = ng_value
+
+                result[key] = {
+                    "count": nested_data["count"],
+                    "group_count": nested_data["group_count"],
+                    "groups": nested_groups,
+                }
+            elif isinstance(value, int):
+                # Simple count for depth=0
+                result[key] = value
+            elif isinstance(value, list):
+                # Recursive path returns logs list, use length as count
+                result[key] = len(value)
+            else:
+                result[key] = value
+        return result
+
+    opt_groups = extract_nested_groups(opt_status, "optimized")
+    base_groups = extract_nested_groups(base_status, "baseline")
+
+    # Verify same top-level keys exist
+    assert set(opt_groups.keys()) == set(
+        base_groups.keys(),
+    ), f"top-level group keys mismatch: {set(opt_groups.keys())} vs {set(base_groups.keys())}"
+
+    # Verify nested structure matches for each top-level group
+    for status_key in opt_groups:
+        opt_nested = opt_groups[status_key]
+        base_nested = base_groups[status_key]
+
+        assert (
+            opt_nested["count"] == base_nested["count"]
+        ), f"count mismatch for '{status_key}': {opt_nested['count']} vs {base_nested['count']}"
+        assert opt_nested["group_count"] == base_nested["group_count"], (
+            f"group_count mismatch for '{status_key}': "
+            f"{opt_nested['group_count']} vs {base_nested['group_count']}"
+        )
+
+        # Verify nested groups
+        assert set(opt_nested["groups"].keys()) == set(base_nested["groups"].keys()), (
+            f"nested group keys mismatch for '{status_key}': "
+            f"{set(opt_nested['groups'].keys())} vs {set(base_nested['groups'].keys())}"
+        )
+
+        for priority_key in opt_nested["groups"]:
+            assert (
+                opt_nested["groups"][priority_key]
+                == base_nested["groups"][priority_key]
+            ), (
+                f"count mismatch for '{status_key}' -> '{priority_key}': "
+                f"{opt_nested['groups'][priority_key]} vs {base_nested['groups'][priority_key]}"
+            )
+
+
+@pytest.mark.anyio
+async def test_grouping_sets_sorting_single_level(client: AsyncClient, use_jsonb_mode):
+    """Test GROUPING SETS optimization with group_sorting at depth=0."""
+    if not use_jsonb_mode:
+        pytest.skip("GROUPING SETS optimization only applies to JSONB mode")
+
+    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
+    project_name = f"test-gs-sort-single-{mode_suffix}"
+    await _create_project(client, project_name)
+
+    # Create test data with scores: cat_0=0,5,10..., cat_1=1,6,11..., etc.
+    # Mean scores: cat_0=47.5, cat_1=48.5, cat_2=49.5, cat_3=50.5, cat_4=51.5
+    for i in range(100):
+        await _create_log(
+            client,
+            project_name,
+            params={},
+            entries={"category": f"cat_{i % 5}", "score": float(i)},
+        )
+
+    # Test with sorting by mean score descending
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/category"],
+            "group_depth": 0,
+            "group_sorting": json.dumps(
+                {
+                    "entries/category": {
+                        "field": "entries/score",
+                        "metric": "mean",
+                        "direction": "descending",
+                        "sort_type": "sort_groups",
+                    },
+                },
+            ),
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    result = response.json()
+
+    # Verify groups are sorted by mean score descending
+    group_obj = result["logs"]["entries/category"]
+    group_items = group_obj["group"]
+
+    # Extract group keys and verify order
+    group_keys = [item["key"] for item in group_items]
+    # cat_4 should have highest mean (4, 9, 14, ..., 99) → mean = 51.5
+    # cat_0 should have lowest mean (0, 5, 10, ..., 95) → mean = 47.5
+    assert group_keys[0] == "cat_4", f"Expected cat_4 first, got {group_keys}"
+    assert group_keys[-1] == "cat_0", f"Expected cat_0 last, got {group_keys}"
+
+
+@pytest.mark.anyio
+async def test_grouping_sets_sorting_multi_level(client: AsyncClient, use_jsonb_mode):
+    """Test GROUPING SETS with sorting at depth=1 (two levels)."""
+    if not use_jsonb_mode:
+        pytest.skip("GROUPING SETS optimization only applies to JSONB mode")
+
+    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
+    project_name = f"test-gs-sort-multi-{mode_suffix}"
+    await _create_project(client, project_name)
+
+    # Create nested data: countries with students and scores
+    data = [
+        ("USA", "Alice", 95),
+        ("USA", "Bob", 70),
+        ("Canada", "Charlie", 90),
+        ("Canada", "Diana", 85),
+        ("Mexico", "Eve", 100),
+        ("Mexico", "Frank", 60),
+    ]
+    for country, student, score in data:
+        await _create_log(
+            client,
+            project_name,
+            params={},
+            entries={"country": country, "student": student, "score": float(score)},
+        )
+
+    # Sort countries by sum(score) desc
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/country", "entries/student"],
+            "group_depth": 1,
+            "group_sorting": json.dumps(
+                {
+                    "entries/country": {
+                        "field": "entries/score",
+                        "metric": "sum",
+                        "direction": "descending",
+                        "sort_type": "sort_groups",
+                    },
+                },
+            ),
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    result = response.json()
+
+    # Verify structure
+    group_obj = result["logs"]["entries/country"]
+    country_keys = [item["key"] for item in group_obj["group"]]
+
+    # Sum scores: Canada=175, USA=165, Mexico=160
+    assert country_keys[0] == "Canada", f"Expected Canada first, got {country_keys}"
+    assert country_keys[-1] == "Mexico", f"Expected Mexico last, got {country_keys}"
+
+
+@pytest.mark.anyio
+async def test_grouping_sets_pagination_multi_page(client: AsyncClient, use_jsonb_mode):
+    """Test GROUPING SETS with group_limit and group_offset for multiple pages."""
+    if not use_jsonb_mode:
+        pytest.skip("GROUPING SETS optimization only applies to JSONB mode")
+
+    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
+    project_name = f"test-gs-pagination-multi-{mode_suffix}"
+    await _create_project(client, project_name)
+
+    # Create 20 distinct categories
+    for i in range(100):
+        await _create_log(
+            client,
+            project_name,
+            params={},
+            entries={"category": f"cat_{i % 20:02d}", "value": i},
+        )
+
+    # Fetch first 5 groups
+    response1 = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/category"],
+            "group_depth": 0,
+            "group_limit": 5,
+            "group_offset": 0,
+        },
+        headers=HEADERS,
+    )
+
+    assert response1.status_code == 200, response1.json()
+    result1 = response1.json()
+    group_obj1 = result1["logs"]["entries/category"]
+
+    # Verify pagination metadata
+    assert group_obj1["group_count"] == 20  # Total groups
+    assert len(group_obj1["group"]) == 5  # Returned groups
+
+    # Fetch next 5 groups
+    response2 = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/category"],
+            "group_depth": 0,
+            "group_limit": 5,
+            "group_offset": 5,
+        },
+        headers=HEADERS,
+    )
+
+    assert response2.status_code == 200, response2.json()
+    result2 = response2.json()
+    group_obj2 = result2["logs"]["entries/category"]
+
+    # Verify pagination metadata
+    assert group_obj2["group_count"] == 20  # Total groups
+    assert len(group_obj2["group"]) == 5  # Returned groups
+
+    # Verify no overlap
+    keys1 = {item["key"] for item in group_obj1["group"]}
+    keys2 = {item["key"] for item in group_obj2["group"]}
+    assert keys1.isdisjoint(keys2), f"Overlap found: {keys1 & keys2}"
+
+
+@pytest.mark.anyio
+async def test_grouping_sets_sorting_with_pagination(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """Test GROUPING SETS with both sorting and pagination combined."""
+    if not use_jsonb_mode:
+        pytest.skip("GROUPING SETS optimization only applies to JSONB mode")
+
+    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
+    project_name = f"test-gs-sort-page-{mode_suffix}"
+    await _create_project(client, project_name)
+
+    # Create 10 categories with different mean scores
+    # cat_00 → mean=0, cat_01 → mean=10, ..., cat_09 → mean=90
+    for i in range(100):
+        cat_idx = i % 10
+        # Score increases with category index
+        score = cat_idx * 10 + (i // 10)
+        await _create_log(
+            client,
+            project_name,
+            params={},
+            entries={"category": f"cat_{cat_idx:02d}", "score": float(score)},
+        )
+
+    # Get top 3 categories by mean score descending
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/category"],
+            "group_depth": 0,
+            "group_limit": 3,
+            "group_offset": 0,
+            "group_sorting": json.dumps(
+                {
+                    "entries/category": {
+                        "field": "entries/score",
+                        "metric": "mean",
+                        "direction": "descending",
+                        "sort_type": "sort_groups",
+                    },
+                },
+            ),
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    group_obj = result["logs"]["entries/category"]
+
+    # Should have total 10 groups, returning top 3
+    assert group_obj["group_count"] == 10
+    assert len(group_obj["group"]) == 3
+
+    # Top 3 should be cat_09, cat_08, cat_07 (highest mean scores)
+    keys = [item["key"] for item in group_obj["group"]]
+    assert keys == ["cat_09", "cat_08", "cat_07"], f"Unexpected order: {keys}"
+
+
+@pytest.mark.anyio
+async def test_grouping_sets_fallback_within_groups_sorting(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """Verify GROUPING SETS falls back to recursive for WITHIN_GROUPS sorting."""
+    if not use_jsonb_mode:
+        pytest.skip("GROUPING SETS optimization only applies to JSONB mode")
+
+    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
+    project_name = f"test-gs-fallback-within-{mode_suffix}"
+    await _create_project(client, project_name)
+
+    # Create test data
+    for i in range(20):
+        await _create_log(
+            client,
+            project_name,
+            params={},
+            entries={"category": f"cat_{i % 3}", "score": float(i)},
+        )
+
+    # Use within_groups sorting (should fall back to recursive path)
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/category"],
+            "group_depth": 0,
+            "group_sorting": json.dumps(
+                {
+                    "entries/category": {
+                        "field": "entries/score",
+                        "direction": "descending",
+                        "sort_type": "within_groups",
+                    },
+                },
+            ),
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    result = response.json()
+    group_obj = result["logs"]["entries/category"]
+    assert group_obj["count"] == 20
+
+
+@pytest.mark.anyio
+async def test_grouping_sets_depth_two(client: AsyncClient, use_jsonb_mode):
+    """Test GROUPING SETS optimization with depth=2 (three levels)."""
+    if not use_jsonb_mode:
+        pytest.skip("GROUPING SETS optimization only applies to JSONB mode")
+
+    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
+    project_name = f"test-gs-depth-two-{mode_suffix}"
+    await _create_project(client, project_name)
+
+    # Create 3-level nested data: country -> city -> district
+    test_data = [
+        ("USA", "NYC", "Manhattan", 100),
+        ("USA", "NYC", "Brooklyn", 80),
+        ("USA", "LA", "Downtown", 60),
+        ("USA", "LA", "Hollywood", 40),
+        ("Canada", "Toronto", "Downtown", 70),
+        ("Canada", "Toronto", "Midtown", 50),
+        ("Canada", "Vancouver", "Gastown", 30),
+    ]
+
+    for country, city, district, score in test_data:
+        await _create_log(
+            client,
+            project_name,
+            params={},
+            entries={
+                "country": country,
+                "city": city,
+                "district": district,
+                "score": float(score),
+            },
+        )
+
+    # Query with depth=2 (three levels)
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/country", "entries/city", "entries/district"],
+            "group_depth": 2,
+        },
+        headers=HEADERS,
+    )
+
+    assert response.status_code == 200, response.json()
+    result = response.json()
+
+    # Verify top-level structure
+    assert "logs" in result
+    assert "entries/country" in result["logs"]
+    country_group = result["logs"]["entries/country"]
+    assert country_group["count"] == 7
+    assert country_group["group_count"] == 2  # USA, Canada
+
+    # Find USA group
+    usa_group = next(
+        (item for item in country_group["group"] if item["key"] == "USA"),
+        None,
+    )
+    assert usa_group is not None
+    # Nested values don't include key wrapper - check for group structure
+    assert "group" in usa_group["value"]
+
+    city_group = usa_group["value"]
+    assert city_group["group_count"] == 2  # NYC, LA
+
+    # Find NYC within USA
+    nyc_group = next(
+        (item for item in city_group["group"] if item["key"] == "NYC"),
+        None,
+    )
+    assert nyc_group is not None
+    # Nested values don't include key wrapper - check for group structure
+    assert "group" in nyc_group["value"]
+
+    district_group = nyc_group["value"]
+    assert district_group["group_count"] == 2  # Manhattan, Brooklyn
+    assert district_group["count"] == 2
+
+
+@pytest.mark.anyio
+async def test_grouping_sets_sorting_vs_recursive_baseline(
+    client: AsyncClient,
+    use_jsonb_mode,
+    monkeypatch,
+):
+    """Compare GROUPING SETS sorting output to recursive baseline."""
+    if not use_jsonb_mode:
+        pytest.skip("GROUPING SETS optimization only applies to JSONB mode")
+
+    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
+    project_name = f"test-gs-sort-vs-rec-{mode_suffix}"
+    await _create_project(client, project_name)
+
+    # Create test data with unique mean scores per group
+    # Open: mean = 80 (90+80+70)/3
+    # Closed: mean = 55 (50+60)/2
+    # Pending: mean = 70 (85+75+65+55)/4  - Different scores for unique mean
+    test_data = [
+        ("Open", 90),
+        ("Open", 80),
+        ("Open", 70),
+        ("Closed", 50),
+        ("Closed", 60),
+        ("Pending", 85),
+        ("Pending", 75),
+        ("Pending", 65),
+        ("Pending", 55),
+    ]
+    for status, score in test_data:
+        await _create_log(
+            client,
+            project_name,
+            params={},
+            entries={"status": status, "score": float(score)},
+        )
+
+    sort_params = json.dumps(
+        {
+            "entries/status": {
+                "field": "entries/score",
+                "metric": "mean",
+                "direction": "descending",
+                "sort_type": "sort_groups",
+            },
+        },
+    )
+
+    # Run 1: GROUPING SETS path (normal operation)
+    response_optimized = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/status"],
+            "group_depth": 0,
+            "group_sorting": sort_params,
+        },
+        headers=HEADERS,
+    )
+    assert response_optimized.status_code == 200, response_optimized.json()
+    result_optimized = response_optimized.json()
+
+    # Run 2: Force recursive path by patching _can_use_grouping_sets
+    from orchestra.web.api.log.utils import grouping_utils
+
+    monkeypatch.setattr(
+        grouping_utils,
+        "_can_use_grouping_sets",
+        lambda *args, **kwargs: False,
+    )
+
+    response_baseline = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "group_by": ["entries/status"],
+            "group_depth": 0,
+            "group_sorting": sort_params,
+        },
+        headers=HEADERS,
+    )
+    assert response_baseline.status_code == 200, response_baseline.json()
+    result_baseline = response_baseline.json()
+
+    # Compare the two outputs
+    opt_status = result_optimized["logs"]["entries/status"]
+    base_status = result_baseline["logs"]["entries/status"]
+
+    # Total counts should match
+    assert (
+        opt_status["count"] == base_status["count"]
+    ), f"count mismatch: {opt_status['count']} vs {base_status['count']}"
+    assert (
+        opt_status["group_count"] == base_status["group_count"]
+    ), f"group_count mismatch: {opt_status['group_count']} vs {base_status['group_count']}"
+
+    # Same groups should exist (order may differ due to implementation details)
+    opt_keys = {g["key"] for g in opt_status["group"]}
+    base_keys = {g["key"] for g in base_status["group"]}
+    assert opt_keys == base_keys, f"Group keys mismatch: {opt_keys} vs {base_keys}"
+
+    # Individual counts should match
+    opt_counts = {g["key"]: g["value"] for g in opt_status["group"]}
+    base_counts = {g["key"]: g["value"] for g in base_status["group"]}
+    assert opt_counts == base_counts, f"Counts mismatch: {opt_counts} vs {base_counts}"
