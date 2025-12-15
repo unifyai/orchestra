@@ -659,11 +659,13 @@ async def test_transfer_preserves_logs_and_contexts(client: AsyncClient, dbsessi
     assert project.organization_id == org_id
     assert project.user_id is None
 
-    # Verify logs are still queryable after transfer
+    # Verify logs are still queryable after transfer (using org API key)
+    org_api_key = org_response.json()["api_key"]
+    org_headers = {"Authorization": f"Bearer {org_api_key}"}
     query_response_after = await client.post(
         "/v0/logs/query",
         json={"project": "Logs_Preserve_Project", "context": "TestContext"},
-        headers=user["headers"],
+        headers=org_headers,
     )
     assert query_response_after.status_code == status.HTTP_200_OK
     logs_after = query_response_after.json()

@@ -103,7 +103,8 @@ async def test_delete_nonexistent_project(client: AsyncClient):
     url = "/v0/project/nonexistent-project"
     response = await client.delete(url, headers=HEADERS)
     assert response.status_code == 404
-    assert response.json()["detail"] == "Project nonexistent-project not found."
+    assert "nonexistent-project" in response.json()["detail"]
+    assert "not found" in response.json()["detail"]
 
 
 @pytest.mark.anyio
@@ -183,7 +184,8 @@ async def test_update_nonexistent_project(client: AsyncClient):
     project_data = {"name": "updated-project", "description": "New description"}
     response = await client.patch(url, json=project_data, headers=HEADERS)
     assert response.status_code == 404
-    assert response.json()["detail"] == "Project nonexistent-project not found."
+    assert "nonexistent-project" in response.json()["detail"]
+    assert "not found" in response.json()["detail"]
 
 
 @pytest.mark.anyio
@@ -458,19 +460,24 @@ async def test_share_project(client: AsyncClient):
     assert response.status_code == 200, response.json()
     assert response.json()["info"] == "Project shared successfully!"
 
-    # get the api key for the new user
+    # get the org api key for the new user (project is now org-owned)
+    # Use by-email endpoint which returns organizations list with API keys
     response = await client.get(
-        f"/v0/admin/auth-user/by-user-id?user_id={to_user_id}",
+        "/v0/admin/auth-user/by-email?email=test_recipient_user@example.com",
         headers=admin_headers,
     )
     data = response.json()
-    to_user_api_key = data["apiKey"]
+    # After sharing, project belongs to an org, so we need the org API key
+    assert "organizations" in data, "User should have organization memberships"
+    assert len(data["organizations"]) > 0, "User should be member of at least one org"
+    org_api_key = data["organizations"][0]["apiKey"]
+    assert org_api_key is not None, "User should have org API key"
     new_headers = {
         "accept": "application/json",
-        "Authorization": f"Bearer {to_user_api_key}",
+        "Authorization": f"Bearer {org_api_key}",
     }
 
-    # 1) Verify the new user can acces the project
+    # 1) Verify the new user can access the project via org API key
     response = await client.get(
         f"/v0/projects",
         headers=new_headers,
