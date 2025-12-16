@@ -36,6 +36,7 @@ from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     ActiveDerivedLog,
@@ -477,6 +478,21 @@ def create_logs(
         project_id = project.id
     except (IndexError, AttributeError):
         raise not_found("Project")
+
+    # Check write permission for org projects with explicit grants
+    if organization_id is not None:
+        resource_access_dao = ResourceAccessDAO(session)
+        has_write = resource_access_dao.check_user_permission(
+            user_id=user_id,
+            resource_type="project",
+            resource_id=project_id,
+            permission_name="project:write",
+        )
+        if not has_write:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to write logs to this project",
+            )
 
     # Get or create context_id
     if request.context:

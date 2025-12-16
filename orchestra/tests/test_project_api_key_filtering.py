@@ -773,7 +773,7 @@ async def test_viewer_can_read_but_not_write_logs(
     )
     assert response.status_code == status.HTTP_200_OK
 
-    # Viewer cannot write logs (should get 403)
+    # Viewer cannot write logs (should get 403 - permission denied)
     response = await client.post(
         "/v0/logs",
         json={
@@ -782,13 +782,9 @@ async def test_viewer_can_read_but_not_write_logs(
         },
         headers=viewer_org_headers,
     )
-    # Viewers don't have project:write permission, should fail
-    # Note: Current implementation may return 404 (can't find project for write)
-    # or 403 (permission denied). Either is acceptable.
-    assert response.status_code in [
-        status.HTTP_403_FORBIDDEN,
-        status.HTTP_404_NOT_FOUND,
-    ]
+    # Viewers don't have project:write permission
+    assert response.status_code == status.HTTP_403_FORBIDDEN
+    assert "permission" in response.json()["detail"].lower()
 
 
 @pytest.mark.anyio
