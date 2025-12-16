@@ -1362,6 +1362,8 @@ def get_project(
         is_versioned=project.is_versioned,
         created_at=project.created_at.isoformat() if project.created_at else None,
         updated_at=project.updated_at.isoformat() if project.updated_at else None,
+        user_id=project.user_id,
+        organization_id=project.organization_id,
     )
 
 
