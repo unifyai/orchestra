@@ -911,13 +911,13 @@ class ResourceAccess(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
 
     __table_args__ = (
+        # Only one role per grantee per resource (single-role-per-resource)
         UniqueConstraint(
             "resource_type",
             "resource_id",
-            "role_id",
             "grantee_type",
             "grantee_id",
-            name="uq_resource_access",
+            name="uq_resource_access_grantee",
         ),
         Index("idx_resource_access_resource", "resource_type", "resource_id"),
         Index("idx_resource_access_grantee", "grantee_type", "grantee_id"),
