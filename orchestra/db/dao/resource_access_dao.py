@@ -44,7 +44,10 @@ class ResourceAccessDAO:
         grantee_id: str,
     ) -> ResourceAccess:
         """
-        Grant access to a resource for a user or team.
+        Grant or update access to a resource for a user or team.
+
+        If the grantee already has access to this resource, their role is updated
+        (upsert behavior). Only one role per grantee per resource is allowed.
 
         Clears the permission cache since permissions have changed.
 
@@ -53,8 +56,28 @@ class ResourceAccessDAO:
         :param role_id: Role ID to grant.
         :param grantee_type: 'user' or 'team'.
         :param grantee_id: User ID or Team ID (as string).
-        :return: The created ResourceAccess object.
+        :return: The created or updated ResourceAccess object.
         """
+        # Check for existing grant (any role) - upsert behavior
+        existing = (
+            self.session.query(ResourceAccess)
+            .filter(
+                ResourceAccess.resource_type == resource_type,
+                ResourceAccess.resource_id == resource_id,
+                ResourceAccess.grantee_type == grantee_type,
+                ResourceAccess.grantee_id == grantee_id,
+            )
+            .first()
+        )
+
+        if existing:
+            # Update existing grant's role
+            existing.role_id = role_id
+            self.session.flush()
+            self.clear_permission_cache()
+            return existing
+
+        # Create new grant
         access = ResourceAccess(
             resource_type=resource_type,
             resource_id=resource_id,
@@ -135,37 +158,18 @@ class ResourceAccessDAO:
 
         Clears the permission cache since permissions have changed.
 
+        Note: Since only one role per grantee per resource is allowed (enforced by
+        the unique constraint), there's no need to check for duplicates.
+
         :param access_id: ResourceAccess ID.
         :param new_role_id: New role ID to assign.
         :return: Updated ResourceAccess object or None if not found.
-        :raises ValueError: If the update would violate unique constraint.
         """
         access = self.get(access_id)
         if not access:
             return None
 
-        # Check if the new combination would violate unique constraint
-        # (same resource + same role + same grantee = duplicate)
-        existing = (
-            self.session.query(ResourceAccess)
-            .filter(
-                ResourceAccess.resource_type == access.resource_type,
-                ResourceAccess.resource_id == access.resource_id,
-                ResourceAccess.role_id == new_role_id,
-                ResourceAccess.grantee_type == access.grantee_type,
-                ResourceAccess.grantee_id == access.grantee_id,
-                ResourceAccess.id != access_id,  # Exclude current record
-            )
-            .first()
-        )
-
-        if existing:
-            raise ValueError(
-                f"Cannot update: {access.grantee_type} '{access.grantee_id}' "
-                f"already has role {new_role_id} on this resource",
-            )
-
-        # Update role
+        # Update role (no duplicate check needed - constraint enforces single role)
         access.role_id = new_role_id
         self.session.flush()
 
