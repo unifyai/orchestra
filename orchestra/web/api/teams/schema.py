@@ -97,6 +97,7 @@ class UserResourceAccessEntry(BaseModel):
     id: int
     role_id: int
     role_name: str
+    permissions: List[str]  # Permission names for this role, e.g., ["project:read"]
     grantee_type: str  # 'user' or 'team'
     source: str  # 'direct' or 'team'
     team_id: Optional[int] = None
