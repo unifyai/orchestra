@@ -105,6 +105,8 @@ class ProjectOut(BaseModel):
     is_versioned: bool = Field(description="Whether the project is versioned")
     created_at: Optional[str] = Field(description="When the project was created")
     updated_at: Optional[str] = Field(description="When the project was last updated")
+    user_id: Optional[str] = Field(None, description="The ID of the user who owns the project")
+    organization_id: Optional[int] = Field(None, description="The ID of the organization that owns the project")
 
 
 class ShareProjectRequest(BaseModel):
