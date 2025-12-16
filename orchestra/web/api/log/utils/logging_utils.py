@@ -1574,12 +1574,17 @@ def _get_logs_query_jsonb(
 
     start_time = time.time()
     user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
 
     # =========================================================================
     # STEP 1: Validate project
     # =========================================================================
     try:
-        project_id = project_dao.get_by_user_and_name(name=project, user_id=user_id).id
+        project_id = project_dao.get_by_user_and_name(
+            name=project,
+            user_id=user_id,
+            organization_id=organization_id,
+        ).id
     except (IndexError, AttributeError):
         raise not_found(f"Project {project}")
 
