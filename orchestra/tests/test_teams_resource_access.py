@@ -1446,18 +1446,18 @@ async def test_update_resource_access_requires_permission(
 
 
 @pytest.mark.anyio
-async def test_update_resource_access_duplicate_constraint(
+async def test_grant_access_upserts_existing_role(
     client: AsyncClient,
     dbsession,
 ):
-    """Test that updating to a duplicate grant returns 409 Conflict."""
-    owner = await create_test_user(client, "duplicate_update_owner@test.com")
-    member = await create_test_user(client, "duplicate_update_member@test.com")
+    """Test that granting access to user who already has access updates their role (upsert)."""
+    owner = await create_test_user(client, "upsert_owner@test.com")
+    member = await create_test_user(client, "upsert_member@test.com")
 
     # Create org
     org_response = await client.post(
         "/v0/organizations",
-        json={"name": "Duplicate Update Org"},
+        json={"name": "Upsert Test Org"},
         headers=owner["headers"],
     )
     org_id = org_response.json()["id"]
@@ -1477,27 +1477,36 @@ async def test_update_resource_access_duplicate_constraint(
     role_dao = RoleDAO(dbsession)
 
     project_dao.create(
-        name="Duplicate_Test_Project",
+        name="Upsert_Test_Project",
         user_id=None,
         organization_id=org_id,
     )
     dbsession.commit()
-    projects = project_dao.filter(organization_id=org_id, name="Duplicate_Test_Project")
+    projects = project_dao.filter(organization_id=org_id, name="Upsert_Test_Project")
     project = projects[0][0]
 
-    # Grant member BOTH Viewer and Member roles (two separate grants)
+    # Grant member Viewer role first
     viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
     member_role = role_dao.get_by_name("Member", organization_id=None)
 
-    viewer_access = resource_access_dao.grant_access(
+    first_access = resource_access_dao.grant_access(
         resource_type="project",
         resource_id=project.id,
         role_id=viewer_role.id,
         grantee_type="user",
         grantee_id=member["id"],
     )
+    first_access_id = first_access.id
+    dbsession.commit()
 
-    resource_access_dao.grant_access(
+    # Verify initial state: member has Viewer role
+    access_entries = resource_access_dao.get_resource_access("project", project.id)
+    member_entries = [e for e in access_entries if e.grantee_id == member["id"]]
+    assert len(member_entries) == 1
+    assert member_entries[0].role_id == viewer_role.id
+
+    # Grant Member role to same user (should upsert, not create new)
+    second_access = resource_access_dao.grant_access(
         resource_type="project",
         resource_id=project.id,
         role_id=member_role.id,
@@ -1506,14 +1515,19 @@ async def test_update_resource_access_duplicate_constraint(
     )
     dbsession.commit()
 
-    # Try to update Viewer grant to Member role (which already exists) → should fail
-    response = await client.patch(
-        f"/v0/resources/project/{project.id}/access/{viewer_access.id}",
-        json={"role_id": member_role.id},
-        headers=owner["headers"],
-    )
-    assert response.status_code == 409
-    assert "already has" in response.json()["detail"].lower()
+    # Verify upsert: same access ID, role updated
+    assert (
+        second_access.id == first_access_id
+    ), "Should return same access entry (upsert)"
+    assert second_access.role_id == member_role.id, "Role should be updated to Member"
+
+    # Verify only ONE access entry exists (not two)
+    access_entries = resource_access_dao.get_resource_access("project", project.id)
+    member_entries = [e for e in access_entries if e.grantee_id == member["id"]]
+    assert (
+        len(member_entries) == 1
+    ), "Should have only one access entry per user per resource"
+    assert member_entries[0].role_id == member_role.id
 
 
 @pytest.mark.anyio
