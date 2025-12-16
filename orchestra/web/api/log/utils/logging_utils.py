@@ -2165,56 +2165,48 @@ def _get_logs_query_jsonb(
         query = query.limit(limit)
 
     rows = query.all()
-    if True:
+
+    # Capture SQL for test analysis (if enabled)
+    try:
         from sqlalchemy import text
 
-        try:
-            # json is already imported at module level - do not re-import here
-            # as it causes UnboundLocalError when json is used earlier in the function
-            # Execute EXPLAIN ANALYZE with the same parameters
+        from orchestra.tests.test_log.sql_capture import (
+            capture_sql,
+            is_capture_enabled,
+            set_test_context,
+        )
+
+        if is_capture_enabled():
+            mode = "jsonb" if settings.use_jsonb_queries else "eav"
+            # Compile SQL for capture
             compiled_sql = query.statement.compile(
                 dialect=session.bind.dialect,
                 compile_kwargs={"literal_binds": True},
             ).string
-            base_sql = compiled_sql  # Store the base SQL before adding EXPLAIN
-            compiled_sql = (
+            # Execute EXPLAIN ANALYZE
+            explain_sql = (
                 "EXPLAIN (ANALYZE, BUFFERS, TIMING, COSTS, VERBOSE, FORMAT JSON) "
                 + compiled_sql
             )
-            explain_query = text(compiled_sql)
-            explain_result = session.execute(explain_query)
+            explain_result = session.execute(text(explain_sql))
             explain_output = explain_result.fetchone()[0]
-            with open("explain_analyze.json", "w") as f:
-                f.write(compiled_sql + "\n")
-                f.write(json.dumps(explain_output, indent=4))
-
-            # Capture SQL for test analysis (if enabled)
-            try:
-                from orchestra.tests.test_log.sql_capture import (
-                    capture_sql,
-                    is_capture_enabled,
-                    set_test_context,
-                )
-
-                if is_capture_enabled():
-                    # Read test name from header (injected by test client)
-                    test_name = request_fastapi.headers.get("X-Test-Name", "unknown")
-                    # Determine mode from use_jsonb_queries setting (settings imported at module level)
-                    mode = "jsonb" if settings.use_jsonb_queries else "eav"
-                    set_test_context(
-                        test_name=test_name,
-                        filter_expr=filter_expr,
-                        mode=mode,
-                    )
-                    capture_sql(
-                        sql=base_sql,
-                        explain_analyze=explain_output,
-                        filter_expr_override=filter_expr if filter_expr else None,
-                    )
-            except ImportError:
-                pass  # sql_capture module not available (production environment)
-        except Exception:
-            pass  # Silently ignore explain analyze errors
+            # Read test name from header (injected by test client)
+            test_name = request_fastapi.headers.get("X-Test-Name", "unknown")
+            # Set context and capture
+            set_test_context(
+                test_name=test_name,
+                filter_expr=filter_expr,
+                mode=mode,
+            )
+            capture_sql(
+                sql=compiled_sql,
+                explain_analyze=explain_output,
+                filter_expr_override=filter_expr if filter_expr else None,
+            )
+    except ImportError:
+        pass  # sql_capture module not available (production environment)
+    except Exception:
+        pass  # Silently ignore capture errors
 
     # =========================================================================
     # STEP 12: Hydrate embeddings from Embedding table
@@ -4029,44 +4021,33 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
         .order_by(paginated_ids_subq.c.row_num, filtered_logs_subq.c.created_at)
     )
 
-    if True:
+    # Capture SQL for test analysis (if enabled)
+    try:
         from sqlalchemy import text
 
-        try:
-            # json is already imported at module level
-            # Execute EXPLAIN ANALYZE with the same parameters
+        from orchestra.tests.test_log.sql_capture import capture_sql, is_capture_enabled
+
+        if is_capture_enabled():
+            # Compile SQL for capture
             compiled_sql = final_logs_query.statement.compile(
                 dialect=session.bind.dialect,
                 compile_kwargs={"literal_binds": True},
             ).string
-            base_sql = compiled_sql  # Store the base SQL before adding EXPLAIN
-            compiled_sql = (
+            # Execute EXPLAIN ANALYZE
+            explain_sql = (
                 "EXPLAIN (ANALYZE, BUFFERS, TIMING, COSTS, VERBOSE, FORMAT JSON) "
                 + compiled_sql
             )
-            explain_query = text(compiled_sql)
-            explain_result = session.execute(explain_query)
+            explain_result = session.execute(text(explain_sql))
             explain_output = explain_result.fetchone()[0]
-            with open("explain_analyze.json", "w") as f:
-                f.write(compiled_sql + "\n")
-                f.write(json.dumps(explain_output, indent=4))
-
-            # Capture SQL for test analysis (if enabled)
-            try:
-                from orchestra.tests.test_log.sql_capture import (
-                    capture_sql,
-                    is_capture_enabled,
-                )
-
-                if is_capture_enabled():
-                    capture_sql(
-                        sql=base_sql,
-                        explain_analyze=explain_output,
-                    )
-            except ImportError:
-                pass  # sql_capture module not available (production environment)
-        except Exception:
-            pass  # Silently ignore explain analyze errors
+            capture_sql(
+                sql=compiled_sql,
+                explain_analyze=explain_output,
+            )
+    except ImportError:
+        pass  # sql_capture module not available (production environment)
+    except Exception:
+        pass  # Silently ignore capture errors
 
     # Execute the query
     result = final_logs_query.all()
