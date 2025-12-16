@@ -34,7 +34,6 @@ from sqlalchemy.sql.expression import Exists, UnaryExpression
 from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.dao.log_dao import LogDAO
-from orchestra.db.models.orchestra_models import Log, LogEventLog
 
 from . import alias_utils, jsonb_builder
 from .core import build_sql_query
@@ -1635,55 +1634,6 @@ def _vector_binary_op(
         select_cols.extend(
             [expr.label("value"), literal(result_type_label).label("inferred_type")],
         )
-        subq = alias_utils.subquery_with_unique_alias(
-            select(*select_cols).select_from(lsub),
-            prefix="vector_op",
-        )
-
-        # Debug: Pretty print results with instruction text
-        results = session.execute(select(subq)).fetchall()
-        if results:
-            print("\n" + "=" * 100)
-            print("COSINE SIMILARITY DEBUG - Top Results")
-            print("=" * 100)
-
-            # Get log_event_ids from results
-            log_event_ids = [row[0] for row in results]
-
-            # Fetch instruction texts by joining through LogEventLog association table
-            instructions = session.execute(
-                select(LogEventLog.log_event_id, Log.value)
-                .join(Log, LogEventLog.log_id == Log.id)
-                .where(LogEventLog.log_event_id.in_(log_event_ids))
-                .where(Log.key == "instruction"),
-            ).fetchall()
-
-            # Create a mapping of log_event_id -> instruction text
-            instruction_map = {
-                log_event_id: text for log_event_id, text in instructions
-            }
-
-            # Print formatted results
-            print(f"{'Rank':<6} {'Log Event ID':<15} {'Distance':<12} {'Instruction'}")
-            print("-" * 100)
-
-            for idx, (log_event_id, distance, _) in enumerate(
-                results[:20],
-                1,
-            ):  # Show top 20
-                instruction = instruction_map.get(log_event_id, "N/A")
-                # Truncate long instructions
-                if instruction and len(instruction) > 60:
-                    instruction = instruction[:57] + "..."
-                # Handle None distance values gracefully
-                distance_str = (
-                    f"{distance:<12.4f}" if distance is not None else "N/A".ljust(12)
-                )
-                print(f"{idx:<6} {log_event_id:<15} {distance_str} {instruction}")
-
-            if len(results) > 20:
-                print(f"\n... and {len(results) - 20} more results")
-            print("=" * 100 + "\n")
 
         return alias_utils.subquery_with_unique_alias(
             select(*select_cols).select_from(lsub),
