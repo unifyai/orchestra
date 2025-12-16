@@ -1011,6 +1011,10 @@ async def get_user_resource_access(
         role = role_dao.get(entry.role_id)
         role_name = role.name if role else "Unknown"
 
+        # Get permissions for this role
+        role_permissions = role_dao.get_role_permissions(entry.role_id)
+        permission_names = [p.name for p in role_permissions]
+
         # Determine if this is a direct grant or team-based
         is_team_grant = entry.grantee_type == "team"
         team_id = None
@@ -1029,6 +1033,7 @@ async def get_user_resource_access(
                 id=entry.id,
                 role_id=entry.role_id,
                 role_name=role_name,
+                permissions=permission_names,
                 grantee_type=entry.grantee_type,
                 source="team" if is_team_grant else "direct",
                 team_id=team_id,

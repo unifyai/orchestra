@@ -859,6 +859,9 @@ async def test_get_user_resource_access_endpoint(
     assert data["effective_role"] == "Owner"
     assert len(data["access_entries"]) == 1
     assert data["access_entries"][0]["role_name"] == "Owner"
+    # Verify permissions are included
+    assert "permissions" in data["access_entries"][0]
+    assert isinstance(data["access_entries"][0]["permissions"], list)
 
     # Owner checks member's access
     response = await client.get(
@@ -871,3 +874,6 @@ async def test_get_user_resource_access_endpoint(
     assert data["effective_role"] == "Member"
     assert len(data["access_entries"]) == 1
     assert data["access_entries"][0]["role_name"] == "Member"
+    # Verify permissions are included for member
+    assert "permissions" in data["access_entries"][0]
+    assert isinstance(data["access_entries"][0]["permissions"], list)
