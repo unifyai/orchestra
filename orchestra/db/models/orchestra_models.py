@@ -2065,7 +2065,15 @@ class CallRecording(Base):
 
 
 class Embedding(Base):
-    """Model class for the embedding table that stores embeddings."""
+    """Model class for the embedding table that stores embeddings.
+
+    Supports soft-delete via the `is_deleted` column to avoid expensive HNSW index
+    surgery during deletions. When embeddings are "deleted", they are marked with
+    is_deleted=True rather than being physically removed.
+
+    The HNSW indexes include `AND is_deleted = false` to exclude soft-deleted rows,
+    ensuring they don't participate in vector similarity searches.
+    """
 
     __tablename__ = "embedding"
 
@@ -2079,6 +2087,8 @@ class Embedding(Base):
     key = Column(String, nullable=False)
     vector = Column(Vector(), nullable=False)  # Support variable dimensions
     created_at = Column(TIMESTAMP, server_default=func.now())
+    # Soft-delete flag for instant deletion without HNSW index surgery
+    is_deleted = Column(Boolean, nullable=False, server_default=sa.text("false"))
 
     __table_args__ = (
         UniqueConstraint("ref_id", "model", "key", name="uq_embedding"),
@@ -2088,6 +2098,10 @@ class Embedding(Base):
             "model",
             "key",
         ),
+        # B-tree index on is_deleted for efficient filtering
+        Index("idx_embedding_is_deleted", "is_deleted"),
+        # Composite index for deletion queries (filter by ref_id and is_deleted)
+        Index("idx_embedding_ref_id_is_deleted", "ref_id", "is_deleted"),
         # CHECK constraints to ensure dimension integrity per model
         # Prevents dimension mismatches from corrupting the HNSW indexes
         sa.CheckConstraint(
@@ -2101,6 +2115,7 @@ class Embedding(Base):
         # Model-specific HNSW expression indexes with dimension casts
         # The cast is critical - queries must also cast to use these indexes
         # Pattern: (vector::vector(N)) vector_cosine_ops for expression index + WHERE model = '...' for partial index
+        # HNSW indexes exclude soft-deleted embeddings for performance
         # OpenAI text-embedding-3-small (1536 dimensions) - Cosine similarity
         Index(
             "embedding_hnsw_cosine_openai_1536_idx",
@@ -2109,7 +2124,9 @@ class Embedding(Base):
             ),  # Include operator class in expression
             postgresql_using="hnsw",
             postgresql_with={"m": 16, "ef_construction": 64},
-            postgresql_where=sa.text("model = 'text-embedding-3-small'"),
+            postgresql_where=sa.text(
+                "model = 'text-embedding-3-small' AND is_deleted = false",
+            ),
         ),
         # Vertex AI multimodalembedding@001 (1408 dimensions) - Cosine similarity
         Index(
@@ -2119,6 +2136,8 @@ class Embedding(Base):
             ),  # Include operator class in expression
             postgresql_using="hnsw",
             postgresql_with={"m": 16, "ef_construction": 64},
-            postgresql_where=sa.text("model = 'multimodalembedding@001'"),
+            postgresql_where=sa.text(
+                "model = 'multimodalembedding@001' AND is_deleted = false",
+            ),
         ),
     )
