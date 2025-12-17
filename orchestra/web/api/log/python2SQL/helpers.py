@@ -40,7 +40,7 @@ from sqlalchemy import (
 )
 
 load_dotenv()
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql.elements import BinaryExpression, Cast, ColumnClause
@@ -70,6 +70,8 @@ __all__ = [
     "_substitute_placeholders",
     "_maybe_vector_column",
     "_ensure_vectors_exist",
+    "_queue_embeddings_for_generation",
+    "_get_or_generate_embedding_sync",
     "_get_embedding",
     "_get_embeddings_batch",
     "_get_image_embedding_batch",
@@ -2103,9 +2105,12 @@ def _maybe_vector_column(expr, key, session, model: str | None = None):
         A new subquery that includes vector data if available
     """
     # Build the join condition
+    # Exclude soft-deleted embeddings to ensure they don't participate in vector searches
     join_condition = and_(
         Embedding.ref_id == expr.c.log_event_id,
         Embedding.key == literal(key),
+        Embedding.is_deleted
+        == False,  # noqa: E712 - SQLAlchemy requires == for SQL generation
     )
 
     # Add model filter if provided
@@ -2248,6 +2253,167 @@ def _embeddable(text: Union[str | None]) -> bool:
     return True
 
 
+def _queue_embeddings_for_generation(
+    session: Session,
+    id_to_text: dict[int, str],
+    model: Optional[str],
+    dimensions: Optional[int],
+    key: str,
+) -> None:
+    """
+    Queue embeddings for background generation instead of creating them synchronously.
+
+    This function:
+    1. Checks which embeddings already exist (excluding soft-deleted ones)
+    2. Queues missing embeddings in the embedding_queue table
+    3. Background worker (triggered by Cloud Scheduler) processes the queue
+
+    Args:
+        session: SQLAlchemy session
+        id_to_text: Dictionary mapping log_event_id to text string
+        model: Embedding model to use (defaults to DEFAULT_EMBEDDING_MODEL if None)
+        dimensions: Optional number of dimensions for the embedding
+        key: The key identifier for these embeddings
+    """
+    from orchestra.db.models.orchestra_models import EmbeddingQueue
+
+    if not id_to_text:
+        return
+
+    model_name = model or DEFAULT_EMBEDDING_MODEL
+
+    # 1. Find which embeddings already exist (excluding soft-deleted)
+    all_ids = list(id_to_text.keys())
+    existing_refs = (
+        session.execute(
+            select(Embedding.ref_id).where(
+                and_(
+                    Embedding.key == key,
+                    Embedding.model == model_name,
+                    Embedding.ref_id.in_(all_ids),
+                    Embedding.is_deleted
+                    == False,  # noqa: E712 - SQLAlchemy requires == for SQL generation
+                ),
+            ),
+        )
+        .scalars()
+        .all()
+    )
+    existing_set = set(existing_refs)
+
+    # 2. Queue only missing embeddings
+    ids_to_queue = [
+        id for id in all_ids if id not in existing_set and _embeddable(id_to_text[id])
+    ]
+
+    if not ids_to_queue:
+        return
+
+    # 3. Bulk insert into queue (use ON CONFLICT DO NOTHING to handle race conditions)
+    queue_entries = [
+        {
+            "ref_id": log_event_id,
+            "key": key,
+            "text": id_to_text[log_event_id],
+            "model": model_name,
+            "dimensions": dimensions,
+            "status": "pending",
+            "retry_count": 0,
+        }
+        for log_event_id in ids_to_queue
+    ]
+
+    stmt = insert(EmbeddingQueue).values(queue_entries)
+    stmt = stmt.on_conflict_do_nothing(constraint="uq_embedding_queue")
+    session.execute(stmt)
+    session.commit()
+
+    # Log for monitoring - embedding worker runs on schedule via Cloud Scheduler
+    logging.info(
+        f"Queued {len(ids_to_queue)} embeddings for generation (model={model_name}). "
+        f"Worker will process on next scheduled run.",
+    )
+
+
+def _get_or_generate_embedding_sync(
+    session: Session,
+    log_event_id: int,
+    text: str,
+    key: str,
+    model: str,
+    dimensions: Optional[int] = None,
+) -> Optional[list]:
+    """
+    Get embedding from DB, or generate synchronously if missing.
+
+    This is a fallback for when embeddings are queried before background
+    processing completes. It ensures queries always return results, even
+    if slightly slower.
+
+    Args:
+        session: SQLAlchemy session
+        log_event_id: Log event ID
+        text: Text to embed
+        key: Embedding key
+        model: Model name
+        dimensions: Optional dimensions
+
+    Returns:
+        Embedding vector, or None if text is not embeddable
+    """
+    # Try to fetch from DB (excluding soft-deleted)
+    embedding = (
+        session.query(Embedding)
+        .filter_by(
+            ref_id=log_event_id,
+            key=key,
+            model=model,
+        )
+        .filter(Embedding.is_deleted == False)  # noqa: E712
+        .first()
+    )
+
+    if embedding:
+        return embedding.vector
+
+    # Not found - check if it's embeddable
+    if not _embeddable(text):
+        return None
+
+    # Generate synchronously (rare case - log warning)
+    logging.warning(
+        f"Embedding not found for log_event {log_event_id}, generating synchronously. "
+        f"This indicates the background worker is behind.",
+    )
+
+    try:
+        vector = _get_embedding(text, model, dimensions)
+
+        # Insert into DB (use upsert to handle race conditions)
+        stmt = insert(Embedding).values(
+            ref_id=log_event_id,
+            key=key,
+            model=model,
+            vector=vector,
+            is_deleted=False,
+        )
+        stmt = stmt.on_conflict_do_update(
+            constraint="uq_embedding",
+            set_={
+                "vector": stmt.excluded.vector,
+                "is_deleted": False,
+            },
+        )
+        session.execute(stmt)
+        session.commit()
+
+        return vector
+
+    except Exception as e:
+        logging.error(f"Failed to generate embedding synchronously: {e}")
+        return None
+
+
 def _ensure_vectors_exist(
     session: Session,
     id_to_text: dict[int, str],
@@ -2275,6 +2441,7 @@ def _ensure_vectors_exist(
     model_name = model or DEFAULT_EMBEDDING_MODEL
 
     # 1. Find which texts actually need embedding
+    # Only count ACTIVE embeddings as existing - soft-deleted ones should be regenerated
     all_ids = list(id_to_text.keys())
     existing_refs = (
         session.execute(
@@ -2283,6 +2450,8 @@ def _ensure_vectors_exist(
                     Embedding.key == key,
                     Embedding.model == model_name,
                     Embedding.ref_id.in_(all_ids),
+                    Embedding.is_deleted
+                    == False,  # noqa: E712 - SQLAlchemy requires == for SQL generation
                 ),
             ),
         )
@@ -2318,23 +2487,36 @@ def _ensure_vectors_exist(
     # Flatten the list of lists of embeddings
     all_embeddings = [embedding for batch in embedding_batches for embedding in batch]
 
-    # 3. Create Embedding objects for bulk insertion
-    to_insert = []
+    # 3. Prepare rows for upsert
+    # Use INSERT ... ON CONFLICT DO UPDATE to handle both:
+    # - New embeddings (insert)
+    # - Soft-deleted embeddings (resurrect by setting is_deleted=False and updating vector)
+    rows_to_upsert = []
     for i, log_event_id in enumerate(ids_to_embed):
         embedding_vector = all_embeddings[i]
-        to_insert.append(
-            Embedding(
-                ref_id=log_event_id,
-                key=key,
-                model=model_name,
-                vector=embedding_vector,
-            ),
+        rows_to_upsert.append(
+            {
+                "ref_id": log_event_id,
+                "key": key,
+                "model": model_name,
+                "vector": embedding_vector,
+                "is_deleted": False,
+            },
         )
 
-    # 4. Bulk insert new vectors
-    if to_insert:
+    # 4. Bulk upsert vectors using INSERT ... ON CONFLICT DO UPDATE
+    # This handles race conditions and soft-deleted rows gracefully
+    if rows_to_upsert:
         try:
-            session.bulk_save_objects(to_insert)
+            stmt = insert(Embedding).values(rows_to_upsert)
+            stmt = stmt.on_conflict_do_update(
+                constraint="uq_embedding",  # Unique constraint on (ref_id, model, key)
+                set_={
+                    "vector": stmt.excluded.vector,
+                    "is_deleted": False,  # Resurrect soft-deleted embeddings
+                },
+            )
+            session.execute(stmt)
             session.commit()
         except IntegrityError:
-            session.rollback()  # Handle race condition
+            session.rollback()  # Handle unexpected race condition
