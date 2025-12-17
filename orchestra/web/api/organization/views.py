@@ -952,7 +952,8 @@ async def _send_invite_email(
 
     # Build invite link
     frontend_url = os.getenv(
-        "UNIFY_CONSOLE_FRONTEND_URL", "https://console.unify.ai"
+        "UNIFY_CONSOLE_FRONTEND_URL",
+        "https://console.unify.ai",
     ).rstrip("/")
     invite_link = f"{frontend_url}/invite?token={invite.token}"
 

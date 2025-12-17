@@ -106,10 +106,12 @@ class ProjectOut(BaseModel):
     created_at: Optional[str] = Field(description="When the project was created")
     updated_at: Optional[str] = Field(description="When the project was last updated")
     user_id: Optional[str] = Field(
-        None, description="The ID of the user who owns the project"
+        None,
+        description="The ID of the user who owns the project",
     )
     organization_id: Optional[int] = Field(
-        None, description="The ID of the organization that owns the project"
+        None,
+        description="The ID of the organization that owns the project",
     )
 
 

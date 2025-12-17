@@ -7686,3 +7686,159 @@ async def process_traffic_logs(
             status_code=500,
             content={"detail": f"Error processing traffic logs: {error_message}"},
         )
+
+
+@admin_router.post(
+    "/process_embedding_queue",
+    responses={
+        200: {
+            "description": "Embedding queue processed successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "message": "Processed 150 embeddings",
+                        "status": "success",
+                        "metrics": {"processed": 150, "duration": 12.5},
+                    },
+                },
+            },
+        },
+        500: {
+            "description": "Internal Server Error",
+        },
+    },
+)
+async def process_embedding_queue(
+    max_items: int = Query(1000, description="Maximum number of embeddings to process"),
+    session=Depends(get_db_session),
+    _=Depends(auth_admin_key),
+):
+    """
+    Admin endpoint to manually process pending embeddings from the queue.
+
+    This endpoint is designed to be called by:
+    - Cloud Scheduler for periodic processing
+    - Administrators for manual triggering
+    - Internal processes when immediate embedding generation is needed
+
+    The endpoint processes embeddings in batches and returns metrics.
+    """
+    try:
+        from orchestra.workers.embedding_worker import (
+            get_queue_metrics,
+            process_pending_embeddings,
+        )
+
+        # Get queue status before processing
+        metrics_before = get_queue_metrics(session)
+
+        if metrics_before.get("pending", 0) == 0:
+            return {
+                "message": "No pending embeddings to process",
+                "status": "success",
+                "metrics": metrics_before,
+            }
+
+        # Process embeddings
+        import time
+
+        start = time.time()
+        processed = process_pending_embeddings(session, limit=max_items)
+        duration = time.time() - start
+
+        # Get queue status after processing
+        metrics_after = get_queue_metrics(session)
+
+        return {
+            "message": f"Processed {processed} embeddings in {duration:.2f}s",
+            "status": "success",
+            "metrics": {
+                "processed": processed,
+                "duration": duration,
+                "throughput": processed / duration if duration > 0 else 0,
+                "queue_before": metrics_before,
+                "queue_after": metrics_after,
+            },
+        }
+
+    except Exception as e:
+        import traceback
+
+        error_message = traceback.format_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Error processing embedding queue: {error_message}"},
+        )
+
+
+@admin_router.post(
+    "/run_index_maintenance",
+    responses={
+        200: {
+            "description": "Index maintenance completed successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "message": "Index maintenance completed",
+                        "status": "success",
+                        "metrics": {
+                            "deleted_count": 3562,
+                            "durations": {"drop_indexes": 0.5, "hard_delete": 0.1},
+                        },
+                    },
+                },
+            },
+        },
+        500: {
+            "description": "Internal Server Error",
+        },
+    },
+)
+async def run_index_maintenance(
+    session=Depends(get_db_session),
+    _=Depends(auth_admin_key),
+):
+    """
+    Admin endpoint to manually trigger HNSW index maintenance.
+
+    This endpoint:
+    1. Drops existing HNSW indexes (CONCURRENTLY - non-blocking)
+    2. Hard-deletes soft-deleted embeddings
+    3. Recreates HNSW indexes (CONCURRENTLY - non-blocking)
+    4. Runs VACUUM to reclaim disk space
+
+    WARNING: This operation can take several minutes for large tables.
+    Use Cloud Run Jobs for production workloads.
+
+    This endpoint is designed to be called by:
+    - Cloud Scheduler for nightly maintenance (2 AM UTC)
+    - Administrators for manual triggering after large deletions
+    """
+    try:
+        from orchestra.workers.index_maintenance import rebuild_hnsw_indexes
+
+        metrics = rebuild_hnsw_indexes(session)
+
+        if metrics["success"]:
+            return {
+                "message": f"Index maintenance completed. Deleted {metrics['deleted_count']} embeddings.",
+                "status": "success",
+                "metrics": metrics,
+            }
+        else:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "detail": f"Index maintenance failed: {metrics.get('error', 'Unknown error')}",
+                    "metrics": metrics,
+                },
+            )
+
+    except Exception as e:
+        import traceback
+
+        error_message = traceback.format_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"Error running index maintenance: {error_message}"},
+        )
