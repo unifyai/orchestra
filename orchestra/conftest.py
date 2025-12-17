@@ -217,6 +217,32 @@ def dbsession(
         connection.close()
 
 
+@pytest.fixture(autouse=True)
+def disable_async_embeddings():
+    """
+    Automatically disable async embedding generation for all tests.
+
+    In production, embeddings are queued for background generation to improve
+    response times. In tests, we need embeddings to be generated synchronously
+    so they're immediately available for assertions.
+
+    This fixture sets async_embeddings=False before each test and restores
+    the original value after the test completes.
+    """
+    import orchestra.settings as settings_module
+
+    # Store original value
+    original = settings_module._async_embeddings_override
+
+    # Disable async embeddings for tests
+    settings_module._async_embeddings_override = False
+
+    yield
+
+    # Restore original value
+    settings_module._async_embeddings_override = original
+
+
 @pytest.fixture
 def fastapi_app(
     dbsession: Session,
@@ -259,8 +285,6 @@ class TimedAsyncClient(AsyncClient):
     - Test name and mode (from CURRENT_TEST_INFO global)
     - Status code
 
-    Also injects X-Test-Name and X-Test-Mode headers for SQL capture.
-
     Used for performance comparison between EAV and JSONB storage modes.
     """
 
@@ -268,33 +292,17 @@ class TimedAsyncClient(AsyncClient):
         super().__init__(*args, **kwargs)
 
     async def request(self, method, url, **kwargs):
-        # Get current test info from global (set by pytest_runtest_setup hook)
-        test_name = CURRENT_TEST_INFO.get("name", "unknown")
-        mode = CURRENT_TEST_INFO.get("mode", "unknown")
-
-        # Inject test name and mode headers for SQL capture
-        headers = kwargs.get("headers", {})
-        if headers is None:
-            headers = {}
-        headers = dict(headers)  # Make mutable copy
-        headers["X-Test-Name"] = test_name
-        headers["X-Test-Mode"] = mode or "unknown"
-        kwargs["headers"] = headers
-
         # Capture timing
         start = time.monotonic()
         response = await super().request(method, url, **kwargs)
         duration = time.monotonic() - start
 
-        # Build timing record - only store JSON-serializable data
-        path = str(url)
-        # Extract params if present (for debugging), converting to dict if needed
-        params = kwargs.get("params", {})
-        if hasattr(params, "items"):
-            params = dict(params)
-        else:
-            params = {}
+        # Get current test info from global (set by pytest_runtest_setup hook)
+        test_name = CURRENT_TEST_INFO.get("name", "unknown")
+        mode = CURRENT_TEST_INFO.get("mode", "unknown")
 
+        # Build timing record
+        path = str(url)
         TIMING_RECORDS.append(
             {
                 "method": method,
@@ -303,7 +311,8 @@ class TimedAsyncClient(AsyncClient):
                 "status_code": response.status_code,
                 "test_name": test_name,
                 "mode": mode,
-                "params": params,  # Only store serializable params
+                "args": (),  # Kept for backward compatibility
+                "kwargs": kwargs,
             },
         )
 
@@ -521,20 +530,13 @@ def pytest_runtest_makereport(item, call):
             params = item.callspec.params
             if "use_jsonb_mode" in params:
                 mode = "jsonb_mode" if params["use_jsonb_mode"] else "eav_mode"
-            # Also check for 'mode' parameter (used in test_repairs_performance.py)
-            elif "mode" in params:
-                mode_val = params["mode"]
-                if mode_val == "eav":
-                    mode = "eav_mode"
-                elif mode_val == "jsonb":
-                    mode = "jsonb_mode"
 
         # Strategy 2: Fallback to nodeid string matching for compatibility
         # This handles cases where the parametrization ids might be in the nodeid
         if mode is None:
-            if "[eav_mode]" in item.nodeid or "[eav]" in item.nodeid:
+            if "[eav_mode]" in item.nodeid:
                 mode = "eav_mode"
-            elif "[jsonb_mode]" in item.nodeid or "[jsonb]" in item.nodeid:
+            elif "[jsonb_mode]" in item.nodeid:
                 mode = "jsonb_mode"
 
         # Only track if we detected a parametrized test
@@ -1581,7 +1583,8 @@ def pytest_sessionfinish(session, exitstatus):
 
             # Fallback: try to infer mode from project name in params (backward compat)
             if mode == "unknown" or mode is None:
-                params = record.get("params", {})
+                kwargs = record.get("kwargs", {})
+                params = kwargs.get("params", {})
                 project = params.get("project", "") if isinstance(params, dict) else ""
                 if "EAV" in str(project):
                     mode = "eav"
