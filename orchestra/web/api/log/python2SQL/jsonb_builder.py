@@ -3899,7 +3899,7 @@ def _handle_embed_jsonb(
     2. Field references: Extract text from LogEvent.data, create embeddings, return from Embedding table
     """
     from .core import _build_sql_query_jsonb
-    from .helpers import _ensure_vectors_exist
+    from .helpers import _queue_embeddings_for_generation
 
     rhs_dict = filter_dict.get("rhs")
     if not isinstance(rhs_dict, list):
@@ -4019,15 +4019,30 @@ def _handle_embed_jsonb(
         if row.text_value and isinstance(row.text_value, str):
             id_to_text[row.log_event_id] = row.text_value
 
-    # Ensure vectors exist for this key (stores in Embedding table)
+    # Generate embeddings: async (production) or sync (testing)
     if id_to_text:
-        _ensure_vectors_exist(
-            session=session,
-            id_to_text=id_to_text,
-            model=model,
-            dimensions=dimensions,
-            key=key,
-        )
+        from orchestra.settings import settings
+
+        if settings.async_embeddings:
+            # Production: queue for background generation
+            _queue_embeddings_for_generation(
+                session=session,
+                id_to_text=id_to_text,
+                model=model,
+                dimensions=dimensions,
+                key=key,
+            )
+        else:
+            # Testing: generate synchronously
+            from .helpers import _ensure_vectors_exist
+
+            _ensure_vectors_exist(
+                session=session,
+                id_to_text=id_to_text,
+                model=model,
+                dimensions=dimensions,
+                key=key,
+            )
 
     # JSONB-native: Build subquery joining LogEvent with Embedding table
     # to return vectors for each log_event_id

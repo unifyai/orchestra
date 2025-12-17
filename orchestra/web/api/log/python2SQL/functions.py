@@ -45,11 +45,11 @@ from .helpers import (
     _build_subquery_for_base_call,
     _build_subquery_for_identifier,
     _embeddable,
-    _ensure_vectors_exist,
     _get_embedding,
     _get_image_embedding_from_url,
     _get_parent_idx,
     _is_jsonb_expression,
+    _queue_embeddings_for_generation,
     _select_value,
     cast_expr,
     count_tokens_per_utf_byte,
@@ -1031,14 +1031,28 @@ def _handle_functions(
                 if isinstance(row.str_value, str)
             }
 
+            # Generate embeddings: async (production) or sync (testing)
             if id_to_text:
-                _ensure_vectors_exist(
-                    session=session,
-                    id_to_text=id_to_text,
-                    model=model,
-                    dimensions=dimensions,
-                    key=key,
-                )
+                if settings.async_embeddings:
+                    # Production: queue for background generation
+                    _queue_embeddings_for_generation(
+                        session=session,
+                        id_to_text=id_to_text,
+                        model=model,
+                        dimensions=dimensions,
+                        key=key,
+                    )
+                else:
+                    # Testing: generate synchronously
+                    from .helpers import _ensure_vectors_exist
+
+                    _ensure_vectors_exist(
+                        session=session,
+                        id_to_text=id_to_text,
+                        model=model,
+                        dimensions=dimensions,
+                        key=key,
+                    )
 
             # Retrieve the vector column for the given key
             vector_subq = _build_subquery_for_identifier(
