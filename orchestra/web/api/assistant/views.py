@@ -315,6 +315,33 @@ def create_assistant(
                     grantee_id=user_id,
                 )
 
+        # Create "Assistants" project if it doesn't exist (for logging purposes)
+        ASSISTANTS_PROJECT_NAME = "Assistants"
+        assistants_project = project_dao.get_by_user_and_name(
+            user_id=user_id,
+            name=ASSISTANTS_PROJECT_NAME,
+            organization_id=organization_id,
+        )
+        if not assistants_project:
+            if organization_id is not None:
+                # Create org Assistants project
+                project_dao.create(
+                    user_id=None,
+                    organization_id=organization_id,
+                    name=ASSISTANTS_PROJECT_NAME,
+                    description="Project to manage and track all organization assistants.",
+                    is_versioned=False,
+                )
+            else:
+                # Create personal Assistants project
+                project_dao.create(
+                    user_id=user_id,
+                    organization_id=None,
+                    name=ASSISTANTS_PROJECT_NAME,
+                    description="Project to manage and track all your assistants.",
+                    is_versioned=False,
+                )
+
         # Commit the assistant creation before infrastructure setup
         # This ensures the assistant persists even if we refresh the session later
         session.commit()
