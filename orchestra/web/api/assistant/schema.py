@@ -222,8 +222,13 @@ class AssistantRead(AssistantCreate):
     )
     user_id: str = Field(
         ...,
-        description="ID of the user to associate the assistant with",
+        description="ID of the user who created/owns the assistant",
         example="123",
+    )
+    organization_id: Optional[int] = Field(
+        None,
+        description="Organization ID if this is an organizational assistant, None for personal assistants",
+        example=None,
     )
     created_at: datetime = Field(
         ...,
@@ -247,7 +252,7 @@ class AssistantRead(AssistantCreate):
     )
     api_key: Optional[str] = Field(
         None,
-        description="API key of the assistant",
+        description="API key associated with this assistant (personal or org key)",
         example="1234567890",
     )
     user_first_name: Optional[str] = Field(
@@ -293,6 +298,7 @@ class AssistantRead(AssistantCreate):
                 "voice_mode": "tts",
                 "agent_id": "12345",
                 "user_id": "123",
+                "organization_id": None,
                 "created_at": "2025-04-25T10:30:00Z",
                 "updated_at": "2025-04-26T14:15:00Z",
                 "api_key": "1234567890",
@@ -983,4 +989,77 @@ class AssistantContactRemoval(BaseModel):
         ...,
         description="The type of contact information to remove.",
         example="email",
+    )
+
+
+class AssistantTransferToOrgRequest(BaseModel):
+    """
+    Schema for transferring an assistant from personal to organizational workspace.
+    """
+
+    organization_id: int = Field(
+        ...,
+        description="Target organization ID to transfer the assistant to.",
+        example=123,
+    )
+    transfer_logs: bool = Field(
+        True,
+        description="Whether to transfer existing logs from personal 'Assistants' project to org 'Assistants' project.",
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "organization_id": 123,
+                "transfer_logs": True,
+            },
+        }
+
+
+class AssistantTransferToPersonalRequest(BaseModel):
+    """
+    Schema for transferring an assistant from organizational to personal workspace.
+    """
+
+    delete_logs: bool = Field(
+        True,
+        description="Whether to delete related logs from the org 'Assistants' project.",
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "delete_logs": True,
+            },
+        }
+
+
+class AssistantTransferResponse(BaseModel):
+    """
+    Response schema for assistant transfer operations.
+    """
+
+    message: str = Field(
+        ...,
+        description="Success message describing the transfer result.",
+    )
+    agent_id: int = Field(
+        ...,
+        description="ID of the transferred assistant.",
+    )
+    transferred_from: str = Field(
+        ...,
+        description="Source workspace type ('personal' or 'organization').",
+    )
+    transferred_to: str = Field(
+        ...,
+        description="Target workspace type ('personal' or 'organization').",
+    )
+    logs_transferred: Optional[bool] = Field(
+        None,
+        description="Whether logs were transferred (only for personal->org transfers).",
+    )
+    logs_deleted: Optional[bool] = Field(
+        None,
+        description="Whether logs were deleted (only for org->personal transfers).",
     )
