@@ -18,11 +18,12 @@ async def test_list_permissions(client: AsyncClient):
     assert response.status_code == status.HTTP_200_OK
 
     permissions = response.json()
-    # Should have 8 permissions (3 resources: project, org, billing)
+    # Should have 11 permissions (4 resources: project, org, billing, assistant)
     # project:read, project:write, project:delete
     # org:read, org:write, org:delete
     # billing:read, billing:write
-    assert len(permissions) == 8
+    # assistant:read, assistant:write, assistant:delete
+    assert len(permissions) == 11
     assert any(p["name"] == "project:read" for p in permissions)
     assert any(p["name"] == "project:write" for p in permissions)
     assert any(p["name"] == "project:delete" for p in permissions)
@@ -265,7 +266,7 @@ async def test_get_system_role(client: AsyncClient, dbsession):
     role = response.json()
     assert role["name"] == "Owner"
     assert role["is_system_role"] is True
-    assert len(role["permissions"]) == 8  # Owner should have all 8 permissions
+    assert len(role["permissions"]) == 11  # Owner should have all 11 permissions
 
 
 @pytest.mark.anyio
@@ -526,21 +527,21 @@ async def test_system_role_permissions(client: AsyncClient, dbsession):
     owner_role = role_dao.get_by_name("Owner", organization_id=None)
     owner_perms = role_dao.get_role_permissions(owner_role.id)
     all_perms = permission_dao.list_all()
-    assert len(owner_perms) == len(all_perms) == 8
+    assert len(owner_perms) == len(all_perms) == 11
 
-    # Check Admin role does not have org:delete (should have 7 permissions)
+    # Check Admin role does not have org:delete (should have 10 permissions)
     admin_role = role_dao.get_by_name("Admin", organization_id=None)
     admin_perms = role_dao.get_role_permissions(admin_role.id)
-    assert len(admin_perms) == 7
+    assert len(admin_perms) == 10
     assert not role_dao.has_permission(admin_role.id, "org:delete")
     assert role_dao.has_permission(admin_role.id, "org:read")
     assert role_dao.has_permission(admin_role.id, "org:write")
     assert role_dao.has_permission(admin_role.id, "project:delete")
 
-    # Check Member role has project read/write + org read + billing read (4 permissions)
+    # Check Member role has project read/write + org read + billing read + assistant read/write (6 permissions)
     member_role = role_dao.get_by_name("Member", organization_id=None)
     member_perms = role_dao.get_role_permissions(member_role.id)
-    assert len(member_perms) == 4
+    assert len(member_perms) == 6
     assert role_dao.has_permission(member_role.id, "project:read")
     assert role_dao.has_permission(member_role.id, "project:write")
     assert role_dao.has_permission(member_role.id, "org:read")
@@ -548,10 +549,10 @@ async def test_system_role_permissions(client: AsyncClient, dbsession):
     assert not role_dao.has_permission(member_role.id, "project:delete")
     assert not role_dao.has_permission(member_role.id, "org:delete")
 
-    # Check Viewer role has only read permissions (3 permissions: project, org, billing read)
+    # Check Viewer role has only read permissions (4 permissions: project, org, billing, assistant read)
     viewer_role = role_dao.get_by_name("Viewer", organization_id=None)
     viewer_perms = role_dao.get_role_permissions(viewer_role.id)
-    assert len(viewer_perms) == 3
+    assert len(viewer_perms) == 4
     assert all(p.action == "read" for p in viewer_perms)
 
 
