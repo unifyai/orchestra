@@ -4,7 +4,12 @@ from typing import List, Optional
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
-from orchestra.db.models.orchestra_models import Project, ResourceAccess, TeamMember
+from orchestra.db.models.orchestra_models import (
+    Assistant,
+    Project,
+    ResourceAccess,
+    TeamMember,
+)
 
 
 class ResourceAccessDAO:
@@ -230,20 +235,20 @@ class ResourceAccessDAO:
         """
         Check if a user has a specific permission on a resource.
 
-        For personal projects: User is owner if project.user_id == user_id.
-        For org projects: Check ResourceAccess + team memberships.
+        For personal resources: User is owner if resource.user_id == user_id.
+        For org resources: Check ResourceAccess + team memberships.
 
         Uses caching to improve performance. Cache is cleared when calling
         clear_permission_cache().
 
         NOTE: For org-level operations (managing members, teams, invites),
         use check_org_member_permission() instead. This method is for
-        resource-level access control (e.g., projects).
+        resource-level access control (projects, assistants).
 
         :param user_id: User ID.
-        :param resource_type: Type of resource ('project').
-        :param resource_id: Resource ID.
-        :param permission_name: Permission name (e.g., 'project:read').
+        :param resource_type: Type of resource ('project', 'assistant').
+        :param resource_id: Resource ID (project.id or assistant.agent_id).
+        :param permission_name: Permission name (e.g., 'project:read', 'assistant:write').
         :return: True if user has permission, False otherwise.
         """
         # Check cache first
@@ -388,10 +393,11 @@ class ResourceAccessDAO:
         """
         Check if a resource is personal (not associated with an organization).
 
-        Only project resources are supported.
-        Projects can be personal (user_id set, organization_id NULL).
+        Supported resource types:
+        - "project": personal if organization_id is NULL
+        - "assistant": personal if organization_id is NULL
 
-        :param resource_type: Type of resource ("project").
+        :param resource_type: Type of resource ("project", "assistant").
         :param resource_id: Resource ID.
         :return: True if personal, False if organizational.
         :raises ValueError: If resource_type is not supported.
@@ -399,10 +405,15 @@ class ResourceAccessDAO:
         if resource_type == "project":
             project = self.session.query(Project).filter_by(id=resource_id).first()
             return project is not None and project.organization_id is None
+        elif resource_type == "assistant":
+            assistant = (
+                self.session.query(Assistant).filter_by(agent_id=resource_id).first()
+            )
+            return assistant is not None and assistant.organization_id is None
         else:
             raise ValueError(
                 f"Unsupported resource type: {resource_type}. "
-                "Only 'project' is supported. For org-level permissions, "
+                "Only 'project' and 'assistant' are supported. For org-level permissions, "
                 "use check_org_member_permission() instead.",
             )
 
@@ -415,9 +426,11 @@ class ResourceAccessDAO:
         """
         Check if user owns a personal resource.
 
-        Only personal projects have ownership.
+        Supported resource types:
+        - "project": ownership determined by project.user_id
+        - "assistant": ownership determined by assistant.user_id
 
-        :param resource_type: Type of resource ("project").
+        :param resource_type: Type of resource ("project", "assistant").
         :param resource_id: Resource ID.
         :param user_id: User ID.
         :return: True if user is owner, False otherwise.
@@ -426,10 +439,15 @@ class ResourceAccessDAO:
         if resource_type == "project":
             project = self.session.query(Project).filter_by(id=resource_id).first()
             return project is not None and project.user_id == user_id
+        elif resource_type == "assistant":
+            assistant = (
+                self.session.query(Assistant).filter_by(agent_id=resource_id).first()
+            )
+            return assistant is not None and assistant.user_id == user_id
         else:
             raise ValueError(
                 f"Unsupported resource type: {resource_type}. "
-                "Only 'project' is supported. For org-level permissions, "
+                "Only 'project' and 'assistant' are supported. For org-level permissions, "
                 "use check_org_member_permission() instead.",
             )
 
@@ -537,9 +555,11 @@ class ResourceAccessDAO:
         """
         Get the organization ID for a resource.
 
-        Projects have organization_id directly.
+        Supported resource types:
+        - "project": has organization_id directly
+        - "assistant": has organization_id directly
 
-        :param resource_type: Type of resource ("project").
+        :param resource_type: Type of resource ("project", "assistant").
         :param resource_id: Resource ID.
         :return: Organization ID or None if personal/not found.
         :raises ValueError: If resource_type is not supported.
@@ -547,10 +567,15 @@ class ResourceAccessDAO:
         if resource_type == "project":
             project = self.session.query(Project).filter_by(id=resource_id).first()
             return project.organization_id if project else None
+        elif resource_type == "assistant":
+            assistant = (
+                self.session.query(Assistant).filter_by(agent_id=resource_id).first()
+            )
+            return assistant.organization_id if assistant else None
         else:
             raise ValueError(
                 f"Unsupported resource type: {resource_type}. "
-                "Only 'project' is supported. For org-level permissions, "
+                "Only 'project' and 'assistant' are supported. For org-level permissions, "
                 "use check_org_member_permission() instead.",
             )
 
@@ -564,34 +589,45 @@ class ResourceAccessDAO:
         Get IDs of all resources of a given type that user can access.
 
         Returns both personal and organizational resource IDs.
-        Only "project" resource type is supported.
+        Supported resource types: "project", "assistant".
 
         :param user_id: User ID.
-        :param resource_type: Type of resource ("project").
+        :param resource_type: Type of resource ("project", "assistant").
         :param permission_name: Required permission.
         :return: List of resource IDs.
         :raises ValueError: If resource_type is not supported.
         """
         # Validate resource type
-        if resource_type != "project":
+        if resource_type not in ("project", "assistant"):
             raise ValueError(
                 f"Unsupported resource type: {resource_type}. "
-                "Only 'project' is supported. For org-level permissions, "
+                "Only 'project' and 'assistant' are supported. For org-level permissions, "
                 "use check_org_member_permission() instead.",
             )
 
         accessible_ids = []
 
-        # Personal resources: only projects can be personal
-        personal_projects = (
-            self.session.query(Project.id)
-            .filter(
-                Project.user_id == user_id,
-                Project.organization_id.is_(None),
+        # Personal resources
+        if resource_type == "project":
+            personal_resources = (
+                self.session.query(Project.id)
+                .filter(
+                    Project.user_id == user_id,
+                    Project.organization_id.is_(None),
+                )
+                .all()
             )
-            .all()
-        )
-        accessible_ids.extend([p[0] for p in personal_projects])
+            accessible_ids.extend([r[0] for r in personal_resources])
+        elif resource_type == "assistant":
+            personal_resources = (
+                self.session.query(Assistant.agent_id)
+                .filter(
+                    Assistant.user_id == user_id,
+                    Assistant.organization_id.is_(None),
+                )
+                .all()
+            )
+            accessible_ids.extend([r[0] for r in personal_resources])
 
         # Org resources: check via RBAC
         # Get teams user belongs to

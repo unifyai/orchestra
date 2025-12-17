@@ -570,7 +570,17 @@ def admin_list_assistants(
             agent_id=agent_id,
         )
 
-        api_keys = [api_key_dao.filter(user_id=a.user_id)[0][0].key for a in assistants]
+        # Get API key based on assistant type (personal vs organizational)
+        def get_api_key_for_assistant(assistant):
+            if assistant.organization_id is None:
+                # Personal assistant - get user's personal API key
+                keys = api_key_dao.get_personal_keys(assistant.user_id)
+            else:
+                # Org assistant - get org API key
+                keys = api_key_dao.filter(organization_id=assistant.organization_id)
+            return keys[0][0].key if keys else None
+
+        api_keys = [get_api_key_for_assistant(a) for a in assistants]
         user_ids = [a.user_id for a in assistants]
         auth_users = [auth_user_dao.get_by_id(user_id)[0] for user_id in user_ids]
         return InfoResponse(
@@ -578,6 +588,7 @@ def admin_list_assistants(
                 AssistantRead(
                     agent_id=str(a.agent_id),
                     user_id=a.user_id,
+                    organization_id=a.organization_id,
                     first_name=a.first_name,
                     surname=a.surname,
                     age=a.age,
@@ -670,6 +681,7 @@ def admin_update_assistant(
 
     # Find the assistant to update
     dao = AssistantDAO(session)
+    api_key_dao = ApiKeyDAO(session)
     assistants = dao.list_all_assistants(
         phone=phone,
         user_phone=user_phone,
@@ -699,11 +711,19 @@ def admin_update_assistant(
     )
     session.commit()
 
+    # Get API key based on assistant type (personal vs organizational)
+    if updated.organization_id is None:
+        keys = api_key_dao.get_personal_keys(updated.user_id)
+    else:
+        keys = api_key_dao.filter(organization_id=updated.organization_id)
+    api_key = keys[0][0].key if keys else None
+
     # Return updated assistant
     return InfoResponse(
         info=AssistantRead(
             agent_id=str(updated.agent_id),
             user_id=updated.user_id,
+            organization_id=updated.organization_id,
             first_name=updated.first_name,
             surname=updated.surname,
             age=updated.age,
@@ -728,6 +748,7 @@ def admin_update_assistant(
             voice_id=updated.voice_id,
             voice_provider=updated.voice_provider,
             voice_mode=updated.voice_mode,
+            api_key=api_key,
         ),
     )
 
@@ -768,6 +789,7 @@ def admin_list_assistants_for_user(
     user_whatsapp_number = normalize_phone_parameter(user_whatsapp_number)
     assistant_whatsapp_number = normalize_phone_parameter(assistant_whatsapp_number)
     dao = AssistantDAO(session)
+    api_key_dao = ApiKeyDAO(session)
     try:
         assistants = dao.list_assistants_for_user(
             user_id=user_id,
@@ -777,11 +799,23 @@ def admin_list_assistants_for_user(
             user_whatsapp_number=user_whatsapp_number,
             assistant_whatsapp_number=assistant_whatsapp_number,
         )
+
+        # Get API key based on assistant type (personal vs organizational)
+        def get_api_key_for_assistant(assistant):
+            if assistant.organization_id is None:
+                keys = api_key_dao.get_personal_keys(assistant.user_id)
+            else:
+                keys = api_key_dao.filter(organization_id=assistant.organization_id)
+            return keys[0][0].key if keys else None
+
+        api_keys = [get_api_key_for_assistant(a) for a in assistants]
+
         return InfoResponse(
             info=[
                 AssistantRead(
                     agent_id=str(a.agent_id),
                     user_id=a.user_id,
+                    organization_id=a.organization_id,
                     first_name=a.first_name,
                     surname=a.surname,
                     age=a.age,
@@ -805,8 +839,9 @@ def admin_list_assistants_for_user(
                     voice_id=a.voice_id,
                     voice_provider=a.voice_provider,
                     voice_mode=a.voice_mode,
+                    api_key=api_keys[i],
                 )
-                for a in assistants
+                for i, a in enumerate(assistants)
             ],
         )
     except Exception as e:
