@@ -1797,11 +1797,14 @@ def _get_logs_query_jsonb(
         # Use JSONB has_key (? operator) with OR logic for data fields
         or_conditions = [LogEvent.data.has_key(field) for field in allowed_fields]
         # Also check Embedding table for vector fields (embeddings are stored separately)
+        # Exclude soft-deleted embeddings from existence checks
         embedding_exists = (
             session.query(Embedding.ref_id)
             .filter(
                 Embedding.ref_id == LogEvent.id,
                 Embedding.key.in_(allowed_fields),
+                Embedding.is_deleted
+                == False,  # noqa: E712 - SQLAlchemy requires == for SQL generation
             )
             .exists()
         )
@@ -4969,11 +4972,14 @@ def _create_logs_from_joined_rows(
             source_log_event_ids.add(log_event_id_b)
 
     # Query all embeddings from source log events in one go
+    # Exclude soft-deleted embeddings from copying operations
     if source_log_event_ids:
         source_embeddings = (
             session.query(Embedding)
             .filter(
                 Embedding.ref_id.in_(source_log_event_ids),
+                Embedding.is_deleted
+                == False,  # noqa: E712 - SQLAlchemy requires == for SQL generation
             )
             .all()
         )
@@ -5401,10 +5407,13 @@ def _create_logs_from_joined_rows_jsonb(
 
     if source_log_event_ids:
         # Query all embeddings from source log events
+        # Exclude soft-deleted embeddings from copying operations
         source_embeddings = (
             session.query(Embedding)
             .filter(
                 Embedding.ref_id.in_(source_log_event_ids),
+                Embedding.is_deleted
+                == False,  # noqa: E712 - SQLAlchemy requires == for SQL generation
             )
             .all()
         )
