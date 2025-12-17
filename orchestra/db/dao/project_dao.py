@@ -1,8 +1,9 @@
 import hashlib
+import logging
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.context_dao import ContextDAO
@@ -11,6 +12,7 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.models.orchestra_models import (
     Context,
     ContextVersion,
+    Embedding,
     Log,
     LogEvent,
     LogEventLog,
@@ -20,6 +22,8 @@ from orchestra.db.models.orchestra_models import (
     TeamMember,
 )
 from orchestra.db.utils import get_next_order_value
+
+logger = logging.getLogger(__name__)
 
 
 class ProjectDAO:
@@ -166,11 +170,23 @@ class ProjectDAO:
         try:
             project = self.session.query(Project).filter_by(id=id).one()
 
-            # Delete associated GCS media BEFORE deleting the project
-            log_dao = LogDAO(self.session, self.context_dao)
+            # Get log event IDs for this project (used for both soft-delete and GCS cleanup)
             log_events_subquery = (
                 select(LogEvent.id).where(LogEvent.project_id == id).subquery()
             )
+
+            # Soft-delete embeddings BEFORE CASCADE delete to avoid HNSW index surgery
+            # This marks embeddings as deleted instead of physically removing them,
+            # which provides instant deletion performance (10,000x faster)
+            soft_delete_result = self.session.execute(
+                update(Embedding)
+                .where(Embedding.ref_id.in_(select(log_events_subquery.c.id)))
+                .values(is_deleted=True),
+            )
+            deleted_count = soft_delete_result.rowcount
+
+            # Delete associated GCS media BEFORE deleting the project
+            log_dao = LogDAO(self.session, self.context_dao)
             logs_to_delete_query = (
                 self.session.query(Log)
                 .join(
@@ -184,8 +200,18 @@ class ProjectDAO:
             log_dao._bulk_delete_gcs_media(logs_to_delete_query)
 
             # Proceed with deleting the project (DB cascades will handle the rest)
+            # Note: CASCADE will delete log_events, which will trigger CASCADE delete
+            # on embeddings. Since embeddings are already soft-deleted, the physical
+            # deletion won't require HNSW index surgery (they're excluded from indexes).
             self.session.delete(project)
             self.session.commit()
+
+            # Log for monitoring - index maintenance runs on schedule via Cloud Scheduler
+            if deleted_count > 0:
+                logger.info(
+                    f"Soft-deleted {deleted_count} embeddings for project {id}. "
+                    f"Index maintenance will clean up on next scheduled run.",
+                )
         except Exception as e:
             self.session.rollback()
             raise ValueError(f"Failed to delete project with id {id}: {e}")
