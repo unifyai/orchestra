@@ -29,6 +29,8 @@ from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.recording_dao import RecordingDAO
+from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
+from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
 from orchestra.db.dependencies import get_db_session
@@ -47,6 +49,9 @@ from orchestra.web.api.assistant.schema import (
     AssistantPhotoUploadResponse,
     AssistantRead,
     AssistantStatus,
+    AssistantTransferResponse,
+    AssistantTransferToOrgRequest,
+    AssistantTransferToPersonalRequest,
     AssistantUpdate,
     AssistantVideoUploadResponse,
     InfoResponse,
@@ -241,26 +246,23 @@ def create_assistant(
 
     # Phase 1: Pre-checks and prepare assistant data
     try:
-        ASSISTANTS_PROJECT_NAME = "Assistants"
-        # Assistants project is always personal for now
-        assistants_project = project_dao.get_by_user_and_name(
-            user_id=user_id,
-            name=ASSISTANTS_PROJECT_NAME,
-            organization_id=None,
-        )
-        if not assistants_project:
-            project_dao.create(
-                user_id=user_id,
-                name=ASSISTANTS_PROJECT_NAME,
-                description="Project to manage and track all assistants.",
-                is_versioned=False,
+        # Get organization context from API key (None = personal, int = org)
+        organization_id = getattr(request.state, "organization_id", None)
+        resource_access_dao = ResourceAccessDAO(session)
+        role_dao = RoleDAO(session)
+
+        # For org context, check assistant:write permission
+        if organization_id is not None:
+            has_permission = resource_access_dao.check_org_member_permission(
+                user_id,
+                organization_id,
+                "assistant:write",
             )
-            # Re-fetch the project to get the object
-            assistants_project = project_dao.get_by_user_and_name(
-                user_id=user_id,
-                name=ASSISTANTS_PROJECT_NAME,
-                organization_id=None,
-            )
+            if not has_permission:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have permission to create assistants in this organization.",
+                )
 
         if not settings.is_staging:
             user = users_dao.get_user_with_id(user_id)
@@ -298,7 +300,20 @@ def create_assistant(
             phone_country=assistant_in.phone_country,
             user_whatsapp_number=assistant_in.user_whatsapp_number,
             timezone=assistant_in.timezone,
+            organization_id=organization_id,
         )
+
+        # For org assistants, grant Owner role to creator
+        if organization_id is not None:
+            owner_role = role_dao.get_by_name("Owner", organization_id=None)
+            if owner_role:
+                resource_access_dao.grant_access(
+                    resource_type="assistant",
+                    resource_id=assistant.agent_id,
+                    role_id=owner_role.id,
+                    grantee_type="user",
+                    grantee_id=user_id,
+                )
 
         # Commit the assistant creation before infrastructure setup
         # This ensures the assistant persists even if we refresh the session later
@@ -580,6 +595,7 @@ def create_assistant(
         info=AssistantRead(
             agent_id=str(assistant.agent_id),
             user_id=assistant.user_id,
+            organization_id=assistant.organization_id,
             first_name=assistant.first_name,
             surname=assistant.surname,
             age=assistant.age,
@@ -685,24 +701,56 @@ def list_assistants(
         None,
         description="Only return assistants whose email address matches this value.",
     ),
+    list_all_org: bool = Query(
+        False,
+        description="If True and using an org API key, list ALL assistants in the organization (not just those created by the current user). Requires assistant:read permission.",
+    ),
     _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[List[AssistantRead]]:
     """
-    List all assistants for the authenticated user.
+    List assistants based on API key context.
 
-    Retrieves all assistants created by the current user, including their
-    configuration details and operational limits.
+    For personal API key: Returns all personal assistants created by the user.
+    For org API key (list_all_org=False): Returns assistants created by the user in this org.
+    For org API key (list_all_org=True): Returns ALL assistants in the org (requires assistant:read permission).
     """
     # Correct for URL-decoded '+' in query parameters.
     phone = normalize_phone_parameter(phone)
 
     assistant_dao = AssistantDAO(session)
+    user_id = request.state.user_id
+
+    # Get organization context from API key
+    organization_id = getattr(request.state, "organization_id", None)
+
     try:
-        assistants = assistant_dao.list_assistants_for_user(
-            request.state.user_id,
-            phone=phone,
-            email=email,
-        )
+        if organization_id is not None and list_all_org:
+            # Org context with list_all_org=True: list all org assistants
+            # Check if user has assistant:read permission
+            resource_access_dao = ResourceAccessDAO(session)
+            has_permission = resource_access_dao.check_org_member_permission(
+                user_id,
+                organization_id,
+                "assistant:read",
+            )
+            if not has_permission:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have permission to view all assistants in this organization.",
+                )
+            assistants = assistant_dao.list_all_org_assistants(
+                organization_id=organization_id,
+                phone=phone,
+                email=email,
+            )
+        else:
+            # Personal context OR org context with list_all_org=False
+            assistants = assistant_dao.list_assistants_for_user(
+                user_id,
+                organization_id=organization_id,
+                phone=phone,
+                email=email,
+            )
         voice_dao = VoiceDAO(session)
 
         return InfoResponse(
@@ -710,6 +758,7 @@ def list_assistants(
                 AssistantRead(
                     agent_id=str(a.agent_id),
                     user_id=a.user_id,
+                    organization_id=a.organization_id,
                     first_name=a.first_name,
                     surname=a.surname,
                     age=a.age,
@@ -739,6 +788,8 @@ def list_assistants(
                 for a in assistants
             ],
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -780,11 +831,13 @@ def delete_assistant_contact(
     assistant's record.
     """
     user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
     assistant_dao = AssistantDAO(session)
 
     assistant = assistant_dao.get_assistant_by_id(
         user_id=user_id,
         agent_id=assistant_id,
+        organization_id=organization_id,
     )
 
     if not assistant:
@@ -792,6 +845,21 @@ def delete_assistant_contact(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
         )
+
+    # For org assistants, check assistant:write permission
+    if organization_id is not None:
+        resource_access_dao = ResourceAccessDAO(session)
+        has_permission = resource_access_dao.check_user_permission(
+            user_id,
+            "assistant",
+            assistant_id,
+            "assistant:write",
+        )
+        if not has_permission:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to modify this assistant.",
+            )
 
     contact_type = removal_payload.contact_type
 
@@ -830,6 +898,7 @@ def delete_assistant_contact(
             info=AssistantRead(
                 agent_id=str(updated_assistant.agent_id),
                 user_id=updated_assistant.user_id,
+                organization_id=updated_assistant.organization_id,
                 first_name=updated_assistant.first_name,
                 surname=updated_assistant.surname,
                 age=updated_assistant.age,
@@ -860,11 +929,11 @@ def delete_assistant_contact(
             ),
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
         session.rollback()
         logging.error(f"Failed to delete contact for assistant {assistant_id}: {e}")
-        if isinstance(e, HTTPException):
-            raise
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to remove contact: {str(e)}",
@@ -903,7 +972,7 @@ def delete_assistant(
     """
     Delete an assistant by ID for the authenticated user.
 
-    Permanently removes the specified assistant from the user's account.
+    Permanently removes the specified assistant from the user's account or organization.
     This action cannot be undone. Associated GCS profile photos will also be deleted.
     """
     bucket_service = BucketService()
@@ -911,12 +980,14 @@ def delete_assistant(
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    organization_id = getattr(request.state, "organization_id", None)
     cleanup_errors = []
     try:
         # First get the assistant to retrieve infrastructure details including GCS photo URL
         assistant = dao.get_assistant_by_id(
             user_id=request.state.user_id,
             agent_id=assistant_id,
+            organization_id=organization_id,
         )
         if not assistant:
             logging.warning(
@@ -926,6 +997,21 @@ def delete_assistant(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Assistant not found.",
             )
+
+        # For org assistants, check assistant:delete permission
+        if organization_id is not None:
+            resource_access_dao = ResourceAccessDAO(session)
+            has_permission = resource_access_dao.check_user_permission(
+                request.state.user_id,
+                "assistant",
+                assistant_id,
+                "assistant:delete",
+            )
+            if not has_permission:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="You do not have permission to delete this assistant.",
+                )
 
         # Suspend any jobs that might be currently running with that assistant
         try:
@@ -939,9 +1025,9 @@ def delete_assistant(
         try:
             ASSISTANTS_PROJECT_NAME = "Assistants"
             assistants_project = project_dao.get_by_user_and_name(
-                user_id=request.state.user_id,
+                user_id=request.state.user_id if organization_id is None else None,
                 name=ASSISTANTS_PROJECT_NAME,
-                organization_id=None,
+                organization_id=organization_id,
             )
             if assistants_project:
                 assistant_context_prefix = f"{assistant.first_name}{assistant.surname}"
@@ -1042,7 +1128,11 @@ def delete_assistant(
 
         # Finally delete the assistant record (matching rollback error handling)
         try:
-            dao.delete_assistant(user_id=request.state.user_id, agent_id=assistant_id)
+            dao.delete_assistant(
+                user_id=request.state.user_id,
+                agent_id=assistant_id,
+                organization_id=organization_id,
+            )
         except Exception as e:
             cleanup_errors.append(f"Failed to delete assistant: {str(e)}")
 
@@ -1154,6 +1244,7 @@ def update_assistant_config(
     provided in the request will be updated, while others remain unchanged.
     """
     user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
     users_dao = UsersDAO(session)
     assistant_dao = AssistantDAO(session)
     bucket_service = BucketService()
@@ -1175,12 +1266,28 @@ def update_assistant_config(
     existing_assistant = assistant_dao.get_assistant_by_id(
         user_id=request.state.user_id,
         agent_id=assistant_id,
+        organization_id=organization_id,
     )
     if not existing_assistant:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Assistant not found.",
         )
+
+    # For org assistants, check assistant:write permission
+    if organization_id is not None:
+        resource_access_dao = ResourceAccessDAO(session)
+        has_permission = resource_access_dao.check_user_permission(
+            user_id,
+            "assistant",
+            assistant_id,
+            "assistant:write",
+        )
+        if not has_permission:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have permission to modify this assistant.",
+            )
 
     # Determine if the photo is being updated before making changes
     old_photo_url = existing_assistant.profile_photo
@@ -1388,6 +1495,7 @@ def update_assistant_config(
             info=AssistantRead(
                 agent_id=str(updated.agent_id),
                 user_id=updated.user_id,
+                organization_id=updated.organization_id,
                 first_name=updated.first_name,
                 surname=updated.surname,
                 age=updated.age,
@@ -1417,6 +1525,8 @@ def update_assistant_config(
                 timezone=updated.timezone,
             ),
         )
+    except HTTPException:
+        raise
     except Exception as e:
         session.rollback()
 
@@ -1448,6 +1558,319 @@ def update_assistant_config(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error updating assistant config: {str(e)}",
+        )
+
+
+@router.post(
+    "/assistant/{assistant_id}/transfer/to-org",
+    response_model=InfoResponse[AssistantTransferResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Transfer assistant to organization",
+    description="Transfers a personal assistant to an organizational workspace.",
+    tags=["Assistant Management"],
+    responses={
+        200: {"description": "Assistant transferred successfully"},
+        403: {"description": "Permission denied"},
+        404: {"description": "Assistant not found"},
+        400: {"description": "Invalid transfer request"},
+    },
+)
+def transfer_assistant_to_org(
+    assistant_id: int,
+    transfer_request: AssistantTransferToOrgRequest,
+    request: Request,
+    session: Session = Depends(get_db_session),
+    _: None = Depends(check_assistant_hiring_approval),
+) -> InfoResponse[AssistantTransferResponse]:
+    """
+    Transfer a personal assistant to an organization.
+
+    This endpoint:
+    1. Moves the assistant from personal workspace to organizational workspace
+    2. Optionally transfers logs from personal "Assistants" project to org "Assistants" project
+    3. Grants the transferring user Owner role on the assistant in the org
+    4. Updates the assistant's associated API key to the org API key
+    """
+    user_id = request.state.user_id
+    target_org_id = transfer_request.organization_id
+    assistant_dao = AssistantDAO(session)
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    resource_access_dao = ResourceAccessDAO(session)
+    role_dao = RoleDAO(session)
+
+    # Verify this is a personal assistant (must use personal API key)
+    current_org_id = getattr(request.state, "organization_id", None)
+    if current_org_id is not None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Must use a personal API key to transfer personal assistants. Use an org API key for org assistants.",
+        )
+
+    # Get the personal assistant
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=None,
+    )
+    if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Personal assistant not found.",
+        )
+
+    # Check user has assistant:write permission in target org
+    has_permission = resource_access_dao.check_org_member_permission(
+        user_id,
+        target_org_id,
+        "assistant:write",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to create assistants in the target organization.",
+        )
+
+    logs_transferred = False
+    try:
+        # Transfer logs if requested
+        if transfer_request.transfer_logs:
+            ASSISTANTS_PROJECT_NAME = "Assistants"
+            # Get personal Assistants project
+            personal_project = project_dao.get_by_user_and_name(
+                user_id=user_id,
+                name=ASSISTANTS_PROJECT_NAME,
+                organization_id=None,
+            )
+            # Get or create org Assistants project
+            org_project = project_dao.get_by_user_and_name(
+                user_id=None,
+                name=ASSISTANTS_PROJECT_NAME,
+                organization_id=target_org_id,
+            )
+            if not org_project:
+                project_dao.create(
+                    user_id=None,
+                    organization_id=target_org_id,
+                    name=ASSISTANTS_PROJECT_NAME,
+                    description="Project to manage and track all organization assistants.",
+                    is_versioned=False,
+                )
+                org_project = project_dao.get_by_user_and_name(
+                    user_id=None,
+                    name=ASSISTANTS_PROJECT_NAME,
+                    organization_id=target_org_id,
+                )
+
+            if personal_project and org_project:
+                assistant_context_prefix = f"{assistant.first_name}{assistant.surname}"
+                # Find all contexts related to the assistant
+                contexts_to_transfer = (
+                    session.query(Context)
+                    .filter(
+                        Context.project_id == personal_project.id,
+                        or_(
+                            Context.name == assistant_context_prefix,
+                            Context.name.like(f"{assistant_context_prefix}/%"),
+                            Context.name.like(f"%/{assistant_context_prefix}"),
+                            Context.name.like(f"%/{assistant_context_prefix}/%"),
+                        ),
+                    )
+                    .all()
+                )
+                for ctx in contexts_to_transfer:
+                    ctx.project_id = org_project.id
+                logs_transferred = len(contexts_to_transfer) > 0
+
+        # Transfer the assistant to org
+        transferred = assistant_dao.transfer_to_organization(
+            agent_id=assistant_id,
+            user_id=user_id,
+            organization_id=target_org_id,
+        )
+        if not transferred:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to transfer assistant.",
+            )
+
+        # Grant Owner role to the user on this assistant
+        owner_role = role_dao.get_by_name("Owner", organization_id=None)
+        if owner_role:
+            resource_access_dao.grant_access(
+                resource_type="assistant",
+                resource_id=assistant_id,
+                role_id=owner_role.id,
+                grantee_type="user",
+                grantee_id=user_id,
+            )
+
+        session.commit()
+
+        return InfoResponse(
+            info=AssistantTransferResponse(
+                message="Assistant transferred to organization successfully.",
+                agent_id=assistant_id,
+                transferred_from="personal",
+                transferred_to="organization",
+                logs_transferred=logs_transferred,
+            ),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Failed to transfer assistant {assistant_id} to org: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to transfer assistant: {str(e)}",
+        )
+
+
+@router.post(
+    "/assistant/{assistant_id}/transfer/to-personal",
+    response_model=InfoResponse[AssistantTransferResponse],
+    status_code=status.HTTP_200_OK,
+    summary="Transfer assistant to personal workspace",
+    description="Transfers an organizational assistant to the user's personal workspace.",
+    tags=["Assistant Management"],
+    responses={
+        200: {"description": "Assistant transferred successfully"},
+        403: {"description": "Permission denied"},
+        404: {"description": "Assistant not found"},
+        400: {"description": "Invalid transfer request"},
+    },
+)
+def transfer_assistant_to_personal(
+    assistant_id: int,
+    transfer_request: AssistantTransferToPersonalRequest,
+    request: Request,
+    session: Session = Depends(get_db_session),
+    _: None = Depends(check_assistant_hiring_approval),
+) -> InfoResponse[AssistantTransferResponse]:
+    """
+    Transfer an organizational assistant to personal workspace.
+
+    This endpoint:
+    1. Moves the assistant from org workspace to user's personal workspace
+    2. Deletes related logs from org "Assistants" project if requested
+    3. Removes RBAC grants on the assistant
+    4. Updates the assistant's owner to the requesting user
+    """
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    assistant_dao = AssistantDAO(session)
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    # Verify this is an org assistant (must use org API key)
+    if organization_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Must use an organization API key to transfer org assistants.",
+        )
+
+    # Get the org assistant
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id=user_id,
+        agent_id=assistant_id,
+        organization_id=organization_id,
+    )
+    if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization assistant not found.",
+        )
+
+    # Check user has assistant:delete permission on this assistant
+    has_permission = resource_access_dao.check_user_permission(
+        user_id,
+        "assistant",
+        assistant_id,
+        "assistant:delete",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to transfer this assistant out of the organization.",
+        )
+
+    logs_deleted = False
+    try:
+        # Delete logs if requested
+        if transfer_request.delete_logs:
+            ASSISTANTS_PROJECT_NAME = "Assistants"
+            org_project = project_dao.get_by_user_and_name(
+                user_id=None,
+                name=ASSISTANTS_PROJECT_NAME,
+                organization_id=organization_id,
+            )
+            if org_project:
+                assistant_context_prefix = f"{assistant.first_name}{assistant.surname}"
+                contexts_to_delete = (
+                    session.query(Context)
+                    .filter(
+                        Context.project_id == org_project.id,
+                        or_(
+                            Context.name == assistant_context_prefix,
+                            Context.name.like(f"{assistant_context_prefix}/%"),
+                            Context.name.like(f"%/{assistant_context_prefix}"),
+                            Context.name.like(f"%/{assistant_context_prefix}/%"),
+                        ),
+                    )
+                    .all()
+                )
+                for ctx in contexts_to_delete:
+                    context_dao.delete(ctx.id)
+                logs_deleted = len(contexts_to_delete) > 0
+
+        # Remove all RBAC grants on this assistant
+        existing_grants = resource_access_dao.get_resource_access(
+            resource_type="assistant",
+            resource_id=assistant_id,
+        )
+        for grant in existing_grants:
+            resource_access_dao.revoke_access(
+                resource_type="assistant",
+                resource_id=assistant_id,
+                grantee_type=grant.grantee_type,
+                grantee_id=grant.grantee_id,
+            )
+
+        # Transfer the assistant to personal
+        transferred = assistant_dao.transfer_to_personal(
+            agent_id=assistant_id,
+            organization_id=organization_id,
+            new_owner_user_id=user_id,
+        )
+        if not transferred:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to transfer assistant.",
+            )
+
+        session.commit()
+
+        return InfoResponse(
+            info=AssistantTransferResponse(
+                message="Assistant transferred to personal workspace successfully.",
+                agent_id=assistant_id,
+                transferred_from="organization",
+                transferred_to="personal",
+                logs_deleted=logs_deleted,
+            ),
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        logging.error(f"Failed to transfer assistant {assistant_id} to personal: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to transfer assistant: {str(e)}",
         )
 
 

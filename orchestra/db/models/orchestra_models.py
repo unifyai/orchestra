@@ -1661,7 +1661,11 @@ class FavoriteProject(Base):
 
 
 class Assistant(Base):
-    """Model class for the assistants table."""
+    """Model class for the assistants table.
+
+    Assistants can be either personal (user_id set, organization_id NULL)
+    or organizational (organization_id set, user_id is the creator).
+    """
 
     __tablename__ = "assistants"
 
@@ -1670,6 +1674,12 @@ class Assistant(Base):
         String,
         ForeignKey("auth_user.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
+    )
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=True,
         index=True,
     )
     first_name = Column(String, nullable=True)
@@ -1711,11 +1721,19 @@ class Assistant(Base):
             ["voices.user_id", "voices.voice_id", "voices.provider"],
             name="fk_assistants_voices",
         ),
+        # Personal assistants: unique per user
         UniqueConstraint(
             "user_id",
             "first_name",
             "surname",
             name="uq_user_assistant_name",
+        ),
+        # Org assistants: unique per organization
+        UniqueConstraint(
+            "organization_id",
+            "first_name",
+            "surname",
+            name="uq_org_assistant_name",
         ),
         sa.CheckConstraint(
             "user_local_desktop IN ('ubuntu', 'windows', 'macos')",
