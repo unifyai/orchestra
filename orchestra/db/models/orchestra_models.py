@@ -2141,3 +2141,43 @@ class Embedding(Base):
             ),
         ),
     )
+
+
+class EmbeddingQueue(Base):
+    """Queue for async embedding generation.
+
+    Embeddings are queued during log creation and processed by background workers.
+    This decouples log creation from OpenAI API calls and HNSW index updates.
+    Status values:
+    - pending: Waiting to be processed
+    - processing: Currently being processed by a worker
+    - completed: Successfully processed (will be deleted from queue)
+    - failed: Failed after max retries (kept for debugging)
+    """
+
+    __tablename__ = "embedding_queue"
+
+    id = Column(Integer, primary_key=True)
+    ref_id = Column(
+        Integer,
+        ForeignKey("log_event.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    key = Column(String, nullable=False)
+    text = Column(String, nullable=False)  # Text to embed
+    model = Column(String, nullable=False)
+    dimensions = Column(Integer, nullable=True)
+    status = Column(String, nullable=False, server_default="pending")
+    retry_count = Column(Integer, nullable=False, server_default=sa.text("0"))
+    error_message = Column(String, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("ref_id", "key", "model", name="uq_embedding_queue"),
+        sa.CheckConstraint(
+            "status IN ('pending', 'processing', 'completed', 'failed')",
+            name="chk_embedding_queue_status",
+        ),
+        Index("idx_embedding_queue_status_created", "status", "created_at"),
+        Index("idx_embedding_queue_ref_id", "ref_id"),
+    )
