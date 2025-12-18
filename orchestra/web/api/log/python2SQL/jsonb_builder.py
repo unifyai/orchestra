@@ -312,17 +312,25 @@ def _build_jsonb_field_expression(
         ).scalar()
         model_name = model_result if model_result else DEFAULT_EMBEDDING_MODEL
 
+        # Use log_event_ids if available to scope the query to user's project/context
+        if log_event_ids is not None:
+            id_source = log_event_ids
+            id_column = log_event_ids.c.id
+        else:
+            id_source = log_event_alias
+            id_column = log_event_alias.id
+
         vector_subq = (
             select(
-                log_event_alias.id.label("log_event_id"),
+                id_column.label("log_event_id"),
                 Embedding.vector.label("value"),
                 literal("vector").label("inferred_type"),
             )
-            .select_from(log_event_alias)
+            .select_from(id_source)
             .outerjoin(
                 Embedding,
                 and_(
-                    Embedding.ref_id == log_event_alias.id,
+                    Embedding.ref_id == id_column,
                     Embedding.key == literal(key),
                     Embedding.model == literal(model_name),
                 ),
@@ -4012,6 +4020,12 @@ def _handle_embed_jsonb(
         log_event_alias.data.op("->>")(key).label("text_value"),
     ).select_from(log_event_alias)
 
+    # Filter by log_event_ids to scope query to user's project/context
+    if log_event_ids is not None:
+        text_query = text_query.where(
+            log_event_alias.id.in_(select(log_event_ids.c.id)),
+        )
+
     # Execute to get id_to_text mapping
     rows = session.execute(text_query).fetchall()
     id_to_text = {}
@@ -4405,12 +4419,16 @@ def _handle_phash_jsonb(
     # In JSONB mode, identifiers return JSONB expressions, not subqueries
     elif _is_jsonb_expression(image_expr):
         # Query LogEvent.data directly to get image URLs
-        rows = session.execute(
-            select(
-                log_event_alias.id.label("log_event_id"),
-                image_expr.label("value"),
-            ).select_from(log_event_alias),
-        ).fetchall()
+        query = select(
+            log_event_alias.id.label("log_event_id"),
+            image_expr.label("value"),
+        ).select_from(log_event_alias)
+
+        # Filter by log_event_ids to scope query to user's project/context
+        if log_event_ids is not None:
+            query = query.where(log_event_alias.id.in_(select(log_event_ids.c.id)))
+
+        rows = session.execute(query).fetchall()
         return _compute_hashes_for_rows(rows)
 
     else:
