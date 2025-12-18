@@ -1764,7 +1764,88 @@ def transfer_assistant_to_org(
                     )
                     # Update the context's project_id
                     ctx.project_id = org_project.id
-                logs_transferred = len(contexts_to_transfer) > 0
+
+                # =========================================================
+                # Transfer logs from shared "All/*" contexts
+                # These contexts may contain logs from multiple assistants,
+                # so we only transfer logs where _assistant_id matches
+                # =========================================================
+                shared_contexts = (
+                    session.query(Context)
+                    .filter(
+                        Context.project_id == personal_project.id,
+                        Context.name.like("All/%"),
+                    )
+                    .all()
+                )
+
+                shared_logs_transferred = False
+                for shared_ctx in shared_contexts:
+                    # Find logs belonging to this assistant in the shared context
+                    assistant_log_ids = [
+                        row[0]
+                        for row in (
+                            session.query(LogEventContext.log_event_id)
+                            .join(
+                                LogEvent,
+                                LogEvent.id == LogEventContext.log_event_id,
+                            )
+                            .filter(
+                                LogEventContext.context_id == shared_ctx.id,
+                                LogEvent.data["_assistant_id"].astext
+                                == str(assistant_id),
+                            )
+                            .all()
+                        )
+                    ]
+
+                    if not assistant_log_ids:
+                        continue
+
+                    shared_logs_transferred = True
+
+                    # Check if shared context exists in org project
+                    org_shared_ctx = (
+                        session.query(Context)
+                        .filter(
+                            Context.project_id == org_project.id,
+                            Context.name == shared_ctx.name,
+                        )
+                        .first()
+                    )
+
+                    if org_shared_ctx:
+                        target_ctx_id = org_shared_ctx.id
+                    else:
+                        # Create the "All/*" context in org project
+                        new_ctx = Context(
+                            project_id=org_project.id,
+                            name=shared_ctx.name,
+                        )
+                        session.add(new_ctx)
+                        session.flush()
+                        target_ctx_id = new_ctx.id
+
+                    # Move logs to org project
+                    session.query(LogEvent).filter(
+                        LogEvent.id.in_(assistant_log_ids),
+                    ).update(
+                        {LogEvent.project_id: org_project.id},
+                        synchronize_session=False,
+                    )
+
+                    # Update context links to point to org's context
+                    session.query(LogEventContext).filter(
+                        LogEventContext.log_event_id.in_(assistant_log_ids),
+                        LogEventContext.context_id == shared_ctx.id,
+                    ).update(
+                        {LogEventContext.context_id: target_ctx_id},
+                        synchronize_session=False,
+                    )
+
+                logs_transferred = (
+                    len(contexts_to_transfer) > 0 or shared_logs_transferred
+                )
 
         # Transfer the assistant to org
         transferred = assistant_dao.transfer_to_organization(
