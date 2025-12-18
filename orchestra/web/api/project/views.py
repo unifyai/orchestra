@@ -52,6 +52,7 @@ from orchestra.web.api.interface.template_utils import (
     TemplateValidator,
 )
 from orchestra.web.api.project.schema import (
+    AdminResourceAccessGrant,
     DuplicateProjectRequest,
     ExportProjectTemplateRequest,
     FavoriteProjectIn,
@@ -2557,3 +2558,147 @@ def admin_duplicate_project(
         "info": f"Project '{request.from_project_name}' duplicated successfully to '{request.new_project_name}'!",
         "details": stats,
     }
+
+
+@admin_router.get(
+    "/projects/org/{org_id}",
+    response_model=List[ProjectOut],
+    summary="Admin: List all projects in an organization",
+    description="Lists ALL projects in an org, bypassing ResourceAccess checks. "
+    "Useful for finding orphaned projects.",
+)
+def admin_list_org_projects(
+    org_id: int,
+    session=Depends(get_db_session),
+) -> List[ProjectOut]:
+    """List all projects in an org without access control checks."""
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+
+    # Use filter() which bypasses RBAC (not filter_by_user_access)
+    projects = project_dao.filter(organization_id=org_id)
+
+    return [
+        ProjectOut(
+            id=p[0].id,
+            name=p[0].name,
+            description=p[0].description,
+            icon=p[0].icon or "folder",
+            is_versioned=p[0].is_versioned,
+            created_at=p[0].created_at.isoformat() if p[0].created_at else None,
+            updated_at=p[0].updated_at.isoformat() if p[0].updated_at else None,
+            user_id=p[0].user_id,
+            organization_id=p[0].organization_id,
+        )
+        for p in projects
+    ]
+
+
+@admin_router.delete(
+    "/project/{project_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Admin: Delete project by ID",
+    description="Deletes any project by ID, including orphaned projects. "
+    "Use with caution - this bypasses all access checks.",
+)
+def admin_delete_project(
+    project_id: int,
+    session=Depends(get_db_session),
+):
+    """Delete a project by ID (admin bypass)."""
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    # Get project
+    project = project_dao.get(project_id)
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project with id {project_id} not found",
+        )
+
+    # Store info for response
+    project_name = project.name
+    org_id = project.organization_id
+
+    try:
+        # Remove all ResourceAccess grants for this project
+        existing_grants = resource_access_dao.get_resource_access(
+            resource_type="project",
+            resource_id=project_id,
+        )
+        for grant in existing_grants:
+            resource_access_dao.revoke_access(
+                resource_type="project",
+                resource_id=project_id,
+                grantee_type=grant.grantee_type,
+                grantee_id=grant.grantee_id,
+            )
+
+        # Delete the project (cascades to contexts, logs, etc.)
+        project_dao.delete(project_id)
+        session.commit()
+
+        return {
+            "info": f"Project '{project_name}' (id={project_id}) deleted successfully",
+            "organization_id": org_id,
+        }
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete project: {str(e)}",
+        )
+
+
+@admin_router.post(
+    "/resources/access",
+    status_code=status.HTTP_201_CREATED,
+    summary="Admin: Grant resource access",
+    description="Grants access to any resource, bypassing permission checks. "
+    "Useful for fixing orphaned resources.",
+)
+def admin_grant_resource_access(
+    request: AdminResourceAccessGrant,
+    session=Depends(get_db_session),
+):
+    """Grant resource access (admin bypass)."""
+    resource_access_dao = ResourceAccessDAO(session)
+    role_dao = RoleDAO(session)
+
+    # Verify role exists
+    role = role_dao.get(request.role_id)
+    if not role:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Role with id {request.role_id} not found",
+        )
+
+    try:
+        access = resource_access_dao.grant_access(
+            resource_type=request.resource_type,
+            resource_id=request.resource_id,
+            role_id=request.role_id,
+            grantee_type=request.grantee_type,
+            grantee_id=request.grantee_id,
+        )
+        session.commit()
+
+        return {
+            "info": "Access granted successfully",
+            "access_id": access.id,
+            "resource_type": access.resource_type,
+            "resource_id": access.resource_id,
+            "role_name": role.name,
+            "grantee_type": access.grantee_type,
+            "grantee_id": access.grantee_id,
+        }
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to grant access: {str(e)}",
+        )

@@ -209,3 +209,28 @@ class TransferResponse(BaseModel):
     from_type: str  # "personal" or "organization"
     to_type: str  # "personal" or "organization"
     message: str
+
+
+class AdminResourceAccessGrant(BaseModel):
+    """Request model for admin granting resource access."""
+
+    resource_type: str = Field(
+        description="Type of resource (e.g., 'project', 'assistant')",
+        example="project",
+    )
+    resource_id: int = Field(
+        description="ID of the resource",
+        example=123,
+    )
+    role_id: int = Field(
+        description="Role ID to grant",
+        example=1,
+    )
+    grantee_type: str = Field(
+        description="Type of grantee ('user' or 'team')",
+        example="user",
+    )
+    grantee_id: str = Field(
+        description="ID of the grantee (user_id or team_id)",
+        example="abc123",
+    )
