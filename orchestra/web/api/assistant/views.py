@@ -34,7 +34,12 @@ from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import AuthUser, Context
+from orchestra.db.models.orchestra_models import (
+    AuthUser,
+    Context,
+    LogEvent,
+    LogEventContext,
+)
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.call_recording_service import CallRecordingService
 from orchestra.services.cartesia_service import CartesiaAPIError, CartesiaService
@@ -1745,6 +1750,19 @@ def transfer_assistant_to_org(
                     .all()
                 )
                 for ctx in contexts_to_transfer:
+                    # Update LogEvent.project_id for all log events in this context
+                    # This is required because logs are queried by LogEvent.project_id
+                    session.query(LogEvent).filter(
+                        LogEvent.id.in_(
+                            session.query(LogEventContext.log_event_id).filter(
+                                LogEventContext.context_id == ctx.id,
+                            ),
+                        ),
+                    ).update(
+                        {LogEvent.project_id: org_project.id},
+                        synchronize_session=False,
+                    )
+                    # Update the context's project_id
                     ctx.project_id = org_project.id
                 logs_transferred = len(contexts_to_transfer) > 0
 
@@ -1868,11 +1886,13 @@ def transfer_assistant_to_personal(
         # Delete logs if requested
         if transfer_request.delete_logs:
             ASSISTANTS_PROJECT_NAME = "Assistants"
-            org_project = project_dao.get_by_user_and_name(
-                user_id=None,
-                name=ASSISTANTS_PROJECT_NAME,
+            # Use filter() instead of get_by_user_and_name() because we need to find
+            # org projects directly without requiring user access checks
+            org_projects = project_dao.filter(
                 organization_id=organization_id,
+                name=ASSISTANTS_PROJECT_NAME,
             )
+            org_project = org_projects[0][0] if org_projects else None
             if org_project:
                 assistant_context_prefix = f"{assistant.first_name}{assistant.surname}"
                 contexts_to_delete = (
