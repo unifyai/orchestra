@@ -1689,11 +1689,16 @@ def _get_logs_query_jsonb(
                     False,
                 )
 
+                # Create a subquery of the current filtered log event IDs
+                filter_event_ids_subq = query.with_entities(LogEvent.id).subquery(
+                    name="filter_event_ids",
+                )
+
                 condition_result = build_sql_query(
                     filter_dict,
                     LogEvent,
                     session,
-                    log_event_ids=None,
+                    log_event_ids=filter_event_ids_subq,
                     project_id=project_id,
                     context_id=context_id,
                     enable_cte_optimization=enable_cte,
@@ -1821,6 +1826,11 @@ def _get_logs_query_jsonb(
     order_by_cols = []
     has_sort_joins = False
 
+    # Create a subquery of the current filtered log event IDs for use in sorting expressions
+    filtered_event_ids_subq = query.with_entities(LogEvent.id).subquery(
+        name="filtered_event_ids_for_sort",
+    )
+
     if sorting:
         try:
             sort_dict = json.loads(sorting)
@@ -1912,7 +1922,7 @@ def _get_logs_query_jsonb(
                     rhs_embed,
                     LogEvent,
                     session,
-                    log_event_ids=None,
+                    log_event_ids=filtered_event_ids_subq,
                     project_id=project_id,
                     context_id=context_id,
                 )
@@ -2107,7 +2117,7 @@ def _get_logs_query_jsonb(
                             expr_dict,
                             LogEvent,
                             session,
-                            log_event_ids=None,
+                            log_event_ids=filtered_event_ids_subq,
                             project_id=project_id,
                             context_id=context_id,
                         )
