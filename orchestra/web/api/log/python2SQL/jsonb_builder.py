@@ -4050,15 +4050,15 @@ def _handle_embed_jsonb(
 
     vector_subq = (
         select(
-            log_event_alias.id.label("log_event_id"),
+            log_event_ids.c.id.label("log_event_id"),
             Embedding.vector.label("value"),
             literal("vector").label("inferred_type"),
         )
-        .select_from(log_event_alias)
+        .select_from(log_event_ids)
         .outerjoin(
             Embedding,
             and_(
-                Embedding.ref_id == log_event_alias.id,
+                Embedding.ref_id == log_event_ids.c.id,
                 Embedding.key == literal(key),
                 Embedding.model == literal(model_name),
             ),
