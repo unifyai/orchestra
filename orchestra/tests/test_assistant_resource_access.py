@@ -7,6 +7,9 @@ from fastapi import status
 from httpx import AsyncClient
 
 from orchestra.db.dao.assistant_dao import AssistantDAO
+from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.tests.utils import ADMIN_HEADERS, HEADERS, create_test_user
@@ -1678,3 +1681,292 @@ async def test_transfer_response_logs_deleted_flag(client: AsyncClient, dbsessio
     assert transfer_resp.status_code == 200
     # logs_deleted should be False when delete_logs=False
     assert transfer_resp.json()["info"]["logs_deleted"] is False
+
+
+@pytest.mark.anyio
+async def test_transfer_creates_assistants_project_with_owner_access(
+    client: AsyncClient,
+    dbsession,
+):
+    """
+    Test that transferring an assistant creates Assistants project with Owner access.
+
+    When the org Assistants project doesn't exist:
+    - It should be created
+    - The transferring user should get Owner role on it
+    """
+    user = await create_test_user(
+        client,
+        "proj_owner_creator@test.com",
+        hiring_approved=True,
+    )
+
+    # Create personal Assistants project (so we can transfer logs)
+    proj_resp = await client.post(
+        "/v0/project",
+        json={"name": "Assistants"},
+        headers=user["headers"],
+    )
+    assert proj_resp.status_code == 200
+
+    # Create personal assistant
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={"first_name": "ProjOwner", "surname": "Test", "create_infra": False},
+        headers=user["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+
+    # Create organization (user becomes owner)
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Proj Owner Test Org"},
+        headers=user["headers"],
+    )
+    org_id = org_resp.json()["id"]
+    org_api_key = org_resp.json()["api_key"]
+    org_headers = {"Authorization": f"Bearer {org_api_key}"}
+
+    # Transfer assistant to org with transfer_logs=True
+    transfer_resp = await client.post(
+        f"/v0/assistant/{agent_id}/transfer/to-org",
+        json={"organization_id": org_id, "transfer_logs": True},
+        headers=user["headers"],
+    )
+    assert transfer_resp.status_code == 200
+
+    # Verify user can see the Assistants project via org API
+    projects_resp = await client.get("/v0/projects", headers=org_headers)
+    assert projects_resp.status_code == 200
+    assert (
+        "Assistants" in projects_resp.json()
+    ), "User should have access to Assistants project"
+
+    # Verify user has Owner role on the project (can delete it)
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    projects = project_dao.filter(organization_id=org_id, name="Assistants")
+    assert len(projects) > 0, "Assistants project should exist in org"
+    project_id = projects[0][0].id
+
+    # Check user has project:delete permission (Owner has this)
+    has_delete = resource_access_dao.check_user_permission(
+        user["id"],
+        "project",
+        project_id,
+        "project:delete",
+    )
+    assert has_delete, "Creator should have Owner role with delete permission"
+
+
+@pytest.mark.anyio
+async def test_transfer_grants_admin_to_second_user_on_existing_project(
+    client: AsyncClient,
+    dbsession,
+):
+    """
+    Test that second user gets Admin access when Assistants project already exists.
+
+    When user transfers to org where Assistants project already exists:
+    - User should get Admin role (not Owner)
+    - User should be able to read/write but not delete
+    """
+    # First user creates org and Assistants project
+    user1 = await create_test_user(
+        client,
+        "proj_first_user@test.com",
+        hiring_approved=True,
+    )
+
+    # Create organization (user1 becomes owner)
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Multi User Assistants Org"},
+        headers=user1["headers"],
+    )
+    org_id = org_resp.json()["id"]
+    org_api_key = org_resp.json()["api_key"]
+    org_headers = {"Authorization": f"Bearer {org_api_key}"}
+
+    # Create Assistants project explicitly via user1's org key
+    proj_resp = await client.post(
+        "/v0/project",
+        json={"name": "Assistants"},
+        headers=org_headers,
+    )
+    assert proj_resp.status_code == 200
+
+    # Second user joins org
+    user2 = await create_test_user(
+        client,
+        "proj_second_user@test.com",
+        hiring_approved=True,
+    )
+
+    # Add user2 to org (use user_id, not email - OrganizationMemberAdd schema)
+    invite_resp = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": user2["id"]},
+        headers=user1["headers"],
+    )
+    assert invite_resp.status_code in [200, 201]
+
+    # User2 creates personal Assistants project (for log transfer)
+    proj_resp2 = await client.post(
+        "/v0/project",
+        json={"name": "Assistants"},
+        headers=user2["headers"],
+    )
+    assert proj_resp2.status_code == 200
+
+    # User2 creates personal assistant
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={"first_name": "SecondUser", "surname": "Asst", "create_infra": False},
+        headers=user2["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+
+    # Get user2's org API key
+    user2_info_resp = await client.get(
+        f"/v0/admin/auth-user/by-email?email=proj_second_user@test.com",
+        headers=ADMIN_HEADERS,
+    )
+    user2_info = user2_info_resp.json()
+    user2_org_api_key = None
+    for org in user2_info.get("organizations", []):
+        if org.get("id") == org_id:
+            user2_org_api_key = org.get("apiKey")
+            break
+
+    # User2 transfers assistant to org (project already exists from user1)
+    transfer_resp = await client.post(
+        f"/v0/assistant/{agent_id}/transfer/to-org",
+        json={"organization_id": org_id, "transfer_logs": True},
+        headers=user2["headers"],
+    )
+    assert transfer_resp.status_code == 200
+
+    # Verify user2 can see the Assistants project
+    if user2_org_api_key:
+        user2_org_headers = {"Authorization": f"Bearer {user2_org_api_key}"}
+        projects_resp = await client.get("/v0/projects", headers=user2_org_headers)
+        assert projects_resp.status_code == 200
+        assert (
+            "Assistants" in projects_resp.json()
+        ), "User2 should have access to Assistants project"
+
+    # Verify user2 has Admin role (read/write but not delete)
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    projects = project_dao.filter(organization_id=org_id, name="Assistants")
+    project_id = projects[0][0].id
+
+    # Check user2 has project:read permission (Admin has this)
+    has_read = resource_access_dao.check_user_permission(
+        user2["id"],
+        "project",
+        project_id,
+        "project:read",
+    )
+    assert has_read, "Second user should have read permission"
+
+    # Check user2 has project:write permission (Admin has this)
+    has_write = resource_access_dao.check_user_permission(
+        user2["id"],
+        "project",
+        project_id,
+        "project:write",
+    )
+    assert has_write, "Second user should have write permission"
+
+
+@pytest.mark.anyio
+async def test_transfer_no_duplicate_grant_if_already_has_access(
+    client: AsyncClient,
+    dbsession,
+):
+    """
+    Test that transferring doesn't create duplicate grants if user already has access.
+
+    If user already has access to Assistants project, no new grant should be added.
+    """
+    user = await create_test_user(
+        client,
+        "no_dup_grant@test.com",
+        hiring_approved=True,
+    )
+
+    # Create organization
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "No Dup Grant Org"},
+        headers=user["headers"],
+    )
+    org_id = org_resp.json()["id"]
+    org_api_key = org_resp.json()["api_key"]
+    org_headers = {"Authorization": f"Bearer {org_api_key}"}
+
+    # Create Assistants project (user gets Owner grant via normal flow)
+    proj_resp = await client.post(
+        "/v0/project",
+        json={"name": "Assistants"},
+        headers=org_headers,
+    )
+    assert proj_resp.status_code == 200
+
+    # Create personal Assistants project for log transfer
+    personal_proj_resp = await client.post(
+        "/v0/project",
+        json={"name": "Assistants"},
+        headers=user["headers"],
+    )
+    assert personal_proj_resp.status_code == 200
+
+    # Create personal assistant
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={"first_name": "NoDup", "surname": "Grant", "create_infra": False},
+        headers=user["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+
+    # Get project ID and count grants before transfer
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    projects = project_dao.filter(organization_id=org_id, name="Assistants")
+    project_id = projects[0][0].id
+
+    grants_before = resource_access_dao.get_resource_access("project", project_id)
+    user_grants_before = [g for g in grants_before if g.grantee_id == user["id"]]
+    count_before = len(user_grants_before)
+
+    # Transfer assistant (user already has Owner access to project)
+    transfer_resp = await client.post(
+        f"/v0/assistant/{agent_id}/transfer/to-org",
+        json={"organization_id": org_id, "transfer_logs": True},
+        headers=user["headers"],
+    )
+    assert transfer_resp.status_code == 200
+
+    # Verify grant count didn't increase
+    dbsession.expire_all()
+    grants_after = resource_access_dao.get_resource_access("project", project_id)
+    user_grants_after = [g for g in grants_after if g.grantee_id == user["id"]]
+    count_after = len(user_grants_after)
+
+    assert (
+        count_after == count_before
+    ), "Should not create duplicate grant if user already has access"
