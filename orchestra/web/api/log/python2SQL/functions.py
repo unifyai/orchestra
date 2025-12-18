@@ -928,7 +928,9 @@ def _handle_functions(
     elif operand == "date":
         return _handle_date_function(rhs_expr, session)
     elif operand == "now":
-        if log_event_ids is None or log_event_ids == []:
+        if log_event_ids is None or (
+            isinstance(log_event_ids, list) and len(log_event_ids) == 0
+        ):
             return literal(datetime.now(timezone.utc).isoformat(), type_=TIMESTAMP)
 
         if isinstance(log_event_ids, list):
@@ -3215,7 +3217,7 @@ def _handle_dict_get(
             value_expr, result_type = process_get(container_sql, key_sql)
 
         # For direct expressions, we need to wrap in a subquery if we have log_event_ids
-        if log_event_ids:
+        if log_event_ids is not None:
             if isinstance(log_event_ids, list):
                 ids_subq = alias_utils.subquery_with_unique_alias(
                     select(literal(id_).label("log_event_id") for id_ in log_event_ids),
