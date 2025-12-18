@@ -1970,3 +1970,250 @@ async def test_transfer_no_duplicate_grant_if_already_has_access(
     assert (
         count_after == count_before
     ), "Should not create duplicate grant if user already has access"
+
+
+@pytest.mark.anyio
+async def test_transfer_shared_all_context_logs(
+    client: AsyncClient,
+    dbsession,
+):
+    """
+    Test that logs in shared 'All/*' contexts are transferred correctly.
+
+    When transferring an assistant with transfer_logs=True:
+    - Logs in "All/Contact" (or other "All/*" contexts) that belong to the
+      assistant (identified by _assistant_id) should be transferred
+    - If "All/Contact" exists in org, logs should be linked to existing context
+    - If "All/Contact" doesn't exist in org, it should be created
+    """
+    user = await create_test_user(
+        client,
+        "shared_ctx_transfer@test.com",
+        hiring_approved=True,
+    )
+
+    # Create personal Assistants project
+    proj_resp = await client.post(
+        "/v0/project",
+        json={"name": "Assistants"},
+        headers=user["headers"],
+    )
+    assert proj_resp.status_code == 200
+
+    # Create personal assistant
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={"first_name": "SharedCtx", "surname": "Test", "create_infra": False},
+        headers=user["headers"],
+    )
+    assert create_resp.status_code == 200
+    assistant_info = create_resp.json()["info"]
+    agent_id = int(assistant_info["agent_id"])
+    assistant_name = f"{assistant_info['first_name']}{assistant_info['surname']}"
+
+    # Create logs in assistant-specific context (AssistantName)
+    specific_log_payload = {
+        "project": "Assistants",
+        "context": assistant_name,
+        "entries": [
+            {
+                "message": "Specific context log",
+                "_assistant_id": agent_id,
+            },
+        ],
+    }
+    log_resp = await client.post(
+        "/v0/logs",
+        json=specific_log_payload,
+        headers=user["headers"],
+    )
+    assert log_resp.status_code == 200
+
+    # Create logs in shared "All/Contact" context with _assistant_id
+    shared_log_payload = {
+        "project": "Assistants",
+        "context": "All/Contact",
+        "entries": [
+            {
+                "message": "Shared context log for this assistant",
+                "_assistant_id": agent_id,
+            },
+        ],
+    }
+    log_resp2 = await client.post(
+        "/v0/logs",
+        json=shared_log_payload,
+        headers=user["headers"],
+    )
+    assert log_resp2.status_code == 200
+
+    # Verify logs exist in personal project's "All/Contact"
+    logs_before = await client.get(
+        "/v0/logs?project=Assistants&context=All/Contact",
+        headers=user["headers"],
+    )
+    assert logs_before.status_code == 200
+    assert logs_before.json()["count"] > 0, "Shared context logs should exist"
+
+    # Create organization
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Shared Ctx Transfer Org"},
+        headers=user["headers"],
+    )
+    org_id = org_resp.json()["id"]
+    org_headers = {"Authorization": f"Bearer {org_resp.json()['api_key']}"}
+
+    # Transfer assistant to org with transfer_logs=True
+    transfer_resp = await client.post(
+        f"/v0/assistant/{agent_id}/transfer/to-org",
+        json={"organization_id": org_id, "transfer_logs": True},
+        headers=user["headers"],
+    )
+    assert transfer_resp.status_code == 200
+    transfer_data = transfer_resp.json()["info"]
+    assert transfer_data["logs_transferred"] is True
+
+    # Verify assistant-specific logs are in org project
+    specific_logs_org = await client.get(
+        f"/v0/logs?project=Assistants&context={assistant_name}",
+        headers=org_headers,
+    )
+    assert specific_logs_org.status_code == 200
+    assert (
+        specific_logs_org.json()["count"] > 0
+    ), "Assistant-specific logs should be in org"
+
+    # Verify shared "All/Contact" logs are in org project
+    shared_logs_org = await client.get(
+        "/v0/logs?project=Assistants&context=All/Contact",
+        headers=org_headers,
+    )
+    assert shared_logs_org.status_code == 200
+    assert (
+        shared_logs_org.json()["count"] > 0
+    ), "Shared context logs should be transferred to org"
+
+    # Verify the shared context logs are no longer in personal project
+    # (they were moved, not copied)
+    shared_logs_personal = await client.get(
+        "/v0/logs?project=Assistants&context=All/Contact",
+        headers=user["headers"],
+    )
+    # Either 404 (context gone) or 200 with count=0 (context exists but no logs)
+    if shared_logs_personal.status_code == 200:
+        assert (
+            shared_logs_personal.json()["count"] == 0
+        ), "Shared context logs should be removed from personal project"
+
+
+@pytest.mark.anyio
+async def test_transfer_shared_context_to_existing_org_context(
+    client: AsyncClient,
+    dbsession,
+):
+    """
+    Test that when org already has 'All/Contact' context, logs are linked to it.
+
+    This tests the scenario where:
+    1. Org already has "All/Contact" context (from previous assistant transfers)
+    2. A new assistant is transferred with logs in "All/Contact"
+    3. The logs should be linked to the existing org context
+    """
+    user = await create_test_user(
+        client,
+        "existing_shared_ctx@test.com",
+        hiring_approved=True,
+    )
+
+    # Create personal Assistants project
+    proj_resp = await client.post(
+        "/v0/project",
+        json={"name": "Assistants"},
+        headers=user["headers"],
+    )
+    assert proj_resp.status_code == 200
+
+    # Create organization
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Existing Shared Ctx Org"},
+        headers=user["headers"],
+    )
+    org_id = org_resp.json()["id"]
+    org_headers = {"Authorization": f"Bearer {org_resp.json()['api_key']}"}
+
+    # Create org Assistants project with "All/Contact" context already existing
+    org_proj_resp = await client.post(
+        "/v0/project",
+        json={"name": "Assistants"},
+        headers=org_headers,
+    )
+    assert org_proj_resp.status_code == 200
+
+    # Create a log in org's "All/Contact" to establish the context
+    existing_log_payload = {
+        "project": "Assistants",
+        "context": "All/Contact",
+        "entries": [{"message": "Pre-existing org log", "_assistant_id": 999}],
+    }
+    existing_log_resp = await client.post(
+        "/v0/logs",
+        json=existing_log_payload,
+        headers=org_headers,
+    )
+    assert existing_log_resp.status_code == 200
+
+    # Now create a personal assistant
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={"first_name": "ExistingCtx", "surname": "Test", "create_infra": False},
+        headers=user["headers"],
+    )
+    assert create_resp.status_code == 200
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+
+    # Create logs in personal "All/Contact" for this assistant
+    personal_shared_log = {
+        "project": "Assistants",
+        "context": "All/Contact",
+        "entries": [
+            {
+                "message": "Personal shared context log",
+                "_assistant_id": agent_id,
+            },
+        ],
+    }
+    log_resp = await client.post(
+        "/v0/logs",
+        json=personal_shared_log,
+        headers=user["headers"],
+    )
+    assert log_resp.status_code == 200
+
+    # Get count of logs in org's "All/Contact" before transfer
+    logs_before = await client.get(
+        "/v0/logs?project=Assistants&context=All/Contact",
+        headers=org_headers,
+    )
+    count_before = logs_before.json()["count"]
+
+    # Transfer assistant to org
+    transfer_resp = await client.post(
+        f"/v0/assistant/{agent_id}/transfer/to-org",
+        json={"organization_id": org_id, "transfer_logs": True},
+        headers=user["headers"],
+    )
+    assert transfer_resp.status_code == 200
+
+    # Verify org's "All/Contact" now has more logs (existing + transferred)
+    logs_after = await client.get(
+        "/v0/logs?project=Assistants&context=All/Contact",
+        headers=org_headers,
+    )
+    assert logs_after.status_code == 200
+    count_after = logs_after.json()["count"]
+
+    assert (
+        count_after > count_before
+    ), "Org's All/Contact should have more logs after transfer"
