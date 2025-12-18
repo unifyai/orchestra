@@ -2217,3 +2217,150 @@ async def test_transfer_shared_context_to_existing_org_context(
     assert (
         count_after > count_before
     ), "Org's All/Contact should have more logs after transfer"
+
+
+@pytest.mark.anyio
+async def test_transfer_org_to_personal_deletes_shared_context_logs(
+    client: AsyncClient,
+    dbsession,
+):
+    """
+    Test that logs in shared 'All/*' contexts are deleted when transferring org->personal.
+
+    When transferring an assistant from org to personal with delete_logs=True:
+    - Assistant-specific contexts should be deleted
+    - Logs in "All/Contact" (or other "All/*" contexts) that belong to the
+      assistant (identified by _assistant_id) should also be deleted
+    - Other assistants' logs in the shared context should NOT be deleted
+    """
+    user = await create_test_user(
+        client,
+        "shared_ctx_delete@test.com",
+        hiring_approved=True,
+    )
+
+    # Create organization
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Shared Ctx Delete Org"},
+        headers=user["headers"],
+    )
+    org_id = org_resp.json()["id"]
+    org_headers = {"Authorization": f"Bearer {org_resp.json()['api_key']}"}
+
+    # Create org Assistants project
+    proj_resp = await client.post(
+        "/v0/project",
+        json={"name": "Assistants"},
+        headers=org_headers,
+    )
+    assert proj_resp.status_code == 200
+
+    # Create org assistant
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={"first_name": "SharedDel", "surname": "Test", "create_infra": False},
+        headers=org_headers,
+    )
+    assert create_resp.status_code == 200
+    assistant_info = create_resp.json()["info"]
+    agent_id = int(assistant_info["agent_id"])
+    assistant_name = f"{assistant_info['first_name']}{assistant_info['surname']}"
+
+    # Create logs in assistant-specific context
+    specific_log_payload = {
+        "project": "Assistants",
+        "context": assistant_name,
+        "entries": [
+            {
+                "message": "Assistant-specific log",
+                "_assistant_id": agent_id,
+            },
+        ],
+    }
+    log_resp = await client.post(
+        "/v0/logs",
+        json=specific_log_payload,
+        headers=org_headers,
+    )
+    assert log_resp.status_code == 200
+
+    # Create logs in shared "All/Contact" context for THIS assistant
+    shared_log_payload = {
+        "project": "Assistants",
+        "context": "All/Contact",
+        "entries": [
+            {
+                "message": "Shared context log for this assistant",
+                "_assistant_id": agent_id,
+            },
+        ],
+    }
+    log_resp2 = await client.post(
+        "/v0/logs",
+        json=shared_log_payload,
+        headers=org_headers,
+    )
+    assert log_resp2.status_code == 200
+
+    # Create logs in shared "All/Contact" for ANOTHER assistant (should NOT be deleted)
+    other_assistant_log = {
+        "project": "Assistants",
+        "context": "All/Contact",
+        "entries": [
+            {
+                "message": "Log from another assistant",
+                "_assistant_id": 99999,  # Different assistant ID
+            },
+        ],
+    }
+    log_resp3 = await client.post(
+        "/v0/logs",
+        json=other_assistant_log,
+        headers=org_headers,
+    )
+    assert log_resp3.status_code == 200
+
+    # Verify logs exist in org's "All/Contact"
+    logs_before = await client.get(
+        "/v0/logs?project=Assistants&context=All/Contact",
+        headers=org_headers,
+    )
+    assert logs_before.status_code == 200
+    count_before = logs_before.json()["count"]
+    assert count_before >= 2, "Should have at least 2 logs in shared context"
+
+    # Transfer assistant to personal with delete_logs=True
+    transfer_resp = await client.post(
+        f"/v0/assistant/{agent_id}/transfer/to-personal",
+        json={"delete_logs": True},
+        headers=org_headers,
+    )
+    assert transfer_resp.status_code == 200
+    transfer_data = transfer_resp.json()["info"]
+    assert transfer_data["logs_deleted"] is True
+
+    # Verify assistant-specific context is deleted (404 or empty)
+    specific_logs = await client.get(
+        f"/v0/logs?project=Assistants&context={assistant_name}",
+        headers=org_headers,
+    )
+    if specific_logs.status_code == 200:
+        assert (
+            specific_logs.json()["count"] == 0
+        ), "Assistant-specific logs should be deleted"
+
+    # Verify "All/Contact" still exists but has fewer logs
+    # (only this assistant's logs should be deleted)
+    logs_after = await client.get(
+        "/v0/logs?project=Assistants&context=All/Contact",
+        headers=org_headers,
+    )
+    assert logs_after.status_code == 200
+    count_after = logs_after.json()["count"]
+
+    # The other assistant's log should still be there
+    assert count_after >= 1, "Other assistant's logs should remain"
+    assert (
+        count_after < count_before
+    ), "This assistant's logs should be deleted from shared context"
