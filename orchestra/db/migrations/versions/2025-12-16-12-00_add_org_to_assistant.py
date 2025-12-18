@@ -20,7 +20,7 @@ from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "add_org_to_assistant"
-down_revision = "single_role_per_resource"
+down_revision = "add_embedding_queue"
 branch_labels = None
 depends_on = None
 
