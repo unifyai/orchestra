@@ -1991,7 +1991,58 @@ def transfer_assistant_to_personal(
                 )
                 for ctx in contexts_to_delete:
                     context_dao.delete(ctx.id)
-                logs_deleted = len(contexts_to_delete) > 0
+
+                # =========================================================
+                # Delete logs from shared "All/*" contexts
+                # These contexts may contain logs from multiple assistants,
+                # so we only delete logs where _assistant_id matches
+                # =========================================================
+                shared_contexts = (
+                    session.query(Context)
+                    .filter(
+                        Context.project_id == org_project.id,
+                        Context.name.like("All/%"),
+                    )
+                    .all()
+                )
+
+                shared_logs_deleted = False
+                for shared_ctx in shared_contexts:
+                    # Find logs belonging to this assistant in the shared context
+                    assistant_log_ids = [
+                        row[0]
+                        for row in (
+                            session.query(LogEventContext.log_event_id)
+                            .join(
+                                LogEvent,
+                                LogEvent.id == LogEventContext.log_event_id,
+                            )
+                            .filter(
+                                LogEventContext.context_id == shared_ctx.id,
+                                LogEvent.data["_assistant_id"].astext
+                                == str(assistant_id),
+                            )
+                            .all()
+                        )
+                    ]
+
+                    if not assistant_log_ids:
+                        continue
+
+                    shared_logs_deleted = True
+
+                    # Delete the LogEventContext associations first
+                    session.query(LogEventContext).filter(
+                        LogEventContext.log_event_id.in_(assistant_log_ids),
+                        LogEventContext.context_id == shared_ctx.id,
+                    ).delete(synchronize_session=False)
+
+                    # Delete the LogEvent records
+                    session.query(LogEvent).filter(
+                        LogEvent.id.in_(assistant_log_ids),
+                    ).delete(synchronize_session=False)
+
+                logs_deleted = len(contexts_to_delete) > 0 or shared_logs_deleted
 
         # Remove all RBAC grants on this assistant
         existing_grants = resource_access_dao.get_resource_access(
