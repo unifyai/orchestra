@@ -1671,11 +1671,14 @@ def transfer_assistant_to_org(
                 organization_id=None,
             )
             # Get or create org Assistants project
-            org_project = project_dao.get_by_user_and_name(
-                user_id=None,
-                name=ASSISTANTS_PROJECT_NAME,
+            # Use filter() instead of get_by_user_and_name() because we need to find
+            # org projects directly without requiring user access checks
+            org_projects = project_dao.filter(
                 organization_id=target_org_id,
+                name=ASSISTANTS_PROJECT_NAME,
             )
+            org_project = org_projects[0][0] if org_projects else None
+            project_created = False
             if not org_project:
                 project_dao.create(
                     user_id=None,
@@ -1684,11 +1687,46 @@ def transfer_assistant_to_org(
                     description="Project to manage and track all organization assistants.",
                     is_versioned=False,
                 )
-                org_project = project_dao.get_by_user_and_name(
-                    user_id=None,
-                    name=ASSISTANTS_PROJECT_NAME,
+                session.flush()  # Get project ID
+                org_projects = project_dao.filter(
                     organization_id=target_org_id,
+                    name=ASSISTANTS_PROJECT_NAME,
                 )
+                org_project = org_projects[0][0] if org_projects else None
+                project_created = True
+
+            # Grant access to the Assistants project for the transferring user
+            if org_project:
+                owner_role = role_dao.get_by_name("Owner", organization_id=None)
+                if project_created:
+                    # Creator gets Owner role
+                    if owner_role:
+                        resource_access_dao.grant_access(
+                            resource_type="project",
+                            resource_id=org_project.id,
+                            role_id=owner_role.id,
+                            grantee_type="user",
+                            grantee_id=user_id,
+                        )
+                else:
+                    # Project exists - check if user already has access
+                    has_access = resource_access_dao.check_user_permission(
+                        user_id,
+                        "project",
+                        org_project.id,
+                        "project:read",
+                    )
+                    if not has_access:
+                        # Grant Admin role to non-creator members
+                        admin_role = role_dao.get_by_name("Admin", organization_id=None)
+                        if admin_role:
+                            resource_access_dao.grant_access(
+                                resource_type="project",
+                                resource_id=org_project.id,
+                                role_id=admin_role.id,
+                                grantee_type="user",
+                                grantee_id=user_id,
+                            )
 
             if personal_project and org_project:
                 assistant_context_prefix = f"{assistant.first_name}{assistant.surname}"
