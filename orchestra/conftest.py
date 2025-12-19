@@ -217,32 +217,6 @@ def dbsession(
         connection.close()
 
 
-@pytest.fixture(autouse=True)
-def disable_async_embeddings():
-    """
-    Automatically disable async embedding generation for all tests.
-
-    In production, embeddings are queued for background generation to improve
-    response times. In tests, we need embeddings to be generated synchronously
-    so they're immediately available for assertions.
-
-    This fixture sets async_embeddings=False before each test and restores
-    the original value after the test completes.
-    """
-    import orchestra.settings as settings_module
-
-    # Store original value
-    original = settings_module._async_embeddings_override
-
-    # Disable async embeddings for tests
-    settings_module._async_embeddings_override = False
-
-    yield
-
-    # Restore original value
-    settings_module._async_embeddings_override = original
-
-
 @pytest.fixture
 def fastapi_app(
     dbsession: Session,

@@ -681,12 +681,29 @@ def _transform_ast(node: ast.AST, preserve_string_literals: bool = False) -> dic
             return {"lhs": type_expr, "operand": "==", "rhs": rhs_literal}
 
         # Handle embed function (multi-arg: text, optional model, optional dimensions)
+        # Also supports async_embeddings keyword argument for async/sync control
         elif func_name == "embed":
+            rhs = [_transform_ast(arg, preserve_string_literals) for arg in node.args]
+
+            # Extract async_embeddings keyword arg (defaults to False = sync)
+            async_embeddings = False
+            for kw in node.keywords:
+                if kw.arg == "async_embeddings":
+                    if isinstance(kw.value, ast.Constant) and isinstance(
+                        kw.value.value,
+                        bool,
+                    ):
+                        async_embeddings = kw.value.value
+                    else:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="async_embeddings must be a boolean literal",
+                        )
+
             return {
                 "operand": "embed",
-                "rhs": [
-                    _transform_ast(arg, preserve_string_literals) for arg in node.args
-                ],
+                "rhs": rhs,
+                "async_embeddings": async_embeddings,
             }
         # Handle embed_image function (single-arg: base64 image)
         elif func_name == "embed_image":
