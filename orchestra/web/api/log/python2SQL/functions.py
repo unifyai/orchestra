@@ -1033,10 +1033,13 @@ def _handle_functions(
                 if isinstance(row.str_value, str)
             }
 
-            # Generate embeddings: async (production) or sync (testing)
+            # Generate embeddings: async (queued) or sync (immediate)
+            # Controlled by async_embeddings kwarg in embed() call (defaults to False = sync)
             if id_to_text:
-                if settings.async_embeddings:
-                    # Production: queue for background generation
+                async_embeddings = filter_dict.get("async_embeddings", False)
+
+                if async_embeddings:
+                    # Async: queue for background generation
                     _queue_embeddings_for_generation(
                         session=session,
                         id_to_text=id_to_text,
@@ -1045,7 +1048,7 @@ def _handle_functions(
                         key=key,
                     )
                 else:
-                    # Testing: generate synchronously
+                    # Sync: generate embeddings immediately
                     from .helpers import _ensure_vectors_exist
 
                     _ensure_vectors_exist(

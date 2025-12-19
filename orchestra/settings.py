@@ -11,8 +11,6 @@ TEMP_DIR = Path(gettempdir())
 
 # Runtime storage mode override for testing
 _use_jsonb_override: Optional[bool] = None
-# Runtime async embeddings override for testing
-_async_embeddings_override: Optional[bool] = None
 
 
 def set_jsonb_mode(enabled: Optional[bool]) -> None:
@@ -24,19 +22,6 @@ def set_jsonb_mode(enabled: Optional[bool]) -> None:
     """
     global _use_jsonb_override
     _use_jsonb_override = enabled
-
-
-def set_async_embeddings(enabled: Optional[bool]) -> None:
-    """
-    Override async embeddings mode at runtime.
-
-    Args:
-        enabled: Async embeddings flag (None uses environment variable).
-                 True = queue embeddings for background generation (production)
-                 False = generate embeddings synchronously (testing)
-    """
-    global _async_embeddings_override
-    _async_embeddings_override = enabled
 
 
 class LogLevel(str, enum.Enum):  # noqa: WPS600
@@ -267,31 +252,6 @@ class Settings(BaseSettings):
             ).lower()
             == "true"
         )
-
-    @property
-    def async_embeddings(self) -> bool:
-        """
-        Enable async embedding generation via queue.
-
-        When True (production): Embeddings are queued for background generation
-        via Cloud Scheduler, providing instant log creation responses.
-
-        When False (testing): Embeddings are generated synchronously during
-        log creation, ensuring they're immediately available for queries.
-
-        Checks runtime override, then environment variable.
-        Default: True for production, can be set to False for tests.
-
-        :return: True if async embedding generation is enabled.
-        """
-        if _async_embeddings_override is not None:
-            return _async_embeddings_override
-        return os.environ.get("ORCHESTRA_ASYNC_EMBEDDINGS", "true").lower() == "true"
-
-    @async_embeddings.setter
-    def async_embeddings(self, value: bool) -> None:
-        """Set async embeddings mode override (for testing)."""
-        set_async_embeddings(value)
 
     model_config = SettingsConfigDict(
         env_file=".env",
