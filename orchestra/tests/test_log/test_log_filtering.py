@@ -277,6 +277,7 @@ async def test_full_name_filter_expression(client: AsyncClient, use_jsonb_mode):
                     "rhs": {
                         "operand": "embed",
                         "rhs": ["query"],
+                        "async_embeddings": False,
                     },
                 },
                 "operand": "<",
@@ -300,6 +301,7 @@ async def test_full_name_filter_expression(client: AsyncClient, use_jsonb_mode):
             {
                 "operand": "embed",
                 "rhs": ["text", "model-name"],
+                "async_embeddings": False,
             },
         ),
         (
@@ -314,6 +316,32 @@ async def test_full_name_filter_expression(client: AsyncClient, use_jsonb_mode):
             {
                 "operand": "embed",
                 "rhs": [{"type": "identifier", "value": "content_field"}],
+                "async_embeddings": False,
+            },
+        ),
+        # embed with async_embeddings keyword argument
+        (
+            "embed(content_field, async_embeddings=True)",
+            {
+                "operand": "embed",
+                "rhs": [{"type": "identifier", "value": "content_field"}],
+                "async_embeddings": True,
+            },
+        ),
+        (
+            "embed(content_field, async_embeddings=False)",
+            {
+                "operand": "embed",
+                "rhs": [{"type": "identifier", "value": "content_field"}],
+                "async_embeddings": False,
+            },
+        ),
+        (
+            "embed('text', 'model-name', async_embeddings=True)",
+            {
+                "operand": "embed",
+                "rhs": ["text", "model-name"],
+                "async_embeddings": True,
             },
         ),
         # Parenthesized arithmetic + comparison
