@@ -1760,7 +1760,20 @@ def _get_logs_query_jsonb(
                         ),
                     )
                 else:
-                    # Direct boolean condition
+                    # Direct expression - ensure it's a boolean condition.
+                    # JSONB expressions must be converted to boolean for PostgreSQL's
+                    # WHERE clause. This handles patterns like `metadata.get('key')`
+                    # used as standalone filter conditions.
+                    from orchestra.web.api.log.python2SQL.jsonb_builder import (
+                        _create_truthiness_condition_jsonb,
+                    )
+
+                    condition_sql = _create_truthiness_condition_jsonb(
+                        condition_sql,
+                        session,
+                        project_id,
+                        context_id,
+                    )
                     query = query.filter(condition_sql)
 
             except HTTPException:

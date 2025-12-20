@@ -708,6 +708,20 @@ def _get_all_filtered_log_event_ids(
                     ),
                 )
             else:
+                # Direct expression - ensure it's a boolean condition.
+                # JSONB expressions must be converted to boolean for PostgreSQL's
+                # WHERE clause. This handles patterns like `metadata.get('key')`
+                # used as standalone filter conditions.
+                from orchestra.web.api.log.python2SQL.jsonb_builder import (
+                    _create_truthiness_condition_jsonb,
+                )
+
+                condition = _create_truthiness_condition_jsonb(
+                    condition,
+                    session,
+                    project_id,
+                    context_id,
+                )
                 log_event_query = log_event_query.filter(condition)
 
     # Filter by "static context"
