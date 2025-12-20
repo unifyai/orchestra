@@ -347,7 +347,12 @@ def _build_jsonb_field_expression(
         pass
 
     # 2. Query FieldType
-    field_type = _get_field_type_from_db(key, session, project_id, context_id)
+    raw_field_type = _get_field_type_from_db(key, session, project_id, context_id)
+
+    # Normalize to SQL-compatible type (handles Pydantic schemas, Optional[T], etc.)
+    from orchestra.web.api.log.utils.type_utils import get_sql_casting_type
+
+    field_type = get_sql_casting_type(raw_field_type) if raw_field_type else None
 
     # 3. Build JSONB extraction
     jsonb_col = log_event_alias.data
@@ -1066,11 +1071,25 @@ def _handle_membership_operator_jsonb(
             # Check if rhs_expr is a list of SQL expressions (from type_literal processing)
             if isinstance(rhs_expr, list):
                 # rhs_expr is already a list of SQL expressions
-                return lhs_expr.in_(rhs_expr) if is_in else not_(lhs_expr.in_(rhs_expr))
+                # Cast LHS to match the type of list elements
+                lhs_casted = cast_expr(lhs_expr, lhs_type, lhs_type, force_to_type=True)
+                return (
+                    lhs_casted.in_(rhs_expr)
+                    if is_in
+                    else not_(lhs_casted.in_(rhs_expr))
+                )
             elif hasattr(rhs_expr, "value"):
                 rhs_list = rhs_expr.value
             if rhs_list is not None:
-                return lhs_expr.in_(rhs_list) if is_in else not_(lhs_expr.in_(rhs_list))
+                # Cast LHS to match the type of list elements for proper comparison
+                # This handles cases like: sender_id in [1, 2, 3, 4] where sender_id
+                # is extracted as text but needs to be compared as integer
+                lhs_casted = cast_expr(lhs_expr, lhs_type, lhs_type, force_to_type=True)
+                return (
+                    lhs_casted.in_(rhs_list)
+                    if is_in
+                    else not_(lhs_casted.in_(rhs_list))
+                )
 
         # Case 3: Scalar field (substring) - only valid for strings
         if rhs_type == "str":
