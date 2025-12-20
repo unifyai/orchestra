@@ -559,9 +559,13 @@ def _build_sort_criteria(
     sort_key: str,
     field_types: Dict[str, str],
 ):
+    from .type_utils import get_sql_casting_type
+
     # If recognized type => cast
     if sort_key in field_types:
-        pytype = field_types[sort_key]
+        raw_pytype = field_types[sort_key]
+        # Normalize type to SQL-compatible (handles Pydantic schemas, Optional[T], etc.)
+        pytype = get_sql_casting_type(raw_pytype) or raw_pytype
         cast_type = STR_TO_SQL_TYPES.get(pytype, None)
         if cast_type is not None:
             if pytype in ("datetime", "date", "time"):
@@ -2076,9 +2080,13 @@ def _get_logs_query_jsonb(
                     # field_types can be either {field_name: "type"} or {field_name: {"field_type": "type", ...}}
                     field_meta = field_types.get(field_name)
                     if isinstance(field_meta, dict):
-                        pytype = field_meta.get("field_type")
+                        raw_pytype = field_meta.get("field_type")
                     else:
-                        pytype = field_meta
+                        raw_pytype = field_meta
+                    # Normalize type to SQL-compatible (handles Pydantic schemas, Optional[T], etc.)
+                    from .type_utils import get_sql_casting_type
+
+                    pytype = get_sql_casting_type(raw_pytype) if raw_pytype else None
                     cast_type = STR_TO_SQL_TYPES.get(pytype) if pytype else None
 
                     if pytype in ("dict", "list"):
