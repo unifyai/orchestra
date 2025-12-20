@@ -438,6 +438,115 @@ def get_base_storage_type(type_str: str) -> str:
         return tree.name.lower()
 
 
+def get_sql_casting_type(type_str: str) -> Optional[str]:
+    """
+    Get the SQL-compatible type for casting operations.
+
+    This function answers: "What SQL type should I cast this field to?"
+    Unlike get_base_storage_type() which returns the storage category (e.g., "union"),
+    this returns a concrete type that exists in STR_TO_SQL_TYPES.
+
+    For Optional[T] / Union[T, NoneType], extracts the non-None inner type T.
+    For Pydantic JSON schemas, normalizes and extracts the castable type.
+
+    Examples:
+        "int" -> "int"
+        "float" -> "float"
+        "Union[int, NoneType]" -> "int"
+        '{"anyOf": [{"type": "integer"}, {"type": "null"}]}' -> "int"
+        '{"type": "string"}' -> "str"
+        "list" -> "list"
+        "dict" -> "dict"
+
+    Returns:
+        A type string compatible with STR_TO_SQL_TYPES, or None if unknown.
+    """
+    if not type_str:
+        return None
+
+    # SQL-compatible base types (keys in STR_TO_SQL_TYPES)
+    sql_compatible_types = {
+        "bool",
+        "int",
+        "float",
+        "str",
+        "datetime",
+        "time",
+        "date",
+        "timedelta",
+        "dict",
+        "list",
+    }
+
+    # Fast path: already a simple SQL-compatible type
+    if type_str in sql_compatible_types:
+        return type_str
+
+    # Handle Pydantic JSON schemas (dict or JSON string)
+    if is_pydantic_schema(type_str):
+        try:
+            schema = normalize_pydantic_schema(type_str)
+            # Use infer_simple_type_from_pydantic_schema to get a pythonic type
+            simple_type = infer_simple_type_from_pydantic_schema(schema)
+            # Recursively process the simplified type
+            return get_sql_casting_type(simple_type)
+        except Exception:
+            pass
+
+    # Handle Union types (especially Optional[T] = Union[T, NoneType])
+    normalized = normalize_type_string(type_str)
+    if normalized.startswith("Union["):
+        # Parse Union[T1, T2, ...] and extract types
+        inner = normalized[6:-1]  # Remove "Union[" and "]"
+        # Split by comma, handling nested types
+        types = _split_union_types(inner)
+        # Filter out NoneType
+        non_none_types = [t.strip() for t in types if t.strip() != "NoneType"]
+        if len(non_none_types) == 1:
+            # Optional[T] case - return the inner type
+            return get_sql_casting_type(non_none_types[0])
+        elif len(non_none_types) > 1:
+            # True union - return first type as representative (best effort)
+            return get_sql_casting_type(non_none_types[0])
+
+    # Try get_base_storage_type for other cases
+    try:
+        base = get_base_storage_type(type_str)
+        if base in sql_compatible_types:
+            return base
+    except Exception:
+        pass
+
+    return None
+
+
+def _split_union_types(inner: str) -> list:
+    """
+    Split Union type arguments handling nested brackets.
+
+    Example: "int, NoneType" -> ["int", "NoneType"]
+             "List[int], NoneType" -> ["List[int]", "NoneType"]
+    """
+    parts = []
+    current = []
+    depth = 0
+    for char in inner:
+        if char == "[":
+            depth += 1
+            current.append(char)
+        elif char == "]":
+            depth -= 1
+            current.append(char)
+        elif char == "," and depth == 0:
+            parts.append("".join(current).strip())
+            current = []
+        else:
+            current.append(char)
+    if current:
+        parts.append("".join(current).strip())
+    return parts
+
+
 def is_untyped_field(field_type: str) -> bool:
     """
     Check if a field type represents an untyped/mixed-type field.

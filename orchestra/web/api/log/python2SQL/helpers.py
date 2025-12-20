@@ -1855,7 +1855,11 @@ def _infer_expression_type(
     if field_name and project_id is not None:
         ft = _get_field_type_from_db(field_name, session, project_id, context_id)
         if ft:
-            return ft
+            # Normalize to SQL-compatible type (handles Pydantic schemas, Optional[T], etc.)
+            from orchestra.web.api.log.utils.type_utils import get_sql_casting_type
+
+            normalized = get_sql_casting_type(ft)
+            return normalized if normalized else ft
 
     # Check for JSONB operators (-> returns jsonb, ->> returns text)
     if isinstance(expr, BinaryExpression):
