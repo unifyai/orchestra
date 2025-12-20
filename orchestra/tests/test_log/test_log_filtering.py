@@ -4266,3 +4266,154 @@ async def test_null_safe_equality_inequality_comparisons(
         f"Test 7 failed: Expected log IDs {expected_ids}, got {matching_ids}. "
         f"Complex filter should exclude NULL values and match valid dates with correct status."
     )
+
+
+@pytest.mark.anyio
+async def test_filter_with_json_schema_typed_field(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """
+    Test that filter expressions work correctly for fields with JSON schema types.
+
+    Regression test for a bug where fields with JSON schema types (e.g., Optional[int]
+    represented as '{"anyOf": [{"type": "integer"}, {"type": "null"}]}') would fail
+    during filter comparisons with integer literals.
+
+    Root cause: Fields with simple types like "int" use JSONB containment (@>) for
+    equality checks, which works correctly. Fields with JSON schema types fall through
+    to text extraction (->>), but the comparison fails because the integer literal is
+    not cast to text, resulting in "operator does not exist: text = integer".
+
+    This test creates two fields:
+    - sender_id: JSON schema type (Optional[int])
+    - exchange_id: Simple type ("int")
+
+    Both should work identically when filtering with integer equality expressions.
+    """
+    project_name = f"test_json_schema_filter-{'jsonb' if use_jsonb_mode else 'eav'}"
+    await _create_project(client, project_name)
+
+    # Step 1: Create fields with different type specifications
+    # sender_id uses JSON schema format (as used by Pydantic for Optional[int])
+    # exchange_id uses simple type string
+    json_schema_type = json.dumps({"anyOf": [{"type": "integer"}, {"type": "null"}]})
+
+    fields_response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project": project_name,
+            "fields": {
+                "sender_id": {
+                    "type": json_schema_type,
+                    "mutable": True,
+                    "description": "ID of the contact (None if deleted)",
+                },
+                "exchange_id": {
+                    "type": "int",
+                    "mutable": True,
+                    "description": "ID of the conversation thread",
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200, fields_response.json()
+
+    # Step 2: Create a log with integer values for both fields
+    log_response = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "sender_id": 3,
+                "exchange_id": 12345,
+                "content": "Hello from Alicia",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert log_response.status_code == 200, log_response.json()
+    log_id = log_response.json()["log_event_ids"][0]
+
+    # Step 3: Test filtering on simple type field (should work)
+    filter_expr = "exchange_id == 12345"
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": filter_expr},
+        headers=HEADERS,
+    )
+    assert (
+        response.status_code == 200
+    ), f"Filter on simple 'int' type failed: {response.text}"
+    data = response.json()
+    assert len(data["logs"]) == 1, f"Expected 1 log, got {len(data['logs'])}"
+    assert data["logs"][0]["id"] == log_id
+
+    # Step 4: Test filtering on JSON schema type field (this is the regression case)
+    filter_expr = "sender_id == 3"
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": filter_expr},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, (
+        f"Filter on JSON schema type failed with error: {response.text}. "
+        f"This is a regression - JSON schema typed fields should support "
+        f"equality comparisons with integer literals."
+    )
+    data = response.json()
+    assert len(data["logs"]) == 1, f"Expected 1 log, got {len(data['logs'])}"
+    assert data["logs"][0]["id"] == log_id
+
+    # Step 5: Test combined filter (both fields in expression)
+    filter_expr = "sender_id == 3 and exchange_id == 12345"
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": filter_expr},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, f"Combined filter failed: {response.text}"
+    data = response.json()
+    assert len(data["logs"]) == 1, f"Expected 1 log, got {len(data['logs'])}"
+    assert data["logs"][0]["id"] == log_id
+
+    # Step 6: Test with None value in JSON schema typed field
+    log_response_null = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "sender_id": None,  # NULL sender (contact deleted)
+                "exchange_id": 99999,
+                "content": "Message with deleted sender",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert log_response_null.status_code == 200, log_response_null.json()
+    log_id_null = log_response_null.json()["log_event_ids"][0]
+
+    # Filter for NULL sender_id
+    filter_expr = "sender_id is None"
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": filter_expr},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, f"Filter for None failed: {response.text}"
+    data = response.json()
+    assert len(data["logs"]) == 1, f"Expected 1 log with None sender_id"
+    assert data["logs"][0]["id"] == log_id_null
+
+    # Filter for non-NULL sender_id
+    filter_expr = "sender_id is not None"
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": filter_expr},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, f"Filter for not None failed: {response.text}"
+    data = response.json()
+    assert len(data["logs"]) == 1, f"Expected 1 log with non-None sender_id"
+    assert data["logs"][0]["id"] == log_id
