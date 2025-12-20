@@ -4417,3 +4417,120 @@ async def test_filter_with_json_schema_typed_field(
     data = response.json()
     assert len(data["logs"]) == 1, f"Expected 1 log with non-None sender_id"
     assert data["logs"][0]["id"] == log_id
+
+
+@pytest.mark.anyio
+async def test_sort_and_aggregate_json_schema_typed_field(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """
+    Test that sorting and aggregation work correctly for fields with JSON schema types.
+
+    Regression test for a bug where fields with JSON schema types cannot be used
+    for sorting because the type lookup in STR_TO_SQL_TYPES fails (it only contains
+    simple types like "int", "float", etc., not JSON schema strings).
+
+    This test uses values like 2, 10, 3 which sort differently as text vs numbers:
+    - Text sort: "10", "2", "3" (lexicographic)
+    - Numeric sort: 2, 3, 10 (correct)
+
+    If sorting falls back to text extraction, this test will catch it.
+    """
+    project_name = f"test_json_schema_sort-{'jsonb' if use_jsonb_mode else 'eav'}"
+    await _create_project(client, project_name)
+
+    # Create field with JSON schema type (Optional[int])
+    json_schema_type = json.dumps({"anyOf": [{"type": "integer"}, {"type": "null"}]})
+
+    fields_response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project": project_name,
+            "fields": {
+                "priority": {
+                    "type": json_schema_type,
+                    "mutable": True,
+                    "description": "Priority level (None if not set)",
+                },
+            },
+        },
+        headers=HEADERS,
+    )
+    assert fields_response.status_code == 200, fields_response.json()
+
+    # Create logs with values that sort differently as text vs numbers
+    # Text sort: "10" < "2" < "3" (lexicographic - "1" comes before "2")
+    # Numeric sort: 2 < 3 < 10 (correct numeric order)
+    test_priorities = [10, 2, 3, None]
+    log_ids = []
+    for priority in test_priorities:
+        log_response = await client.post(
+            "/v0/logs",
+            json={"project": project_name, "entries": {"priority": priority}},
+            headers=HEADERS,
+        )
+        assert log_response.status_code == 200, log_response.json()
+        log_ids.append(log_response.json()["log_event_ids"][0])
+
+    # Test 1: Sort ascending - must be numeric order [2, 3, 10], not text ["10", "2", "3"]
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "sorting": json.dumps({"priority": "ascending"}),
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, (
+        f"Sorting by JSON schema type failed: {response.text}. "
+        f"JSON schema typed fields should support sorting."
+    )
+    data = response.json()
+    priorities = [log["entries"].get("priority") for log in data["logs"]]
+    non_null_priorities = [p for p in priorities if p is not None]
+
+    # This assertion catches text-based sorting:
+    # Text sort would give [10, 2, 3] (wrong), numeric gives [2, 3, 10] (correct)
+    assert non_null_priorities == [2, 3, 10], (
+        f"Expected numeric ascending order [2, 3, 10], got {non_null_priorities}. "
+        f"This suggests values are being sorted as text, not numbers."
+    )
+
+    # Test 2: Sort descending - must be [10, 3, 2], not ["3", "2", "10"]
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "sorting": json.dumps({"priority": "descending"}),
+        },
+        headers=HEADERS,
+    )
+    assert (
+        response.status_code == 200
+    ), f"Descending sort by JSON schema type failed: {response.text}"
+    data = response.json()
+    priorities = [log["entries"].get("priority") for log in data["logs"]]
+    non_null_priorities = [p for p in priorities if p is not None]
+
+    assert non_null_priorities == [10, 3, 2], (
+        f"Expected numeric descending order [10, 3, 2], got {non_null_priorities}. "
+        f"This suggests values are being sorted as text, not numbers."
+    )
+
+    # Test 3: Sum aggregation - verifies numeric handling
+    response = await client.get(
+        "/v0/logs/metric/sum",
+        params={
+            "project": project_name,
+            "key": "priority",
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, (
+        f"Aggregation on JSON schema type failed: {response.text}. "
+        f"JSON schema typed fields should support aggregations."
+    )
+    result = response.json()
+    # Sum of 10 + 2 + 3 = 15 (NULL is ignored)
+    assert result == 15, f"Expected sum=15, got {result}"
