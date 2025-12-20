@@ -1868,9 +1868,9 @@ async def test_assistants_3tier_with_prefix(
             headers=HEADERS,
         )
         assert response.status_code == 200, response.json()
-        assert log_id in [log["id"] for log in response.json()["logs"]], (
-            f"Log should be in {ctx}"
-        )
+        assert log_id in [
+            log["id"] for log in response.json()["logs"]
+        ], f"Log should be in {ctx}"
 
     # Delete from Tier 3 (user+assistant context) - should cascade to other tiers
     ids_and_fields = [([log_id], None)]
@@ -1890,9 +1890,9 @@ async def test_assistants_3tier_with_prefix(
             headers=HEADERS,
         )
         assert response.status_code == 200, response.json()
-        assert log_id not in [log["id"] for log in response.json()["logs"]], (
-            f"Log should be removed from {ctx}"
-        )
+        assert log_id not in [
+            log["id"] for log in response.json()["logs"]
+        ], f"Log should be removed from {ctx}"
 
 
 @pytest.mark.anyio
@@ -1972,9 +1972,9 @@ async def test_assistants_3tier_with_prefix_and_nested_subcontext(
             headers=HEADERS,
         )
         assert response.status_code == 200, response.json()
-        assert log_id not in [log["id"] for log in response.json()["logs"]], (
-            f"Log should be removed from {ctx}"
-        )
+        assert log_id not in [
+            log["id"] for log in response.json()["logs"]
+        ], f"Log should be removed from {ctx}"
 
 
 # =============================================================================
