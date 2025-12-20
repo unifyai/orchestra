@@ -1799,6 +1799,102 @@ async def test_unitytests_3tier_delete_from_global_all_context(
         assert log_id not in [log["id"] for log in response.json()["logs"]]
 
 
+@pytest.mark.anyio
+async def test_assistants_3tier_with_prefix(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """
+    Test 3-tier context deletion with arbitrary prefix before the hierarchy.
+
+    This tests contexts like Unity's test isolation paths:
+    - Tier 1: tests/test_foo/All/Contacts (global aggregate with prefix)
+    - Tier 2: tests/test_foo/DefaultUser/All/Contacts (user aggregate with prefix)
+    - Tier 3: tests/test_foo/DefaultUser/Assistant/Contacts (user + assistant with prefix)
+
+    The prefix can have arbitrary depth. The 3-tier logic should detect the hierarchy
+    by finding the Tier 1 context (shortest context containing 'All') and parsing it
+    to extract prefix and SubContext dynamically.
+    """
+    project_name = "UnityTests-PrefixTest"
+    # Prefix simulates Unity's test isolation paths
+    prefix = "tests/test_contact_manager/test_foo"
+    global_all_context = f"{prefix}/All/Contacts"
+    user_all_context = f"{prefix}/DefaultUser/All/Contacts"
+    user_assistant_context = f"{prefix}/DefaultUser/Assistant/Contacts"
+
+    # Create project
+    response = await _create_project(client, project_name)
+    assert response.status_code == 200, response.json()
+
+    # Create all three contexts with prefix
+    for ctx in [global_all_context, user_all_context, user_assistant_context]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": ctx},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+
+    # Create a log with _user and _assistant fields
+    response = await _create_log(
+        client,
+        project_name,
+        entries={
+            "name": "John Doe",
+            "email": "john@example.com",
+            "_user": "DefaultUser",
+            "_assistant": "Assistant",
+        },
+        context=user_assistant_context,
+    )
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    # Add to other contexts (simulating Unity's _add_to_all behavior)
+    for ctx in [global_all_context, user_all_context]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts/add_logs",
+            json={"context_name": ctx, "log_ids": [log_id]},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+
+    # Verify log is in all three contexts
+    for ctx in [global_all_context, user_all_context, user_assistant_context]:
+        response = await client.get(
+            f"/v0/logs?project={project_name}",
+            params={"context": ctx},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+        assert log_id in [log["id"] for log in response.json()["logs"]], (
+            f"Log should be in {ctx}"
+        )
+
+    # Delete from Tier 3 (user+assistant context) - should cascade to other tiers
+    ids_and_fields = [([log_id], None)]
+    response = await _delete_logs(
+        client,
+        ids_and_fields,
+        project_name=project_name,
+        context=user_assistant_context,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify log is removed from ALL three contexts
+    for ctx in [global_all_context, user_all_context, user_assistant_context]:
+        response = await client.get(
+            f"/v0/logs?project={project_name}",
+            params={"context": ctx},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+        assert log_id not in [log["id"] for log in response.json()["logs"]], (
+            f"Log should be removed from {ctx}"
+        )
+
+
 # =============================================================================
 # JSONB Mode-Specific Tests
 # =============================================================================
