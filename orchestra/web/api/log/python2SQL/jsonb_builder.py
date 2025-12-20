@@ -233,6 +233,15 @@ def _create_truthiness_condition_jsonb(expr, session, project_id=None, context_i
 def _build_truthiness_sql(val_col, val_type):
     """
     Build SQL truthiness condition based on value type.
+
+    Implements Python truthiness semantics for SQL expressions:
+    - None/null: False
+    - False: False
+    - 0, 0.0: False
+    - "" (empty string): False
+    - [] (empty list): False
+    - {} (empty dict): False
+    - Everything else: True
     """
     normalized_type = _normalize_type(val_type)
 
@@ -251,6 +260,33 @@ def _build_truthiness_sql(val_col, val_type):
     elif normalized_type == "dict":
         # For dicts, check if not empty
         return val_col != cast(literal("{}"), JSONB)
+    elif normalized_type == "jsonb":
+        # For generic JSONB, we need runtime type checking since it could be
+        # any JSON type: object, array, string, number, boolean, or null.
+        # Use jsonb_typeof() to determine the type at runtime and apply
+        # appropriate truthiness rules.
+        jsonb_type = func.jsonb_typeof(val_col)
+        return and_(
+            val_col.isnot(None),  # SQL NULL check
+            jsonb_type != literal("null"),  # JSON null check
+            case(
+                # Empty object is falsy
+                (
+                    jsonb_type == literal("object"),
+                    val_col != cast(literal("{}"), JSONB),
+                ),
+                # Empty array is falsy
+                (jsonb_type == literal("array"), func.jsonb_array_length(val_col) > 0),
+                # Empty string is falsy
+                (jsonb_type == literal("string"), func.length(val_col.astext) > 0),
+                # Number 0 is falsy
+                (jsonb_type == literal("number"), cast(val_col.astext, Float) != 0),
+                # Boolean: use the value itself
+                (jsonb_type == literal("boolean"), cast(val_col, Boolean).is_(True)),
+                # For any other type, truthy if not null (already checked above)
+                else_=literal(True),
+            ),
+        )
     elif val_type == "NoneType":
         return literal(False)
     else:
@@ -981,6 +1017,27 @@ def _handle_arithmetic_operator_jsonb(
         )
 
 
+def _is_or_with_empty_list_fallback(node_dict):
+    """
+    Check if a node represents the pattern (expr or []).
+
+    This is a common Python idiom for safe iteration over potentially null arrays:
+        'x' in (arr or [])
+
+    Python's `or` operator returns one of its operands, not a boolean.
+    So `arr or []` returns `arr` if truthy, else `[]`.
+
+    Returns:
+        True if the pattern matches, False otherwise.
+    """
+    return (
+        isinstance(node_dict, dict)
+        and node_dict.get("operand") == "or"
+        and isinstance(node_dict.get("rhs"), list)
+        and len(node_dict.get("rhs", [])) == 0
+    )
+
+
 def _handle_membership_operator_jsonb(
     filter_dict,
     log_event_alias,
@@ -999,6 +1056,7 @@ def _handle_membership_operator_jsonb(
     - Array membership: Uses @> containment operator with GIN index
     - String membership: Uses LIKE or POSITION for substring checks
     - List literals: Converts to PostgreSQL array comparison
+    - (expr or []) pattern: Safe iteration with COALESCE fallback
 
     Args:
         filter_dict: Parsed filter expression with 'operand', 'lhs', and 'rhs' keys.
@@ -1022,6 +1080,25 @@ def _handle_membership_operator_jsonb(
     lhs_dict = filter_dict["lhs"]
     rhs_dict = filter_dict["rhs"]
 
+    # Handle the (expr or []) fallback pattern specially.
+    # In Python, `'x' in (arr or [])` uses arr if truthy, else [].
+    # We must NOT convert the `or` to boolean SQL OR - we need the array value.
+    or_fallback_array_expr = None
+    if _is_or_with_empty_list_fallback(rhs_dict):
+        # Build only the LHS of the 'or' (the array expression)
+        or_fallback_array_expr = _build_sql_query_jsonb(
+            rhs_dict["lhs"],
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+            query_context=query_context,
+        )
+
     lhs_expr = _build_sql_query_jsonb(
         lhs_dict,
         log_event_alias,
@@ -1034,18 +1111,23 @@ def _handle_membership_operator_jsonb(
         context_id=context_id,
         query_context=query_context,
     )
-    rhs_expr = _build_sql_query_jsonb(
-        rhs_dict,
-        log_event_alias,
-        session,
-        log_event_ids,
-        is_derived=is_derived,
-        local_scope=local_scope,
-        is_vector=is_vector,
-        project_id=project_id,
-        context_id=context_id,
-        query_context=query_context,
-    )
+
+    # Use the or-fallback array expression if detected, otherwise build normally
+    if or_fallback_array_expr is not None:
+        rhs_expr = or_fallback_array_expr
+    else:
+        rhs_expr = _build_sql_query_jsonb(
+            rhs_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+            query_context=query_context,
+        )
 
     lhs_is_sub = isinstance(lhs_expr, Subquery)
     rhs_is_sub = isinstance(rhs_expr, Subquery)
@@ -1055,6 +1137,19 @@ def _handle_membership_operator_jsonb(
     if not lhs_is_sub and not rhs_is_sub:
         lhs_type = _infer_expression_type(lhs_expr, session, project_id, context_id)
         rhs_type = _infer_expression_type(rhs_expr, session, project_id, context_id)
+
+        # Case 0: Handle (expr or []) fallback pattern for safe array membership
+        # Use COALESCE to provide empty array fallback when expression is NULL
+        if or_fallback_array_expr is not None:
+            # COALESCE(array_expr, '[]'::jsonb) ensures we have an array for containment
+            rhs_with_fallback = func.coalesce(
+                cast(rhs_expr, JSONB),
+                cast(literal("[]"), JSONB),
+            )
+            containment = rhs_with_fallback.op("@>")(
+                func.jsonb_build_array(lhs_expr),
+            )
+            return containment if is_in else not_(containment)
 
         # Case 1: RHS is JSONB array (use centralized type helper)
         if _is_list_type(rhs_type):
