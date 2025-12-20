@@ -317,7 +317,9 @@ def _get_assistants_sibling_context_info(
         try:
             all_idx = parts.index("All")
             prefix = "/".join(parts[:all_idx]) if all_idx > 0 else ""
-            sub_context = "/".join(parts[all_idx + 1 :]) if all_idx < len(parts) - 1 else ""
+            sub_context = (
+                "/".join(parts[all_idx + 1 :]) if all_idx < len(parts) - 1 else ""
+            )
             return (prefix, sub_context)
         except ValueError:
             return ("", "")
@@ -348,7 +350,9 @@ def _get_assistants_sibling_context_info(
         # Construct all three tier context names
         if prefix:
             tier1_name = f"{prefix}/All/{sub_context}"
-            tier2_name = f"{prefix}/{user_name}/All/{sub_context}" if user_name else None
+            tier2_name = (
+                f"{prefix}/{user_name}/All/{sub_context}" if user_name else None
+            )
             tier3_name = (
                 f"{prefix}/{user_name}/{assistant_name}/{sub_context}"
                 if user_name and assistant_name
