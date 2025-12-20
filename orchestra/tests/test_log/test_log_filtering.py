@@ -4366,6 +4366,58 @@ async def test_filter_with_json_schema_typed_field(
     assert len(data["logs"]) == 1, f"Expected 1 log, got {len(data['logs'])}"
     assert data["logs"][0]["id"] == log_id
 
+    # Step 4b: Create another log with sender_id=10 to test text vs numeric comparison
+    # Text comparison: "10" > "5" is FALSE (because "1" < "5")
+    # Numeric comparison: 10 > 5 is TRUE
+    log_response_10 = await client.post(
+        "/v0/logs",
+        json={
+            "project": project_name,
+            "entries": {
+                "sender_id": 10,
+                "exchange_id": 99998,
+                "content": "Message from sender 10",
+            },
+        },
+        headers=HEADERS,
+    )
+    assert log_response_10.status_code == 200, log_response_10.json()
+    log_id_10 = log_response_10.json()["log_event_ids"][0]
+
+    # Step 4c: Test comparison operator that would fail with text comparison
+    # "10" > "5" is FALSE in text (lexicographic), but 10 > 5 is TRUE numerically
+    filter_expr = "sender_id > 5"
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": filter_expr},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, (
+        f"Comparison operator on JSON schema type failed: {response.text}. "
+        f"JSON schema typed fields should support comparison operators."
+    )
+    data = response.json()
+    assert len(data["logs"]) == 1, (
+        f"Expected 1 log where sender_id > 5 (sender_id=10). Got {len(data['logs'])}. "
+        f"If 0, this suggests text comparison where '10' < '5' lexicographically."
+    )
+    assert data["logs"][0]["id"] == log_id_10
+
+    # Step 4d: Test 'in' operator on JSON schema type field
+    filter_expr = "sender_id in [1, 2, 3, 4]"
+    response = await client.get(
+        "/v0/logs",
+        params={"project": project_name, "filter_expr": filter_expr},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, (
+        f"'in' operator on JSON schema type failed: {response.text}. "
+        f"JSON schema typed fields should support membership tests."
+    )
+    data = response.json()
+    assert len(data["logs"]) == 1, f"Expected 1 log where sender_id in [1,2,3,4]"
+    assert data["logs"][0]["id"] == log_id
+
     # Step 5: Test combined filter (both fields in expression)
     filter_expr = "sender_id == 3 and exchange_id == 12345"
     response = await client.get(
@@ -4406,7 +4458,7 @@ async def test_filter_with_json_schema_typed_field(
     assert len(data["logs"]) == 1, f"Expected 1 log with None sender_id"
     assert data["logs"][0]["id"] == log_id_null
 
-    # Filter for non-NULL sender_id
+    # Filter for non-NULL sender_id (should return both sender_id=3 and sender_id=10)
     filter_expr = "sender_id is not None"
     response = await client.get(
         "/v0/logs",
@@ -4415,8 +4467,12 @@ async def test_filter_with_json_schema_typed_field(
     )
     assert response.status_code == 200, f"Filter for not None failed: {response.text}"
     data = response.json()
-    assert len(data["logs"]) == 1, f"Expected 1 log with non-None sender_id"
-    assert data["logs"][0]["id"] == log_id
+    assert len(data["logs"]) == 2, f"Expected 2 logs with non-None sender_id"
+    returned_ids = {log["id"] for log in data["logs"]}
+    assert returned_ids == {
+        log_id,
+        log_id_10,
+    }, f"Expected logs {log_id} and {log_id_10}"
 
 
 @pytest.mark.anyio
