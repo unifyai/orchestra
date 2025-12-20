@@ -172,16 +172,19 @@ def _get_assistants_sibling_context_info(
     For Assistants project, find sibling context IDs for each log event.
 
     Uses a 3-tier context hierarchy:
-    - Tier 1: "All/<SubContext>" (global aggregate)
-    - Tier 2: "<User>/All/<SubContext>" (user aggregate)
-    - Tier 3: "<User>/<Assistant>/<SubContext>" (user + assistant specific)
+    - Tier 1: "<prefix>/All/<SubContext>" (global aggregate)
+    - Tier 2: "<prefix>/<User>/All/<SubContext>" (user aggregate)
+    - Tier 3: "<prefix>/<User>/<Assistant>/<SubContext>" (user + assistant specific)
+
+    Both <prefix> and <SubContext> can have arbitrary depth. We determine them
+    dynamically by finding each log's Tier 1 context and locating "All" within it.
+    The Tier 1 context is identified as the shortest context containing "All"
+    that each log belongs to.
 
     Deletion cascade rules:
-    - From Tier 3 (User/Assistant/Ctx): delete from User/All/Ctx and All/Ctx
-    - From Tier 2 (User/All/Ctx): delete from User/<Assistant>/Ctx and All/Ctx
-    - From Tier 1 (All/Ctx): delete from <User>/All/Ctx and <User>/<Assistant>/Ctx
+    - From any tier: delete from the other two tiers
 
-    Uses "_user" and "_assistant" fields from logs to find related contexts.
+    Uses "_user" and "_assistant" fields from logs to construct sibling paths.
 
     Args:
         session: Database session
@@ -199,11 +202,6 @@ def _get_assistants_sibling_context_info(
         return {}
 
     sibling_map: Dict[int, List[int]] = {}
-    parts = context_name.split("/")
-
-    # Must have at least format "X/Y" to have siblings
-    if len(parts) < 2:
-        return {}
 
     def _add_sibling(log_id: int, ctx_id: int):
         """Helper to add a sibling context ID to the map."""
@@ -253,10 +251,7 @@ def _get_assistants_sibling_context_info(
                 result[log_event_id] = value
         return result
 
-    def _find_context_and_verify_membership(
-        ctx_name: str,
-        logs: List[int],
-    ) -> Optional[int]:
+    def _find_context_id(ctx_name: str) -> Optional[int]:
         """Find context by name and return its ID if it exists."""
         ctx = context_dao.filter(project_id=project_id, name=ctx_name)
         if ctx:
@@ -275,104 +270,107 @@ def _get_assistants_sibling_context_info(
         )
         return [log_id for (log_id,) in existing]
 
-    # Determine the tier based on context structure
-    if parts[0] == "All":
-        # Tier 1: "All/<SubContext>" - global aggregate
-        # Find: <User>/All/<SubContext> and <User>/<Assistant>/<SubContext>
-        sub_context = "/".join(parts[1:])
+    def _get_tier1_context_for_logs() -> Dict[int, str]:
+        """Find the Tier 1 context name for each log.
 
-        # Get _user and _assistant fields for all logs
-        user_values = _get_log_field_values("_user")
-        assistant_values = _get_log_field_values("_assistant")
+        Tier 1 is identified as the SHORTEST context containing "All" that
+        each log belongs to. This works because Tier 2 adds a User component,
+        making it longer than Tier 1 for the same prefix/SubContext.
 
-        # Group logs by user
-        user_to_logs: Dict[str, List[int]] = {}
-        for log_id, user_name in user_values.items():
-            user_to_logs.setdefault(user_name, []).append(log_id)
+        Returns:
+            Dict mapping log_event_id to its Tier 1 context name.
+        """
+        # Query all contexts that contain these logs
+        log_contexts = (
+            session.query(LogEventContext.log_event_id, Context.name)
+            .join(Context, Context.id == LogEventContext.context_id)
+            .filter(
+                LogEventContext.log_event_id.in_(log_event_ids),
+                Context.project_id == project_id,
+            )
+            .all()
+        )
 
-        # For each user, find User/All/SubContext
-        for user_name, logs in user_to_logs.items():
-            user_all_ctx_name = f"{user_name}/All/{sub_context}"
-            ctx_id = _find_context_and_verify_membership(user_all_ctx_name, logs)
-            if ctx_id:
-                for log_id in _verify_logs_in_context(ctx_id, logs):
-                    _add_sibling(log_id, ctx_id)
+        # For each log, find its Tier 1 context (shortest one containing "All")
+        result: Dict[int, str] = {}
+        for log_id, ctx_name in log_contexts:
+            if "/All/" not in ctx_name and not ctx_name.startswith("All/"):
+                # No "All" in this context - not an aggregation context
+                continue
 
-        # For each log with both _user and _assistant, find User/Assistant/SubContext
-        for log_id in log_event_ids:
-            user_name = user_values.get(log_id)
-            assistant_name = assistant_values.get(log_id)
-            if user_name and assistant_name:
-                user_assistant_ctx_name = f"{user_name}/{assistant_name}/{sub_context}"
-                ctx_id = _find_context_and_verify_membership(
-                    user_assistant_ctx_name,
-                    [log_id],
-                )
-                if ctx_id:
-                    for lid in _verify_logs_in_context(ctx_id, [log_id]):
-                        _add_sibling(lid, ctx_id)
+            if log_id not in result or len(ctx_name) < len(result[log_id]):
+                # First match or shorter match - this is more likely Tier 1
+                result[log_id] = ctx_name
 
-    elif len(parts) >= 2 and parts[1] == "All":
-        # Tier 2: "<User>/All/<SubContext>" - user aggregate
-        # Find: <User>/<Assistant>/<SubContext> and All/<SubContext>
-        user_name = parts[0]
-        sub_context = "/".join(parts[2:]) if len(parts) > 2 else ""
+        return result
 
-        # Get _assistant field for all logs
-        assistant_values = _get_log_field_values("_assistant")
+    def _parse_tier1_context(tier1_ctx: str) -> tuple:
+        """Parse a Tier 1 context into (prefix, sub_context).
 
-        # Group logs by assistant
-        assistant_to_logs: Dict[str, List[int]] = {}
-        for log_id, assistant_name in assistant_values.items():
-            assistant_to_logs.setdefault(assistant_name, []).append(log_id)
+        Args:
+            tier1_ctx: Context name like "<prefix>/All/<SubContext>"
 
-        # For each assistant, find User/Assistant/SubContext
-        for assistant_name, logs in assistant_to_logs.items():
-            if sub_context:
-                user_assistant_ctx_name = f"{user_name}/{assistant_name}/{sub_context}"
-            else:
-                user_assistant_ctx_name = f"{user_name}/{assistant_name}"
-            ctx_id = _find_context_and_verify_membership(user_assistant_ctx_name, logs)
-            if ctx_id:
-                for log_id in _verify_logs_in_context(ctx_id, logs):
-                    _add_sibling(log_id, ctx_id)
+        Returns:
+            Tuple of (prefix, sub_context) where prefix may be empty string.
+        """
+        parts = tier1_ctx.split("/")
+        try:
+            all_idx = parts.index("All")
+            prefix = "/".join(parts[:all_idx]) if all_idx > 0 else ""
+            sub_context = "/".join(parts[all_idx + 1 :]) if all_idx < len(parts) - 1 else ""
+            return (prefix, sub_context)
+        except ValueError:
+            return ("", "")
 
-        # Find All/SubContext for all logs
-        if sub_context:
-            all_ctx_name = f"All/{sub_context}"
+    # Step 1: Find Tier 1 context for each log to determine prefix/SubContext
+    tier1_contexts = _get_tier1_context_for_logs()
+
+    if not tier1_contexts:
+        return {}
+
+    # Step 2: Get _user and _assistant fields for all logs
+    user_values = _get_log_field_values("_user")
+    assistant_values = _get_log_field_values("_assistant")
+
+    # Step 3: For each log, construct and find sibling contexts
+    for log_id in log_event_ids:
+        tier1_ctx = tier1_contexts.get(log_id)
+        if not tier1_ctx:
+            continue
+
+        prefix, sub_context = _parse_tier1_context(tier1_ctx)
+        if not sub_context:
+            continue
+
+        user_name = user_values.get(log_id)
+        assistant_name = assistant_values.get(log_id)
+
+        # Construct all three tier context names
+        if prefix:
+            tier1_name = f"{prefix}/All/{sub_context}"
+            tier2_name = f"{prefix}/{user_name}/All/{sub_context}" if user_name else None
+            tier3_name = (
+                f"{prefix}/{user_name}/{assistant_name}/{sub_context}"
+                if user_name and assistant_name
+                else None
+            )
         else:
-            all_ctx_name = "All"
-        ctx_id = _find_context_and_verify_membership(all_ctx_name, log_event_ids)
-        if ctx_id:
-            for log_id in _verify_logs_in_context(ctx_id, log_event_ids):
-                _add_sibling(log_id, ctx_id)
+            tier1_name = f"All/{sub_context}"
+            tier2_name = f"{user_name}/All/{sub_context}" if user_name else None
+            tier3_name = (
+                f"{user_name}/{assistant_name}/{sub_context}"
+                if user_name and assistant_name
+                else None
+            )
 
-    else:
-        # Tier 3: "<User>/<Assistant>/<SubContext>" - user + assistant specific
-        # Find: <User>/All/<SubContext> and All/<SubContext>
-        user_name = parts[0]
-        # assistant_name = parts[1]  # Not needed since we use context structure
-        sub_context = "/".join(parts[2:]) if len(parts) > 2 else ""
-
-        # Find User/All/SubContext for all logs
-        if sub_context:
-            user_all_ctx_name = f"{user_name}/All/{sub_context}"
-        else:
-            user_all_ctx_name = f"{user_name}/All"
-        ctx_id = _find_context_and_verify_membership(user_all_ctx_name, log_event_ids)
-        if ctx_id:
-            for log_id in _verify_logs_in_context(ctx_id, log_event_ids):
-                _add_sibling(log_id, ctx_id)
-
-        # Find All/SubContext for all logs
-        if sub_context:
-            all_ctx_name = f"All/{sub_context}"
-        else:
-            all_ctx_name = "All"
-        ctx_id = _find_context_and_verify_membership(all_ctx_name, log_event_ids)
-        if ctx_id:
-            for log_id in _verify_logs_in_context(ctx_id, log_event_ids):
-                _add_sibling(log_id, ctx_id)
+        # Find sibling contexts (excluding the current context)
+        for sibling_name in [tier1_name, tier2_name, tier3_name]:
+            if sibling_name and sibling_name != context_name:
+                ctx_id = _find_context_id(sibling_name)
+                if ctx_id and ctx_id != context_id:
+                    # Verify log actually exists in this context before adding
+                    if _verify_logs_in_context(ctx_id, [log_id]):
+                        _add_sibling(log_id, ctx_id)
 
     return sibling_map
 
