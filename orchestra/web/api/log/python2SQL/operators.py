@@ -284,6 +284,7 @@ def _create_truthiness_condition(subq_or_literal, session):
 
 # Import shared truthiness logic
 from .truthiness import build_truthiness_sql as _build_truthiness_sql
+from .truthiness import get_or_list_fallback as _get_or_list_fallback
 
 
 def _handle_logical_operator(
@@ -953,6 +954,25 @@ def _handle_membership_operator(
     operand = filter_dict.get("operand")
     is_in = operand == "in"
 
+    rhs_dict = filter_dict.get("rhs")
+
+    # Handle the (expr or <list>) fallback pattern specially.
+    # In Python, `'x' in (arr or [])` uses arr if truthy, else [].
+    # We must NOT convert the `or` to boolean SQL OR - we need the array value.
+    or_fallback_list = _get_or_list_fallback(rhs_dict)
+    or_fallback_array_expr = None
+    if or_fallback_list is not None:
+        # Build only the LHS of the 'or' (the array expression)
+        or_fallback_array_expr = build_sql_query(
+            rhs_dict["lhs"],
+            log_event_alias,
+            session,
+            log_event_ids=log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+        )
+
     lhs = build_sql_query(
         filter_dict.get("lhs"),
         log_event_alias,
@@ -962,15 +982,20 @@ def _handle_membership_operator(
         local_scope=local_scope,
         is_vector=is_vector,
     )
-    rhs = build_sql_query(
-        filter_dict.get("rhs"),
-        log_event_alias,
-        session,
-        log_event_ids=log_event_ids,
-        is_derived=is_derived,
-        local_scope=local_scope,
-        is_vector=is_vector,
-    )
+
+    # Use the or-fallback array expression if detected, otherwise build normally
+    if or_fallback_array_expr is not None:
+        rhs = or_fallback_array_expr
+    else:
+        rhs = build_sql_query(
+            rhs_dict,
+            log_event_alias,
+            session,
+            log_event_ids=log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+        )
 
     lhs_is_sub = isinstance(lhs, Subquery)
     rhs_is_sub = isinstance(rhs, Subquery)
@@ -979,6 +1004,18 @@ def _handle_membership_operator(
     if lhs_is_sub and rhs_is_sub:
         lval, lval_type = _select_value(lhs, session)
         rval, rval_type = _select_value(rhs, session)
+
+        # Handle (expr or <list>) fallback pattern with COALESCE
+        if or_fallback_list is not None:
+            fallback_json = json.dumps(or_fallback_list)
+            # NULLIF converts JSON null to SQL NULL, then COALESCE provides fallback
+            rval_with_fallback = func.coalesce(
+                func.nullif(cast(rval, JSONB), cast(literal("null"), JSONB)),
+                cast(literal(fallback_json), JSONB),
+            )
+            condition = rval_with_fallback.op("@>")(func.jsonb_build_array(lval))
+            expr = condition if is_in else ~condition
+            return _join_subqueries(lhs, rhs, expr, "bool", session=session)
 
         # Check if RHS is a JSONB list for containment check
         if rval_type == "list" and is_in:
@@ -1070,6 +1107,36 @@ def _handle_membership_operator(
     # Only RHS is a subquery
     elif rhs_is_sub and not lhs_is_sub:
         rval, rval_type = _select_value(rhs, session)
+
+        # Handle (expr or <list>) fallback pattern with COALESCE
+        # This handles cases like `'x' in (arr or [])` where arr might be null/missing
+        if or_fallback_list is not None:
+            lhs_value = lhs.value if isinstance(lhs, BindParameter) else lhs
+            try:
+                lhs_value = json.loads(lhs_value)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+            fallback_json = json.dumps(or_fallback_list)
+            # NULLIF converts JSON null to SQL NULL, then COALESCE provides fallback
+            rval_with_fallback = func.coalesce(
+                func.nullif(cast(rval, JSONB), cast(literal("null"), JSONB)),
+                cast(literal(fallback_json), JSONB),
+            )
+            containment_expr = rval_with_fallback.op("@>")(
+                func.jsonb_build_array(lhs_value),
+            )
+            cond = containment_expr if is_in else ~containment_expr
+            select_cols = [rhs.c.log_event_id.label("log_event_id")]
+            if "__comp_idx__" in rhs.c.keys():
+                select_cols.append(rhs.c.__comp_idx__.label("__comp_idx__"))
+            select_cols.extend(
+                [cond.label("value"), literal("bool").label("inferred_type")],
+            )
+            return alias_utils.subquery_with_unique_alias(
+                select(*select_cols).select_from(rhs),
+                prefix="membership_op",
+            )
 
         # Check if we're trying to do membership test on a boolean column
         if rval_type == "bool" and not isinstance(rval, list):
