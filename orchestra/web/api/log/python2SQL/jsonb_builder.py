@@ -1017,25 +1017,27 @@ def _handle_arithmetic_operator_jsonb(
         )
 
 
-def _is_or_with_empty_list_fallback(node_dict):
+def _get_or_list_fallback(node_dict):
     """
-    Check if a node represents the pattern (expr or []).
+    Check if a node represents the pattern (expr or <list>).
 
     This is a common Python idiom for safe iteration over potentially null arrays:
         'x' in (arr or [])
+        'x' in (arr or ['default'])
 
     Python's `or` operator returns one of its operands, not a boolean.
     So `arr or []` returns `arr` if truthy, else `[]`.
 
     Returns:
-        True if the pattern matches, False otherwise.
+        The fallback list if the pattern matches, None otherwise.
     """
-    return (
+    if (
         isinstance(node_dict, dict)
         and node_dict.get("operand") == "or"
         and isinstance(node_dict.get("rhs"), list)
-        and len(node_dict.get("rhs", [])) == 0
-    )
+    ):
+        return node_dict.get("rhs")
+    return None
 
 
 def _handle_membership_operator_jsonb(
@@ -1080,11 +1082,12 @@ def _handle_membership_operator_jsonb(
     lhs_dict = filter_dict["lhs"]
     rhs_dict = filter_dict["rhs"]
 
-    # Handle the (expr or []) fallback pattern specially.
+    # Handle the (expr or <list>) fallback pattern specially.
     # In Python, `'x' in (arr or [])` uses arr if truthy, else [].
     # We must NOT convert the `or` to boolean SQL OR - we need the array value.
+    or_fallback_list = _get_or_list_fallback(rhs_dict)
     or_fallback_array_expr = None
-    if _is_or_with_empty_list_fallback(rhs_dict):
+    if or_fallback_list is not None:
         # Build only the LHS of the 'or' (the array expression)
         or_fallback_array_expr = _build_sql_query_jsonb(
             rhs_dict["lhs"],
@@ -1138,13 +1141,16 @@ def _handle_membership_operator_jsonb(
         lhs_type = _infer_expression_type(lhs_expr, session, project_id, context_id)
         rhs_type = _infer_expression_type(rhs_expr, session, project_id, context_id)
 
-        # Case 0: Handle (expr or []) fallback pattern for safe array membership
-        # Use COALESCE to provide empty array fallback when expression is NULL
-        if or_fallback_array_expr is not None:
-            # COALESCE(array_expr, '[]'::jsonb) ensures we have an array for containment
+        # Case 0: Handle (expr or <list>) fallback pattern for safe array membership
+        # Use COALESCE to provide the fallback list when expression is NULL or JSON null
+        if or_fallback_list is not None:
+            import json
+
+            fallback_json = json.dumps(or_fallback_list)
+            # NULLIF converts JSON null to SQL NULL, then COALESCE provides fallback
             rhs_with_fallback = func.coalesce(
-                cast(rhs_expr, JSONB),
-                cast(literal("[]"), JSONB),
+                func.nullif(cast(rhs_expr, JSONB), cast(literal("null"), JSONB)),
+                cast(literal(fallback_json), JSONB),
             )
             containment = rhs_with_fallback.op("@>")(
                 func.jsonb_build_array(lhs_expr),
