@@ -673,7 +673,9 @@ def _select_value(
             elif len(distinct_types) == 1:
                 dt = distinct_types[0]
             else:
-                dt = functools.reduce(unify_inferred_types, distinct_types)
+                # Multiple types - use "jsonb" for runtime type checking
+                # to ensure correct truthiness evaluation
+                dt = "jsonb"
             return subq.c.value, dt
 
         # Subqueries with multiple typed columns (from _build_subquery_for_identifier)
