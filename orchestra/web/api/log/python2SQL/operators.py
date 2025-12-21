@@ -282,35 +282,8 @@ def _create_truthiness_condition(subq_or_literal, session):
     return literal(bool(subq_or_literal))
 
 
-def _build_truthiness_sql(val_col, val_type):
-    """
-    Build SQL truthiness condition based on value type.
-    """
-    if val_type == "bool":
-        # The value column might be JSONB, so we must cast it to Boolean.
-        return cast(val_col, Boolean).is_(True)
-    elif val_type in ("int", "float"):
-        # For numbers, check if not 0
-        return case(
-            (val_col.is_(None), literal(False)),
-            (func.jsonb_typeof(val_col) == "null", literal(False)),
-            else_=(cast(val_col, Float) != 0),
-        )
-    elif val_type == "str":
-        # For strings, check if not empty
-        return func.length(func.replace(cast(val_col, String), '"', "")) > 0
-    elif val_type == "list":
-        # For lists, check if not empty
-        return func.jsonb_array_length(val_col) > 0
-    elif val_type == "dict":
-        # For dicts, check if not empty
-        return val_col != cast(literal("{}"), JSONB)
-    elif val_type == "NoneType":
-        # None is always falsy
-        return literal(False)
-    else:
-        # For other types (timestamp, etc.), check if not null
-        return val_col.isnot(None)
+# Import shared truthiness logic
+from .truthiness import build_truthiness_sql as _build_truthiness_sql
 
 
 def _handle_logical_operator(
