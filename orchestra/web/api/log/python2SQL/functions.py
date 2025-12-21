@@ -3147,27 +3147,10 @@ def _handle_dict_get(
             )
             return value_expr, default_type
         else:
-            # No default - use the inferred type directly
-            try:
-                possible_types = [
-                    row[0] for row in session.execute(select(result_type)).fetchall()
-                ]
-                inferred_type = (
-                    unify_inferred_types(*possible_types) if possible_types else "str"
-                )
-            except Exception:
-                inferred_type = "str"
-
-            # For scalar types, we need to extract the value with ->>
-            if inferred_type in ("str", "int", "float", "bool"):
-                # For scalar types, we need to extract as text then cast
-                extracted_text = safe_val.op("->>")(key_text)
-                value_expr = cast_expr(extracted_text, "str", inferred_type)
-            else:
-                # For complex types (list, dict), keep as JSONB
-                value_expr = extracted_jsonb
-
-            return value_expr, inferred_type
+            # No default - return JSONB value and dynamic type expression
+            # The type will be determined at runtime based on the actual JSON value.
+            # This ensures truthiness checks work correctly for all types.
+            return extracted_jsonb, result_type
 
     # Handle subquery containers
     if isinstance(container_sql, Subquery):
@@ -3204,9 +3187,12 @@ def _handle_dict_get(
             select_cols.append(container_sql.c.__parent_idx__.label("__parent_idx__"))
 
         # Add the value and type columns
-        select_cols.extend(
-            [value_expr.label("value"), literal(result_type).label("inferred_type")],
-        )
+        # Note: result_type may be a CASE expression (dynamic type) or a string literal
+        if isinstance(result_type, str):
+            type_col = literal(result_type).label("inferred_type")
+        else:
+            type_col = result_type.label("inferred_type")
+        select_cols.extend([value_expr.label("value"), type_col])
 
         return alias_utils.subquery_with_unique_alias(
             select(*select_cols).select_from(container_sql),
