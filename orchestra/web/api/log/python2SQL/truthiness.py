@@ -12,7 +12,7 @@ implementing Python's truthiness semantics in SQL:
     - Everything else: True
 """
 
-from sqlalchemy import Boolean, Float, and_, case, cast, func, literal
+from sqlalchemy import Boolean, Float, String, and_, case, cast, func, literal
 from sqlalchemy.dialects.postgresql import JSONB
 
 from .type_mapping import normalize_type
@@ -34,22 +34,15 @@ def build_truthiness_sql(val_col, val_type):
     """
     normalized_type = normalize_type(val_type)
 
-    # Extract text representation from JSONB for scalar types.
-    # #>> '{}' extracts the root value as text, avoiding JSON quoting issues.
-    val_as_text = val_col.op("#>>")(literal("{}"))
-
     if normalized_type == "bool":
         # Cast to boolean and check if True
-        # For JSONB, casting works correctly for boolean values
         return cast(val_col, Boolean).is_(True)
     elif normalized_type in ("int", "float"):
-        # For numbers, extract as text and cast to float for comparison
-        # Using #>> '{}' to get raw text avoids JSON quoting
-        return and_(val_col.isnot(None), cast(val_as_text, Float) != 0)
+        # For numbers, check if not 0 and not null
+        return and_(val_col.isnot(None), cast(val_col, Float) != 0)
     elif normalized_type == "str":
-        # For strings, extract as text and check length
-        # Using #>> '{}' extracts the actual string content without JSON quotes
-        return and_(val_col.isnot(None), func.length(val_as_text) > 0)
+        # For strings, check if not empty and not null
+        return and_(val_col.isnot(None), func.length(cast(val_col, String)) > 0)
     elif normalized_type == "list":
         # For lists, check if not empty
         return func.jsonb_array_length(val_col) > 0
