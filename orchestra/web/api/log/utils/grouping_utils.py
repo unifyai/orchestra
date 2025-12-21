@@ -694,17 +694,16 @@ def _get_all_filtered_log_event_ids(
                 context_id=context_id,
             )
             if isinstance(condition, Subquery):
-                # Subquery => we check existence
+                # Subquery => filter by log_event_id where the value is truthy
+                # Use proper truthiness evaluation, not just is_(True)
+                from orchestra.web.api.log.python2SQL.operators import (
+                    _create_truthiness_condition,
+                )
+
+                truthiness_clause = _create_truthiness_condition(condition, session)
                 log_event_query = log_event_query.filter(
-                    exists(
-                        select(1)
-                        .select_from(condition)
-                        .where(
-                            and_(
-                                condition.c.log_event_id == LogEvent.id,
-                                condition.c.value.is_(True),
-                            ),
-                        ),
+                    LogEvent.id.in_(
+                        select(condition.c.log_event_id).where(truthiness_clause),
                     ),
                 )
             else:
