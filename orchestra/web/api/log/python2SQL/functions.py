@@ -3147,10 +3147,10 @@ def _handle_dict_get(
             )
             return value_expr, default_type
         else:
-            # No default - return JSONB value and dynamic type expression
-            # The type will be determined at runtime based on the actual JSON value.
-            # This ensures truthiness checks work correctly for all types.
-            return extracted_jsonb, result_type
+            # No default - return JSONB value with "jsonb" type
+            # This uses runtime type checking for truthiness evaluation,
+            # ensuring correct behavior for all JSON types.
+            return extracted_jsonb, "jsonb"
 
     # Handle subquery containers
     if isinstance(container_sql, Subquery):
