@@ -844,6 +844,141 @@ async def test_full_name_filter_expression(client: AsyncClient, use_jsonb_mode):
                 },
             },
         ),
+        # Backtick-quoted field names (for field names with whitespace/special chars)
+        (
+            "`Business time` > 5",
+            {
+                "lhs": {"type": "identifier", "value": "Business time"},
+                "operand": ">",
+                "rhs": 5,
+            },
+        ),
+        # Backtick field in function call
+        (
+            "embed(`Content Field`)",
+            {
+                "operand": "embed",
+                "rhs": [{"type": "identifier", "value": "Content Field"}],
+                "async_embeddings": False,
+            },
+        ),
+        # Backtick field with property access / dict get
+        (
+            "`User Data`.get('key')",
+            {
+                "operand": "dict_method",
+                "method": "get",
+                "rhs": {"type": "identifier", "value": "User Data"},
+                "key": "key",
+                "default": None,
+                "default_supplied": False,
+            },
+        ),
+        # Multiple backtick fields
+        (
+            "`First Name` == 'John' and `Last Name` == 'Doe'",
+            {
+                "lhs": {
+                    "lhs": {"type": "identifier", "value": "First Name"},
+                    "operand": "==",
+                    "rhs": "John",
+                },
+                "operand": "and",
+                "rhs": {
+                    "lhs": {"type": "identifier", "value": "Last Name"},
+                    "operand": "==",
+                    "rhs": "Doe",
+                },
+            },
+        ),
+        # Backtick field with special chars (parentheses, dollar sign)
+        (
+            "`Revenue ($)` > 100",
+            {
+                "lhs": {"type": "identifier", "value": "Revenue ($)"},
+                "operand": ">",
+                "rhs": 100,
+            },
+        ),
+        # Mixed backtick and regular fields
+        (
+            "score > 10 and `Business time` < '2024-01-01'",
+            {
+                "lhs": {
+                    "lhs": {"type": "identifier", "value": "score"},
+                    "operand": ">",
+                    "rhs": 10,
+                },
+                "operand": "and",
+                "rhs": {
+                    "lhs": {"type": "identifier", "value": "Business time"},
+                    "operand": "<",
+                    "rhs": "2024-01-01T00:00:00",  # Parser normalizes timestamps
+                },
+            },
+        ),
+        # Backtick field with string method
+        (
+            "`Full Name`.lower() == 'john doe'",
+            {
+                "lhs": {
+                    "operand": "str_method",
+                    "method": "lower",
+                    "rhs": {"type": "identifier", "value": "Full Name"},
+                    "args": [],
+                },
+                "operand": "==",
+                "rhs": "john doe",
+            },
+        ),
+        # Backtick field in vector similarity function
+        (
+            "cosine(`Content Embedding`, embed('query')) < 0.5",
+            {
+                "lhs": {
+                    "lhs": {"type": "identifier", "value": "Content Embedding"},
+                    "operand": "cosine",
+                    "rhs": {
+                        "operand": "embed",
+                        "rhs": ["query"],
+                        "async_embeddings": False,
+                    },
+                },
+                "operand": "<",
+                "rhs": 0.5,
+            },
+        ),
+        # Backtick field with indexing
+        (
+            "`User Info`['email'] == 'test@example.com'",
+            {
+                "lhs": {
+                    "operand": "INDEX",
+                    "lhs": {"type": "identifier", "value": "User Info"},
+                    "rhs": "email",
+                },
+                "operand": "==",
+                "rhs": "test@example.com",
+            },
+        ),
+        # Backticks enclosing single quotes - quotes become part of the field name
+        (
+            "`'Quoted Field'` > 5",
+            {
+                "lhs": {"type": "identifier", "value": "'Quoted Field'"},
+                "operand": ">",
+                "rhs": 5,
+            },
+        ),
+        # Backticks enclosing double quotes - quotes become part of the field name
+        (
+            '`"Double Quoted"` == 10',
+            {
+                "lhs": {"type": "identifier", "value": '"Double Quoted"'},
+                "operand": "==",
+                "rhs": 10,
+            },
+        ),
     ],
 )
 def test_ast_parser(expression, expected_dict):
@@ -855,6 +990,130 @@ def test_ast_parser(expression, expected_dict):
     assert (
         result_dict == expected_dict
     ), f"AST mismatch.\nGot: {result_dict}\nExpected: {expected_dict}"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "expression, values, expected_match",
+    [
+        # Simple backtick field equality
+        (
+            "`Business Time` == 'morning'",
+            {"Business Time": "morning"},
+            True,
+        ),
+        (
+            "`Business Time` == 'afternoon'",
+            {"Business Time": "morning"},
+            False,
+        ),
+        # Backtick field with comparison
+        (
+            "`Sales Revenue` > 100",
+            {"Sales Revenue": 150},
+            True,
+        ),
+        (
+            "`Sales Revenue` > 100",
+            {"Sales Revenue": 50},
+            False,
+        ),
+        # Multiple backtick fields with logical operators
+        (
+            "`First Name` == 'John' and `Last Name` == 'Doe'",
+            {"First Name": "John", "Last Name": "Doe"},
+            True,
+        ),
+        (
+            "`First Name` == 'John' and `Last Name` == 'Doe'",
+            {"First Name": "John", "Last Name": "Smith"},
+            False,
+        ),
+        # Mixed regular and backtick fields
+        (
+            "score > 80 and `User Rating` >= 4.5",
+            {"score": 90, "User Rating": 4.8},
+            True,
+        ),
+        (
+            "score > 80 and `User Rating` >= 4.5",
+            {"score": 90, "User Rating": 4.0},
+            False,
+        ),
+        # Backtick field with string method
+        (
+            "`Full Name`.lower() == 'john doe'",
+            {"Full Name": "JOHN DOE"},
+            True,
+        ),
+        # Backtick field with special characters
+        (
+            "`Revenue ($)` > 1000",
+            {"Revenue ($)": 1500},
+            True,
+        ),
+        # Backtick field with dict get
+        (
+            "`User Data`.get('email') == 'test@example.com'",
+            {"User Data": {"email": "test@example.com"}},
+            True,
+        ),
+        # Backtick field in len function
+        (
+            "len(`Item Names`) == 3",
+            {"Item Names": ["a", "b", "c"]},
+            True,
+        ),
+        # Backtick field in exists function
+        (
+            "exists(`Optional Field`)",
+            {"Optional Field": "present"},
+            True,
+        ),
+        (
+            "exists(`Missing Field`)",
+            {"Other Field": "value"},
+            False,
+        ),
+    ],
+)
+async def test_log_filter_with_whitespace_field_names(
+    client: AsyncClient,
+    expression,
+    values,
+    expected_match,
+    use_jsonb_mode,
+):
+    """
+    Integration test for filtering logs using backtick-quoted field names
+    that contain whitespace or special characters.
+    """
+    project_name = f"test_backtick_fields-{'jsonb' if use_jsonb_mode else 'eav'}"
+    await _create_project(client, project_name)
+
+    # Create a log with field names containing spaces
+    response = await _create_log(client, project_name, entries=values)
+    assert response.status_code == 200, response.text
+    log_id = response.json()["log_event_ids"][0]
+
+    # Test the filter expression with backtick-quoted field names
+    response = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": expression,
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+
+    # Verify the filter worked correctly
+    if expected_match:
+        assert len(data["logs"]) == 1, f"Expected 1 log for expression: {expression}"
+        assert data["logs"][0]["id"] == log_id
+    else:
+        assert len(data["logs"]) == 0, f"Expected 0 logs for expression: {expression}"
 
 
 @pytest.mark.anyio
