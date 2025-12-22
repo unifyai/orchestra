@@ -981,26 +981,52 @@ def _preprocess_backtick_fields(expr: str) -> tuple[str, dict[str, str]]:
     with valid Python identifiers (placeholders). Returns the processed expression
     and a mapping from placeholder to original field name.
 
+    This function respects string literal boundaries - backticks inside quoted
+    strings (e.g., "Hello `world`") are not treated as field delimiters.
+
+    Uses regex alternation with ordered groups (matching the deprecated tokenizer
+    approach) to ensure strings are matched before backticks:
+      1. Triple-quoted strings (triple " or triple ') - matched first due to length
+      2. Single/double quoted strings
+      3. Backtick-quoted field names (only these are replaced)
+
     Args:
         expr: The filter expression string
 
     Returns:
         A tuple of (processed_expression, placeholder_to_field_mapping)
     """
-    backtick_fields = {}
-    # Match backtick-quoted strings, supporting escaped backticks inside
-    # Pattern: `...` where ... can contain any char except unescaped backtick
-    backtick_pattern = r"`([^`\\]*(?:\\.[^`\\]*)*)`"
+    backtick_fields: dict[str, str] = {}
 
-    def replace_backtick(match):
-        field_name = match.group(1)
-        # Handle escaped backticks inside the field name
-        field_name = field_name.replace(r"\`", "`")
+    # Pattern uses alternation with ordered groups:
+    # Group 1: Triple-quoted strings (must come first - longer match)
+    # Group 2: Single/double quoted strings (with escape handling)
+    # Group 3: Backtick-quoted field names (only these get replaced)
+    #
+    # The pattern mirrors the deprecated tokenizer's token specification order:
+    # STRING tokens are matched before BACKTICK_IDENTIFIER tokens.
+    pattern = re.compile(
+        r'("""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\')'  # Group 1: triple-quoted
+        r"|"  # OR
+        r'("(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\')'  # Group 2: quoted strings
+        r"|"  # OR
+        r"(`(?:[^`\\]|\\.)*`)",  # Group 3: backtick fields
+    )
+
+    def replace_match(match: re.Match) -> str:
+        # If group 1 or 2 matched (string literal), return unchanged
+        if match.group(1) or match.group(2):
+            return match.group(0)
+
+        # Group 3 matched (backtick field) - extract and replace
+        backtick_match = match.group(3)
+        # Remove surrounding backticks and unescape internal backticks
+        field_name = backtick_match[1:-1].replace(r"\`", "`")
         placeholder = f"__BACKTICK_FIELD_{len(backtick_fields)}__"
         backtick_fields[placeholder] = field_name
         return placeholder
 
-    processed_expr = re.sub(backtick_pattern, replace_backtick, expr)
+    processed_expr = pattern.sub(replace_match, expr)
     return processed_expr, backtick_fields
 
 

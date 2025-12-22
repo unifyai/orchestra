@@ -1130,6 +1130,33 @@ async def test_full_name_filter_expression(client: AsyncClient, use_jsonb_mode):
                 },
             },
         ),
+        # Backticks inside double-quoted string should NOT be treated as field names
+        (
+            'field == "Hello `world`"',
+            {
+                "lhs": {"type": "identifier", "value": "field"},
+                "operand": "==",
+                "rhs": "Hello `world`",
+            },
+        ),
+        # Backticks inside single-quoted string should NOT be treated as field names
+        (
+            "field == 'Value with `backticks` inside'",
+            {
+                "lhs": {"type": "identifier", "value": "field"},
+                "operand": "==",
+                "rhs": "Value with `backticks` inside",
+            },
+        ),
+        # Mixed: backtick field AND string containing backticks
+        (
+            '`My Field` == "Hello `world`"',
+            {
+                "lhs": {"type": "identifier", "value": "My Field"},
+                "operand": "==",
+                "rhs": "Hello `world`",
+            },
+        ),
     ],
 )
 def test_ast_parser(expression, expected_dict):
