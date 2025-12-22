@@ -112,12 +112,6 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 0.25, "completion": 1.25},
     },
-    "claude-3.5-haiku": {
-        "endpoint": "vertex_ai/claude-3-5-haiku@20241022",
-        "region": "us-east5",
-        "context_window": 200000,
-        "cost": {"prompt": 0.8, "completion": 4},
-    },
     "claude-4-sonnet": {
         "endpoint": "vertex_ai/claude-sonnet-4@20250514",
         "region": "us-east5",
