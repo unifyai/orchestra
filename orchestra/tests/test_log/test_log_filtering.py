@@ -979,6 +979,157 @@ async def test_full_name_filter_expression(client: AsyncClient, use_jsonb_mode):
                 "rhs": 10,
             },
         ),
+        # Backtick field with 'is' operator (identity with None)
+        (
+            "`User Status` is None",
+            {
+                "lhs": {"type": "identifier", "value": "User Status"},
+                "operand": "is",
+                "rhs": None,
+            },
+        ),
+        # Backtick field with 'is not' operator
+        (
+            "`User Status` is not None",
+            {
+                "lhs": {"type": "identifier", "value": "User Status"},
+                "operand": "is not",
+                "rhs": None,
+            },
+        ),
+        # Backtick field with 'in' operator (membership)
+        (
+            "`Category Name` in ['Electronics', 'Books', 'Clothing']",
+            {
+                "lhs": {"type": "identifier", "value": "Category Name"},
+                "operand": "in",
+                "rhs": ["Electronics", "Books", "Clothing"],
+            },
+        ),
+        # Backtick field with 'not in' operator
+        (
+            "`Status Code` not in [400, 404, 500]",
+            {
+                "lhs": {"type": "identifier", "value": "Status Code"},
+                "operand": "not in",
+                "rhs": [400, 404, 500],
+            },
+        ),
+        # Backtick field as container for 'in' check (string in field)
+        (
+            "'error' in `Log Message`",
+            {
+                "lhs": "error",
+                "operand": "in",
+                "rhs": {"type": "identifier", "value": "Log Message"},
+            },
+        ),
+        # Backtick field with 'not' operator
+        (
+            "not `Is Active`",
+            {
+                "operand": "not",
+                "rhs": {"type": "identifier", "value": "Is Active"},
+            },
+        ),
+        # Backtick field with 'or' operator
+        (
+            "`Primary Status` == 'active' or `Secondary Status` == 'pending'",
+            {
+                "lhs": {
+                    "lhs": {"type": "identifier", "value": "Primary Status"},
+                    "operand": "==",
+                    "rhs": "active",
+                },
+                "operand": "or",
+                "rhs": {
+                    "lhs": {"type": "identifier", "value": "Secondary Status"},
+                    "operand": "==",
+                    "rhs": "pending",
+                },
+            },
+        ),
+        # Complex: backtick fields with 'is not' and 'and'
+        (
+            "`User Name` is not None and `Email Address` is not None",
+            {
+                "lhs": {
+                    "lhs": {"type": "identifier", "value": "User Name"},
+                    "operand": "is not",
+                    "rhs": None,
+                },
+                "operand": "and",
+                "rhs": {
+                    "lhs": {"type": "identifier", "value": "Email Address"},
+                    "operand": "is not",
+                    "rhs": None,
+                },
+            },
+        ),
+        # Backtick field with isNone function
+        (
+            "isNone(`Optional Value`)",
+            {
+                "operand": "isNone",
+                "rhs": {"type": "identifier", "value": "Optional Value"},
+            },
+        ),
+        # Backtick field with exists function
+        (
+            "exists(`My Field`)",
+            {
+                "operand": "exists",
+                "rhs": {"type": "identifier", "value": "My Field"},
+            },
+        ),
+        # Backtick field with 'not exists'
+        (
+            "not exists(`Missing Field`)",
+            {
+                "operand": "not",
+                "rhs": {
+                    "operand": "exists",
+                    "rhs": {"type": "identifier", "value": "Missing Field"},
+                },
+            },
+        ),
+        # Backtick field with comparison operators (<=, >=, !=)
+        (
+            "`Start Index` <= 10",
+            {
+                "lhs": {"type": "identifier", "value": "Start Index"},
+                "operand": "<=",
+                "rhs": 10,
+            },
+        ),
+        (
+            "`End Index` >= 100",
+            {
+                "lhs": {"type": "identifier", "value": "End Index"},
+                "operand": ">=",
+                "rhs": 100,
+            },
+        ),
+        (
+            "`Error Code` != 0",
+            {
+                "lhs": {"type": "identifier", "value": "Error Code"},
+                "operand": "!=",
+                "rhs": 0,
+            },
+        ),
+        # Backtick field in str() function with 'in' operator
+        (
+            "'test' in str(`Complex Object`)",
+            {
+                "lhs": "test",
+                "operand": "in",
+                "rhs": {
+                    "operand": "str",
+                    "rhs": {"type": "identifier", "value": "Complex Object"},
+                },
+            },
+        ),
     ],
 )
 def test_ast_parser(expression, expected_dict):
@@ -1073,6 +1224,93 @@ def test_ast_parser(expression, expected_dict):
         (
             "exists(`Missing Field`)",
             {"Other Field": "value"},
+            False,
+        ),
+        # Backtick field with 'is' operator (None check)
+        (
+            "`User Status` is None",
+            {"User Status": None},
+            True,
+        ),
+        (
+            "`User Status` is None",
+            {"User Status": "active"},
+            False,
+        ),
+        # Backtick field with 'is not' operator
+        (
+            "`Account Type` is not None",
+            {"Account Type": "premium"},
+            True,
+        ),
+        (
+            "`Account Type` is not None",
+            {"Account Type": None},
+            False,
+        ),
+        # Backtick field with 'in' operator (value in list)
+        (
+            "`Item Category` in ['Electronics', 'Books', 'Clothing']",
+            {"Item Category": "Books"},
+            True,
+        ),
+        (
+            "`Item Category` in ['Electronics', 'Books', 'Clothing']",
+            {"Item Category": "Furniture"},
+            False,
+        ),
+        # Backtick field with 'not in' operator
+        (
+            "`Error Code` not in [400, 404, 500]",
+            {"Error Code": 200},
+            True,
+        ),
+        (
+            "`Error Code` not in [400, 404, 500]",
+            {"Error Code": 404},
+            False,
+        ),
+        # String 'in' backtick field (substring check)
+        (
+            "'error' in `Log Message`",
+            {"Log Message": "An error occurred"},
+            True,
+        ),
+        (
+            "'error' in `Log Message`",
+            {"Log Message": "All systems operational"},
+            False,
+        ),
+        # Backtick field with 'or' operator
+        (
+            "`Primary Flag` == True or `Backup Flag` == True",
+            {"Primary Flag": False, "Backup Flag": True},
+            True,
+        ),
+        (
+            "`Primary Flag` == True or `Backup Flag` == True",
+            {"Primary Flag": False, "Backup Flag": False},
+            False,
+        ),
+        # Backtick field comparison operators (<=, >=, !=)
+        (
+            "`Start Value` <= 10",
+            {"Start Value": 5},
+            True,
+        ),
+        (
+            "`End Value` >= 100",
+            {"End Value": 150},
+            True,
+        ),
+        (
+            "`Status Code` != 0",
+            {"Status Code": 1},
+            True,
+        ),
+        (
+            "`Status Code` != 0",
+            {"Status Code": 0},
             False,
         ),
     ],
