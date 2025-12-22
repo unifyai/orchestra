@@ -143,11 +143,6 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 3, "completion": 15},
     },
-    "claude-3.5-haiku": {
-        "endpoint": "replicate/anthropic/claude-3.5-haiku",
-        "context_window": 200000,
-        "cost": {"prompt": 1, "completion": 5},
-    },
     "gemini-3-pro": {
         "endpoint": "replicate/google/gemini-3-pro",
         "context_window": 200000,
