@@ -76,7 +76,7 @@ supported_models = {
     "mistral-small": {
         "endpoint": "mistralai/Mistral-Small-24B-Instruct-2501",
         "context_window": 32000,
-        "cost": {"prompt": 0.8, "completion": 0.8},
+        "cost": {"prompt": 0.1, "completion": 0.3},
     },
     "qwen-3-235b-a22b-instruct": {
         "endpoint": "together_ai/Qwen/Qwen3-235B-A22B-fp8-tput",
