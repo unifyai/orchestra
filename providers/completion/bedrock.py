@@ -126,11 +126,6 @@ supported_models = {
         "context_window": 200000,
         "cost": {"prompt": 0.25, "completion": 1.25},
     },
-    "claude-3.5-haiku": {
-        "endpoint": "bedrock/us.anthropic.claude-3-5-haiku-20241022-v1:0",
-        "context_window": 200000,
-        "cost": {"prompt": 0.8, "completion": 4},
-    },
     "claude-4-sonnet": {
         "endpoint": "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0",
         "context_window": 200000,
