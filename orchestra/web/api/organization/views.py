@@ -15,6 +15,7 @@ from orchestra.db.dao.organization_invite_dao import OrganizationInviteDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
+from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.organization.schema import (
@@ -549,15 +550,32 @@ async def remove_organization_member(
             detail="User is not a member of this organization",
         )
 
-    # Remove member and revoke organization API keys
+    # Remove member and clean up all associated data
     try:
-        # Revoke organization API keys (personal keys are NOT affected)
-        revoked_count = api_key_dao.revoke_organization_keys(
+        team_dao = TeamDAO(session)
+
+        # 1. Delete unshared resources created by this user
+        resource_access_dao.delete_unshared_resources_by_creator(
+            user_id,
+            organization_id,
+        )
+
+        # 2. Remove user from all org teams
+        team_dao.remove_user_from_all_org_teams(user_id, organization_id)
+
+        # 3. Revoke resource access grants (for shared resources user had access to)
+        resource_access_dao.revoke_user_access_for_organization(
+            user_id,
+            organization_id,
+        )
+
+        # 4. Revoke organization API keys (personal keys are NOT affected)
+        api_key_dao.revoke_organization_keys(
             user_id=user_id,
             organization_id=organization_id,
         )
 
-        # Remove member from organization
+        # 5. Remove member from organization
         member = existing_member[0][0]
         org_member_dao.delete(member.id)
 

@@ -667,3 +667,160 @@ class ResourceAccessDAO:
                 accessible_ids.append(entry.resource_id)
 
         return list(set(accessible_ids))  # Remove duplicates
+
+    def revoke_user_access_for_organization(
+        self,
+        user_id: str,
+        organization_id: int,
+    ) -> int:
+        """
+        Revoke all resource access for a user within an organization.
+        Called when a member is removed from an organization.
+
+        :param user_id: User ID.
+        :param organization_id: Organization ID.
+        :returns: Count of deleted entries.
+        """
+        # Get all project IDs in this org
+        project_ids = [
+            p.id
+            for p in self.session.query(Project.id)
+            .filter_by(organization_id=organization_id)
+            .all()
+        ]
+
+        # Get all assistant IDs in this org
+        assistant_ids = [
+            a.agent_id
+            for a in self.session.query(Assistant.agent_id)
+            .filter_by(organization_id=organization_id)
+            .all()
+        ]
+
+        # Delete user's access grants for these resources
+        deleted = 0
+        if project_ids:
+            deleted += (
+                self.session.query(ResourceAccess)
+                .filter(
+                    ResourceAccess.grantee_type == "user",
+                    ResourceAccess.grantee_id == user_id,
+                    ResourceAccess.resource_type == "project",
+                    ResourceAccess.resource_id.in_(project_ids),
+                )
+                .delete(synchronize_session=False)
+            )
+
+        if assistant_ids:
+            deleted += (
+                self.session.query(ResourceAccess)
+                .filter(
+                    ResourceAccess.grantee_type == "user",
+                    ResourceAccess.grantee_id == user_id,
+                    ResourceAccess.resource_type == "assistant",
+                    ResourceAccess.resource_id.in_(assistant_ids),
+                )
+                .delete(synchronize_session=False)
+            )
+
+        self.session.flush()
+        self.clear_permission_cache()
+        return deleted
+
+    def delete_unshared_resources_by_creator(
+        self,
+        user_id: str,
+        organization_id: int,
+    ) -> dict:
+        """
+        Delete resources created by a user that were never shared with others.
+
+        A resource is considered "unshared" if:
+        - It has explicit ResourceAccess entries (not relying on implicit org access)
+        - The ONLY grantee is the creator themselves
+
+        Resources with no ResourceAccess entries use implicit org membership
+        access and are considered shared with all org members.
+
+        :param user_id: User ID of the creator being removed.
+        :param organization_id: Organization ID.
+        :returns: Dict with counts of deleted resources by type.
+        """
+        deleted = {"projects": 0, "assistants": 0}
+
+        # Get resources created by this user in this org
+        user_projects = (
+            self.session.query(Project)
+            .filter(
+                Project.user_id == user_id,
+                Project.organization_id == organization_id,
+            )
+            .all()
+        )
+
+        user_assistants = (
+            self.session.query(Assistant)
+            .filter(
+                Assistant.user_id == user_id,
+                Assistant.organization_id == organization_id,
+            )
+            .all()
+        )
+
+        # Check each project
+        for project in user_projects:
+            if self._is_resource_unshared(
+                resource_type="project",
+                resource_id=project.id,
+                creator_id=user_id,
+            ):
+                self.session.delete(project)
+                deleted["projects"] += 1
+
+        # Check each assistant
+        for assistant in user_assistants:
+            if self._is_resource_unshared(
+                resource_type="assistant",
+                resource_id=assistant.agent_id,
+                creator_id=user_id,
+            ):
+                self.session.delete(assistant)
+                deleted["assistants"] += 1
+
+        self.session.flush()
+        return deleted
+
+    def _is_resource_unshared(
+        self,
+        resource_type: str,
+        resource_id: int,
+        creator_id: str,
+    ) -> bool:
+        """
+        Check if a resource was never shared (only creator has explicit access).
+
+        Returns True (unshared) if:
+        - Resource has explicit ResourceAccess entries
+        - ALL entries are for the creator only (no team grants, no other users)
+
+        Returns False (shared) if:
+        - Resource has NO explicit entries (uses implicit org access = shared with all)
+        - Resource has entries for other users or teams
+        """
+        access_entries = self.get_resource_access(resource_type, resource_id)
+
+        # No explicit grants = uses implicit org membership access = shared
+        if not access_entries:
+            return False
+
+        # Check if all entries are for the creator only
+        for entry in access_entries:
+            # Team grant = shared
+            if entry.grantee_type == "team":
+                return False
+            # Another user = shared
+            if entry.grantee_type == "user" and entry.grantee_id != creator_id:
+                return False
+
+        # Only the creator has explicit access = unshared/private
+        return True
