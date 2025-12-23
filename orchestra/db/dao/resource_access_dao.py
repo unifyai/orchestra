@@ -6,6 +6,9 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
     Assistant,
+    Context,
+    LogEvent,
+    LogEventContext,
     Project,
     ResourceAccess,
     TeamMember,
@@ -784,11 +787,108 @@ class ResourceAccessDAO:
                 resource_id=assistant.agent_id,
                 creator_id=user_id,
             ):
+                # Delete assistant logs before deleting assistant
+                self._delete_assistant_logs(assistant, organization_id)
                 self.session.delete(assistant)
                 deleted["assistants"] += 1
 
         self.session.flush()
         return deleted
+
+    def _delete_assistant_logs(
+        self,
+        assistant: Assistant,
+        organization_id: int,
+    ) -> None:
+        """
+        Delete all logs associated with an assistant being removed.
+
+        This mirrors the logic from transfer-to-personal but deletes instead of transfers:
+        1. Deletes assistant-specific contexts ({FirstName}{Surname}/...)
+        2. Deletes logs in shared All/* contexts where _assistant_id matches
+        """
+        ASSISTANTS_PROJECT_NAME = "Assistants"
+
+        # Find the org's Assistants project
+        org_project = (
+            self.session.query(Project)
+            .filter(
+                Project.organization_id == organization_id,
+                Project.name == ASSISTANTS_PROJECT_NAME,
+            )
+            .first()
+        )
+
+        if not org_project:
+            return
+
+        assistant_context_prefix = f"{assistant.first_name}{assistant.surname}"
+
+        # 1. Delete assistant-specific contexts (FirstLast/... or FirstLast)
+        from sqlalchemy import or_
+
+        contexts_to_delete = (
+            self.session.query(Context)
+            .filter(
+                Context.project_id == org_project.id,
+                or_(
+                    Context.name.like(f"{assistant_context_prefix}/%"),
+                    Context.name == assistant_context_prefix,
+                ),
+            )
+            .all()
+        )
+
+        for ctx in contexts_to_delete:
+            # Delete LogEventContext associations first
+            self.session.query(LogEventContext).filter(
+                LogEventContext.context_id == ctx.id,
+            ).delete(synchronize_session=False)
+            # Delete the context (cascades to delete orphaned LogEvents if any)
+            self.session.delete(ctx)
+
+        # 2. Delete logs from shared All/* contexts where _assistant_id matches
+        shared_contexts = (
+            self.session.query(Context)
+            .filter(
+                Context.project_id == org_project.id,
+                Context.name.like("All/%"),
+            )
+            .all()
+        )
+
+        for shared_ctx in shared_contexts:
+            # Find logs belonging to this assistant in the shared context
+            assistant_log_ids = [
+                row[0]
+                for row in (
+                    self.session.query(LogEventContext.log_event_id)
+                    .join(
+                        LogEvent,
+                        LogEvent.id == LogEventContext.log_event_id,
+                    )
+                    .filter(
+                        LogEventContext.context_id == shared_ctx.id,
+                        LogEvent.data["_assistant_id"].astext
+                        == str(assistant.agent_id),
+                    )
+                    .all()
+                )
+            ]
+
+            if not assistant_log_ids:
+                continue
+
+            # Delete the LogEventContext associations first
+            self.session.query(LogEventContext).filter(
+                LogEventContext.log_event_id.in_(assistant_log_ids),
+                LogEventContext.context_id == shared_ctx.id,
+            ).delete(synchronize_session=False)
+
+            # Delete the LogEvent records
+            self.session.query(LogEvent).filter(
+                LogEvent.id.in_(assistant_log_ids),
+            ).delete(synchronize_session=False)
 
     def _is_resource_unshared(
         self,

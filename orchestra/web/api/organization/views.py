@@ -18,6 +18,7 @@ from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dependencies import get_db_session
+from orchestra.services.contact_sync_service import ContactSyncService
 from orchestra.web.api.organization.schema import (
     AcceptInviteResponse,
     DeclineInviteResponse,
@@ -553,6 +554,12 @@ async def remove_organization_member(
     # Remove member and clean up all associated data
     try:
         team_dao = TeamDAO(session)
+        auth_user_dao = AuthUserDAO(session)
+        contact_sync_service = ContactSyncService(session)
+
+        # Get user info for Contact update
+        user_row = auth_user_dao.get_by_id(user_id)
+        departing_user = user_row[0] if user_row else None
 
         # 1. Delete unshared resources created by this user
         resource_access_dao.delete_unshared_resources_by_creator(
@@ -569,13 +576,21 @@ async def remove_organization_member(
             organization_id,
         )
 
-        # 4. Revoke organization API keys (personal keys are NOT affected)
+        # 4. Mark user's Contact log as non-system (is_system=False)
+        if departing_user:
+            contact_sync_service.mark_member_contact_as_non_system(
+                organization_id=organization_id,
+                first_name=departing_user.name or "",
+                last_name=departing_user.last_name,
+            )
+
+        # 5. Revoke organization API keys (personal keys are NOT affected)
         api_key_dao.revoke_organization_keys(
             user_id=user_id,
             organization_id=organization_id,
         )
 
-        # 5. Remove member from organization
+        # 6. Remove member from organization
         member = existing_member[0][0]
         org_member_dao.delete(member.id)
 
