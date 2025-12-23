@@ -738,3 +738,272 @@ async def test_member_removal_handles_multiple_unshared_resources(
         assert (
             assistant_dao.get_assistant_by_agent_id(aid) is None
         ), f"Assistant {aid} should be deleted"
+
+
+# =============================================================================
+# Assistant Log Cleanup Tests
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsession):
+    """Test that when an unshared assistant is deleted, its logs are also deleted."""
+    owner = await create_test_user(
+        client,
+        "log_cleanup_owner@test.com",
+        hiring_approved=True,
+    )
+    member = await create_test_user(
+        client,
+        "log_cleanup_member@test.com",
+        hiring_approved=True,
+    )
+
+    # Create organization
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Log Cleanup Test Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_resp.json()["id"]
+    org_headers = {"Authorization": f"Bearer {org_resp.json()['api_key']}"}
+
+    # Add member
+    add_resp = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+    member_org_key = add_resp.json()["api_key"]
+    member_org_headers = {"Authorization": f"Bearer {member_org_key}"}
+
+    # Create Assistants project for org
+    await client.post(
+        "/v0/project",
+        json={"name": "Assistants"},
+        headers=org_headers,
+    )
+
+    # Member creates assistant (unshared - only they have access)
+    assistant_dao = AssistantDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+
+    assistant = assistant_dao.create_assistant(
+        user_id=member["id"],
+        first_name="MemberOnly",
+        surname="Bot",
+        age=None,
+        nationality=None,
+        about=None,
+        weekly_limit=None,
+        max_parallel=None,
+        organization_id=org_id,
+    )
+    dbsession.flush()
+    agent_id = assistant.agent_id
+
+    # Grant only the member Owner role (making it unshared)
+    resource_access_dao.grant_access(
+        "assistant",
+        agent_id,
+        owner_role.id,
+        "user",
+        member["id"],
+    )
+    dbsession.commit()
+
+    # Create logs for this assistant in various contexts
+    # Assistant-specific context
+    await client.post(
+        "/v0/logs",
+        json={
+            "project": "Assistants",
+            "context": "MemberOnlyBot/Tasks",
+            "entries": [{"task": "Test task", "_assistant_id": str(agent_id)}],
+        },
+        headers=org_headers,
+    )
+
+    # Shared All/Contacts context
+    await client.post(
+        "/v0/logs",
+        json={
+            "project": "Assistants",
+            "context": "All/Contacts",
+            "entries": [
+                {
+                    "_assistant": "MemberOnlyBot",
+                    "_assistant_id": str(agent_id),
+                    "contact_id": 0,
+                },
+            ],
+        },
+        headers=org_headers,
+    )
+
+    # Verify logs exist
+    logs_resp = await client.get(
+        "/v0/logs?project=Assistants&context=MemberOnlyBot/Tasks",
+        headers=org_headers,
+    )
+    assert logs_resp.status_code == 200
+    assert len(logs_resp.json()["logs"]) == 1
+
+    contacts_resp = await client.get(
+        "/v0/logs?project=Assistants&context=All/Contacts",
+        headers=org_headers,
+    )
+    assert contacts_resp.status_code == 200
+    assistant_contact = [
+        log
+        for log in contacts_resp.json()["logs"]
+        if log["entries"].get("_assistant_id") == str(agent_id)
+    ]
+    assert len(assistant_contact) == 1
+
+    # Remove member - should delete assistant AND its logs
+    remove_resp = await client.delete(
+        f"/v0/organizations/{org_id}/members/{member['id']}",
+        headers=owner["headers"],
+    )
+    assert remove_resp.status_code == status.HTTP_204_NO_CONTENT
+
+    # Verify assistant is deleted
+    dbsession.expire_all()
+    assert assistant_dao.get_assistant_by_agent_id(agent_id) is None
+
+    # Verify assistant-specific context logs are deleted
+    logs_resp = await client.get(
+        "/v0/logs?project=Assistants&context=MemberOnlyBot/Tasks",
+        headers=org_headers,
+    )
+    # Context may still exist but should have no logs, or context is deleted
+    if logs_resp.status_code == 200:
+        assert len(logs_resp.json().get("logs", [])) == 0
+
+    # Verify logs in All/Contacts for this assistant are deleted
+    contacts_resp = await client.get(
+        "/v0/logs?project=Assistants&context=All/Contacts",
+        headers=org_headers,
+    )
+    assert contacts_resp.status_code == 200
+    remaining_assistant_logs = [
+        log
+        for log in contacts_resp.json()["logs"]
+        if log["entries"].get("_assistant_id") == str(agent_id)
+    ]
+    assert len(remaining_assistant_logs) == 0
+
+
+# =============================================================================
+# Contact is_system Update Tests
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_member_removal_sets_contact_is_system_false(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test that removing a member sets their Contact log to is_system=False."""
+    owner = await create_test_user(
+        client,
+        "contact_update_owner@test.com",
+        hiring_approved=True,
+    )
+    member = await create_test_user(
+        client,
+        "contact_update_member@test.com",
+        hiring_approved=True,
+    )
+
+    # Create organization
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Contact Update Test Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_resp.json()["id"]
+    org_headers = {"Authorization": f"Bearer {org_resp.json()['api_key']}"}
+
+    # Add member
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+
+    # Create Assistants project with All/Contacts context
+    await client.post(
+        "/v0/project",
+        json={"name": "Assistants"},
+        headers=org_headers,
+    )
+
+    # Create Contact log for the member with is_system=True
+    # Use "Test" as name since create_test_user uses "Test" as first_name
+    await client.post(
+        "/v0/logs",
+        json={
+            "project": "Assistants",
+            "context": "All/Contacts",
+            "entries": [
+                {
+                    "user_name": "Test",  # Matches member's first_name from create_test_user
+                    "is_system": True,
+                    "contact_id": 1,
+                    "timezone": "UTC",
+                },
+            ],
+        },
+        headers=org_headers,
+    )
+
+    # Verify Contact exists with is_system=True
+    contacts_resp = await client.get(
+        "/v0/logs?project=Assistants&context=All/Contacts",
+        headers=org_headers,
+    )
+    assert contacts_resp.status_code == 200
+    member_contact = next(
+        (
+            log
+            for log in contacts_resp.json()["logs"]
+            if log["entries"].get("user_name") == "Test"
+            and log["entries"].get("is_system") is True
+        ),
+        None,
+    )
+    assert (
+        member_contact is not None
+    ), "Member's Contact should exist with is_system=True"
+
+    # Remove member
+    remove_resp = await client.delete(
+        f"/v0/organizations/{org_id}/members/{member['id']}",
+        headers=owner["headers"],
+    )
+    assert remove_resp.status_code == status.HTTP_204_NO_CONTENT
+
+    # Verify Contact now has is_system=False
+    contacts_resp = await client.get(
+        "/v0/logs?project=Assistants&context=All/Contacts",
+        headers=org_headers,
+    )
+    assert contacts_resp.status_code == 200
+
+    # Find the member's contact - should now have is_system=False
+    member_contact = next(
+        (
+            log
+            for log in contacts_resp.json()["logs"]
+            if log["entries"].get("user_name") == "Test"
+        ),
+        None,
+    )
+    assert member_contact is not None, "Member's Contact should still exist"
+    assert (
+        member_contact["entries"].get("is_system") is False
+    ), "is_system should be False after member removal"
