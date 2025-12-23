@@ -1063,3 +1063,89 @@ class AssistantTransferResponse(BaseModel):
         None,
         description="Whether logs were deleted (only for org->personal transfers).",
     )
+
+
+# Admin schemas
+
+
+class AdminUpdateUserByAssistant(BaseModel):
+    """
+    Admin schema for updating a user's profile via assistant lookup.
+
+    For personal assistants: updates the owner's profile.
+    For org assistants: finds the member by email and updates their profile.
+    """
+
+    assistant_id: int = Field(
+        ...,
+        description="The ID of the assistant to use for user lookup.",
+    )
+    target_user_email: str = Field(
+        ...,
+        description="Email of the target user to update. Must match the assistant owner (personal) or an org member (organizational).",
+    )
+    timezone: Optional[str] = Field(
+        None,
+        description="Timezone to set for the user in IANA format.",
+        example="America/New_York",
+    )
+    bio: Optional[str] = Field(
+        None,
+        description="Bio/description to set for the user.",
+        example="Software engineer focused on AI systems.",
+    )
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in VALID_TIMEZONES:
+            raise ValueError(f"'{v}' is not a valid IANA timezone.")
+        return v
+
+
+class AdminUpdateUserByAssistantResponse(BaseModel):
+    """Response schema for admin update user by assistant."""
+
+    info: str = Field(..., description="Success message.")
+    user_id: str = Field(..., description="ID of the updated user.")
+    email: str = Field(..., description="Email of the updated user.")
+    assistant_type: str = Field(
+        ...,
+        description="Type of assistant ('personal' or 'organization').",
+    )
+
+
+class AdminUpdateAssistant(BaseModel):
+    """
+    Admin schema for updating assistant details directly.
+    Bypasses permission checks for admin operations.
+    """
+
+    timezone: Optional[str] = Field(
+        None,
+        description="Timezone to set for the assistant in IANA format.",
+        example="Europe/London",
+    )
+    about: Optional[str] = Field(
+        None,
+        description="About/description to set for the assistant.",
+        example="AI assistant specializing in customer support.",
+    )
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in VALID_TIMEZONES:
+            raise ValueError(f"'{v}' is not a valid IANA timezone.")
+        return v
+
+
+class AdminUpdateAssistantResponse(BaseModel):
+    """Response schema for admin update assistant."""
+
+    info: str = Field(..., description="Success message.")
+    assistant_id: int = Field(..., description="ID of the updated assistant.")
+    updated_fields: List[str] = Field(
+        ...,
+        description="List of fields that were updated.",
+    )

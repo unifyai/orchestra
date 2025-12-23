@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
+from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
@@ -49,6 +50,10 @@ from orchestra.services.openai_service import OpenAIAPIError, OpenAIService
 from orchestra.services.replicate_service import ReplicateAPIError, ReplicateService
 from orchestra.settings import settings
 from orchestra.web.api.assistant.schema import (
+    AdminUpdateAssistant,
+    AdminUpdateAssistantResponse,
+    AdminUpdateUserByAssistant,
+    AdminUpdateUserByAssistantResponse,
     AssistantContactRemoval,
     AssistantCreate,
     AssistantPhotoUploadResponse,
@@ -3836,3 +3841,215 @@ def admin_get_assistant_status(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to get assistant status: {str(e)}",
         )
+
+
+@admin_router.post(
+    "/assistant/update-user",
+    response_model=AdminUpdateUserByAssistantResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Admin: Update user details via assistant lookup",
+    description="Updates a user's profile (timezone, bio) by looking up the assistant. "
+    "For personal assistants, updates the owner. "
+    "For org assistants, finds the member by email and updates them.",
+    tags=["Assistants", "Admin"],
+    responses={
+        200: {
+            "description": "User updated successfully.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": "User updated successfully",
+                        "user_id": "abc123",
+                        "email": "user@example.com",
+                        "assistant_type": "personal",
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Assistant or user not found.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Assistant not found."},
+                },
+            },
+        },
+        422: {
+            "description": "Validation error (e.g., invalid timezone).",
+        },
+    },
+)
+def admin_update_user_by_assistant(
+    request_body: AdminUpdateUserByAssistant,
+    session: Session = Depends(get_db_session),
+) -> AdminUpdateUserByAssistantResponse:
+    """
+    Update a user's profile by looking up an assistant.
+
+    For personal assistants: updates the owner's profile if email matches.
+    For org assistants: finds the org member by email and updates their profile.
+    """
+    assistant_dao = AssistantDAO(session)
+    auth_user_dao = AuthUserDAO(session)
+    org_member_dao = OrganizationMemberDAO(session)
+
+    # Get assistant without user/org context (admin bypass)
+    assistant = assistant_dao.get_assistant_by_agent_id(request_body.assistant_id)
+    if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Assistant with id {request_body.assistant_id} not found.",
+        )
+
+    target_user_id = None
+    assistant_type = "personal"
+
+    if assistant.organization_id is None:
+        # Personal assistant: check if target_user_email matches owner
+        assistant_type = "personal"
+        owner = auth_user_dao.get_by_id(assistant.user_id)
+        if not owner:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Assistant owner not found.",
+            )
+        # owner is a tuple (AuthUser,)
+        owner_user = owner[0]
+        if owner_user.email != request_body.target_user_email:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Target user '{request_body.target_user_email}' does not match "
+                f"assistant owner.",
+            )
+        target_user_id = owner_user.id
+    else:
+        # Org assistant: find member by email
+        assistant_type = "organization"
+        members = org_member_dao.filter(organization_id=assistant.organization_id)
+
+        # Find member whose email matches target_user_email
+        for member_tuple in members:
+            member = member_tuple[0]
+            user_row = auth_user_dao.get_by_id(member.user_id)
+            if user_row:
+                user = user_row[0]
+                if user.email == request_body.target_user_email:
+                    target_user_id = user.id
+                    break
+
+        if target_user_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Target user '{request_body.target_user_email}' not found "
+                f"in organization.",
+            )
+
+    # Build update kwargs (only include non-None values)
+    update_kwargs = {}
+    if request_body.timezone is not None:
+        update_kwargs["timezone"] = request_body.timezone
+    if request_body.bio is not None:
+        update_kwargs["bio"] = request_body.bio
+
+    if not update_kwargs:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No fields to update. Provide at least 'timezone' or 'bio'.",
+        )
+
+    # Update the user
+    try:
+        auth_user_dao.update(id=target_user_id, **update_kwargs)
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(e),
+        )
+
+    return AdminUpdateUserByAssistantResponse(
+        info="User updated successfully",
+        user_id=target_user_id,
+        email=request_body.target_user_email,
+        assistant_type=assistant_type,
+    )
+
+
+@admin_router.patch(
+    "/assistant/{assistant_id}",
+    response_model=AdminUpdateAssistantResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Admin: Update assistant details",
+    description="Updates an assistant's details (timezone, about) directly, "
+    "bypassing permission checks.",
+    tags=["Assistants", "Admin"],
+    responses={
+        200: {
+            "description": "Assistant updated successfully.",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "info": "Assistant updated successfully",
+                        "assistant_id": 123,
+                        "updated_fields": ["timezone", "about"],
+                    },
+                },
+            },
+        },
+        404: {
+            "description": "Assistant not found.",
+            "content": {
+                "application/json": {
+                    "example": {"detail": "Assistant not found."},
+                },
+            },
+        },
+        422: {
+            "description": "Validation error (e.g., invalid timezone).",
+        },
+    },
+)
+def admin_update_assistant(
+    assistant_id: int,
+    request_body: AdminUpdateAssistant,
+    session: Session = Depends(get_db_session),
+) -> AdminUpdateAssistantResponse:
+    """
+    Update an assistant's details directly (admin bypass).
+
+    Updates timezone and/or about fields without requiring user context.
+    """
+    assistant_dao = AssistantDAO(session)
+
+    # Get assistant without user/org context (admin bypass)
+    assistant = assistant_dao.get_assistant_by_agent_id(assistant_id)
+    if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Assistant with id {assistant_id} not found.",
+        )
+
+    # Build update dict and track updated fields
+    updated_fields = []
+
+    if request_body.timezone is not None:
+        assistant.timezone = request_body.timezone
+        updated_fields.append("timezone")
+
+    if request_body.about is not None:
+        assistant.about = request_body.about
+        updated_fields.append("about")
+
+    if not updated_fields:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="No fields to update. Provide at least 'timezone' or 'about'.",
+        )
+
+    # Commit changes
+    session.commit()
+
+    return AdminUpdateAssistantResponse(
+        info="Assistant updated successfully",
+        assistant_id=assistant_id,
+        updated_fields=updated_fields,
+    )
