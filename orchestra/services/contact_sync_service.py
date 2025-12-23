@@ -432,3 +432,88 @@ class ContactSyncService:
                 f"Synced assistant bio to {updated} logs in project {project.id}",
             )
         return updated
+
+    def mark_member_contact_as_non_system(
+        self,
+        organization_id: int,
+        first_name: str,
+        last_name: Optional[str],
+    ) -> int:
+        """
+        Mark a departing member's Contact log as non-system (is_system=False).
+
+        Called when a member is removed from an organization. This updates
+        their Contact entry in the org's Assistants project's All/Contacts
+        context to set is_system=False, indicating they are no longer a
+        system user for that organization.
+
+        Args:
+            organization_id: The organization ID
+            first_name: User's first name
+            last_name: User's last name
+
+        Returns:
+            Number of logs updated
+        """
+        if not first_name:
+            logger.debug("Skipping Contact update: no first_name available")
+            return 0
+
+        user_name = f"{first_name}{last_name or ''}"
+
+        # Find the org's Assistants project
+        project = (
+            self.session.query(Project)
+            .filter(
+                Project.organization_id == organization_id,
+                Project.name == self.ASSISTANTS_PROJECT_NAME,
+            )
+            .first()
+        )
+
+        if not project:
+            logger.debug(
+                f"No Assistants project found for org {organization_id}, "
+                "skipping Contact is_system update",
+            )
+            return 0
+
+        context = self._get_contacts_context(project.id)
+        if not context:
+            logger.debug(
+                f"No All/Contacts context in org {organization_id}'s Assistants project",
+            )
+            return 0
+
+        # Update is_system to false for this user's Contact row
+        query = text(
+            """
+            UPDATE log_event
+            SET data = data || jsonb_build_object('is_system', false),
+                updated_at = NOW()
+            WHERE id IN (
+                SELECT le.id
+                FROM log_event le
+                JOIN log_event_context lec ON le.id = lec.log_event_id
+                WHERE lec.context_id = :context_id
+                  AND le.data->>'user_name' = :user_name
+                  AND (le.data->>'is_system')::boolean = true
+            )
+        """,
+        )
+
+        result = self.session.execute(
+            query,
+            {
+                "context_id": context.id,
+                "user_name": user_name,
+            },
+        )
+
+        updated = result.rowcount
+        if updated > 0:
+            logger.info(
+                f"Marked {updated} Contact log(s) as non-system for user "
+                f"'{user_name}' in org {organization_id}",
+            )
+        return updated
