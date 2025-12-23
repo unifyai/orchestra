@@ -954,3 +954,73 @@ async def test_org_member_permission_for_team_operations(
         headers=viewer_user["headers"],
     )
     assert viewer_team_response.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.anyio
+async def test_list_members_by_api_key_with_org_key(client: AsyncClient):
+    """Test listing org members using org API key (no org_id in path)."""
+    owner = await create_test_user(client, "list_members_owner@test.com")
+    member = await create_test_user(client, "list_members_member@test.com")
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "List Members By Key Org"},
+        headers=owner["headers"],
+    )
+    assert org_response.status_code == status.HTTP_201_CREATED
+    org_data = org_response.json()
+    org_id = org_data["id"]
+    org_api_key = org_data["api_key"]
+    org_headers = {"Authorization": f"Bearer {org_api_key}"}
+
+    # Add a member
+    add_response = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+    assert add_response.status_code == status.HTTP_201_CREATED
+
+    # List members using org API key (no org_id in path)
+    list_response = await client.get(
+        "/v0/organizations/members",
+        headers=org_headers,
+    )
+    assert list_response.status_code == status.HTTP_200_OK
+    members = list_response.json()
+
+    # Should have 2 members: owner + member
+    assert len(members) == 2
+
+    # Verify member data structure
+    user_ids = [m["user_id"] for m in members]
+    assert owner["id"] in user_ids
+    assert member["id"] in user_ids
+
+    # Verify response contains expected fields
+    for m in members:
+        assert "id" in m
+        assert "user_id" in m
+        assert "organization_id" in m
+        assert m["organization_id"] == org_id
+        assert "role_id" in m
+        assert "role_name" in m
+        assert "email" in m
+
+
+@pytest.mark.anyio
+async def test_list_members_by_api_key_with_personal_key(client: AsyncClient):
+    """Test listing org members using personal API key returns empty list."""
+    user = await create_test_user(client, "list_members_personal@test.com")
+
+    # List members using personal API key
+    list_response = await client.get(
+        "/v0/organizations/members",
+        headers=user["headers"],
+    )
+    assert list_response.status_code == status.HTTP_200_OK
+    members = list_response.json()
+
+    # Should return empty list for personal API key
+    assert members == []
