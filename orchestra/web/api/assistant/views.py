@@ -1481,6 +1481,7 @@ def update_assistant_config(
             user_id=request.state.user_id,
             agent_id=assistant_id,
             update_data=update_data,
+            organization_id=organization_id,
         )
         if not updated:
             raise HTTPException(
