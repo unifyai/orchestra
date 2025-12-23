@@ -187,6 +187,200 @@ async def test_org_assistant_create_grants_owner_role(client: AsyncClient, dbses
 
 
 @pytest.mark.anyio
+async def test_org_assistant_update_with_org_key(client: AsyncClient, dbsession):
+    """Test that org assistant can be updated using the same org API key that created it."""
+    owner = await create_test_user(
+        client,
+        "org_asst_update@test.com",
+        hiring_approved=True,
+    )
+
+    # Create organization - API key is included in response
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Org Assistant Update Test"},
+        headers=owner["headers"],
+    )
+    assert org_resp.status_code == status.HTTP_201_CREATED
+    org_data = org_resp.json()
+    org_id = org_data["id"]
+    org_headers = {"Authorization": f"Bearer {org_data['api_key']}"}
+
+    # Create assistant using org API key
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "Org",
+            "surname": "Updateable",
+            "about": "Original bio",
+            "timezone": "UTC",
+            "create_infra": False,
+        },
+        headers=org_headers,
+    )
+    assert create_resp.status_code == 200
+    data = create_resp.json()["info"]
+    assert data["organization_id"] == org_id
+    agent_id = data["agent_id"]
+
+    # Update assistant using same org API key
+    update_resp = await client.patch(
+        f"/v0/assistant/{agent_id}/config",
+        json={
+            "about": "Updated bio",
+            "timezone": "America/New_York",
+            "create_infra": False,
+        },
+        headers=org_headers,
+    )
+    assert update_resp.status_code == 200, f"Update failed: {update_resp.json()}"
+
+    # Verify the update was applied
+    updated_data = update_resp.json()["info"]
+    assert updated_data["about"] == "Updated bio"
+    assert updated_data["timezone"] == "America/New_York"
+    assert updated_data["organization_id"] == org_id
+
+
+@pytest.mark.anyio
+async def test_org_assistant_update_by_member_with_permission(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test that org member with assistant:write permission can update org assistant."""
+    owner = await create_test_user(
+        client,
+        "org_member_update_owner@test.com",
+        hiring_approved=True,
+    )
+    member = await create_test_user(
+        client,
+        "org_member_update_member@test.com",
+        hiring_approved=True,
+    )
+
+    # Create organization
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Member Update Test Org"},
+        headers=owner["headers"],
+    )
+    assert org_resp.status_code == status.HTTP_201_CREATED
+    org_data = org_resp.json()
+    org_id = org_data["id"]
+    owner_org_headers = {"Authorization": f"Bearer {org_data['api_key']}"}
+
+    # Add member to org
+    add_member_resp = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+    assert add_member_resp.status_code == 201
+    member_org_key = add_member_resp.json()["api_key"]
+    member_org_headers = {"Authorization": f"Bearer {member_org_key}"}
+
+    # Owner creates assistant
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "Org",
+            "surname": "SharedAssistant",
+            "about": "Original",
+            "create_infra": False,
+        },
+        headers=owner_org_headers,
+    )
+    assert create_resp.status_code == 200
+    agent_id = int(create_resp.json()["info"]["agent_id"])
+
+    # Grant member write permission on the assistant
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    role_dao = RoleDAO(dbsession)
+    member_role = role_dao.get_by_name("Member", organization_id=None)
+    assert member_role is not None, "Member system role should exist"
+
+    resource_access_dao.grant_access(
+        resource_type="assistant",
+        resource_id=agent_id,
+        grantee_type="user",
+        grantee_id=member["id"],
+        role_id=member_role.id,
+    )
+    dbsession.commit()
+
+    # Member updates the assistant
+    update_resp = await client.patch(
+        f"/v0/assistant/{agent_id}/config",
+        json={"about": "Updated by member", "create_infra": False},
+        headers=member_org_headers,
+    )
+    assert update_resp.status_code == 200, f"Member update failed: {update_resp.json()}"
+    assert update_resp.json()["info"]["about"] == "Updated by member"
+
+
+@pytest.mark.anyio
+async def test_org_assistant_update_by_member_without_permission(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test that org member without assistant:write permission cannot update org assistant."""
+    owner = await create_test_user(
+        client,
+        "org_noperm_owner@test.com",
+        hiring_approved=True,
+    )
+    member = await create_test_user(
+        client,
+        "org_noperm_member@test.com",
+        hiring_approved=True,
+    )
+
+    # Create organization
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "No Perm Update Test Org"},
+        headers=owner["headers"],
+    )
+    assert org_resp.status_code == status.HTTP_201_CREATED
+    org_data = org_resp.json()
+    org_id = org_data["id"]
+    owner_org_headers = {"Authorization": f"Bearer {org_data['api_key']}"}
+
+    # Add member to org (they only have default member permissions, not assistant:write)
+    add_member_resp = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+    assert add_member_resp.status_code == 201
+    member_org_key = add_member_resp.json()["api_key"]
+    member_org_headers = {"Authorization": f"Bearer {member_org_key}"}
+
+    # Owner creates assistant
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "Org",
+            "surname": "Protected",
+            "about": "Original",
+            "create_infra": False,
+        },
+        headers=owner_org_headers,
+    )
+    assert create_resp.status_code == 200
+    agent_id = create_resp.json()["info"]["agent_id"]
+
+    # Member tries to update without permission - should get 403
+    update_resp = await client.patch(
+        f"/v0/assistant/{agent_id}/config",
+        json={"about": "Unauthorized update", "create_infra": False},
+        headers=member_org_headers,
+    )
+    assert update_resp.status_code == status.HTTP_403_FORBIDDEN
+
+
+@pytest.mark.anyio
 async def test_org_assistant_list_own_only(client: AsyncClient, dbsession):
     """Test that list_all_org=False returns only user's own assistants."""
     owner = await create_test_user(
