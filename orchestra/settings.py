@@ -152,6 +152,12 @@ class Settings(BaseSettings):
     chat_completions_markup_rate: float = 1.2
     cors_allow_origins: list[str] = []
 
+    # Console URL for generating shareable plot links
+    console_url: str = os.environ.get(
+        "ORCHESTRA_CONSOLE_URL",
+        "https://console.unify.ai",
+    )
+
     vertexai_service_acc_json: str = ""
     vertexai_project: str = (
         os.environ.get("ORCHESTRA_VERTEXAI_PROJECT")
