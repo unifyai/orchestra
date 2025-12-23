@@ -19,6 +19,7 @@ from orchestra.db.dao.interface_dao import InterfaceDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+from orchestra.db.dao.plot_dao import PlotDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
@@ -1164,6 +1165,13 @@ def transfer_project_to_organization(
             grantee_id=user_id,
         )
 
+        # Update organization_id for all plots belonging to this project
+        plot_dao = PlotDAO(session)
+        plot_dao.update_organization_id(
+            project_id=project_id,
+            organization_id=transfer_request.organization_id,
+        )
+
         session.commit()
 
         return TransferResponse(
@@ -1298,6 +1306,14 @@ def transfer_project_to_personal(
         # Transfer the project to personal ownership (direct SQLAlchemy update to ensure None is set)
         project.user_id = user_id
         project.organization_id = None
+
+        # Update organization_id for all plots belonging to this project
+        plot_dao = PlotDAO(session)
+        plot_dao.update_organization_id(
+            project_id=project_id,
+            organization_id=None,  # Personal project
+        )
+
         session.commit()
 
         return TransferResponse(

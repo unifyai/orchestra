@@ -34,6 +34,8 @@ from orchestra.web.api.dependencies import (
     check_account_not_frozen,
 )
 from orchestra.web.api.log.views import admin_router as log_admin_router
+from orchestra.web.api.plot.views import admin_router as plot_admin_router
+from orchestra.web.api.plot.views import router as plot_router
 from orchestra.web.api.project.views import admin_router as project_admin_router
 from orchestra.web.api.webhooks import stripe as stripe_webhooks
 
@@ -101,6 +103,13 @@ api_router.include_router(
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
 )
+api_router.include_router(
+    plot_admin_router,
+    prefix="/admin",
+    tags=["Plots"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
 # API_KEY_AUTH endpoints
 
 groupings = {
@@ -126,6 +135,7 @@ groupings = {
         "Contexts",
         "Context Artifacts",
         "Logs",
+        "Plots",
         "Configs",
     ],
     "Account": [
@@ -188,6 +198,11 @@ api_router.include_router(
 api_router.include_router(
     log.router,
     tags=["Logs"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
+    plot_router,
+    tags=["Plots"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
