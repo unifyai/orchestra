@@ -154,9 +154,9 @@ class Settings(BaseSettings):
 
     # Console URL for generating shareable plot links
     console_url: str = os.environ.get(
-        "ORCHESTRA_CONSOLE_URL",
-        "https://console.unify.ai",
-    )
+        "UNIFY_CONSOLE_FRONTEND_URL",
+        "https://console.unify.ai/",
+    ).rstrip("/")
 
     vertexai_service_acc_json: str = ""
     vertexai_project: str = (
