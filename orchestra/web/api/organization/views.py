@@ -139,6 +139,98 @@ async def list_organizations(
     return [OrganizationResponse.model_validate(org) for org in organizations]
 
 
+@router.get(
+    "/organizations/members",
+    response_model=List[OrganizationMemberResponse],
+)
+async def list_organization_members_by_api_key(
+    request_fastapi: Request,
+    session: Session = Depends(get_db_session),
+) -> List[OrganizationMemberResponse]:
+    """
+    List all members of the organization associated with the API key.
+
+    For org API key: Returns all members with their roles.
+    For personal API key: Returns empty list.
+    """
+    user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
+
+    # Personal API key - return empty list
+    if organization_id is None:
+        return []
+
+    org_dao = OrganizationDAO(session)
+    org_member_dao = OrganizationMemberDAO(session)
+    role_dao = RoleDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+    auth_user_dao = AuthUserDAO(session)
+
+    # Verify organization exists
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {organization_id} not found",
+        )
+
+    # Check if user has org:read permission via org membership role
+    has_permission = resource_access_dao.check_org_member_permission(
+        user_id,
+        organization_id,
+        "org:read",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view members of this organization",
+        )
+
+    # Get all members
+    all_members_result = org_member_dao.filter(organization_id=organization_id)
+
+    # Build response with role names and user info
+    members_response = []
+    for member_row in all_members_result:
+        member = member_row[0]
+        role_name = None
+        if member.role_id:
+            role = role_dao.get(member.role_id)
+            role_name = role.name if role else None
+
+        # Fetch user info
+        user_info_row = auth_user_dao.get_by_id(member.user_id)
+        user_name = None
+        user_email = None
+        user_image = None
+        if user_info_row:
+            user_info = user_info_row[0]
+            name_parts = []
+            if user_info.name:
+                name_parts.append(user_info.name)
+            if user_info.last_name:
+                name_parts.append(user_info.last_name)
+            user_name = " ".join(name_parts) if name_parts else None
+            user_email = user_info.email
+            user_image = user_info.image
+
+        members_response.append(
+            OrganizationMemberResponse(
+                id=member.id,
+                user_id=member.user_id,
+                organization_id=member.organization_id,
+                role_id=member.role_id,
+                role_name=role_name,
+                created_at=member.created_at,
+                name=user_name,
+                email=user_email,
+                image=user_image,
+            ),
+        )
+
+    return members_response
+
+
 @router.get("/organizations/{organization_id}", response_model=OrganizationResponse)
 async def get_organization(
     request_fastapi: Request,
