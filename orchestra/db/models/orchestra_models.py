@@ -22,7 +22,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSON, JSONB
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import backref, relationship
 
 from orchestra.db.base import Base
 
@@ -2198,4 +2198,48 @@ class EmbeddingQueue(Base):
         ),
         Index("idx_embedding_queue_status_created", "status", "created_at"),
         Index("idx_embedding_queue_ref_id", "ref_id"),
+    )
+
+
+class Plot(Base):
+    """Model class for shareable plot configurations.
+
+    Plots are linked to projects and follow project-based access control.
+    When a project is deleted, all associated plots are cascade deleted.
+    """
+
+    __tablename__ = "plot"
+
+    id = Column(Integer, primary_key=True)
+    token = Column(String(12), unique=True, nullable=False, index=True)
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id = Column(
+        String,
+        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    title = Column(String, nullable=True)
+    plot_config = Column(JSONB, nullable=False)
+    project_config = Column(JSONB, nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+    # Relationships - passive_deletes=True lets the DB handle CASCADE DELETE
+    project = relationship("Project", backref=backref("plots", passive_deletes=True))
+
+    __table_args__ = (
+        Index("idx_plot_project_id", "project_id"),
+        Index("idx_plot_user_id", "user_id"),
+        Index("idx_plot_organization_id", "organization_id"),
     )
