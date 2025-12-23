@@ -160,6 +160,10 @@ class AuthUserDAO:
         raw = self.session.execute(query)
         entry = raw.scalars().first()
         if entry is not None:
+            # Track changes for contact sync
+            should_sync_timezone = False
+            should_sync_bio = False
+
             if name is not ...:
                 setattr(entry, "name", name)
             if last_name is not ...:
@@ -167,12 +171,18 @@ class AuthUserDAO:
             if job_title is not ...:
                 setattr(entry, "job_title", job_title)
             if bio is not ...:
+                old_bio = getattr(entry, "bio", None)
+                if bio != old_bio:
+                    should_sync_bio = True
                 setattr(entry, "bio", bio)
             if image is not ...:
                 setattr(entry, "image", image)
             if timezone is not ...:
                 if timezone is not None and timezone not in VALID_TIMEZONES:
                     raise ValueError(f"'{timezone}' is not a valid IANA timezone.")
+                old_timezone = getattr(entry, "timezone", None)
+                if timezone != old_timezone:
+                    should_sync_timezone = True
                 setattr(entry, "timezone", timezone)
             if tier is not ...:
                 setattr(entry, "tier", tier)
@@ -223,6 +233,27 @@ class AuthUserDAO:
                 setattr(entry, "tax_jurisdiction", tax_jurisdiction)
 
             self.session.commit()
+
+            # Sync timezone/bio changes to Contact logs in Assistants projects
+            if should_sync_timezone or should_sync_bio:
+                from orchestra.services.contact_sync_service import ContactSyncService
+
+                sync_service = ContactSyncService(self.session)
+                if should_sync_timezone:
+                    sync_service.sync_user_timezone(
+                        user_id=id,
+                        first_name=entry.name,
+                        last_name=entry.last_name,
+                        new_timezone=entry.timezone,
+                    )
+                if should_sync_bio:
+                    sync_service.sync_user_bio(
+                        user_id=id,
+                        first_name=entry.name,
+                        last_name=entry.last_name,
+                        new_bio=entry.bio,
+                    )
+                self.session.commit()
 
     def delete(self, id: str):
         try:

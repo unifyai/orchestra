@@ -281,10 +281,50 @@ class AssistantDAO:
             if tz is not None and tz not in VALID_TIMEZONES:
                 raise ValueError(f"'{tz}' is not a valid IANA timezone.")
 
+        # Track changes for contact sync
+        should_sync_timezone = False
+        should_sync_bio = False
+
+        if "timezone" in update_data:
+            old_timezone = assistant.timezone
+            new_timezone = update_data["timezone"]
+            if new_timezone != old_timezone:
+                should_sync_timezone = True
+
+        if "about" in update_data:
+            old_about = assistant.about
+            new_about = update_data["about"]
+            if new_about != old_about:
+                should_sync_bio = True
+
         for key, value in update_data.items():
             setattr(assistant, key, value)
 
         self.session.add(assistant)
+        self.session.flush()
+
+        # Sync timezone/bio changes to Contact logs in Assistants project
+        if should_sync_timezone or should_sync_bio:
+            from orchestra.services.contact_sync_service import ContactSyncService
+
+            sync_service = ContactSyncService(self.session)
+            if should_sync_timezone:
+                sync_service.sync_assistant_timezone(
+                    user_id=user_id,
+                    organization_id=organization_id,
+                    first_name=assistant.first_name,
+                    surname=assistant.surname,
+                    new_timezone=assistant.timezone,
+                )
+            if should_sync_bio:
+                sync_service.sync_assistant_bio(
+                    user_id=user_id,
+                    organization_id=organization_id,
+                    first_name=assistant.first_name,
+                    surname=assistant.surname,
+                    new_bio=assistant.about,
+                )
+
         return assistant
 
     def transfer_to_organization(
