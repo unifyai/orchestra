@@ -524,6 +524,505 @@ async def test_truthiness_in_or_expression(
 
 
 # =============================================================================
+# != None Filter Tests
+# =============================================================================
+#
+# These tests verify that None comparison filters work correctly in JSONB mode.
+#
+# JSONB has two representations of "null":
+# 1. SQL NULL - when the key doesn't exist in the JSONB object
+# 2. JSON null literal - when the key exists with the value `null`
+#
+# The filter expressions `field != None`, `None != field`, `field == None`,
+# `None == field`, and their `is`/`is not` variants must check for BOTH
+# representations to correctly match Python's None comparison semantics.
+
+
+@pytest.mark.anyio
+async def test_field_not_equals_none_filter(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """
+    Test that `field != None` filter correctly returns logs where field has a value.
+
+    Tests both `field != None` and `None != field` syntax variants.
+    """
+    project_name = "test-field-not-equals-none"
+    await _create_project(client, project_name)
+
+    # Create a log WITH custom_hash set to a non-null value
+    await _create_log(
+        client,
+        project_name,
+        entries=[
+            {"name": "with_hash", "custom_hash": "abc123"},
+        ],
+        params={},
+    )
+
+    # Create a log WITHOUT custom_hash (should NOT match the filter)
+    await _create_log(
+        client,
+        project_name,
+        entries=[
+            {"name": "without_hash", "other_field": "value"},
+        ],
+        params={},
+    )
+
+    # Test 1: Query with filter: custom_hash != None (RHS None)
+    resp = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "custom_hash != None",
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.text
+    logs = resp.json()["logs"]
+
+    assert len(logs) == 1, (
+        f"Expected 1 log where custom_hash != None, got {len(logs)}. "
+        "The filter 'custom_hash != None' should return logs where custom_hash has a value."
+    )
+    assert logs[0]["entries"]["name"] == "with_hash"
+    assert logs[0]["entries"]["custom_hash"] == "abc123"
+
+    # Test 2: Query with filter: None != custom_hash (LHS None - reversed)
+    resp2 = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "None != custom_hash",
+        },
+        headers=HEADERS,
+    )
+    assert resp2.status_code == 200, resp2.text
+    logs2 = resp2.json()["logs"]
+
+    assert len(logs2) == 1, (
+        f"Expected 1 log where None != custom_hash, got {len(logs2)}. "
+        "The filter 'None != custom_hash' should return logs where custom_hash has a value."
+    )
+    assert logs2[0]["entries"]["name"] == "with_hash"
+    assert logs2[0]["entries"]["custom_hash"] == "abc123"
+
+
+# =============================================================================
+# Additional None Comparison Edge Cases
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_field_equals_none_filter(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """
+    Test `field == None` filter (the equality variant, not just inequality).
+
+    Should return logs where the field is missing OR has explicit null value.
+
+    KNOWN ISSUE: Currently fails because `== None` only matches explicit JSON null,
+    not missing keys. This is a gap in the None comparison handling.
+    """
+    project_name = "test-field-equals-none"
+    await _create_project(client, project_name)
+
+    await _create_log(
+        client,
+        project_name,
+        entries=[
+            {"name": "has_value", "optional_field": "some_value"},
+            {"name": "missing_field", "other": "data"},
+            {"name": "explicit_null", "optional_field": None},
+        ],
+        params={},
+    )
+
+    # Query: optional_field == None
+    resp = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "optional_field == None",
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.text
+    logs = resp.json()["logs"]
+
+    # Should match: missing_field (no key) and explicit_null (key with null value)
+    # Should NOT match: has_value
+    names = {log["entries"]["name"] for log in logs}
+    assert names == {"missing_field", "explicit_null"}, f"Got: {names}"
+
+
+@pytest.mark.anyio
+async def test_explicit_json_null_vs_missing_key(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """
+    Test that we correctly distinguish between:
+    1. Key doesn't exist (SQL NULL when accessed)
+    2. Key exists with JSON null value (JSONB literal "null")
+
+    Both should be treated as None for Python comparison semantics.
+
+    KNOWN ISSUE in EAV mode: `== None` only matches explicit null, not missing keys.
+    This is a fundamental limitation of the EAV architecture where each field is
+    a separate row - missing fields have no row to match against.
+    """
+    project_name = "test-explicit-null-vs-missing"
+    await _create_project(client, project_name)
+
+    await _create_log(
+        client,
+        project_name,
+        entries=[
+            # Key exists with explicit null
+            {"name": "explicit_null", "status": None},
+            # Key doesn't exist at all
+            {"name": "missing_key", "other_field": "value"},
+            # Key exists with empty string (NOT null)
+            {"name": "empty_string", "status": ""},
+            # Key exists with actual value
+            {"name": "has_value", "status": "active"},
+        ],
+        params={},
+    )
+
+    # Test != None: should return empty_string and has_value
+    resp1 = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "status != None",
+        },
+        headers=HEADERS,
+    )
+    assert resp1.status_code == 200, resp1.text
+    names1 = {log["entries"]["name"] for log in resp1.json()["logs"]}
+    assert names1 == {"empty_string", "has_value"}, f"!= None got: {names1}"
+
+    # Test == None: should return explicit_null and missing_key
+    resp2 = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "status == None",
+        },
+        headers=HEADERS,
+    )
+    assert resp2.status_code == 200, resp2.text
+    names2 = {log["entries"]["name"] for log in resp2.json()["logs"]}
+    assert names2 == {"explicit_null", "missing_key"}, f"== None got: {names2}"
+
+
+@pytest.mark.anyio
+async def test_nested_field_none_comparison(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """
+    Test None comparisons on nested field access like `metadata.nested.field != None`.
+    """
+    project_name = "test-nested-none-comparison"
+    await _create_project(client, project_name)
+
+    await _create_log(
+        client,
+        project_name,
+        entries=[
+            # Deep nested value exists
+            {"name": "deep_value", "metadata": {"level1": {"level2": "value"}}},
+            # Partial path exists but leaf is null
+            {"name": "deep_null", "metadata": {"level1": {"level2": None}}},
+            # Partial path exists but leaf is missing
+            {"name": "deep_missing", "metadata": {"level1": {"other": "x"}}},
+            # Parent path missing entirely
+            {"name": "parent_missing", "metadata": {"other": "data"}},
+        ],
+        params={},
+    )
+
+    # Test: metadata['level1']['level2'] != None
+    resp = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "metadata['level1']['level2'] != None",
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.text
+    names = {log["entries"]["name"] for log in resp.json()["logs"]}
+    # Only deep_value should have a non-None value at that path
+    assert names == {"deep_value"}, f"Nested != None got: {names}"
+
+
+@pytest.mark.anyio
+async def test_none_comparison_with_is_operator(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """
+    Verify that `is None` and `is not None` still work correctly
+    (they were working before, this is a regression test).
+
+    KNOWN ISSUE in EAV mode: `is None` only matches explicit null, not missing keys.
+    Same architectural limitation as `== None`.
+    """
+    project_name = "test-is-none-operator"
+    await _create_project(client, project_name)
+
+    await _create_log(
+        client,
+        project_name,
+        entries=[
+            {"name": "has_value", "field": "value"},
+            {"name": "is_null", "field": None},
+            {"name": "is_missing", "other": "data"},
+        ],
+        params={},
+    )
+
+    # Test: field is not None
+    resp1 = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "field is not None",
+        },
+        headers=HEADERS,
+    )
+    assert resp1.status_code == 200, resp1.text
+    names1 = {log["entries"]["name"] for log in resp1.json()["logs"]}
+    assert names1 == {"has_value"}, f"is not None got: {names1}"
+
+    # Test: field is None
+    resp2 = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "field is None",
+        },
+        headers=HEADERS,
+    )
+    assert resp2.status_code == 200, resp2.text
+    names2 = {log["entries"]["name"] for log in resp2.json()["logs"]}
+    assert names2 == {"is_null", "is_missing"}, f"is None got: {names2}"
+
+
+@pytest.mark.anyio
+async def test_chained_none_comparisons(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """
+    Test chained None comparisons: `field1 != None and field2 != None`
+    """
+    project_name = "test-chained-none"
+    await _create_project(client, project_name)
+
+    await _create_log(
+        client,
+        project_name,
+        entries=[
+            {"name": "both_present", "field1": "a", "field2": "b"},
+            {"name": "only_field1", "field1": "a"},
+            {"name": "only_field2", "field2": "b"},
+            {"name": "neither", "other": "data"},
+        ],
+        params={},
+    )
+
+    # Test: field1 != None and field2 != None
+    resp = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "field1 != None and field2 != None",
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.text
+    names = {log["entries"]["name"] for log in resp.json()["logs"]}
+    assert names == {"both_present"}, f"Chained != None got: {names}"
+
+
+@pytest.mark.anyio
+async def test_none_comparison_with_or(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """
+    Test None comparisons with OR: `field1 != None or field2 != None`
+    """
+    project_name = "test-none-with-or"
+    await _create_project(client, project_name)
+
+    await _create_log(
+        client,
+        project_name,
+        entries=[
+            {"name": "both_present", "field1": "a", "field2": "b"},
+            {"name": "only_field1", "field1": "a"},
+            {"name": "only_field2", "field2": "b"},
+            {"name": "neither", "other": "data"},
+        ],
+        params={},
+    )
+
+    # Test: field1 != None or field2 != None
+    resp = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "field1 != None or field2 != None",
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.text
+    names = {log["entries"]["name"] for log in resp.json()["logs"]}
+    # Should match anything with at least one field present
+    assert names == {
+        "both_present",
+        "only_field1",
+        "only_field2",
+    }, f"OR != None got: {names}"
+
+
+@pytest.mark.anyio
+async def test_none_comparison_after_get_method(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """
+    Test None comparison on result of .get() method: `metadata.get('key') != None`
+
+    This is different from direct field access because .get() returns None for missing keys.
+    """
+    project_name = "test-get-method-none"
+    await _create_project(client, project_name)
+
+    await _create_log(
+        client,
+        project_name,
+        entries=[
+            {"name": "key_exists", "metadata": {"key": "value"}},
+            {"name": "key_null", "metadata": {"key": None}},
+            {"name": "key_missing", "metadata": {"other": "data"}},
+            {"name": "no_metadata", "other": "field"},
+        ],
+        params={},
+    )
+
+    # Test: metadata.get('key') != None
+    resp = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "metadata.get('key') != None",
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.text
+    names = {log["entries"]["name"] for log in resp.json()["logs"]}
+    # Only key_exists should have a non-None value
+    assert names == {"key_exists"}, f"get() != None got: {names}"
+
+
+@pytest.mark.anyio
+async def test_mixed_none_and_value_comparison(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """
+    Test filter combining None check with value comparison:
+    `field != None and field != 'excluded'`
+    """
+    project_name = "test-mixed-none-value"
+    await _create_project(client, project_name)
+
+    await _create_log(
+        client,
+        project_name,
+        entries=[
+            {"name": "good_value", "status": "active"},
+            {"name": "excluded_value", "status": "excluded"},
+            {"name": "null_value", "status": None},
+            {"name": "missing", "other": "data"},
+        ],
+        params={},
+    )
+
+    # Test: status != None and status != 'excluded'
+    resp = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "status != None and status != 'excluded'",
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.text
+    names = {log["entries"]["name"] for log in resp.json()["logs"]}
+    assert names == {"good_value"}, f"Mixed comparison got: {names}"
+
+
+@pytest.mark.anyio
+async def test_none_in_list_membership(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """
+    Test None behavior in list membership: `field in [None, 'a', 'b']`
+
+    This tests whether None is correctly matched when it's part of a list literal.
+
+    KNOWN ISSUE in EAV mode: SQL type error (text = jsonb) when None is in the list.
+    This is a separate bug in the membership operator handling.
+    """
+    project_name = "test-none-in-list"
+    await _create_project(client, project_name)
+
+    await _create_log(
+        client,
+        project_name,
+        entries=[
+            {"name": "value_a", "status": "a"},
+            {"name": "value_b", "status": "b"},
+            {"name": "value_c", "status": "c"},
+            {"name": "null_status", "status": None},
+            {"name": "missing_status", "other": "data"},
+        ],
+        params={},
+    )
+
+    # Test: status in [None, 'a', 'b']
+    # This should match: value_a, value_b, null_status, and possibly missing_status
+    resp = await client.get(
+        "/v0/logs",
+        params={
+            "project": project_name,
+            "filter_expr": "status in [None, 'a', 'b']",
+        },
+        headers=HEADERS,
+    )
+    assert resp.status_code == 200, resp.text
+    names = {log["entries"]["name"] for log in resp.json()["logs"]}
+    # Should at minimum match a, b, and null_status
+    # Whether missing_status matches depends on how `in` handles missing keys
+    assert "value_a" in names, f"'a' should match, got: {names}"
+    assert "value_b" in names, f"'b' should match, got: {names}"
+    assert "value_c" not in names, f"'c' should not match, got: {names}"
+
+
+# =============================================================================
 # Grouping Context Tests
 # =============================================================================
 
