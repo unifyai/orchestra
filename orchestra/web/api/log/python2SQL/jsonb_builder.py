@@ -470,46 +470,52 @@ def _handle_comparison_operator_jsonb(
                     )
 
                     if _is_scalar_literal(rhs_expr, rhs_type):
-                        # Verify field type is compatible with containment operator
-                        # Containment works for: int, float, str, bool, NoneType
-                        # Does NOT work for: list, dict (these need special handling)
-                        lhs_type = _infer_expression_type(
-                            lhs_expr,
-                            session,
-                            project_id,
-                            context_id,
-                        )
-                        containment_compatible_types = {
-                            "int",
-                            "float",
-                            "str",
-                            "bool",
-                            "NoneType",
-                        }
-
-                        if (
-                            lhs_type in containment_compatible_types
-                            or lhs_type is None
-                            or lhs_type == "any"
-                        ):
-                            # Extract the literal value
-                            rhs_value = rhs_expr.value
-
-                            # Convert string "true"/"false" to Python bool for boolean field comparisons
-                            if lhs_type == "bool" and rhs_type == "str":
-                                if isinstance(rhs_value, str):
-                                    if rhs_value.lower() == "true":
-                                        rhs_value = True
-                                    elif rhs_value.lower() == "false":
-                                        rhs_value = False
-                                    # else: keep original string value, will likely not match
-
-                            # Use JSONB containment for GIN index acceleration
-                            # jsonb_build_object preserves Python types (int/float→number, str→string, bool→boolean, None→null)
-                            containment_check = log_event_alias.data.op("@>")(
-                                func.jsonb_build_object(lhs_field_name, rhs_value),
+                        # Skip containment optimization for None comparisons.
+                        # Containment `data @> {"field": null}` only matches explicit null,
+                        # not missing keys. Let None comparisons fall through to the
+                        # special None handling below which checks for both cases.
+                        if rhs_type == "NoneType":
+                            pass  # Fall through to None handling
+                        else:
+                            # Verify field type is compatible with containment operator
+                            # Containment works for: int, float, str, bool
+                            # Does NOT work for: list, dict (these need special handling)
+                            lhs_type = _infer_expression_type(
+                                lhs_expr,
+                                session,
+                                project_id,
+                                context_id,
                             )
-                            return containment_check
+                            containment_compatible_types = {
+                                "int",
+                                "float",
+                                "str",
+                                "bool",
+                            }
+
+                            if (
+                                lhs_type in containment_compatible_types
+                                or lhs_type is None
+                                or lhs_type == "any"
+                            ):
+                                # Extract the literal value
+                                rhs_value = rhs_expr.value
+
+                                # Convert string "true"/"false" to Python bool for boolean field comparisons
+                                if lhs_type == "bool" and rhs_type == "str":
+                                    if isinstance(rhs_value, str):
+                                        if rhs_value.lower() == "true":
+                                            rhs_value = True
+                                        elif rhs_value.lower() == "false":
+                                            rhs_value = False
+                                        # else: keep original string value, will likely not match
+
+                                # Use JSONB containment for GIN index acceleration
+                                # jsonb_build_object preserves Python types (int/float→number, str→string, bool→boolean)
+                                containment_check = log_event_alias.data.op("@>")(
+                                    func.jsonb_build_object(lhs_field_name, rhs_value),
+                                )
+                                return containment_check
 
         # Fall through to existing logic for complex cases
         # (nested access, arithmetic, functions, non-equality operators)
