@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
+from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
 from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.log_dao import LogDAO
@@ -69,6 +70,9 @@ from orchestra.web.api.assistant.schema import (
     RecordingCreate,
     RecordingInfo,
     ReplicatePredictionResponse,
+    SecretCreate,
+    SecretRead,
+    SecretUpdate,
     VoiceCreate,
     VoiceDesignCreateFromPreviewRequest,
     VoiceDesignGeneratePreviewsAPIResponse,
@@ -3125,6 +3129,189 @@ async def design_voice_create_from_preview_endpoint(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to create voice from preview: {str(e)}",
+        )
+
+
+@router.post(
+    "/assistant/{assistant_id}/secret",
+    response_model=InfoResponse[SecretRead],
+    status_code=status.HTTP_201_CREATED,
+    summary="Create or update a secret",
+    description=(
+        "Creates a new secret for an assistant or updates an existing one. "
+        "Secrets are used to store API keys and tokens for external services."
+    ),
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": "Assistant not found"},
+        status.HTTP_409_CONFLICT: {
+            "description": "Secret already exists (use PUT to update)",
+        },
+    },
+    tags=["Secrets"],
+)
+def create_secret(
+    assistant_id: int,
+    secret_in: SecretCreate,
+    request: Request,
+    session: Session = Depends(get_db_session),
+    _: None = Depends(check_assistant_hiring_approval),
+) -> InfoResponse[SecretRead]:
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    assistant_dao = AssistantDAO(session)
+    secret_dao = AssistantSecretDAO(session)
+
+    # Verify access to the assistant
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id,
+        assistant_id,
+        organization_id,
+    )
+    if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+
+    try:
+        secret = secret_dao.create_secret(
+            user_id=user_id,
+            agent_id=assistant_id,
+            secret_name=secret_in.secret_name,
+            secret_value=secret_in.secret_value,
+            description=secret_in.description,
+        )
+        session.commit()
+        return InfoResponse(
+            info=SecretRead(
+                secret_name=secret.secret_name,
+                description=secret.description,
+                created_at=secret.created_at,
+                updated_at=secret.updated_at,
+            ),
+        )
+    except IntegrityError:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Secret '{secret_in.secret_name}' already exists for this assistant. Use PUT to update.",
+        )
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Error creating secret: {str(e)}",
+        )
+
+
+@router.put(
+    "/assistant/{assistant_id}/secret/{secret_name}",
+    response_model=InfoResponse[SecretRead],
+    status_code=status.HTTP_200_OK,
+    summary="Update secret",
+    description="Updates an existing secret's value and/or description.",
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": "Assistant or secret not found"},
+    },
+    tags=["Secrets"],
+)
+def update_secret(
+    assistant_id: int,
+    secret_name: str,
+    secret_in: SecretUpdate,
+    request: Request,
+    session: Session = Depends(get_db_session),
+    _: None = Depends(check_assistant_hiring_approval),
+) -> InfoResponse[SecretRead]:
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    assistant_dao = AssistantDAO(session)
+    secret_dao = AssistantSecretDAO(session)
+
+    # Verify access to the assistant
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id,
+        assistant_id,
+        organization_id,
+    )
+    if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+
+    secret = secret_dao.update_secret(
+        user_id=user_id,
+        agent_id=assistant_id,
+        secret_name=secret_name,
+        secret_value=secret_in.secret_value,
+        description=secret_in.description,
+    )
+
+    if not secret:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Secret '{secret_name}' not found.",
+        )
+
+    session.commit()
+    return InfoResponse(
+        info=SecretRead(
+            secret_name=secret.secret_name,
+            description=secret.description,
+            created_at=secret.created_at,
+            updated_at=secret.updated_at,
+        ),
+    )
+
+
+@router.delete(
+    "/assistant/{assistant_id}/secret/{secret_name}",
+    status_code=status.HTTP_200_OK,
+    summary="Delete secret",
+    description="Deletes a specific secret from an assistant.",
+    responses={
+        status.HTTP_404_NOT_FOUND: {"description": "Assistant or secret not found"},
+    },
+    tags=["Secrets"],
+)
+def delete_secret(
+    assistant_id: int,
+    secret_name: str,
+    request: Request,
+    session: Session = Depends(get_db_session),
+    _: None = Depends(check_assistant_hiring_approval),
+) -> InfoResponse[dict]:
+    user_id = request.state.user_id
+    organization_id = getattr(request.state, "organization_id", None)
+    assistant_dao = AssistantDAO(session)
+    secret_dao = AssistantSecretDAO(session)
+
+    # Verify access to the assistant
+    assistant = assistant_dao.get_assistant_by_id(
+        user_id,
+        assistant_id,
+        organization_id,
+    )
+    if not assistant:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Assistant not found.",
+        )
+
+    try:
+        secret_dao.delete_secret(user_id, assistant_id, secret_name)
+        session.commit()
+        return InfoResponse(
+            info={"message": f"Secret '{secret_name}' deleted successfully."},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Error deleting secret: {str(e)}",
         )
 
 
