@@ -73,13 +73,14 @@ async def test_user_timezone_sync_updates_contact_log(
     )
     assert project_resp.status_code == 200
 
-    # Create a Contact log with user_name and is_system=True
+    # Create a Contact log with first_name/surname and is_system=True
     log_payload = {
         "project": "Assistants",
         "context": "All/Contacts",
         "entries": [
             {
-                "user_name": "Test",  # matches the name from create_test_user
+                "first_name": "Test",  # matches the name from create_test_user
+                "surname": None,  # create_test_user doesn't set last_name
                 "is_system": True,
                 "timezone": "UTC",
                 "bio": "Original bio",
@@ -133,7 +134,14 @@ async def test_user_timezone_sync_to_multiple_projects(
         json={
             "project": "Assistants",
             "context": "All/Contacts",
-            "entries": [{"user_name": "Test", "is_system": True, "timezone": "UTC"}],
+            "entries": [
+                {
+                    "first_name": "Test",
+                    "surname": None,
+                    "is_system": True,
+                    "timezone": "UTC",
+                },
+            ],
         },
         headers=user["headers"],
     )
@@ -158,7 +166,14 @@ async def test_user_timezone_sync_to_multiple_projects(
         json={
             "project": "Assistants",
             "context": "All/Contacts",
-            "entries": [{"user_name": "Test", "is_system": True, "timezone": "UTC"}],
+            "entries": [
+                {
+                    "first_name": "Test",
+                    "surname": None,
+                    "is_system": True,
+                    "timezone": "UTC",
+                },
+            ],
         },
         headers=org_headers,
     )
@@ -219,7 +234,7 @@ async def test_user_timezone_sync_no_matching_logs(
     """Test that timezone sync succeeds even if no matching Contact logs exist."""
     user = await create_test_user(client, "no_match_tz@test.com")
 
-    # Create Assistants project with Contact log for different user_name
+    # Create Assistants project with Contact log for different user
     await client.post(
         "/v0/project",
         json={"name": "Assistants"},
@@ -231,7 +246,12 @@ async def test_user_timezone_sync_no_matching_logs(
             "project": "Assistants",
             "context": "All/Contacts",
             "entries": [
-                {"user_name": "DifferentUser", "is_system": True, "timezone": "UTC"},
+                {
+                    "first_name": "DifferentUser",
+                    "surname": None,
+                    "is_system": True,
+                    "timezone": "UTC",
+                },
             ],
         },
         headers=user["headers"],
@@ -284,7 +304,8 @@ async def test_user_bio_sync_updates_contact_log(
             "context": "All/Contacts",
             "entries": [
                 {
-                    "user_name": "Test",
+                    "first_name": "Test",
+                    "surname": None,
                     "is_system": True,
                     "bio": "Original bio",
                     "contact_id": 1,
@@ -336,7 +357,8 @@ async def test_user_bio_and_timezone_sync_together(
             "context": "All/Contacts",
             "entries": [
                 {
-                    "user_name": "Test",
+                    "first_name": "Test",
+                    "surname": None,
                     "is_system": True,
                     "timezone": "UTC",
                     "bio": "Old bio",
@@ -790,7 +812,12 @@ async def test_sync_sets_null_timezone(
             "project": "Assistants",
             "context": "All/Contacts",
             "entries": [
-                {"user_name": "Test", "is_system": True, "timezone": "Europe/Paris"},
+                {
+                    "first_name": "Test",
+                    "surname": None,
+                    "is_system": True,
+                    "timezone": "Europe/Paris",
+                },
             ],
         },
         headers=user["headers"],
@@ -839,8 +866,18 @@ async def test_sync_only_affects_is_system_true_logs(
             "project": "Assistants",
             "context": "All/Contacts",
             "entries": [
-                {"user_name": "Test", "is_system": True, "timezone": "UTC"},
-                {"user_name": "Test", "is_system": False, "timezone": "UTC"},
+                {
+                    "first_name": "Test",
+                    "surname": None,
+                    "is_system": True,
+                    "timezone": "UTC",
+                },
+                {
+                    "first_name": "Test",
+                    "surname": None,
+                    "is_system": False,
+                    "timezone": "UTC",
+                },
             ],
         },
         headers=user["headers"],
