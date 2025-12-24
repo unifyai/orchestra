@@ -31,7 +31,7 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.sql.elements import ClauseElement
 from sqlalchemy.sql.expression import Exists, UnaryExpression
-from sqlalchemy.sql.selectable import Subquery
+from sqlalchemy.sql.selectable import CTE, Subquery
 
 from orchestra.db.dao.log_dao import LogDAO
 
@@ -831,11 +831,15 @@ def _handle_comparison_operator(
     if operand in ("is", "is not", "==", "!=") and (
         rval_type == "NoneType" or lval_type == "NoneType"
     ):
-        # Determine which side is None and which is the field expression
+        # Determine which side is None and which is the field expression/subquery
         if rval_type == "NoneType":
             field_val = lval
+            field_subq = lhs_sql
+            field_dict = filter_dict.get("lhs")
         else:
             field_val = rval
+            field_subq = rhs_sql
+            field_dict = filter_dict.get("rhs")
         is_equality = operand in ("is", "==")
 
         # Cast field to text for comparison (handles both SQL NULL and JSONB "null")
@@ -903,6 +907,74 @@ def _handle_comparison_operator(
     # --- Wrap the expression in a subquery or join as needed ---
     lhs_is_sub = isinstance(lhs_sql, Subquery)
     rhs_is_sub = isinstance(rhs_sql, Subquery)
+
+    # Special handling for EAV mode None equality comparisons (== None, is None)
+    # In EAV mode, each field is a separate row. Missing fields have no row.
+    # For `field == None`, we need to match BOTH:
+    #   1. Logs where field exists with null value (standard subquery)
+    #   2. Logs where field doesn't exist at all (use LEFT JOIN)
+    if (
+        operand in ("is", "==")
+        and (rval_type == "NoneType" or lval_type == "NoneType")
+        and (lhs_is_sub or rhs_is_sub)
+        and log_event_ids is not None
+    ):
+        field_subq = lhs_sql if lhs_is_sub else rhs_sql
+
+        # Check if log_event_ids is a Subquery/CTE that we can use directly
+        if isinstance(log_event_ids, (Subquery, CTE)):
+            # Build a LEFT JOIN query: all log_event_ids LEFT JOIN field_subq
+            # Result is True where field is NULL (either missing or explicitly null)
+            all_events = log_event_ids
+            left_join_subq = (
+                select(
+                    all_events.c.id.label("log_event_id"),
+                    # expr evaluates to True when field is NULL or "null"
+                    # For missing fields (no join match), field_subq columns are NULL
+                    or_(
+                        field_subq.c.log_event_id.is_(
+                            None,
+                        ),  # No matching row = missing field
+                        expr,  # Existing row matches null check
+                    ).label("value"),
+                    literal("bool").label("inferred_type"),
+                )
+                .select_from(all_events)
+                .outerjoin(field_subq, all_events.c.id == field_subq.c.log_event_id)
+            )
+            return alias_utils.subquery_with_unique_alias(
+                left_join_subq,
+                prefix="none_eq_op",
+            )
+        elif isinstance(log_event_ids, list):
+            # For list of IDs, we need to create a VALUES subquery
+            from sqlalchemy import column, values
+
+            all_events = (
+                select(literal_column("id"))
+                .select_from(
+                    values(column("id", Integer)).data(
+                        [(id_,) for id_ in log_event_ids],
+                    ),
+                )
+                .subquery("all_event_ids")
+            )
+            left_join_subq = (
+                select(
+                    all_events.c.id.label("log_event_id"),
+                    or_(
+                        field_subq.c.log_event_id.is_(None),
+                        expr,
+                    ).label("value"),
+                    literal("bool").label("inferred_type"),
+                )
+                .select_from(all_events)
+                .outerjoin(field_subq, all_events.c.id == field_subq.c.log_event_id)
+            )
+            return alias_utils.subquery_with_unique_alias(
+                left_join_subq,
+                prefix="none_eq_op",
+            )
 
     if lhs_is_sub and rhs_is_sub:
         # If both sides are subqueries, they MUST be joined to avoid a cartesian product.
@@ -1100,6 +1172,13 @@ def _handle_membership_operator(
                     lval = lhs.c.float_value
                 elif first_item_type == "bool":
                     lval = lhs.c.bool_value
+
+            # For string-typed columns, cast to TEXT to avoid JSONB type coercion issues.
+            # The str_value column is defined via CASE on JSONB, which SQLAlchemy infers as JSONB.
+            # Without explicit TEXT cast, SQLAlchemy converts list elements to JSONB, causing
+            # "operator does not exist: text = jsonb" errors when rhs_list contains None.
+            if lval_type == "str":
+                lval = cast(lval, Text)
             expr = lval.in_(rhs_list) if is_in else ~lval.in_(rhs_list)
         else:
             substring_cond = _substring_expr(lval, rhs)
