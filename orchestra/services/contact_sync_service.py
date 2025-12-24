@@ -23,8 +23,8 @@ class ContactSyncService:
     Service for syncing profile fields between User/Assistant and Contact logs.
 
     Handles:
-    - User timezone → Contact logs (user_name=FirstLast, is_system=True)
-    - User bio → Contact logs (user_name=FirstLast, is_system=True)
+    - User timezone → Contact logs (first_name + surname, is_system=True)
+    - User bio → Contact logs (first_name + surname, is_system=True)
     - Assistant timezone → Contact logs (_assistant=FirstSurname, contact_id=0)
     - Assistant about → Contact logs (_assistant=FirstSurname, contact_id=0)
     """
@@ -123,16 +123,18 @@ class ContactSyncService:
     def _update_contact_logs_user(
         self,
         context_id: int,
-        user_name: str,
+        first_name: Optional[str],
+        surname: Optional[str],
         update_field: str,
         new_value: Optional[str],
     ) -> int:
         """
-        Update Contact logs for a user (where user_name matches and is_system=True).
+        Update Contact logs for a user (where first_name/surname match and is_system=True).
 
         Args:
             context_id: The context ID to search within
-            user_name: The user_name value to filter by (FirstLast)
+            first_name: The first_name field value to filter by
+            surname: The surname field value to filter by
             update_field: The field name to update (e.g., "timezone", "bio")
             new_value: The new value to set
 
@@ -149,7 +151,8 @@ class ContactSyncService:
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
                 WHERE lec.context_id = :context_id
-                  AND le.data->>'user_name' = :user_name
+                  AND COALESCE(le.data->>'first_name', '') = COALESCE(:first_name, '')
+                  AND COALESCE(le.data->>'surname', '') = COALESCE(:surname, '')
                   AND (le.data->>'is_system')::boolean = true
             )
         """,
@@ -159,7 +162,8 @@ class ContactSyncService:
             query,
             {
                 "context_id": context_id,
-                "user_name": user_name,
+                "first_name": first_name,
+                "surname": surname,
                 "update_field": update_field,
                 "new_value": new_value,
             },
@@ -227,15 +231,15 @@ class ContactSyncService:
         Sync user timezone to All/Contacts logs.
 
         Updates logs where:
-        - user_name = "{first_name}{last_name}"
+        - first_name and surname fields match
         - is_system = True
 
         Syncs to ALL accessible Assistants projects (personal + all org memberships).
 
         Args:
             user_id: The user's ID
-            first_name: User's first name
-            last_name: User's last name
+            first_name: User's first name (matches contact first_name)
+            last_name: User's last name (matches contact surname)
             new_timezone: The new timezone value to set
 
         Returns:
@@ -245,7 +249,6 @@ class ContactSyncService:
             logger.debug("Skipping user timezone sync: no name available")
             return 0
 
-        user_name = f"{first_name or ''}{last_name or ''}"
         total_updated = 0
 
         # Get all Assistants projects for this user
@@ -258,7 +261,8 @@ class ContactSyncService:
 
             updated = self._update_contact_logs_user(
                 context_id=context.id,
-                user_name=user_name,
+                first_name=first_name,
+                surname=last_name,  # auth_user.last_name → contact.surname
                 update_field="timezone",
                 new_value=new_timezone,
             )
@@ -281,15 +285,15 @@ class ContactSyncService:
         Sync user bio to All/Contacts logs.
 
         Updates logs where:
-        - user_name = "{first_name}{last_name}"
+        - first_name and surname fields match
         - is_system = True
 
         Syncs to ALL accessible Assistants projects (personal + all org memberships).
 
         Args:
             user_id: The user's ID
-            first_name: User's first name
-            last_name: User's last name
+            first_name: User's first name (matches contact first_name)
+            last_name: User's last name (matches contact surname)
             new_bio: The new bio value to set
 
         Returns:
@@ -299,7 +303,6 @@ class ContactSyncService:
             logger.debug("Skipping user bio sync: no name available")
             return 0
 
-        user_name = f"{first_name or ''}{last_name or ''}"
         total_updated = 0
 
         projects = self._get_all_assistants_projects_for_user(user_id)
@@ -311,7 +314,8 @@ class ContactSyncService:
 
             updated = self._update_contact_logs_user(
                 context_id=context.id,
-                user_name=user_name,
+                first_name=first_name,
+                surname=last_name,  # auth_user.last_name → contact.surname
                 update_field="bio",
                 new_value=new_bio,
             )
@@ -449,8 +453,8 @@ class ContactSyncService:
 
         Args:
             organization_id: The organization ID
-            first_name: User's first name
-            last_name: User's last name
+            first_name: User's first name (matches contact first_name)
+            last_name: User's last name (matches contact surname)
 
         Returns:
             Number of logs updated
@@ -458,8 +462,6 @@ class ContactSyncService:
         if not first_name:
             logger.debug("Skipping Contact update: no first_name available")
             return 0
-
-        user_name = f"{first_name}{last_name or ''}"
 
         # Find the org's Assistants project
         project = (
@@ -496,7 +498,8 @@ class ContactSyncService:
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
                 WHERE lec.context_id = :context_id
-                  AND le.data->>'user_name' = :user_name
+                  AND COALESCE(le.data->>'first_name', '') = COALESCE(:first_name, '')
+                  AND COALESCE(le.data->>'surname', '') = COALESCE(:surname, '')
                   AND (le.data->>'is_system')::boolean = true
             )
         """,
@@ -506,7 +509,8 @@ class ContactSyncService:
             query,
             {
                 "context_id": context.id,
-                "user_name": user_name,
+                "first_name": first_name,
+                "surname": last_name,  # auth_user.last_name → contact.surname
             },
         )
 
@@ -514,6 +518,6 @@ class ContactSyncService:
         if updated > 0:
             logger.info(
                 f"Marked {updated} Contact log(s) as non-system for user "
-                f"'{user_name}' in org {organization_id}",
+                f"'{first_name} {last_name or ''}' in org {organization_id}",
             )
         return updated

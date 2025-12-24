@@ -943,7 +943,7 @@ async def test_member_removal_sets_contact_is_system_false(
     )
 
     # Create Contact log for the member with is_system=True
-    # Use "Test" as name since create_test_user uses "Test" as first_name
+    # Use "Test" as first_name since create_test_user uses "Test" as name
     await client.post(
         "/v0/logs",
         json={
@@ -951,7 +951,8 @@ async def test_member_removal_sets_contact_is_system_false(
             "context": "All/Contacts",
             "entries": [
                 {
-                    "user_name": "Test",  # Matches member's first_name from create_test_user
+                    "first_name": "Test",  # Matches member's name from create_test_user
+                    "surname": None,  # create_test_user doesn't set last_name
                     "is_system": True,
                     "contact_id": 1,
                     "timezone": "UTC",
@@ -971,7 +972,7 @@ async def test_member_removal_sets_contact_is_system_false(
         (
             log
             for log in contacts_resp.json()["logs"]
-            if log["entries"].get("user_name") == "Test"
+            if log["entries"].get("first_name") == "Test"
             and log["entries"].get("is_system") is True
         ),
         None,
@@ -999,7 +1000,7 @@ async def test_member_removal_sets_contact_is_system_false(
         (
             log
             for log in contacts_resp.json()["logs"]
-            if log["entries"].get("user_name") == "Test"
+            if log["entries"].get("first_name") == "Test"
         ),
         None,
     )
