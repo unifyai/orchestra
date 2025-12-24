@@ -2039,6 +2039,9 @@ def _parse_rhs_list_or_dict_if_needed(rhs_dict, rhs_val):
         # Unwrap type literal dicts from parser into their raw values
         if val.get("type") == "type_literal":
             return val.get("value")
+        # Handle list type dicts from parser
+        if val.get("type") == "list":
+            return val.get("value")
         return val
 
     if isinstance(val, list):
