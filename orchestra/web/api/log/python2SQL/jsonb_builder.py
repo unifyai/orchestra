@@ -517,18 +517,31 @@ def _handle_comparison_operator_jsonb(
         lhs_type = _infer_expression_type(lhs_expr, session, project_id, context_id)
         rhs_type = _infer_expression_type(rhs_expr, session, project_id, context_id)
 
-        # Special handling for `is None` / `is not None` in JSONB mode
+        # Special handling for None comparisons in JSONB mode
         # JSONB null values can be either SQL NULL or the JSONB literal "null"
         # We need to check for both cases to properly match None comparisons
-        if operand in ("is", "is not") and rhs_type == "NoneType":
-            # Cast LHS to text for comparison (handles both SQL NULL and JSONB "null")
-            lhs_as_text = cast(lhs_expr, Text)
-            if operand == "is":
-                # `field is None` → field is SQL NULL OR field equals the string "null"
-                return or_(lhs_as_text.is_(None), lhs_as_text == "null")
+        # This applies to: `field == None`, `None == field`, `field != None`, `None != field`
+        # and their `is`/`is not` variants
+        if operand in ("is", "is not", "==", "!="):
+            # Determine which side is None and which is the field expression
+            if rhs_type == "NoneType":
+                field_expr = lhs_expr
+                is_equality = operand in ("is", "==")
+            elif lhs_type == "NoneType":
+                field_expr = rhs_expr
+                is_equality = operand in ("is", "==")
             else:
-                # `field is not None` → field is NOT SQL NULL AND field is not "null"
-                return and_(lhs_as_text.isnot(None), lhs_as_text != "null")
+                field_expr = None  # Neither side is None, skip this handling
+
+            if field_expr is not None:
+                # Cast field to text for comparison (handles both SQL NULL and JSONB "null")
+                field_as_text = cast(field_expr, Text)
+                if is_equality:
+                    # `field is None` / `field == None` → field is SQL NULL OR field equals the string "null"
+                    return or_(field_as_text.is_(None), field_as_text == "null")
+                else:
+                    # `field is not None` / `field != None` → field is NOT SQL NULL AND field is not "null"
+                    return and_(field_as_text.isnot(None), field_as_text != "null")
 
         # Special handling for JSONB vs scalar comparison
         # When one side is "jsonb" (from nested access) and the other is a scalar type
