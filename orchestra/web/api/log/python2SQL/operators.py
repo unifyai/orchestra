@@ -824,21 +824,35 @@ def _handle_comparison_operator(
     rval, rval_type = _select_value(rhs_sql, session)
 
     # --- Build the core boolean expression ---
-    # `is` and `is not` are handled specially
-    if operand in ("is", "is not"):
+    # None comparisons are handled specially for all equality/identity operators
+    # JSONB null values can be either SQL NULL or the JSONB literal "null"
+    # This applies to: `field == None`, `None == field`, `field != None`, `None != field`
+    # and their `is`/`is not` variants
+    if operand in ("is", "is not", "==", "!=") and (
+        rval_type == "NoneType" or lval_type == "NoneType"
+    ):
+        # Determine which side is None and which is the field expression
         if rval_type == "NoneType":
-            # Robust check for `is None` / `is not None` against JSONB
-            lval_as_text = cast(lval, Text)
-            expr = (
-                or_(lval_as_text.is_(None), lval_as_text == "null")
-                if operand == "is"
-                else and_(lval_as_text.isnot(None), lval_as_text != "null")
-            )
+            field_val = lval
         else:
-            # For `is True` or `is False`, treat as equality. For other `is` cases, use IS.
-            # Note: `val IS TRUE` is the same as `val = TRUE` in SQL for boolean types.
-            bool_val = cast_expr(lval, lval_type, "bool")
-            expr = (bool_val == rval) if operand == "is" else (bool_val != rval)
+            field_val = rval
+        is_equality = operand in ("is", "==")
+
+        # Cast field to text for comparison (handles both SQL NULL and JSONB "null")
+        field_as_text = cast(field_val, Text)
+        if is_equality:
+            # `field is None` / `field == None` → field is SQL NULL OR field equals the string "null"
+            expr = or_(field_as_text.is_(None), field_as_text == "null")
+        else:
+            # `field is not None` / `field != None` → field is NOT SQL NULL AND field is not "null"
+            expr = and_(field_as_text.isnot(None), field_as_text != "null")
+
+    # `is` and `is not` for non-None values
+    elif operand in ("is", "is not"):
+        # For `is True` or `is False`, treat as equality. For other `is` cases, use IS.
+        # Note: `val IS TRUE` is the same as `val = TRUE` in SQL for boolean types.
+        bool_val = cast_expr(lval, lval_type, "bool")
+        expr = (bool_val == rval) if operand == "is" else (bool_val != rval)
 
     # Handle `==` and `!=` for list comparisons
     elif (
