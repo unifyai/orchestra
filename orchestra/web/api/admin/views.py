@@ -15,6 +15,7 @@ from sqlalchemy import select
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
+from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
 from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.context_dao import ContextDAO
@@ -560,6 +561,7 @@ def admin_list_assistants(
     voice_dao = VoiceDAO(session)
     api_key_dao = ApiKeyDAO(session)
     auth_user_dao = AuthUserDAO(session)
+    secret_dao = AssistantSecretDAO(session)
     try:
         assistants = assistant_dao.list_all_assistants(
             phone=phone,
@@ -580,7 +582,16 @@ def admin_list_assistants(
                 keys = api_key_dao.filter(organization_id=assistant.organization_id)
             return keys[0][0].key if keys else None
 
+        # Get secrets for each assistant
+        def get_secrets_for_assistant(assistant):
+            secrets = secret_dao.list_secrets(
+                assistant.user_id,
+                assistant.agent_id,
+            )
+            return {s.secret_name: s.secret_value for s in secrets}
+
         api_keys = [get_api_key_for_assistant(a) for a in assistants]
+        secrets_list = [get_secrets_for_assistant(a) for a in assistants]
         user_ids = [a.user_id for a in assistants]
         auth_users = [auth_user_dao.get_by_id(user_id)[0] for user_id in user_ids]
         return InfoResponse(
@@ -616,6 +627,7 @@ def admin_list_assistants(
                     user_first_name=auth_users[i].name,
                     user_last_name=auth_users[i].last_name,
                     user_email=auth_users[i].email,
+                    secrets=secrets_list[i],
                 )
                 for i, a in enumerate(assistants)
             ],
@@ -682,6 +694,7 @@ def admin_update_assistant(
     # Find the assistant to update
     dao = AssistantDAO(session)
     api_key_dao = ApiKeyDAO(session)
+    secret_dao = AssistantSecretDAO(session)
     assistants = dao.list_all_assistants(
         phone=phone,
         user_phone=user_phone,
@@ -718,6 +731,10 @@ def admin_update_assistant(
         keys = api_key_dao.filter(organization_id=updated.organization_id)
     api_key = keys[0][0].key if keys else None
 
+    # Get secrets for the assistant
+    secrets = secret_dao.list_secrets(updated.user_id, updated.agent_id)
+    secrets_dict = {s.secret_name: s.secret_value for s in secrets}
+
     # Return updated assistant
     return InfoResponse(
         info=AssistantRead(
@@ -749,6 +766,7 @@ def admin_update_assistant(
             voice_provider=updated.voice_provider,
             voice_mode=updated.voice_mode,
             api_key=api_key,
+            secrets=secrets_dict,
         ),
     )
 
@@ -790,6 +808,7 @@ def admin_list_assistants_for_user(
     assistant_whatsapp_number = normalize_phone_parameter(assistant_whatsapp_number)
     dao = AssistantDAO(session)
     api_key_dao = ApiKeyDAO(session)
+    secret_dao = AssistantSecretDAO(session)
     try:
         assistants = dao.list_assistants_for_user(
             user_id=user_id,
@@ -808,7 +827,16 @@ def admin_list_assistants_for_user(
                 keys = api_key_dao.filter(organization_id=assistant.organization_id)
             return keys[0][0].key if keys else None
 
+        # Get secrets for each assistant
+        def get_secrets_for_assistant(assistant):
+            secrets = secret_dao.list_secrets(
+                assistant.user_id,
+                assistant.agent_id,
+            )
+            return {s.secret_name: s.secret_value for s in secrets}
+
         api_keys = [get_api_key_for_assistant(a) for a in assistants]
+        secrets_list = [get_secrets_for_assistant(a) for a in assistants]
 
         return InfoResponse(
             info=[
@@ -840,6 +868,7 @@ def admin_list_assistants_for_user(
                     voice_provider=a.voice_provider,
                     voice_mode=a.voice_mode,
                     api_key=api_keys[i],
+                    secrets=secrets_list[i],
                 )
                 for i, a in enumerate(assistants)
             ],
