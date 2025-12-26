@@ -205,6 +205,8 @@ async def list_organization_members_by_api_key(
         user_name = None
         user_email = None
         user_image = None
+        user_bio = None
+        user_timezone = None
         if user_info_row:
             user_info = user_info_row[0]
             name_parts = []
@@ -215,6 +217,8 @@ async def list_organization_members_by_api_key(
             user_name = " ".join(name_parts) if name_parts else None
             user_email = user_info.email
             user_image = user_info.image
+            user_bio = user_info.bio
+            user_timezone = user_info.timezone
 
         members_response.append(
             OrganizationMemberResponse(
@@ -227,6 +231,8 @@ async def list_organization_members_by_api_key(
                 name=user_name,
                 email=user_email,
                 image=user_image,
+                bio=user_bio,
+                timezone=user_timezone,
             ),
         )
 

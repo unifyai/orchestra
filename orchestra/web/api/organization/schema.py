@@ -71,6 +71,8 @@ class OrganizationMemberResponse(BaseModel):
     name: Optional[str] = None
     email: Optional[str] = None
     image: Optional[str] = None
+    bio: Optional[str] = None
+    timezone: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
