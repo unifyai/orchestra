@@ -921,33 +921,10 @@ def _handle_comparison_operator(
     ):
         field_subq = lhs_sql if lhs_is_sub else rhs_sql
 
-        # Check if log_event_ids is a Subquery/CTE that we can use directly
+        # Build all_events from log_event_ids (either Subquery/CTE or list)
         if isinstance(log_event_ids, (Subquery, CTE)):
-            # Build a LEFT JOIN query: all log_event_ids LEFT JOIN field_subq
-            # Result is True where field is NULL (either missing or explicitly null)
             all_events = log_event_ids
-            left_join_subq = (
-                select(
-                    all_events.c.id.label("log_event_id"),
-                    # expr evaluates to True when field is NULL or "null"
-                    # For missing fields (no join match), field_subq columns are NULL
-                    or_(
-                        field_subq.c.log_event_id.is_(
-                            None,
-                        ),  # No matching row = missing field
-                        expr,  # Existing row matches null check
-                    ).label("value"),
-                    literal("bool").label("inferred_type"),
-                )
-                .select_from(all_events)
-                .outerjoin(field_subq, all_events.c.id == field_subq.c.log_event_id)
-            )
-            return alias_utils.subquery_with_unique_alias(
-                left_join_subq,
-                prefix="none_eq_op",
-            )
         elif isinstance(log_event_ids, list):
-            # For list of IDs, we need to create a VALUES subquery
             from sqlalchemy import column, values
 
             all_events = (
@@ -959,12 +936,18 @@ def _handle_comparison_operator(
                 )
                 .subquery("all_event_ids")
             )
+        else:
+            all_events = None
+
+        if all_events is not None:
+            # LEFT JOIN: all log_event_ids with field_subq
+            # Result is True where field is NULL (missing) or explicitly null
             left_join_subq = (
                 select(
                     all_events.c.id.label("log_event_id"),
                     or_(
-                        field_subq.c.log_event_id.is_(None),
-                        expr,
+                        field_subq.c.log_event_id.is_(None),  # No row = missing field
+                        expr,  # Existing row matches null check
                     ).label("value"),
                     literal("bool").label("inferred_type"),
                 )
