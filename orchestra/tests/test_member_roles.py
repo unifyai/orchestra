@@ -1007,6 +1007,8 @@ async def test_list_members_by_api_key_with_org_key(client: AsyncClient):
         assert "role_id" in m
         assert "role_name" in m
         assert "email" in m
+        assert "bio" in m
+        assert "timezone" in m
 
 
 @pytest.mark.anyio
