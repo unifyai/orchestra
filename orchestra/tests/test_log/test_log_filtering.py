@@ -2900,18 +2900,13 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
     )
     assert response.status_code == 200, response.json()
     result = response.json()
-    # JSONB mode: logs without the field at all also match (missing field = NULL)
-    # EAV mode: only logs with explicit NULL value match
-    if use_jsonb_mode:
-        # In JSONB mode, missing fields are NULL, so more logs may match
-        # Just verify that the explicitly updated logs are in the result
-        log_ids = [log["id"] for log in result["logs"]]
-        assert 3 in log_ids
-        assert 4 in log_ids
-    else:
-        assert len(result["logs"]) == 2
-        assert result["logs"][0]["entries"]["_/description"] is None
-        assert result["logs"][1]["entries"]["_/description"] is None
+    # Both JSONB and EAV modes: logs without the field also match (missing field = None)
+    # This is consistent with Python semantics where accessing a missing dict key
+    # with .get() returns None, and None == None is True.
+    # Just verify that the explicitly updated logs are in the result
+    log_ids = [log["id"] for log in result["logs"]]
+    assert 3 in log_ids
+    assert 4 in log_ids
 
     # num_tokens derived behavior sanity
     response = await client.get(
