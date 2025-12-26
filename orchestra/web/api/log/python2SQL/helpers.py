@@ -1790,7 +1790,10 @@ def _infer_expression_type(
     if hasattr(expr, "_annotations") and "inferred_type" in expr._annotations:
         return expr._annotations["inferred_type"]
 
-    if hasattr(expr, "value"):  # BindParameter or similar
+    # Check for BindParameter (literal values) - must check type explicitly
+    # because other SQLAlchemy elements like Case have a .value attribute
+    # that returns None (for simple CASE WHEN vs switch-case style)
+    if isinstance(expr, BindParameter):
         return LogDAO.infer_type("", expr.value)
 
     # Check for ORM Column references (e.g., LogEvent.created_at)
