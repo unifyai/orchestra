@@ -2225,6 +2225,8 @@ class EmbeddingQueue(Base):
     retry_count = Column(Integer, nullable=False, server_default=sa.text("0"))
     error_message = Column(String, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+    # Timestamp when item was claimed for processing (used for stale detection)
+    processing_started_at = Column(TIMESTAMP, nullable=True)
 
     __table_args__ = (
         UniqueConstraint("ref_id", "key", "model", name="uq_embedding_queue"),
@@ -2234,6 +2236,12 @@ class EmbeddingQueue(Base):
         ),
         Index("idx_embedding_queue_status_created", "status", "created_at"),
         Index("idx_embedding_queue_ref_id", "ref_id"),
+        # Index for efficient stale processing detection
+        Index(
+            "idx_embedding_queue_processing_started",
+            "status",
+            "processing_started_at",
+        ),
     )
 
 
