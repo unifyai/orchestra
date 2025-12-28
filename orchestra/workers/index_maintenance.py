@@ -2,13 +2,15 @@
 Background worker for HNSW index maintenance.
 
 This worker performs periodic maintenance on HNSW indexes to:
-1. Hard-delete soft-deleted embeddings (rows with is_deleted=true)
-2. Rebuild HNSW indexes using CONCURRENTLY to avoid blocking
-3. Run VACUUM to reclaim disk space
+1. Check for and clean up invalid indexes (left by failed CONCURRENTLY operations)
+2. Hard-delete soft-deleted embeddings in batches (to avoid long locks)
+3. Use REINDEX CONCURRENTLY to rebuild indexes (keeps old index usable during rebuild)
+4. Run VACUUM to reclaim disk space
 
 The worker is triggered by:
 - Pub/Sub messages from project deletions (orchestra-embedding-maintenance topic)
 - Cloud Scheduler for nightly maintenance (2 AM UTC)
+- Manual API calls to /run_index_maintenance endpoint
 
 Usage:
     python -m orchestra.workers.index_maintenance
@@ -17,7 +19,8 @@ Environment Variables:
     DB_HOST, DB_USER, DB_PASS, DB_NAME: Database connection parameters
     INSTANCE_CONNECTION_NAME: Cloud SQL instance (for production)
 
-IMPORTANT: Uses DROP/CREATE INDEX CONCURRENTLY to avoid blocking production queries.
+IMPORTANT: Uses REINDEX CONCURRENTLY instead of DROP/CREATE to avoid query degradation
+during index rebuilds. The old index remains usable until the new one is ready.
 """
 
 import logging
@@ -26,6 +29,7 @@ import signal
 import sys
 import time
 from datetime import datetime, timezone
+from typing import List
 
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
@@ -35,6 +39,24 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+# Configuration
+BATCH_DELETE_SIZE = 10000  # Delete soft-deleted rows in batches of 10k
+MAX_DELETE_BATCHES = 1000  # Safety limit: max 10M rows per maintenance run
+
+# Index definitions for the embedding table
+HNSW_INDEXES = [
+    {
+        "name": "embedding_hnsw_cosine_openai_1536_idx",
+        "model": "text-embedding-3-small",
+        "dimensions": 1536,
+    },
+    {
+        "name": "embedding_hnsw_cosine_vertexai_1408_idx",
+        "model": "multimodalembedding@001",
+        "dimensions": 1408,
+    },
+]
 
 # Global shutdown flag
 shutdown_flag = False
@@ -108,14 +130,243 @@ def get_soft_deleted_count(conn) -> int:
     return result or 0
 
 
+def check_index_exists(conn, index_name: str) -> bool:
+    """Check if an index exists."""
+    result = conn.execute(
+        text(
+            """
+            SELECT EXISTS (
+                SELECT 1 FROM pg_indexes
+                WHERE indexname = :index_name
+            )
+        """,
+        ),
+        {"index_name": index_name},
+    ).scalar()
+    return result or False
+
+
+def check_and_cleanup_invalid_indexes(conn) -> List[str]:
+    """
+    Check for and clean up invalid HNSW indexes.
+
+    Invalid indexes can be left behind by failed CREATE INDEX CONCURRENTLY
+    or REINDEX CONCURRENTLY operations. They still incur write overhead
+    and should be cleaned up.
+
+    Returns:
+        List of invalid index names that were cleaned up
+    """
+    # Find invalid indexes on the embedding table
+    result = conn.execute(
+        text(
+            """
+            SELECT i.indexname
+            FROM pg_indexes i
+            JOIN pg_class c ON c.relname = i.indexname
+            JOIN pg_index idx ON idx.indexrelid = c.oid
+            WHERE i.tablename = 'embedding'
+              AND idx.indisvalid = false
+        """,
+        ),
+    )
+    invalid_indexes = [row[0] for row in result.fetchall()]
+
+    if not invalid_indexes:
+        logger.info("No invalid indexes found")
+        return []
+
+    logger.warning(f"Found {len(invalid_indexes)} invalid indexes: {invalid_indexes}")
+
+    cleaned = []
+    for index_name in invalid_indexes:
+        try:
+            logger.info(f"Dropping invalid index: {index_name}")
+            conn.execute(
+                text(f"DROP INDEX CONCURRENTLY IF EXISTS {index_name}"),
+            )
+            cleaned.append(index_name)
+            logger.info(f"Successfully dropped invalid index: {index_name}")
+        except Exception as e:
+            logger.error(f"Failed to drop invalid index {index_name}: {e}")
+
+    return cleaned
+
+
+def batched_delete_soft_deleted(conn) -> dict:
+    """
+    Delete soft-deleted embeddings in batches to avoid long locks.
+
+    Instead of a single DELETE that could lock the table for minutes,
+    this deletes in batches of BATCH_DELETE_SIZE rows at a time.
+
+    Returns:
+        Dictionary with deletion metrics
+    """
+    start_time = time.time()
+    total_deleted = 0
+    batch_count = 0
+
+    logger.info(
+        f"Starting batched deletion of soft-deleted embeddings "
+        f"(batch_size={BATCH_DELETE_SIZE})",
+    )
+
+    while batch_count < MAX_DELETE_BATCHES:
+        # Check for shutdown
+        if shutdown_flag:
+            logger.info("Shutdown requested, stopping batched delete")
+            break
+
+        # Delete a batch using ctid for efficient row identification
+        result = conn.execute(
+            text(
+                """
+                WITH to_delete AS (
+                    SELECT ctid FROM embedding
+                    WHERE is_deleted = true
+                    LIMIT :batch_size
+                )
+                DELETE FROM embedding
+                WHERE ctid IN (SELECT ctid FROM to_delete)
+            """,
+            ),
+            {"batch_size": BATCH_DELETE_SIZE},
+        )
+
+        deleted_in_batch = result.rowcount
+        if deleted_in_batch == 0:
+            break
+
+        total_deleted += deleted_in_batch
+        batch_count += 1
+
+        if batch_count % 10 == 0:
+            logger.info(
+                f"Deleted {total_deleted} rows so far "
+                f"({batch_count} batches, {time.time() - start_time:.1f}s elapsed)",
+            )
+
+    duration = time.time() - start_time
+    logger.info(
+        f"Batched deletion complete: deleted={total_deleted}, "
+        f"batches={batch_count}, duration={duration:.2f}s",
+    )
+
+    return {
+        "total_deleted": total_deleted,
+        "batch_count": batch_count,
+        "duration": duration,
+    }
+
+
+def reindex_hnsw_indexes(conn) -> dict:
+    """
+    Reindex HNSW indexes using REINDEX CONCURRENTLY.
+
+    Unlike DROP/CREATE, REINDEX CONCURRENTLY:
+    - Keeps the old index usable during the rebuild
+    - Atomically swaps in the new index when ready
+    - Only then removes the old index data
+
+    This prevents query degradation during index maintenance.
+
+    Returns:
+        Dictionary with reindex metrics per index
+    """
+    results = {}
+
+    for index_info in HNSW_INDEXES:
+        index_name = index_info["name"]
+        model = index_info["model"]
+        dims = index_info["dimensions"]
+
+        logger.info(f"Reindexing {index_name} for model {model}")
+
+        try:
+            # Check if index exists
+            if not check_index_exists(conn, index_name):
+                logger.warning(
+                    f"Index {index_name} does not exist, creating it...",
+                )
+                # Create the index if it doesn't exist
+                start = time.time()
+                conn.execute(
+                    text(
+                        f"""
+                        CREATE INDEX CONCURRENTLY IF NOT EXISTS {index_name}
+                        ON embedding USING hnsw ((vector::vector({dims})) vector_cosine_ops)
+                        WITH (m = 16, ef_construction = 64)
+                        WHERE model = '{model}' AND is_deleted = false
+                    """,
+                    ),
+                )
+                results[index_name] = {
+                    "action": "created",
+                    "duration": time.time() - start,
+                    "success": True,
+                }
+            else:
+                # Reindex existing index
+                start = time.time()
+                conn.execute(
+                    text(f"REINDEX INDEX CONCURRENTLY {index_name}"),
+                )
+                results[index_name] = {
+                    "action": "reindexed",
+                    "duration": time.time() - start,
+                    "success": True,
+                }
+
+            logger.info(
+                f"Successfully {results[index_name]['action']} {index_name} "
+                f"in {results[index_name]['duration']:.2f}s",
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to reindex {index_name}: {e}", exc_info=True)
+            results[index_name] = {
+                "action": "failed",
+                "error": str(e),
+                "success": False,
+            }
+
+            # Try to create index if reindex failed (might be corrupted)
+            try:
+                logger.info(f"Attempting to recreate {index_name} after failure...")
+                conn.execute(
+                    text(f"DROP INDEX CONCURRENTLY IF EXISTS {index_name}"),
+                )
+                conn.execute(
+                    text(
+                        f"""
+                        CREATE INDEX CONCURRENTLY IF NOT EXISTS {index_name}
+                        ON embedding USING hnsw ((vector::vector({dims})) vector_cosine_ops)
+                        WITH (m = 16, ef_construction = 64)
+                        WHERE model = '{model}' AND is_deleted = false
+                    """,
+                    ),
+                )
+                results[index_name]["recovery"] = "recreated"
+                logger.info(f"Successfully recreated {index_name} after failure")
+            except Exception as recovery_error:
+                logger.error(
+                    f"Failed to recreate {index_name}: {recovery_error}",
+                    exc_info=True,
+                )
+                results[index_name]["recovery"] = f"failed: {recovery_error}"
+
+    return results
+
+
 def rebuild_hnsw_indexes(session: Session) -> dict:
     """
-    Rebuild HNSW indexes to clean up soft-deleted entries.
+    Perform HNSW index maintenance with minimal query impact.
 
     This function:
-    1. Drops existing HNSW indexes using CONCURRENTLY (non-blocking)
-    2. Hard-deletes rows where is_deleted = true
-    3. Recreates HNSW indexes with CONCURRENTLY
+    1. Checks for and cleans up any invalid indexes
+    2. Deletes soft-deleted embeddings in batches (avoids long locks)
+    3. Uses REINDEX CONCURRENTLY to rebuild indexes (no downtime)
     4. Runs VACUUM to reclaim disk space
 
     Returns:
@@ -123,7 +374,10 @@ def rebuild_hnsw_indexes(session: Session) -> dict:
     """
     metrics = {
         "start_time": datetime.now(timezone.utc).isoformat(),
-        "deleted_count": 0,
+        "soft_deleted_count": 0,
+        "invalid_indexes_cleaned": [],
+        "deletion_metrics": {},
+        "reindex_results": {},
         "index_sizes_before": {},
         "index_sizes_after": {},
         "durations": {},
@@ -140,107 +394,50 @@ def rebuild_hnsw_indexes(session: Session) -> dict:
         conn = conn.execution_options(isolation_level="AUTOCOMMIT")
 
         # Get initial metrics
-        metrics["deleted_count"] = get_soft_deleted_count(conn)
-        metrics["index_sizes_before"]["openai"] = get_index_size(
-            conn,
-            "embedding_hnsw_cosine_openai_1536_idx",
-        )
-        metrics["index_sizes_before"]["vertexai"] = get_index_size(
-            conn,
-            "embedding_hnsw_cosine_vertexai_1408_idx",
-        )
+        metrics["soft_deleted_count"] = get_soft_deleted_count(conn)
+        for index_info in HNSW_INDEXES:
+            index_name = index_info["name"]
+            metrics["index_sizes_before"][index_name] = get_index_size(conn, index_name)
 
         logger.info(
-            f"Starting index maintenance. Soft-deleted rows: {metrics['deleted_count']}",
+            f"Starting index maintenance. Soft-deleted rows: {metrics['soft_deleted_count']}",
         )
         logger.info(f"Index sizes before: {metrics['index_sizes_before']}")
 
-        if metrics["deleted_count"] == 0:
-            logger.info("No soft-deleted embeddings to clean up. Skipping rebuild.")
-            metrics["success"] = True
-            return metrics
-
-        # Phase 1: Drop existing HNSW indexes (CONCURRENTLY)
-        logger.info("Phase 1: Dropping HNSW indexes...")
+        # Phase 1: Check and cleanup invalid indexes
+        logger.info("Phase 1: Checking for invalid indexes...")
         start = time.time()
+        metrics["invalid_indexes_cleaned"] = check_and_cleanup_invalid_indexes(conn)
+        metrics["durations"]["invalid_index_cleanup"] = time.time() - start
 
-        conn.execute(
-            text(
-                "DROP INDEX CONCURRENTLY IF EXISTS embedding_hnsw_cosine_openai_1536_idx",
-            ),
-        )
-        conn.execute(
-            text(
-                "DROP INDEX CONCURRENTLY IF EXISTS embedding_hnsw_cosine_vertexai_1408_idx",
-            ),
-        )
+        # Phase 2: Batched deletion of soft-deleted embeddings
+        if metrics["soft_deleted_count"] > 0:
+            logger.info("Phase 2: Batched deletion of soft-deleted embeddings...")
+            start = time.time()
+            metrics["deletion_metrics"] = batched_delete_soft_deleted(conn)
+            metrics["durations"]["batched_delete"] = time.time() - start
+        else:
+            logger.info("Phase 2: No soft-deleted embeddings to clean up, skipping")
+            metrics["deletion_metrics"] = {"total_deleted": 0, "batch_count": 0}
+            metrics["durations"]["batched_delete"] = 0
 
-        metrics["durations"]["drop_indexes"] = time.time() - start
-        logger.info(f"Indexes dropped in {metrics['durations']['drop_indexes']:.2f}s")
-
-        # Phase 2: Hard-delete soft-deleted embeddings
-        logger.info("Phase 2: Hard-deleting soft-deleted embeddings...")
+        # Phase 3: Reindex HNSW indexes using REINDEX CONCURRENTLY
+        logger.info("Phase 3: Reindexing HNSW indexes...")
         start = time.time()
-
-        result = conn.execute(
-            text("DELETE FROM embedding WHERE is_deleted = true"),
-        )
-        actual_deleted = result.rowcount
-
-        metrics["durations"]["hard_delete"] = time.time() - start
-        logger.info(
-            f"Hard-deleted {actual_deleted} embeddings in {metrics['durations']['hard_delete']:.2f}s",
-        )
-
-        # Phase 3: Recreate HNSW indexes (CONCURRENTLY)
-        logger.info("Phase 3: Creating HNSW indexes...")
-        start = time.time()
-
-        # OpenAI text-embedding-3-small (1536 dimensions)
-        conn.execute(
-            text(
-                """
-                CREATE INDEX CONCURRENTLY IF NOT EXISTS embedding_hnsw_cosine_openai_1536_idx
-                ON embedding USING hnsw ((vector::vector(1536)) vector_cosine_ops)
-                WITH (m = 16, ef_construction = 64)
-                WHERE model = 'text-embedding-3-small' AND is_deleted = false
-            """,
-            ),
-        )
-
-        # Vertex AI multimodalembedding@001 (1408 dimensions)
-        conn.execute(
-            text(
-                """
-                CREATE INDEX CONCURRENTLY IF NOT EXISTS embedding_hnsw_cosine_vertexai_1408_idx
-                ON embedding USING hnsw ((vector::vector(1408)) vector_cosine_ops)
-                WITH (m = 16, ef_construction = 64)
-                WHERE model = 'multimodalembedding@001' AND is_deleted = false
-            """,
-            ),
-        )
-
-        metrics["durations"]["create_indexes"] = time.time() - start
-        logger.info(f"Indexes created in {metrics['durations']['create_indexes']:.2f}s")
+        metrics["reindex_results"] = reindex_hnsw_indexes(conn)
+        metrics["durations"]["reindex"] = time.time() - start
 
         # Phase 4: VACUUM to reclaim space
         logger.info("Phase 4: Running VACUUM...")
         start = time.time()
-
-        conn.execute(text("VACUUM (VERBOSE) embedding"))
-
+        conn.execute(text("VACUUM embedding"))
         metrics["durations"]["vacuum"] = time.time() - start
         logger.info(f"VACUUM completed in {metrics['durations']['vacuum']:.2f}s")
 
         # Get final metrics
-        metrics["index_sizes_after"]["openai"] = get_index_size(
-            conn,
-            "embedding_hnsw_cosine_openai_1536_idx",
-        )
-        metrics["index_sizes_after"]["vertexai"] = get_index_size(
-            conn,
-            "embedding_hnsw_cosine_vertexai_1408_idx",
-        )
+        for index_info in HNSW_INDEXES:
+            index_name = index_info["name"]
+            metrics["index_sizes_after"][index_name] = get_index_size(conn, index_name)
 
         metrics["success"] = True
         metrics["end_time"] = datetime.now(timezone.utc).isoformat()
@@ -255,33 +452,7 @@ def rebuild_hnsw_indexes(session: Session) -> dict:
         logger.error(f"Index maintenance failed: {e}", exc_info=True)
         metrics["error"] = str(e)
         metrics["success"] = False
-
-        # Try to recreate indexes if they were dropped but not recreated
-        try:
-            logger.info("Attempting to recreate indexes after failure...")
-            conn.execute(
-                text(
-                    """
-                    CREATE INDEX CONCURRENTLY IF NOT EXISTS embedding_hnsw_cosine_openai_1536_idx
-                    ON embedding USING hnsw ((vector::vector(1536)) vector_cosine_ops)
-                    WITH (m = 16, ef_construction = 64)
-                    WHERE model = 'text-embedding-3-small' AND is_deleted = false
-                """,
-                ),
-            )
-            conn.execute(
-                text(
-                    """
-                    CREATE INDEX CONCURRENTLY IF NOT EXISTS embedding_hnsw_cosine_vertexai_1408_idx
-                    ON embedding USING hnsw ((vector::vector(1408)) vector_cosine_ops)
-                    WITH (m = 16, ef_construction = 64)
-                    WHERE model = 'multimodalembedding@001' AND is_deleted = false
-                """,
-                ),
-            )
-            logger.info("Indexes recreated after failure")
-        except Exception as recovery_error:
-            logger.error(f"Failed to recreate indexes: {recovery_error}")
+        metrics["end_time"] = datetime.now(timezone.utc).isoformat()
 
     finally:
         conn.close()
@@ -304,8 +475,10 @@ def run_maintenance() -> dict:
 
         # Log summary
         if metrics["success"]:
+            deleted = metrics.get("deletion_metrics", {}).get("total_deleted", 0)
             logger.info(
-                f"Maintenance completed: deleted={metrics['deleted_count']}, "
+                f"Maintenance completed: deleted={deleted}, "
+                f"invalid_cleaned={len(metrics.get('invalid_indexes_cleaned', []))}, "
                 f"durations={metrics['durations']}",
             )
         else:
