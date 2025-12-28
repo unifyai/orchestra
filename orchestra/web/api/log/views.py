@@ -7690,6 +7690,11 @@ async def process_traffic_logs(
         )
 
 
+# Hard cap for max_items to prevent pathological calls
+MAX_ITEMS_HARD_CAP = 5000
+MAX_TIME_SECONDS_HARD_CAP = 600  # 10 minutes max
+
+
 @admin_router.post(
     "/process_embedding_queue",
     responses={
@@ -7698,9 +7703,17 @@ async def process_traffic_logs(
             "content": {
                 "application/json": {
                     "example": {
-                        "message": "Processed 150 embeddings",
+                        "message": "Processed 150 embeddings in 45.23s",
                         "status": "success",
-                        "metrics": {"processed": 150, "duration": 12.5},
+                        "metrics": {
+                            "processed": 150,
+                            "duration": 45.23,
+                            "throughput": 3.32,
+                            "time_limit_reached": False,
+                            "size_limit_reached": False,
+                            "queue_before": {"pending": 500, "processing": 0},
+                            "queue_after": {"pending": 350, "processing": 0},
+                        },
                     },
                 },
             },
@@ -7711,7 +7724,16 @@ async def process_traffic_logs(
     },
 )
 async def process_embedding_queue(
-    max_items: int = Query(1000, description="Maximum number of embeddings to process"),
+    max_items: int = Query(
+        1000,
+        le=MAX_ITEMS_HARD_CAP,
+        description=f"Maximum number of embeddings to process (hard cap: {MAX_ITEMS_HARD_CAP})",
+    ),
+    max_time_seconds: int = Query(
+        300,
+        le=MAX_TIME_SECONDS_HARD_CAP,
+        description=f"Maximum processing time in seconds (hard cap: {MAX_TIME_SECONDS_HARD_CAP})",
+    ),
     session=Depends(get_db_session),
     _=Depends(auth_admin_key),
 ):
@@ -7719,11 +7741,18 @@ async def process_embedding_queue(
     Admin endpoint to manually process pending embeddings from the queue.
 
     This endpoint is designed to be called by:
-    - Cloud Scheduler for periodic processing
+    - Cloud Scheduler for periodic processing (recommended: every 5 minutes)
     - Administrators for manual triggering
     - Internal processes when immediate embedding generation is needed
 
-    The endpoint processes embeddings in batches and returns metrics.
+    The endpoint processes embeddings in batches with both time and size bounds.
+    Processing stops when either limit is reached, ensuring predictable execution time.
+
+    Features:
+    - Atomic queue claiming with FOR UPDATE SKIP LOCKED (multi-worker safe)
+    - Automatic reset of stale items stuck in 'processing' state (crash recovery)
+    - Time-bounded execution to prevent long-running operations
+    - Size-bounded execution to limit API costs per invocation
     """
     try:
         from orchestra.workers.embedding_worker import (
@@ -7738,26 +7767,37 @@ async def process_embedding_queue(
             return {
                 "message": "No pending embeddings to process",
                 "status": "success",
-                "metrics": metrics_before,
+                "metrics": {
+                    "processed": 0,
+                    "queue_before": metrics_before,
+                    "queue_after": metrics_before,
+                },
             }
 
-        # Process embeddings
-        import time
-
-        start = time.time()
-        processed = process_pending_embeddings(session, limit=max_items)
-        duration = time.time() - start
+        # Process embeddings with time and size bounds
+        result = process_pending_embeddings(
+            session,
+            limit=max_items,
+            max_time_seconds=max_time_seconds,
+        )
 
         # Get queue status after processing
         metrics_after = get_queue_metrics(session)
+
+        processed = result.get("processed", 0)
+        duration = result.get("duration", 0)
 
         return {
             "message": f"Processed {processed} embeddings in {duration:.2f}s",
             "status": "success",
             "metrics": {
                 "processed": processed,
+                "errors": result.get("errors", 0),
                 "duration": duration,
-                "throughput": processed / duration if duration > 0 else 0,
+                "throughput": result.get("throughput", 0),
+                "stale_reset": result.get("stale_reset", 0),
+                "time_limit_reached": result.get("time_limit_reached", False),
+                "size_limit_reached": result.get("size_limit_reached", False),
                 "queue_before": metrics_before,
                 "queue_after": metrics_after,
             },
@@ -7781,11 +7821,29 @@ async def process_embedding_queue(
             "content": {
                 "application/json": {
                     "example": {
-                        "message": "Index maintenance completed",
+                        "message": "Index maintenance completed. Deleted 3562 embeddings.",
                         "status": "success",
                         "metrics": {
-                            "deleted_count": 3562,
-                            "durations": {"drop_indexes": 0.5, "hard_delete": 0.1},
+                            "soft_deleted_count": 3562,
+                            "invalid_indexes_cleaned": [],
+                            "deletion_metrics": {
+                                "total_deleted": 3562,
+                                "batch_count": 1,
+                                "duration": 12.5,
+                            },
+                            "reindex_results": {
+                                "embedding_hnsw_cosine_openai_1536_idx": {
+                                    "action": "reindexed",
+                                    "duration": 45.2,
+                                    "success": True,
+                                },
+                            },
+                            "durations": {
+                                "invalid_index_cleanup": 0.1,
+                                "batched_delete": 12.5,
+                                "reindex": 85.0,
+                                "vacuum": 8.3,
+                            },
                         },
                     },
                 },
@@ -7803,17 +7861,22 @@ async def run_index_maintenance(
     """
     Admin endpoint to manually trigger HNSW index maintenance.
 
-    This endpoint:
-    1. Drops existing HNSW indexes (CONCURRENTLY - non-blocking)
-    2. Hard-deletes soft-deleted embeddings
-    3. Recreates HNSW indexes (CONCURRENTLY - non-blocking)
+    This endpoint performs comprehensive index maintenance:
+    1. Checks for and cleans up invalid indexes (left by failed CONCURRENTLY ops)
+    2. Hard-deletes soft-deleted embeddings in batches (avoids long locks)
+    3. Uses REINDEX CONCURRENTLY to rebuild indexes (no query downtime)
     4. Runs VACUUM to reclaim disk space
 
+    Key improvements over traditional DROP/CREATE:
+    - REINDEX CONCURRENTLY keeps old index usable during rebuild
+    - Batched deletes prevent long table locks
+    - Invalid index detection handles failed previous operations
+
     WARNING: This operation can take several minutes for large tables.
-    Use Cloud Run Jobs for production workloads.
+    Recommended to run during low-traffic hours (e.g., 2 AM UTC).
 
     This endpoint is designed to be called by:
-    - Cloud Scheduler for nightly maintenance (2 AM UTC)
+    - Cloud Scheduler for nightly maintenance
     - Administrators for manual triggering after large deletions
     """
     try:
@@ -7822,8 +7885,9 @@ async def run_index_maintenance(
         metrics = rebuild_hnsw_indexes(session)
 
         if metrics["success"]:
+            deleted = metrics.get("deletion_metrics", {}).get("total_deleted", 0)
             return {
-                "message": f"Index maintenance completed. Deleted {metrics['deleted_count']} embeddings.",
+                "message": f"Index maintenance completed. Deleted {deleted} embeddings.",
                 "status": "success",
                 "metrics": metrics,
             }
