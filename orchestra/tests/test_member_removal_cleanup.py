@@ -943,7 +943,7 @@ async def test_member_removal_sets_contact_is_system_false(
     )
 
     # Create Contact log for the member with is_system=True
-    # Use "Test" as first_name since create_test_user uses "Test" as name
+    # Match by email since contact sync now uses email
     await client.post(
         "/v0/logs",
         json={
@@ -951,8 +951,9 @@ async def test_member_removal_sets_contact_is_system_false(
             "context": "All/Contacts",
             "entries": [
                 {
-                    "first_name": "Test",  # Matches member's name from create_test_user
-                    "surname": None,  # create_test_user doesn't set last_name
+                    "email": member["email"],  # Matches member's email
+                    "first_name": "Test",
+                    "surname": None,
                     "is_system": True,
                     "contact_id": 1,
                     "timezone": "UTC",
@@ -972,7 +973,7 @@ async def test_member_removal_sets_contact_is_system_false(
         (
             log
             for log in contacts_resp.json()["logs"]
-            if log["entries"].get("first_name") == "Test"
+            if log["entries"].get("email") == member["email"]
             and log["entries"].get("is_system") is True
         ),
         None,
@@ -1000,7 +1001,7 @@ async def test_member_removal_sets_contact_is_system_false(
         (
             log
             for log in contacts_resp.json()["logs"]
-            if log["entries"].get("first_name") == "Test"
+            if log["entries"].get("email") == member["email"]
         ),
         None,
     )

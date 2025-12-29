@@ -583,11 +583,10 @@ async def remove_organization_member(
         )
 
         # 4. Mark user's Contact log as non-system (is_system=False)
-        if departing_user:
+        if departing_user and departing_user.email:
             contact_sync_service.mark_member_contact_as_non_system(
                 organization_id=organization_id,
-                first_name=departing_user.name or "",
-                last_name=departing_user.last_name,
+                email=departing_user.email,
             )
 
         # 5. Revoke organization API keys (personal keys are NOT affected)

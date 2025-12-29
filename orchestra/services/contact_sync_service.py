@@ -123,18 +123,16 @@ class ContactSyncService:
     def _update_contact_logs_user(
         self,
         context_id: int,
-        first_name: Optional[str],
-        surname: Optional[str],
+        email: str,
         update_field: str,
         new_value: Optional[str],
     ) -> int:
         """
-        Update Contact logs for a user (where first_name/surname match and is_system=True).
+        Update Contact logs for a user (where email matches and is_system=True).
 
         Args:
             context_id: The context ID to search within
-            first_name: The first_name field value to filter by
-            surname: The surname field value to filter by
+            email: The email field value to filter by
             update_field: The field name to update (e.g., "timezone", "bio")
             new_value: The new value to set
 
@@ -151,8 +149,7 @@ class ContactSyncService:
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
                 WHERE lec.context_id = :context_id
-                  AND COALESCE(le.data->>'first_name', '') = COALESCE(:first_name, '')
-                  AND COALESCE(le.data->>'surname', '') = COALESCE(:surname, '')
+                  AND le.data->>'email' = :email
                   AND (le.data->>'is_system')::boolean = true
             )
         """,
@@ -162,8 +159,7 @@ class ContactSyncService:
             query,
             {
                 "context_id": context_id,
-                "first_name": first_name,
-                "surname": surname,
+                "email": email,
                 "update_field": update_field,
                 "new_value": new_value,
             },
@@ -223,30 +219,28 @@ class ContactSyncService:
     def sync_user_timezone(
         self,
         user_id: str,
-        first_name: Optional[str],
-        last_name: Optional[str],
+        email: str,
         new_timezone: Optional[str],
     ) -> int:
         """
         Sync user timezone to All/Contacts logs.
 
         Updates logs where:
-        - first_name and surname fields match
+        - email field matches
         - is_system = True
 
         Syncs to ALL accessible Assistants projects (personal + all org memberships).
 
         Args:
             user_id: The user's ID
-            first_name: User's first name (matches contact first_name)
-            last_name: User's last name (matches contact surname)
+            email: User's email (matches contact email)
             new_timezone: The new timezone value to set
 
         Returns:
             Total number of logs updated across all projects
         """
-        if not first_name and not last_name:
-            logger.debug("Skipping user timezone sync: no name available")
+        if not email:
+            logger.debug("Skipping user timezone sync: no email available")
             return 0
 
         total_updated = 0
@@ -261,8 +255,7 @@ class ContactSyncService:
 
             updated = self._update_contact_logs_user(
                 context_id=context.id,
-                first_name=first_name,
-                surname=last_name,  # auth_user.last_name → contact.surname
+                email=email,
                 update_field="timezone",
                 new_value=new_timezone,
             )
@@ -277,30 +270,28 @@ class ContactSyncService:
     def sync_user_bio(
         self,
         user_id: str,
-        first_name: Optional[str],
-        last_name: Optional[str],
+        email: str,
         new_bio: Optional[str],
     ) -> int:
         """
         Sync user bio to All/Contacts logs.
 
         Updates logs where:
-        - first_name and surname fields match
+        - email field matches
         - is_system = True
 
         Syncs to ALL accessible Assistants projects (personal + all org memberships).
 
         Args:
             user_id: The user's ID
-            first_name: User's first name (matches contact first_name)
-            last_name: User's last name (matches contact surname)
+            email: User's email (matches contact email)
             new_bio: The new bio value to set
 
         Returns:
             Total number of logs updated across all projects
         """
-        if not first_name and not last_name:
-            logger.debug("Skipping user bio sync: no name available")
+        if not email:
+            logger.debug("Skipping user bio sync: no email available")
             return 0
 
         total_updated = 0
@@ -314,8 +305,7 @@ class ContactSyncService:
 
             updated = self._update_contact_logs_user(
                 context_id=context.id,
-                first_name=first_name,
-                surname=last_name,  # auth_user.last_name → contact.surname
+                email=email,
                 update_field="bio",
                 new_value=new_bio,
             )
@@ -440,8 +430,7 @@ class ContactSyncService:
     def mark_member_contact_as_non_system(
         self,
         organization_id: int,
-        first_name: str,
-        last_name: Optional[str],
+        email: str,
     ) -> int:
         """
         Mark a departing member's Contact log as non-system (is_system=False).
@@ -453,14 +442,13 @@ class ContactSyncService:
 
         Args:
             organization_id: The organization ID
-            first_name: User's first name (matches contact first_name)
-            last_name: User's last name (matches contact surname)
+            email: User's email (matches contact email)
 
         Returns:
             Number of logs updated
         """
-        if not first_name:
-            logger.debug("Skipping Contact update: no first_name available")
+        if not email:
+            logger.debug("Skipping Contact update: no email available")
             return 0
 
         # Find the org's Assistants project
@@ -498,8 +486,7 @@ class ContactSyncService:
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
                 WHERE lec.context_id = :context_id
-                  AND COALESCE(le.data->>'first_name', '') = COALESCE(:first_name, '')
-                  AND COALESCE(le.data->>'surname', '') = COALESCE(:surname, '')
+                  AND le.data->>'email' = :email
                   AND (le.data->>'is_system')::boolean = true
             )
         """,
@@ -509,8 +496,7 @@ class ContactSyncService:
             query,
             {
                 "context_id": context.id,
-                "first_name": first_name,
-                "surname": last_name,  # auth_user.last_name → contact.surname
+                "email": email,
             },
         )
 
@@ -518,6 +504,6 @@ class ContactSyncService:
         if updated > 0:
             logger.info(
                 f"Marked {updated} Contact log(s) as non-system for user "
-                f"'{first_name} {last_name or ''}' in org {organization_id}",
+                f"'{email}' in org {organization_id}",
             )
         return updated
