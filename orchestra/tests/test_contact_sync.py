@@ -753,6 +753,183 @@ async def test_org_assistant_timezone_sync(client: AsyncClient, dbsession: Sessi
 
 
 # =============================================================================
+# ORG MEMBER SYNC TESTS
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_org_member_contact_syncs_to_org_assistants_project(
+    client: AsyncClient,
+    dbsession: Session,
+):
+    """
+    Test that a non-owner org member's Contact syncs to org's Assistants project.
+
+    Scenario:
+    1. User A creates an org
+    2. Users B and C are added as members
+    3. A hires an org assistant (creates Assistants project)
+    4. Contact logs for A, B, C are created in All/Contacts with is_system=True
+    5. B updates their timezone/bio via /admin/assistant/update-user
+    6. Verify B's Contact in the org's Assistants project is updated
+    """
+    # Create org owner (User A)
+    owner = await create_test_user(
+        client,
+        "org_member_sync_owner@test.com",
+        hiring_approved=True,
+    )
+
+    # Create org members (Users B and C)
+    member_b = await create_test_user(client, "org_member_sync_b@test.com")
+    member_c = await create_test_user(client, "org_member_sync_c@test.com")
+
+    # User A creates the org
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Multi Member Sync Org"},
+        headers=owner["headers"],
+    )
+    assert org_resp.status_code == status.HTTP_201_CREATED
+    org_data = org_resp.json()
+    org_id = org_data["id"]
+    org_headers = {"Authorization": f"Bearer {org_data['api_key']}"}
+
+    # Add B and C as org members
+    add_b_resp = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member_b["id"]},
+        headers=owner["headers"],
+    )
+    assert add_b_resp.status_code == status.HTTP_201_CREATED
+
+    add_c_resp = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member_c["id"]},
+        headers=owner["headers"],
+    )
+    assert add_c_resp.status_code == status.HTTP_201_CREATED
+
+    # Explicitly create Assistants project for org (needed for log access)
+    project_resp = await client.post(
+        "/v0/project",
+        json={"name": "Assistants"},
+        headers=org_headers,
+    )
+    assert project_resp.status_code == 200
+
+    # A creates an org assistant
+    assistant_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "OrgSync",
+            "surname": "Bot",
+            "timezone": "UTC",
+            "create_infra": False,
+        },
+        headers=org_headers,
+    )
+    assert assistant_resp.status_code == 200
+    agent_id = assistant_resp.json()["info"]["agent_id"]
+
+    # Create Contact logs for all members (A, B, C) in org's All/Contacts
+    # These would normally be created when assistants are hired
+    await client.post(
+        "/v0/logs",
+        json={
+            "project": "Assistants",
+            "context": "All/Contacts",
+            "entries": [
+                {
+                    "email": owner["email"],
+                    "first_name": "Owner",
+                    "is_system": True,
+                    "timezone": "UTC",
+                    "bio": "Owner bio",
+                    "contact_id": 1,
+                },
+                {
+                    "email": member_b["email"],
+                    "first_name": "MemberB",
+                    "is_system": True,
+                    "timezone": "UTC",
+                    "bio": "Member B original bio",
+                    "contact_id": 2,
+                },
+                {
+                    "email": member_c["email"],
+                    "first_name": "MemberC",
+                    "is_system": True,
+                    "timezone": "UTC",
+                    "bio": "Member C bio",
+                    "contact_id": 3,
+                },
+            ],
+        },
+        headers=org_headers,
+    )
+
+    # Verify all contacts exist
+    logs_resp = await client.get(
+        "/v0/logs?project=Assistants&context=All/Contacts",
+        headers=org_headers,
+    )
+    assert logs_resp.status_code == 200
+    assert len(logs_resp.json()["logs"]) == 3
+
+    # B updates their timezone and bio via /admin/assistant/update-user
+    update_resp = await client.post(
+        "/v0/admin/assistant/update-user",
+        json={
+            "assistant_id": agent_id,
+            "target_user_email": member_b["email"],
+            "timezone": "Asia/Tokyo",
+            "bio": "Member B updated bio",
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert update_resp.status_code == 200
+
+    # Verify B's Contact in org's Assistants project was updated
+    logs_resp = await client.get(
+        "/v0/logs?project=Assistants&context=All/Contacts",
+        headers=org_headers,
+    )
+    assert logs_resp.status_code == 200
+    logs = logs_resp.json()["logs"]
+
+    # Find B's contact
+    b_contact = next(
+        (log for log in logs if log["entries"].get("email") == member_b["email"]),
+        None,
+    )
+    assert b_contact is not None, "Member B's Contact should exist"
+    assert (
+        b_contact["entries"]["timezone"] == "Asia/Tokyo"
+    ), "B's timezone should be synced"
+    assert (
+        b_contact["entries"]["bio"] == "Member B updated bio"
+    ), "B's bio should be synced"
+
+    # Verify A's and C's contacts were NOT changed
+    a_contact = next(
+        (log for log in logs if log["entries"].get("email") == owner["email"]),
+        None,
+    )
+    assert a_contact is not None
+    assert a_contact["entries"]["timezone"] == "UTC", "A's timezone should be unchanged"
+    assert a_contact["entries"]["bio"] == "Owner bio", "A's bio should be unchanged"
+
+    c_contact = next(
+        (log for log in logs if log["entries"].get("email") == member_c["email"]),
+        None,
+    )
+    assert c_contact is not None
+    assert c_contact["entries"]["timezone"] == "UTC", "C's timezone should be unchanged"
+    assert c_contact["entries"]["bio"] == "Member C bio", "C's bio should be unchanged"
+
+
+# =============================================================================
 # EDGE CASE TESTS
 # =============================================================================
 
@@ -764,14 +941,27 @@ async def test_sync_with_null_name_fields(
 ):
     """Test that sync works based on email even without name fields."""
     # Create user without setting first/last name
-    user = await create_test_user(client, "null_name_tz@test.com")
+    user = await create_test_user(
+        client,
+        "null_name_tz@test.com",
+        hiring_approved=True,
+    )
 
-    # Create Assistants project and Contact log (matched by email, not name)
-    await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
+    # Create assistant (creates Assistants project)
+    assistant_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "NullName",
+            "surname": "Bot",
+            "timezone": "UTC",
+            "create_infra": False,
+        },
         headers=user["headers"],
     )
+    assert assistant_resp.status_code == 200
+    agent_id = assistant_resp.json()["info"]["agent_id"]
+
+    # Create Contact log (matched by email, not name)
     await client.post(
         "/v0/logs",
         json={
@@ -788,12 +978,12 @@ async def test_sync_with_null_name_fields(
         headers=user["headers"],
     )
 
-    # Update timezone - should work based on email match
-    update_resp = await client.put(
-        "/v0/admin/auth-user",
+    # Update timezone via /admin/assistant/update-user - should work based on email
+    update_resp = await client.post(
+        "/v0/admin/assistant/update-user",
         json={
-            "user_id": user["id"],
-            "email": user["email"],
+            "assistant_id": agent_id,
+            "target_user_email": user["email"],
             "timezone": "Europe/London",
         },
         headers=ADMIN_HEADERS,
@@ -814,26 +1004,38 @@ async def test_sync_sets_null_timezone(
     dbsession: Session,
 ):
     """Test that syncing null timezone works correctly."""
-    user = await create_test_user(client, "null_tz_sync@test.com")
+    user = await create_test_user(
+        client,
+        "null_tz_sync@test.com",
+        hiring_approved=True,
+    )
+
+    # Create assistant (creates Assistants project)
+    assistant_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "NullTz",
+            "surname": "Bot",
+            "timezone": "UTC",
+            "create_infra": False,
+        },
+        headers=user["headers"],
+    )
+    assert assistant_resp.status_code == 200
+    agent_id = assistant_resp.json()["info"]["agent_id"]
 
     # First set the user's timezone to a non-null value
-    await client.put(
-        "/v0/admin/auth-user",
+    await client.post(
+        "/v0/admin/assistant/update-user",
         json={
-            "user_id": user["id"],
-            "email": user["email"],
-            "name": "Test",
+            "assistant_id": agent_id,
+            "target_user_email": user["email"],
             "timezone": "Europe/Paris",
         },
         headers=ADMIN_HEADERS,
     )
 
-    # Create Assistants project and Contact log with initial timezone
-    await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
-        headers=user["headers"],
-    )
+    # Create Contact log with initial timezone
     await client.post(
         "/v0/logs",
         json={
@@ -852,7 +1054,9 @@ async def test_sync_sets_null_timezone(
         headers=user["headers"],
     )
 
-    # Update user timezone to null (should trigger sync because it changed)
+    # Update user timezone to null via admin endpoint
+    # Note: /admin/assistant/update-user doesn't support null timezone,
+    # so we use /admin/auth-user for this specific null case
     update_resp = await client.put(
         "/v0/admin/auth-user",
         json={
@@ -879,14 +1083,25 @@ async def test_sync_only_affects_is_system_true_logs(
     dbsession: Session,
 ):
     """Test that user sync only updates logs where is_system=True."""
-    user = await create_test_user(client, "is_system_filter@test.com")
+    user = await create_test_user(
+        client,
+        "is_system_filter@test.com",
+        hiring_approved=True,
+    )
 
-    # Create Assistants project
-    await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
+    # Create assistant (creates Assistants project)
+    assistant_resp = await client.post(
+        "/v0/assistant",
+        json={
+            "first_name": "IsSystem",
+            "surname": "Bot",
+            "timezone": "UTC",
+            "create_infra": False,
+        },
         headers=user["headers"],
     )
+    assert assistant_resp.status_code == 200
+    agent_id = assistant_resp.json()["info"]["agent_id"]
 
     # Create Contact logs - one with is_system=True, one with is_system=False
     await client.post(
@@ -914,13 +1129,12 @@ async def test_sync_only_affects_is_system_true_logs(
         headers=user["headers"],
     )
 
-    # Update user timezone
-    await client.put(
-        "/v0/admin/auth-user",
+    # Update user timezone via /admin/assistant/update-user
+    await client.post(
+        "/v0/admin/assistant/update-user",
         json={
-            "user_id": user["id"],
-            "email": user["email"],
-            "name": "Test",
+            "assistant_id": agent_id,
+            "target_user_email": user["email"],
             "timezone": "Europe/Rome",
         },
         headers=ADMIN_HEADERS,
