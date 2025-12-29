@@ -242,15 +242,13 @@ class AuthUserDAO:
                 if should_sync_timezone:
                     sync_service.sync_user_timezone(
                         user_id=id,
-                        first_name=entry.name,
-                        last_name=entry.last_name,
+                        email=entry.email,
                         new_timezone=entry.timezone,
                     )
                 if should_sync_bio:
                     sync_service.sync_user_bio(
                         user_id=id,
-                        first_name=entry.name,
-                        last_name=entry.last_name,
+                        email=entry.email,
                         new_bio=entry.bio,
                     )
                 self.session.commit()
