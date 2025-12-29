@@ -73,13 +73,13 @@ async def test_user_timezone_sync_updates_contact_log(
     )
     assert project_resp.status_code == 200
 
-    # Create a Contact log with email and is_system=True
+    # Create a Contact log with email_address and is_system=True
     log_payload = {
         "project": "Assistants",
         "context": "All/Contacts",
         "entries": [
             {
-                "email": user["email"],  # matches the user's email
+                "email_address": user["email"],  # matches the user's email
                 "first_name": "Test",
                 "surname": None,
                 "is_system": True,
@@ -137,7 +137,7 @@ async def test_user_timezone_sync_to_multiple_projects(
             "context": "All/Contacts",
             "entries": [
                 {
-                    "email": user["email"],
+                    "email_address": user["email"],
                     "first_name": "Test",
                     "surname": None,
                     "is_system": True,
@@ -170,7 +170,7 @@ async def test_user_timezone_sync_to_multiple_projects(
             "context": "All/Contacts",
             "entries": [
                 {
-                    "email": user["email"],
+                    "email_address": user["email"],
                     "first_name": "Test",
                     "surname": None,
                     "is_system": True,
@@ -250,7 +250,7 @@ async def test_user_timezone_sync_no_matching_logs(
             "context": "All/Contacts",
             "entries": [
                 {
-                    "email": "different_user@test.com",
+                    "email_address": "different_user@test.com",
                     "first_name": "DifferentUser",
                     "surname": None,
                     "is_system": True,
@@ -308,7 +308,7 @@ async def test_user_bio_sync_updates_contact_log(
             "context": "All/Contacts",
             "entries": [
                 {
-                    "email": user["email"],
+                    "email_address": user["email"],
                     "first_name": "Test",
                     "surname": None,
                     "is_system": True,
@@ -362,7 +362,7 @@ async def test_user_bio_and_timezone_sync_together(
             "context": "All/Contacts",
             "entries": [
                 {
-                    "email": user["email"],
+                    "email_address": user["email"],
                     "first_name": "Test",
                     "surname": None,
                     "is_system": True,
@@ -841,7 +841,7 @@ async def test_org_member_contact_syncs_to_org_assistants_project(
             "context": "All/Contacts",
             "entries": [
                 {
-                    "email": owner["email"],
+                    "email_address": owner["email"],
                     "first_name": "Owner",
                     "is_system": True,
                     "timezone": "UTC",
@@ -849,7 +849,7 @@ async def test_org_member_contact_syncs_to_org_assistants_project(
                     "contact_id": 1,
                 },
                 {
-                    "email": member_b["email"],
+                    "email_address": member_b["email"],
                     "first_name": "MemberB",
                     "is_system": True,
                     "timezone": "UTC",
@@ -857,7 +857,7 @@ async def test_org_member_contact_syncs_to_org_assistants_project(
                     "contact_id": 2,
                 },
                 {
-                    "email": member_c["email"],
+                    "email_address": member_c["email"],
                     "first_name": "MemberC",
                     "is_system": True,
                     "timezone": "UTC",
@@ -900,7 +900,11 @@ async def test_org_member_contact_syncs_to_org_assistants_project(
 
     # Find B's contact
     b_contact = next(
-        (log for log in logs if log["entries"].get("email") == member_b["email"]),
+        (
+            log
+            for log in logs
+            if log["entries"].get("email_address") == member_b["email"]
+        ),
         None,
     )
     assert b_contact is not None, "Member B's Contact should exist"
@@ -913,7 +917,7 @@ async def test_org_member_contact_syncs_to_org_assistants_project(
 
     # Verify A's and C's contacts were NOT changed
     a_contact = next(
-        (log for log in logs if log["entries"].get("email") == owner["email"]),
+        (log for log in logs if log["entries"].get("email_address") == owner["email"]),
         None,
     )
     assert a_contact is not None
@@ -921,7 +925,11 @@ async def test_org_member_contact_syncs_to_org_assistants_project(
     assert a_contact["entries"]["bio"] == "Owner bio", "A's bio should be unchanged"
 
     c_contact = next(
-        (log for log in logs if log["entries"].get("email") == member_c["email"]),
+        (
+            log
+            for log in logs
+            if log["entries"].get("email_address") == member_c["email"]
+        ),
         None,
     )
     assert c_contact is not None
@@ -969,7 +977,7 @@ async def test_sync_with_null_name_fields(
             "context": "All/Contacts",
             "entries": [
                 {
-                    "email": user["email"],
+                    "email_address": user["email"],
                     "is_system": True,
                     "timezone": "UTC",
                 },
@@ -1043,7 +1051,7 @@ async def test_sync_sets_null_timezone(
             "context": "All/Contacts",
             "entries": [
                 {
-                    "email": user["email"],
+                    "email_address": user["email"],
                     "first_name": "Test",
                     "surname": None,
                     "is_system": True,
@@ -1111,14 +1119,14 @@ async def test_sync_only_affects_is_system_true_logs(
             "context": "All/Contacts",
             "entries": [
                 {
-                    "email": user["email"],
+                    "email_address": user["email"],
                     "first_name": "Test",
                     "surname": None,
                     "is_system": True,
                     "timezone": "UTC",
                 },
                 {
-                    "email": user["email"],
+                    "email_address": user["email"],
                     "first_name": "Test",
                     "surname": None,
                     "is_system": False,

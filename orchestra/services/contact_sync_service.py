@@ -128,11 +128,11 @@ class ContactSyncService:
         new_value: Optional[str],
     ) -> int:
         """
-        Update Contact logs for a user (where email matches and is_system=True).
+        Update Contact logs for a user (where email_address matches and is_system=True).
 
         Args:
             context_id: The context ID to search within
-            email: The email field value to filter by
+            email: The user's email to filter by (matches email_address field in logs)
             update_field: The field name to update (e.g., "timezone", "bio")
             new_value: The new value to set
 
@@ -149,7 +149,7 @@ class ContactSyncService:
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
                 WHERE lec.context_id = :context_id
-                  AND le.data->>'email' = :email
+                  AND le.data->>'email_address' = :email
                   AND (le.data->>'is_system')::boolean = true
             )
         """,
@@ -486,7 +486,7 @@ class ContactSyncService:
                 FROM log_event le
                 JOIN log_event_context lec ON le.id = lec.log_event_id
                 WHERE lec.context_id = :context_id
-                  AND le.data->>'email' = :email
+                  AND le.data->>'email_address' = :email
                   AND (le.data->>'is_system')::boolean = true
             )
         """,
