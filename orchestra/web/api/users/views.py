@@ -824,6 +824,7 @@ async def get_user_basic_info(
         "email": user.email,
         "job_title": user.job_title,
         "bio": user.bio,
+        "timezone": user.timezone,
     }
 
 
