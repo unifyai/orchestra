@@ -212,6 +212,6 @@ supported_models = {
         "endpoint": "vertex_ai/openai/gpt-oss-120b-maas",
         "region": "us-central1",
         "context_window": 131072,
-        "cost": {"prompt": 0.9, "completion": 0.36},
+        "cost": {"prompt": 0.09, "completion": 0.36},
     },
 }
