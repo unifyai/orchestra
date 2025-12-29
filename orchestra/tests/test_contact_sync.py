@@ -73,14 +73,15 @@ async def test_user_timezone_sync_updates_contact_log(
     )
     assert project_resp.status_code == 200
 
-    # Create a Contact log with first_name/surname and is_system=True
+    # Create a Contact log with email and is_system=True
     log_payload = {
         "project": "Assistants",
         "context": "All/Contacts",
         "entries": [
             {
-                "first_name": "Test",  # matches the name from create_test_user
-                "surname": None,  # create_test_user doesn't set last_name
+                "email": user["email"],  # matches the user's email
+                "first_name": "Test",
+                "surname": None,
                 "is_system": True,
                 "timezone": "UTC",
                 "bio": "Original bio",
@@ -136,6 +137,7 @@ async def test_user_timezone_sync_to_multiple_projects(
             "context": "All/Contacts",
             "entries": [
                 {
+                    "email": user["email"],
                     "first_name": "Test",
                     "surname": None,
                     "is_system": True,
@@ -168,6 +170,7 @@ async def test_user_timezone_sync_to_multiple_projects(
             "context": "All/Contacts",
             "entries": [
                 {
+                    "email": user["email"],
                     "first_name": "Test",
                     "surname": None,
                     "is_system": True,
@@ -234,7 +237,7 @@ async def test_user_timezone_sync_no_matching_logs(
     """Test that timezone sync succeeds even if no matching Contact logs exist."""
     user = await create_test_user(client, "no_match_tz@test.com")
 
-    # Create Assistants project with Contact log for different user
+    # Create Assistants project with Contact log for different user (different email)
     await client.post(
         "/v0/project",
         json={"name": "Assistants"},
@@ -247,6 +250,7 @@ async def test_user_timezone_sync_no_matching_logs(
             "context": "All/Contacts",
             "entries": [
                 {
+                    "email": "different_user@test.com",
                     "first_name": "DifferentUser",
                     "surname": None,
                     "is_system": True,
@@ -304,6 +308,7 @@ async def test_user_bio_sync_updates_contact_log(
             "context": "All/Contacts",
             "entries": [
                 {
+                    "email": user["email"],
                     "first_name": "Test",
                     "surname": None,
                     "is_system": True,
@@ -357,6 +362,7 @@ async def test_user_bio_and_timezone_sync_together(
             "context": "All/Contacts",
             "entries": [
                 {
+                    "email": user["email"],
                     "first_name": "Test",
                     "surname": None,
                     "is_system": True,
@@ -756,18 +762,33 @@ async def test_sync_with_null_name_fields(
     client: AsyncClient,
     dbsession: Session,
 ):
-    """Test that sync handles users with missing name fields gracefully."""
+    """Test that sync works based on email even without name fields."""
     # Create user without setting first/last name
     user = await create_test_user(client, "null_name_tz@test.com")
 
-    # Create Assistants project
+    # Create Assistants project and Contact log (matched by email, not name)
     await client.post(
         "/v0/project",
         json={"name": "Assistants"},
         headers=user["headers"],
     )
+    await client.post(
+        "/v0/logs",
+        json={
+            "project": "Assistants",
+            "context": "All/Contacts",
+            "entries": [
+                {
+                    "email": user["email"],
+                    "is_system": True,
+                    "timezone": "UTC",
+                },
+            ],
+        },
+        headers=user["headers"],
+    )
 
-    # Update timezone - should not raise error even with no name
+    # Update timezone - should work based on email match
     update_resp = await client.put(
         "/v0/admin/auth-user",
         json={
@@ -778,6 +799,13 @@ async def test_sync_with_null_name_fields(
         headers=ADMIN_HEADERS,
     )
     assert update_resp.status_code == 200
+
+    # Verify Contact log was updated
+    logs_resp = await client.get(
+        "/v0/logs?project=Assistants&context=All/Contacts",
+        headers=user["headers"],
+    )
+    assert logs_resp.json()["logs"][0]["entries"]["timezone"] == "Europe/London"
 
 
 @pytest.mark.anyio
@@ -813,6 +841,7 @@ async def test_sync_sets_null_timezone(
             "context": "All/Contacts",
             "entries": [
                 {
+                    "email": user["email"],
                     "first_name": "Test",
                     "surname": None,
                     "is_system": True,
@@ -867,12 +896,14 @@ async def test_sync_only_affects_is_system_true_logs(
             "context": "All/Contacts",
             "entries": [
                 {
+                    "email": user["email"],
                     "first_name": "Test",
                     "surname": None,
                     "is_system": True,
                     "timezone": "UTC",
                 },
                 {
+                    "email": user["email"],
                     "first_name": "Test",
                     "surname": None,
                     "is_system": False,
