@@ -951,7 +951,7 @@ async def test_member_removal_sets_contact_is_system_false(
             "context": "All/Contacts",
             "entries": [
                 {
-                    "email": member["email"],  # Matches member's email
+                    "email_address": member["email"],  # Matches member's email
                     "first_name": "Test",
                     "surname": None,
                     "is_system": True,
@@ -973,7 +973,7 @@ async def test_member_removal_sets_contact_is_system_false(
         (
             log
             for log in contacts_resp.json()["logs"]
-            if log["entries"].get("email") == member["email"]
+            if log["entries"].get("email_address") == member["email"]
             and log["entries"].get("is_system") is True
         ),
         None,
@@ -1001,7 +1001,7 @@ async def test_member_removal_sets_contact_is_system_false(
         (
             log
             for log in contacts_resp.json()["logs"]
-            if log["entries"].get("email") == member["email"]
+            if log["entries"].get("email_address") == member["email"]
         ),
         None,
     )
