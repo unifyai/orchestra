@@ -545,3 +545,49 @@ class TestFileSpanExporterEdgeCases:
                 data = json.load(f)
                 span_names = [s["name"] for s in data["spans"]]
                 assert span_names == ["span_1", "span_2", "span_3"]
+
+
+# =============================================================================
+# Request Trace Middleware Tests
+# =============================================================================
+
+
+class TestRequestTraceMiddleware:
+    """Test request data capture utilities."""
+
+    def test_truncate_short_string(self):
+        """Short strings should not be truncated."""
+        from orchestra.web.api.utils.request_trace_middleware import _truncate
+
+        result = _truncate("hello", max_len=100)
+        assert result == "hello"
+
+    def test_truncate_long_string(self):
+        """Long strings should be truncated with indicator."""
+        from orchestra.web.api.utils.request_trace_middleware import _truncate
+
+        long_str = "x" * 1000
+        result = _truncate(long_str, max_len=100)
+        assert len(result) < 1000  # Much shorter than original
+        assert "truncated" in result
+        assert "1000 total" in result
+
+    def test_safe_json_dumps_dict(self):
+        """Dicts should serialize to JSON."""
+        from orchestra.web.api.utils.request_trace_middleware import _safe_json_dumps
+
+        result = _safe_json_dumps({"key": "value", "num": 42})
+        assert '"key"' in result
+        assert '"value"' in result
+        assert "42" in result
+
+    def test_safe_json_dumps_with_non_serializable(self):
+        """Non-serializable objects should fall back to str()."""
+        from orchestra.web.api.utils.request_trace_middleware import _safe_json_dumps
+
+        class Custom:
+            def __str__(self):
+                return "custom_obj"
+
+        result = _safe_json_dumps({"obj": Custom()})
+        assert "custom_obj" in result
