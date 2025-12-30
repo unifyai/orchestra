@@ -13,34 +13,34 @@ class TestPhoneNumberValidator:
     def test_valid_us_number_with_country_code(self):
         """Test valid US phone number with country code."""
         is_valid, formatted, error = PhoneNumberValidator.validate_and_format(
-            "+1-555-123-4567",
+            "+1-650-253-0000",
         )
         assert is_valid is True
-        assert formatted == "+15551234567"
+        assert formatted == "+16502530000"
         assert error is None
 
     def test_valid_us_number_various_formats(self):
         """Test that various US number formats all normalize to E.164."""
         formats = [
-            "+1 555 123 4567",
-            "+1 (555) 123-4567",
-            "+15551234567",
-            "+1.555.123.4567",
+            "+1 650 253 0000",
+            "+1 (650) 253-0000",
+            "+16502530000",
+            "+1.650.253.0000",
         ]
         for phone in formats:
             is_valid, formatted, error = PhoneNumberValidator.validate_and_format(phone)
             assert is_valid is True, f"Failed for format: {phone}"
-            assert formatted == "+15551234567", f"Wrong format for: {phone}"
+            assert formatted == "+16502530000", f"Wrong format for: {phone}"
             assert error is None
 
     def test_valid_us_number_with_default_region(self):
         """Test US number without country code using default region."""
         is_valid, formatted, error = PhoneNumberValidator.validate_and_format(
-            "555-123-4567",
+            "650-253-0000",
             default_region="US",
         )
         assert is_valid is True
-        assert formatted == "+15551234567"
+        assert formatted == "+16502530000"
         assert error is None
 
     def test_valid_uk_number(self):
@@ -105,9 +105,9 @@ class TestPhoneNumberValidator:
         assert error is not None
 
     def test_invalid_number_letters(self):
-        """Test that vanity numbers with letters are rejected."""
+        """Test that pure letter strings are rejected."""
         is_valid, formatted, error = PhoneNumberValidator.validate_and_format(
-            "+1-800-FLOWERS",
+            "CALLMENOW",
         )
         assert is_valid is False
         assert formatted is None
@@ -148,10 +148,10 @@ class TestPhoneNumberValidator:
     def test_strips_whitespace(self):
         """Test that leading/trailing whitespace is stripped."""
         is_valid, formatted, error = PhoneNumberValidator.validate_and_format(
-            "  +1 555 123 4567  ",
+            "  +1 650 253 0000  ",
         )
         assert is_valid is True
-        assert formatted == "+15551234567"
+        assert formatted == "+16502530000"
         assert error is None
 
 
@@ -160,11 +160,11 @@ class TestValidatePhoneNumberFunction:
 
     def test_valid_number_returns_dict(self):
         """Test that valid number returns proper dict structure."""
-        result = validate_phone_number("+1-555-867-5309")
+        result = validate_phone_number("+1-650-253-0000")
         assert result["is_valid"] is True
-        assert result["formatted_phone_number"] == "+15558675309"
+        assert result["formatted_phone_number"] == "+16502530000"
         assert result["error"] is None
-        assert result["original_input"] == "+1-555-867-5309"
+        assert result["original_input"] == "+1-650-253-0000"
 
     def test_invalid_number_returns_dict(self):
         """Test that invalid number returns proper dict structure."""
@@ -176,9 +176,9 @@ class TestValidatePhoneNumberFunction:
 
     def test_with_default_region(self):
         """Test convenience function with default region."""
-        result = validate_phone_number("555-123-4567", default_region="US")
+        result = validate_phone_number("650-253-0000", default_region="US")
         assert result["is_valid"] is True
-        assert result["formatted_phone_number"] == "+15551234567"
+        assert result["formatted_phone_number"] == "+16502530000"
 
     def test_empty_returns_error(self):
         """Test that empty string returns error in dict."""
