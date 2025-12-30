@@ -139,8 +139,30 @@ class FileSpanExporter(SpanExporter):
         """Get or create file handle for a trace type."""
         if trace_type not in self._files or self._files[trace_type] is None:
             file_path = self.trace_log_dir / "traces" / f"{trace_type}_traces.jsonl"
+            # Ensure directory exists (may have been deleted while server was running)
+            file_path.parent.mkdir(parents=True, exist_ok=True)
             self._files[trace_type] = open(file_path, "a", buffering=1)  # Line buffered
         return self._files[trace_type]
+
+    def _write_span(self, trace_type: str, span_dict: dict) -> None:
+        """Write a span to file, recovering from stale handles if needed."""
+        try:
+            file_handle = self._get_file(trace_type)
+            json.dump(span_dict, file_handle, default=str)
+            file_handle.write("\n")
+        except OSError:
+            # File handle is stale (directory may have been deleted and recreated)
+            # Close and clear the handle, then retry once
+            if trace_type in self._files:
+                try:
+                    self._files[trace_type].close()
+                except Exception:
+                    pass
+                self._files[trace_type] = None
+            # Retry with fresh handle
+            file_handle = self._get_file(trace_type)
+            json.dump(span_dict, file_handle, default=str)
+            file_handle.write("\n")
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         """Export spans to appropriate JSON files."""
@@ -153,9 +175,7 @@ class FileSpanExporter(SpanExporter):
                     # Add timestamp for easier searching
                     span_dict["_exported_at"] = datetime.utcnow().isoformat()
 
-                    file_handle = self._get_file(trace_type)
-                    json.dump(span_dict, file_handle, default=str)
-                    file_handle.write("\n")
+                    self._write_span(trace_type, span_dict)
 
             return SpanExportResult.SUCCESS
         except Exception as e:
