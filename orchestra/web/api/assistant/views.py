@@ -515,6 +515,7 @@ def create_assistant(
                 assistant = assistant_dao.get_assistant_by_id(
                     user_id=user_id,
                     agent_id=assistant_id,
+                    organization_id=organization_id,
                 )
 
             except Exception as infra_error:
