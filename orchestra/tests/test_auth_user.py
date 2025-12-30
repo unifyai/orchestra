@@ -155,7 +155,7 @@ async def test_update_user_phone_number(client: AsyncClient):
     url = f"/v0/admin/auth-user/by-user-id?user_id={user_id}"
     response = await client.get(url, headers=HEADERS)
     assert response.status_code == 200, response.json()
-    assert response.json()["phoneNumber"] == "+442079460958"
+    assert response.json()["phone_number"] == "+442079460958"
 
 
 @pytest.mark.anyio
@@ -638,13 +638,13 @@ async def test_phone_number_in_get_endpoints(client: AsyncClient):
     url = f"/v0/admin/auth-user/by-user-id?user_id={user_id}"
     response = await client.get(url, headers=HEADERS)
     assert response.status_code == 200, response.json()
-    assert response.json()["phoneNumber"] == "+16502530000"
+    assert response.json()["phone_number"] == "+16502530000"
 
     # test GET by-email
     url = f"/v0/admin/auth-user/by-email?email={email}"
     response = await client.get(url, headers=HEADERS)
     assert response.status_code == 200, response.json()
-    assert response.json()["phoneNumber"] == "+16502530000"
+    assert response.json()["phone_number"] == "+16502530000"
 
 
 @pytest.mark.anyio
