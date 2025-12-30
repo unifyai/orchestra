@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from google.cloud import aiplatform
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.openai import OpenAIInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.sdk.resources import (
     DEPLOYMENT_ENVIRONMENT,
@@ -120,7 +121,12 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
 
     :param app: current application.
     """
-    if not settings.opentelemetry_endpoint and not settings.tempo_url:
+    # Enable tracing if any backend is configured (OTLP, Tempo, or local file)
+    if (
+        not settings.opentelemetry_endpoint
+        and not settings.tempo_url
+        and not settings.trace_log_dir
+    ):
         return
 
     # Create resource with service information
@@ -201,6 +207,19 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
             )
             # Continue without Tempo tracing
 
+    # Add file-based exporter for local development
+    if settings.trace_log_dir:
+        try:
+            from orchestra.web.api.utils.file_trace_exporter import FileSpanExporter
+
+            file_exporter = FileSpanExporter(settings.trace_log_dir)
+            tracer_provider.add_span_processor(BatchSpanProcessor(file_exporter))
+            logger.info(
+                f"Configured file-based trace exporter at {settings.trace_log_dir}",
+            )
+        except Exception as e:
+            logger.warning(f"Failed to configure file trace exporter: {e}")
+
     excluded_endpoints = [
         app.url_path_for("health_check"),
         app.url_path_for("openapi"),
@@ -219,6 +238,8 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
         tracer_provider=tracer_provider,
         engine=app.state.db_engine,
     )
+    OpenAIInstrumentor().instrument(tracer_provider=tracer_provider)
+    logger.info("Instrumented OpenAI client for tracing")
 
     set_tracer_provider(tracer_provider=tracer_provider)
 
@@ -234,6 +255,7 @@ def stop_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
 
     FastAPIInstrumentor().uninstrument_app(app)
     SQLAlchemyInstrumentor().uninstrument()
+    OpenAIInstrumentor().uninstrument()
 
 
 def setup_observability(app: FastAPI) -> None:  # pragma: no cover

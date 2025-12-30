@@ -123,6 +123,14 @@ class Settings(BaseSettings):
         None,
     )
 
+    # Local file-based trace logging directory
+    # When set, traces are written to JSON files in this directory
+    # Example: /Users/user/unity/logs/orchestra/2025-01-01T12-00-00
+    trace_log_dir: Optional[str] = os.environ.get(
+        "ORCHESTRA_TRACE_LOG_DIR",
+        None,
+    )
+
     # Production Traffic Project (for internal monitoring)
     orchestra_organization_name: str = os.environ.get(
         "ORCHESTRA_ORGANIZATION_NAME",
