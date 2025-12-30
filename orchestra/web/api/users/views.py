@@ -184,7 +184,7 @@ async def get_user(
         "business_classification": format_business_classification(user_instance),
         "onboarded": user_instance.onboarded,
         "timezone": user_instance.timezone,
-        "phoneNumber": user_instance.phone_number,
+        "phone_number": user_instance.phone_number,
     }
 
 
@@ -262,7 +262,7 @@ async def get_user_by_email(
         "business_classification": format_business_classification(user_instance),
         "onboarded": user_instance.onboarded,
         "timezone": user_instance.timezone,
-        "phoneNumber": user_instance.phone_number,
+        "phone_number": user_instance.phone_number,
     }
 
 
@@ -321,7 +321,7 @@ async def get_user_by_account(
         "business_classification": format_business_classification(user_instance),
         "onboarded": user_instance.onboarded,
         "timezone": user_instance.timezone,
-        "phoneNumber": user_instance.phone_number,
+        "phone_number": user_instance.phone_number,
     }
 
 
