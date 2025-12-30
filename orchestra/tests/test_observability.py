@@ -157,14 +157,15 @@ class TestFileSpanExporterRequestOrganization:
                 assert len(data["spans"]) == 3
 
 
-class TestFileSpanExporterIndex:
-    """Test that index.jsonl is correctly maintained."""
+class TestFileSpanExporterFilenameFormat:
+    """Test that filenames include duration and other useful info."""
 
-    def test_creates_index_file(self):
-        """Verify index.jsonl is created with request summaries."""
+    def test_complete_trace_has_duration_in_filename(self):
+        """Verify completed traces have duration in filename."""
         with tempfile.TemporaryDirectory() as tmpdir:
             exporter = FileSpanExporter(tmpdir)
 
+            # Span with 1000ms duration (end_time - start_time in ns)
             span = _create_mock_span(
                 name="GET /api/users",
                 attributes={
@@ -172,75 +173,106 @@ class TestFileSpanExporterIndex:
                     "http.route": "/api/users",
                     "http.status_code": 200,
                 },
+                start_time=1000000000,  # 1s in ns
+                end_time=2000000000,  # 2s in ns = 1000ms duration
             )
 
             exporter.export([span])
             exporter.force_flush()
             exporter.shutdown()
 
-            index_path = Path(tmpdir) / "index.jsonl"
-            assert index_path.exists()
+            requests_dir = Path(tmpdir) / "requests"
+            request_files = list(requests_dir.glob("*.json"))
+            assert len(request_files) == 1
 
-            with open(index_path) as f:
-                line = f.readline()
-                summary = json.loads(line)
-                assert summary["method"] == "GET"
-                assert summary["route"] == "/api/users"
-                assert summary["status_code"] == 200
+            filename = request_files[0].name
+            # Should contain duration (1000ms)
+            assert "_1000ms_" in filename
+            assert "_PENDING_" not in filename
 
-    def test_index_contains_span_counts(self):
-        """Verify index includes counts of different span types."""
+    def test_in_progress_trace_has_pending_in_filename(self):
+        """Verify in-progress traces have PENDING in filename."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            exporter = FileSpanExporter(tmpdir)
+
+            # Child span (no root yet, so in-progress)
+            child_span = _create_mock_span(
+                name="db_query",
+                trace_id=0xABCDEF1234567890,
+                span_id=0x2222,
+                parent_span_id=0x1111,
+                attributes={"db.system": "postgresql"},
+            )
+            exporter.export([child_span])
+            exporter._process_traces()
+
+            requests_dir = Path(tmpdir) / "requests"
+            request_files = list(requests_dir.glob("*.json"))
+            assert len(request_files) == 1
+
+            filename = request_files[0].name
+            assert "_PENDING_" in filename
+
+            exporter.shutdown()
+
+    def test_filename_renamed_on_completion(self):
+        """Verify file is renamed from PENDING to actual duration on completion."""
         with tempfile.TemporaryDirectory() as tmpdir:
             exporter = FileSpanExporter(tmpdir)
 
             trace_id = 0xABCDEF1234567890
-            spans = [
-                # Root HTTP span
-                _create_mock_span(
-                    name="POST /api/contacts",
-                    trace_id=trace_id,
-                    span_id=0x1111,
-                    attributes={
-                        "http.method": "POST",
-                        "http.route": "/api/contacts",
-                        "http.status_code": 201,
-                    },
-                ),
-                # Two DB queries
-                _create_mock_span(
-                    name="SELECT",
-                    trace_id=trace_id,
-                    span_id=0x2222,
-                    parent_span_id=0x1111,
-                    attributes={"db.system": "postgresql"},
-                ),
-                _create_mock_span(
-                    name="INSERT",
-                    trace_id=trace_id,
-                    span_id=0x3333,
-                    parent_span_id=0x1111,
-                    attributes={"db.system": "postgresql"},
-                ),
-                # One OpenAI call
-                _create_mock_span(
-                    name="openai.embeddings",
-                    trace_id=trace_id,
-                    span_id=0x4444,
-                    parent_span_id=0x1111,
-                    attributes={"gen_ai.system": "openai"},
-                ),
-            ]
 
-            exporter.export(spans)
+            # First, add child span (creates PENDING file)
+            child_span = _create_mock_span(
+                name="db_query",
+                trace_id=trace_id,
+                span_id=0x2222,
+                parent_span_id=0x1111,
+                attributes={"db.system": "postgresql"},
+            )
+            exporter.export([child_span])
+            exporter._process_traces()
+
+            requests_dir = Path(tmpdir) / "requests"
+            pending_files = list(requests_dir.glob("*_PENDING_*.json"))
+            assert len(pending_files) == 1
+
+            # Now complete with root span (500ms duration)
+            root_span = _create_mock_span(
+                name="GET /api/users",
+                trace_id=trace_id,
+                span_id=0x1111,
+                attributes={"http.method": "GET", "http.route": "/api/users"},
+                start_time=1000000000,
+                end_time=1500000000,  # 500ms duration
+            )
+            exporter.export([root_span])
+            exporter.force_flush()
+
+            # PENDING file should be renamed to have duration
+            pending_files = list(requests_dir.glob("*_PENDING_*.json"))
+            assert len(pending_files) == 0
+
+            duration_files = list(requests_dir.glob("*_500ms_*.json"))
+            assert len(duration_files) == 1
+
+            exporter.shutdown()
+
+    def test_no_index_file_created(self):
+        """Verify index.jsonl is NOT created (removed feature)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            exporter = FileSpanExporter(tmpdir)
+
+            span = _create_mock_span(
+                name="GET /api/users",
+                attributes={"http.method": "GET"},
+            )
+            exporter.export([span])
             exporter.force_flush()
             exporter.shutdown()
 
             index_path = Path(tmpdir) / "index.jsonl"
-            with open(index_path) as f:
-                summary = json.loads(f.readline())
-                assert summary["span_count"] == 4
-                assert summary["db_queries"] == 2
-                assert summary["openai_calls"] == 1
+            assert not index_path.exists()
 
 
 # =============================================================================
@@ -734,45 +766,33 @@ class TestIncrementalWriting:
 
             exporter.shutdown()
 
-    def test_index_only_contains_complete_traces(self):
-        """Verify index.jsonl only has entries for completed traces."""
+    def test_filename_includes_method_and_route(self):
+        """Verify filename includes HTTP method and sanitized route."""
         with tempfile.TemporaryDirectory() as tmpdir:
             exporter = FileSpanExporter(tmpdir)
 
-            trace_id = 0xABCDEF1234567890
-
-            # Add child span (in-progress)
-            child_span = _create_mock_span(
-                name="db_query",
-                trace_id=trace_id,
-                span_id=0x2222,
-                parent_span_id=0x1111,
+            span = _create_mock_span(
+                name="POST /v0/contacts/{id}",
+                attributes={
+                    "http.method": "POST",
+                    "http.route": "/v0/contacts/{id}",
+                },
             )
-            exporter.export([child_span])
-            exporter._process_traces()
-
-            # Index should be empty (only in-progress)
-            index_path = Path(tmpdir) / "index.jsonl"
-            if index_path.exists():
-                with open(index_path) as f:
-                    assert f.read().strip() == ""
-
-            # Complete the trace
-            root_span = _create_mock_span(
-                name="GET /api",
-                trace_id=trace_id,
-                span_id=0x1111,
-                attributes={"http.method": "GET"},
-            )
-            exporter.export([root_span])
+            exporter.export([span])
             exporter.force_flush()
-
-            # Now index should have one entry
-            with open(index_path) as f:
-                lines = [l for l in f.readlines() if l.strip()]
-                assert len(lines) == 1
-
             exporter.shutdown()
+
+            requests_dir = Path(tmpdir) / "requests"
+            request_files = list(requests_dir.glob("*.json"))
+            assert len(request_files) == 1
+
+            filename = request_files[0].name
+            # Should have method and sanitized route (v0/ stripped, {} removed)
+            assert "_POST_" in filename
+            assert "_contacts-id_" in filename
+            # v0 should be stripped
+            assert "_v0_" not in filename
+            assert "v0-" not in filename
 
     def test_request_received_span_available_in_progress(self):
         """Verify request_received span provides params before root completes."""
