@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from google.cloud import aiplatform
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.instrumentation.openai import OpenAIInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.sdk.resources import (
@@ -241,6 +242,11 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
     OpenAIInstrumentor().instrument(tracer_provider=tracer_provider)
     logger.info("Instrumented OpenAI client for tracing")
 
+    # Instrument httpx to capture actual HTTP request timing for OpenAI SDK calls
+    # This provides visibility into individual HTTP requests, retries, and rate limiting
+    HTTPXClientInstrumentor().instrument(tracer_provider=tracer_provider)
+    logger.info("Instrumented httpx client for HTTP-level tracing")
+
     set_tracer_provider(tracer_provider=tracer_provider)
 
 
@@ -256,6 +262,7 @@ def stop_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
     FastAPIInstrumentor().uninstrument_app(app)
     SQLAlchemyInstrumentor().uninstrument()
     OpenAIInstrumentor().uninstrument()
+    HTTPXClientInstrumentor().uninstrument()
 
 
 def setup_observability(app: FastAPI) -> None:  # pragma: no cover
