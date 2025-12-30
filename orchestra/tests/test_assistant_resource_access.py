@@ -2558,3 +2558,176 @@ async def test_transfer_org_to_personal_deletes_shared_context_logs(
     assert (
         count_after < count_before
     ), "This assistant's logs should be deleted from shared context"
+
+
+# =============================================================================
+# Org Assistant Assistants Project Access Tests
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_org_assistant_create_creates_assistants_project_with_owner_access(
+    client: AsyncClient,
+    dbsession,
+):
+    """
+    Test that creating an org assistant creates Assistants project with Owner access.
+
+    When the org Assistants project doesn't exist:
+    - It should be created
+    - The creator should get Owner role on it
+    """
+    user = await create_test_user(
+        client,
+        "org_asst_proj_owner@test.com",
+        hiring_approved=True,
+    )
+
+    # Create organization
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Assistants Project Test Org"},
+        headers=user["headers"],
+    )
+    assert org_resp.status_code == status.HTTP_201_CREATED
+    org_id = org_resp.json()["id"]
+    org_api_key = org_resp.json()["api_key"]
+    org_headers = {"Authorization": f"Bearer {org_api_key}"}
+
+    # Verify no Assistants project exists yet
+    projects_resp = await client.get("/v0/projects", headers=org_headers)
+    assert projects_resp.status_code == 200
+    assert "Assistants" not in projects_resp.json()
+
+    # Create org assistant
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={"first_name": "Project", "surname": "Creator", "create_infra": False},
+        headers=org_headers,
+    )
+    assert create_resp.status_code == 200
+
+    # Verify Assistants project now exists and user can see it
+    projects_resp = await client.get("/v0/projects", headers=org_headers)
+    assert projects_resp.status_code == 200
+    assert "Assistants" in projects_resp.json()
+
+    # Verify user has Owner role (project:delete permission)
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    projects = project_dao.filter(organization_id=org_id, name="Assistants")
+    assert len(projects) > 0, "Assistants project should exist in org"
+    project_id = projects[0][0].id
+
+    has_delete = resource_access_dao.check_user_permission(
+        user["id"],
+        "project",
+        project_id,
+        "project:delete",
+    )
+    assert has_delete, "Creator should have Owner role with delete permission"
+
+
+@pytest.mark.anyio
+async def test_org_assistant_create_grants_member_access_on_existing_project(
+    client: AsyncClient,
+    dbsession,
+):
+    """
+    Test that creating an org assistant grants Member access when project exists.
+
+    When the org Assistants project already exists:
+    - User should get Member role (if no access)
+    - User should be able to read but not delete
+    """
+    # First user creates org and Assistants project via assistant creation
+    user1 = await create_test_user(
+        client,
+        "org_asst_proj_owner2@test.com",
+        hiring_approved=True,
+    )
+
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Existing Assistants Proj Org"},
+        headers=user1["headers"],
+    )
+    assert org_resp.status_code == status.HTTP_201_CREATED
+    org_id = org_resp.json()["id"]
+    org_api_key = org_resp.json()["api_key"]
+    org_headers = {"Authorization": f"Bearer {org_api_key}"}
+
+    # User1 creates first assistant (creates Assistants project with Owner access)
+    create_resp1 = await client.post(
+        "/v0/assistant",
+        json={"first_name": "First", "surname": "Assistant", "create_infra": False},
+        headers=org_headers,
+    )
+    assert create_resp1.status_code == 200
+
+    # Verify Assistants project exists
+    projects_resp = await client.get("/v0/projects", headers=org_headers)
+    assert "Assistants" in projects_resp.json()
+
+    # Second user joins org
+    user2 = await create_test_user(
+        client,
+        "org_asst_member@test.com",
+        hiring_approved=True,
+    )
+
+    add_member_resp = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": user2["id"]},
+        headers=user1["headers"],
+    )
+    assert add_member_resp.status_code == 201
+    member_org_key = add_member_resp.json()["api_key"]
+    member_org_headers = {"Authorization": f"Bearer {member_org_key}"}
+
+    # Verify user2 cannot see Assistants project yet (no explicit access)
+    projects_resp2_before = await client.get("/v0/projects", headers=member_org_headers)
+    assert projects_resp2_before.status_code == 200
+    assert (
+        "Assistants" not in projects_resp2_before.json()
+    ), "User2 should not have access before creating assistant"
+
+    # User2 creates org assistant
+    create_resp2 = await client.post(
+        "/v0/assistant",
+        json={"first_name": "Second", "surname": "Assistant", "create_infra": False},
+        headers=member_org_headers,
+    )
+    assert create_resp2.status_code == 200
+
+    # Verify user2 can now see Assistants project
+    projects_resp2 = await client.get("/v0/projects", headers=member_org_headers)
+    assert projects_resp2.status_code == 200
+    assert "Assistants" in projects_resp2.json()
+
+    # Verify user2 has Member role (project:read but NOT project:delete)
+    resource_access_dao = ResourceAccessDAO(dbsession)
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    projects = project_dao.filter(organization_id=org_id, name="Assistants")
+    project_id = projects[0][0].id
+
+    has_read = resource_access_dao.check_user_permission(
+        user2["id"],
+        "project",
+        project_id,
+        "project:read",
+    )
+    has_delete = resource_access_dao.check_user_permission(
+        user2["id"],
+        "project",
+        project_id,
+        "project:delete",
+    )
+    assert has_read, "Member should have read permission"
+    assert not has_delete, "Member should NOT have delete permission"
