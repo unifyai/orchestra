@@ -207,6 +207,7 @@ async def list_organization_members_by_api_key(
         user_image = None
         user_bio = None
         user_timezone = None
+        user_phone_number = None
         if user_info_row:
             user_info = user_info_row[0]
             name_parts = []
@@ -219,6 +220,7 @@ async def list_organization_members_by_api_key(
             user_image = user_info.image
             user_bio = user_info.bio
             user_timezone = user_info.timezone
+            user_phone_number = user_info.phone_number
 
         members_response.append(
             OrganizationMemberResponse(
@@ -233,6 +235,7 @@ async def list_organization_members_by_api_key(
                 image=user_image,
                 bio=user_bio,
                 timezone=user_timezone,
+                phone_number=user_phone_number,
             ),
         )
 
@@ -667,6 +670,9 @@ async def list_organization_members(
         user_name = None
         user_email = None
         user_image = None
+        user_bio = None
+        user_timezone = None
+        user_phone_number = None
         if user_info_row:
             # get_by_id returns a Row, extract the AuthUser model
             user_info = user_info_row[0]
@@ -679,6 +685,9 @@ async def list_organization_members(
             user_name = " ".join(name_parts) if name_parts else None
             user_email = user_info.email
             user_image = user_info.image
+            user_bio = user_info.bio
+            user_timezone = user_info.timezone
+            user_phone_number = user_info.phone_number
 
         members_response.append(
             OrganizationMemberResponse(
@@ -691,6 +700,9 @@ async def list_organization_members(
                 name=user_name,
                 email=user_email,
                 image=user_image,
+                bio=user_bio,
+                timezone=user_timezone,
+                phone_number=user_phone_number,
             ),
         )
 
@@ -784,8 +796,32 @@ async def update_member_role(
         )
         session.commit()
 
-        # Return updated member
+        # Return updated member with user info
         updated_member = org_member_dao.get_member(member_user_id, organization_id)
+
+        # Fetch user info
+        auth_user_dao = AuthUserDAO(session)
+        user_info_row = auth_user_dao.get_by_id(member_user_id)
+        user_name = None
+        user_email = None
+        user_image = None
+        user_bio = None
+        user_timezone = None
+        user_phone_number = None
+        if user_info_row:
+            user_info = user_info_row[0]
+            name_parts = []
+            if user_info.name:
+                name_parts.append(user_info.name)
+            if user_info.last_name:
+                name_parts.append(user_info.last_name)
+            user_name = " ".join(name_parts) if name_parts else None
+            user_email = user_info.email
+            user_image = user_info.image
+            user_bio = user_info.bio
+            user_timezone = user_info.timezone
+            user_phone_number = user_info.phone_number
+
         return OrganizationMemberResponse(
             id=updated_member.id,
             user_id=updated_member.user_id,
@@ -793,6 +829,12 @@ async def update_member_role(
             role_id=updated_member.role_id,
             role_name=role.name,
             created_at=updated_member.created_at,
+            name=user_name,
+            email=user_email,
+            image=user_image,
+            bio=user_bio,
+            timezone=user_timezone,
+            phone_number=user_phone_number,
         )
     except Exception as e:
         session.rollback()
