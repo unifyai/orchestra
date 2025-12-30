@@ -1781,13 +1781,16 @@ def transfer_assistant_to_org(
                         "project:read",
                     )
                     if not has_access:
-                        # Grant Admin role to non-creator members
-                        admin_role = role_dao.get_by_name("Admin", organization_id=None)
-                        if admin_role:
+                        # Grant Member role to user
+                        member_role = role_dao.get_by_name(
+                            "Member",
+                            organization_id=None,
+                        )
+                        if member_role:
                             resource_access_dao.grant_access(
                                 resource_type="project",
                                 resource_id=org_project.id,
-                                role_id=admin_role.id,
+                                role_id=member_role.id,
                                 grantee_type="user",
                                 grantee_id=user_id,
                             )
