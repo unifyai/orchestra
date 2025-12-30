@@ -914,3 +914,138 @@ class TestTraceBufferIncrementalLogic:
         assert summary["method"] == "POST"
         assert summary["route"] == "/v0/contacts"
         assert summary["status"] == "in_progress"
+
+
+# =============================================================================
+# Trace Context Propagation Tests
+# =============================================================================
+
+
+class TestTraceContextPropagation:
+    """Test that trace_id from incoming traceparent header is preserved.
+
+    When Unity pytest sends a request with a traceparent header, Orchestra
+    should use that trace_id for all spans, enabling correlation between
+    Unity test logs and Orchestra trace files.
+    """
+
+    def test_span_uses_provided_trace_id(self):
+        """Verify spans use the trace_id from traceparent when provided."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            exporter = FileSpanExporter(tmpdir)
+
+            # Simulate a trace_id that would come from Unity pytest
+            # (32 hex chars converted to int)
+            unity_trace_id = 0xABCDEF1234567890ABCDEF1234567890
+
+            span = _create_mock_span(
+                name="GET /v0/contacts",
+                trace_id=unity_trace_id,
+                attributes={
+                    "http.method": "GET",
+                    "http.route": "/v0/contacts",
+                    "http.status_code": 200,
+                },
+            )
+
+            exporter.export([span])
+            exporter.force_flush()
+            exporter.shutdown()
+
+            # Find the generated file
+            requests_dir = Path(tmpdir) / "requests"
+            request_files = list(requests_dir.glob("*.json"))
+            assert len(request_files) == 1
+
+            # Verify trace_id in filename (last 8 chars)
+            filename = request_files[0].name
+            assert "abcdef12" in filename.lower() or "34567890" in filename.lower()
+
+            # Verify trace_id in file content
+            with open(request_files[0]) as f:
+                data = json.load(f)
+                # trace_id is stored as hex string
+                assert data["trace_id"].lower().endswith("1234567890")
+
+    def test_multiple_spans_share_trace_id(self):
+        """Verify all spans in a request share the same trace_id."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            exporter = FileSpanExporter(tmpdir)
+
+            # Unity-provided trace_id
+            unity_trace_id = 0x11223344556677889900AABBCCDDEEFF
+
+            # Simulate a full request trace with multiple spans
+            http_span = _create_mock_span(
+                name="GET /v0/contacts",
+                trace_id=unity_trace_id,
+                span_id=0x1000,
+                attributes={"http.method": "GET", "http.route": "/v0/contacts"},
+            )
+            db_span = _create_mock_span(
+                name="SELECT contacts",
+                trace_id=unity_trace_id,  # Same trace_id
+                span_id=0x2000,
+                parent_span_id=0x1000,
+                attributes={"db.system": "postgresql"},
+            )
+            request_received = _create_mock_span(
+                name="http.request_received GET /v0/contacts",
+                trace_id=unity_trace_id,  # Same trace_id
+                span_id=0x3000,
+                parent_span_id=0x1000,
+                attributes={"http.request.method": "GET"},
+            )
+
+            exporter.export([request_received, db_span, http_span])
+            exporter.force_flush()
+            exporter.shutdown()
+
+            # Should have exactly 1 file (all same trace_id)
+            requests_dir = Path(tmpdir) / "requests"
+            request_files = list(requests_dir.glob("*.json"))
+            assert len(request_files) == 1
+
+            with open(request_files[0]) as f:
+                data = json.load(f)
+                # All spans should have the same trace_id
+                assert len(data["spans"]) == 3
+                expected_trace_id = f"{unity_trace_id:032x}"
+                assert data["trace_id"] == expected_trace_id
+
+    def test_trace_id_correlation_format(self):
+        """Verify trace_id format enables easy correlation with Unity logs.
+
+        Unity logs: [TRACE] TRACE_ID=abcdef1234567890... test=test_foo
+        Orchestra files: ..._abcdef12.json (last 8 chars of trace_id)
+        """
+        with tempfile.TemporaryDirectory() as tmpdir:
+            exporter = FileSpanExporter(tmpdir)
+
+            # Example trace_id that Unity would generate and log
+            trace_id = 0x1A2B3C4D5E6F7890FEDCBA0987654321
+
+            span = _create_mock_span(
+                name="POST /v0/logs",
+                trace_id=trace_id,
+                attributes={
+                    "http.method": "POST",
+                    "http.route": "/v0/logs",
+                    "http.status_code": 201,
+                },
+            )
+
+            exporter.export([span])
+            exporter.force_flush()
+            exporter.shutdown()
+
+            requests_dir = Path(tmpdir) / "requests"
+            request_files = list(requests_dir.glob("*.json"))
+            assert len(request_files) == 1
+
+            # The filename should contain part of the trace_id for easy grep
+            filename = request_files[0].name
+            # trace_id ends with 87654321, which is used in filename (last 8 chars)
+            trace_id_hex = f"{trace_id:032x}"
+            trace_id_short = trace_id_hex[-8:]
+            assert trace_id_short in filename.lower()
