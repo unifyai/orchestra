@@ -212,12 +212,18 @@ def _get_embeddings_batch(
                 `MAX_TOKENS_PER_INPUT`, an API call fails for a non-token-limit
                 reason, or embedding dimensions exceed `MAX_EMBEDDING_DIMS`.
     """
+    import time
+
+    import openai
+    from opentelemetry import trace
+
     if not OPENAI_API_KEY:
         raise ValueError(
             "OPENAI_API_KEY environment variable must be set to use embed()",
         )
 
     model = model or DEFAULT_EMBEDDING_MODEL
+    tracer = trace.get_tracer(__name__)
 
     if not texts:
         return []
@@ -250,31 +256,107 @@ def _get_embeddings_batch(
     if current_batch:
         batches.append(current_batch)
 
-    def _embed_or_split(batch_texts: list[str]) -> list[list[float]]:
+    def _embed_or_split(batch_texts: list[str], depth: int = 0) -> list[list[float]]:
         """Try to embed the given batch; on token-limit error, split and retry."""
         kwargs = {"model": model, "input": batch_texts}
         if dimensions is not None:
             kwargs["dimensions"] = dimensions
-        try:
-            resp = _client.embeddings.create(**kwargs)
-            resp.data.sort(key=lambda x: x.index)
-            embs = [d.embedding for d in resp.data]
-            if embs and len(embs[0]) > MAX_EMBEDDING_DIMS:
-                raise ValueError(
-                    f"Embedding dimension {len(embs[0])} exceeds {MAX_EMBEDDING_DIMS}",
+
+        with tracer.start_as_current_span("embedding_api_attempt") as span:
+            span.set_attribute("embedding.batch_size", len(batch_texts))
+            span.set_attribute("embedding.model", model)
+            span.set_attribute("embedding.split_depth", depth)
+            if dimensions is not None:
+                span.set_attribute("embedding.dimensions", dimensions)
+
+            start_time = time.monotonic()
+            try:
+                resp = _client.embeddings.create(**kwargs)
+                duration_ms = (time.monotonic() - start_time) * 1000
+                span.set_attribute("embedding.duration_ms", duration_ms)
+                span.set_attribute("embedding.success", True)
+
+                resp.data.sort(key=lambda x: x.index)
+                embs = [d.embedding for d in resp.data]
+                if embs and len(embs[0]) > MAX_EMBEDDING_DIMS:
+                    raise ValueError(
+                        f"Embedding dimension {len(embs[0])} exceeds {MAX_EMBEDDING_DIMS}",
+                    )
+
+                # Record usage info if available
+                if hasattr(resp, "usage") and resp.usage:
+                    span.set_attribute(
+                        "embedding.usage.total_tokens",
+                        resp.usage.total_tokens,
+                    )
+                    span.set_attribute(
+                        "embedding.usage.prompt_tokens",
+                        resp.usage.prompt_tokens,
+                    )
+
+                return embs
+
+            except openai.RateLimitError as e:
+                duration_ms = (time.monotonic() - start_time) * 1000
+                span.set_attribute("embedding.duration_ms", duration_ms)
+                span.set_attribute("embedding.success", False)
+                span.set_attribute("embedding.error_type", "rate_limit")
+                span.set_attribute("embedding.error_message", str(e)[:500])
+
+                # Capture rate limit headers if available
+                if hasattr(e, "response") and e.response is not None:
+                    headers = getattr(e.response, "headers", {})
+                    if "retry-after" in headers:
+                        span.set_attribute(
+                            "embedding.rate_limit.retry_after",
+                            headers["retry-after"],
+                        )
+                    if "x-ratelimit-limit-requests" in headers:
+                        span.set_attribute(
+                            "embedding.rate_limit.limit_requests",
+                            headers["x-ratelimit-limit-requests"],
+                        )
+                    if "x-ratelimit-remaining-requests" in headers:
+                        span.set_attribute(
+                            "embedding.rate_limit.remaining_requests",
+                            headers["x-ratelimit-remaining-requests"],
+                        )
+                    if "x-ratelimit-reset-requests" in headers:
+                        span.set_attribute(
+                            "embedding.rate_limit.reset_requests",
+                            headers["x-ratelimit-reset-requests"],
+                        )
+
+                span.add_event(
+                    "rate_limit_error",
+                    {"error": str(e)[:500]},
                 )
-            return embs
-        except Exception as e:
-            msg = str(e).lower()
-            if "max_tokens_per_request" in msg or "too many tokens" in msg:
-                if len(batch_texts) == 1:
-                    # Cannot split further; surface error
-                    raise ValueError(f"Failed to get embeddings: {str(e)}")
-                mid = len(batch_texts) // 2
-                left = _embed_or_split(batch_texts[:mid])
-                right = _embed_or_split(batch_texts[mid:])
-                return left + right
-            raise ValueError(f"Failed to get embeddings: {str(e)}")
+                raise ValueError(f"Failed to get embeddings (rate limited): {str(e)}")
+
+            except Exception as e:
+                duration_ms = (time.monotonic() - start_time) * 1000
+                span.set_attribute("embedding.duration_ms", duration_ms)
+                span.set_attribute("embedding.success", False)
+                span.set_attribute("embedding.error_message", str(e)[:500])
+
+                msg = str(e).lower()
+                if "max_tokens_per_request" in msg or "too many tokens" in msg:
+                    span.set_attribute("embedding.error_type", "token_limit")
+                    span.add_event(
+                        "token_limit_split",
+                        {"batch_size": len(batch_texts), "depth": depth},
+                    )
+
+                    if len(batch_texts) == 1:
+                        # Cannot split further; surface error
+                        raise ValueError(f"Failed to get embeddings: {str(e)}")
+                    mid = len(batch_texts) // 2
+                    left = _embed_or_split(batch_texts[:mid], depth + 1)
+                    right = _embed_or_split(batch_texts[mid:], depth + 1)
+                    return left + right
+
+                span.set_attribute("embedding.error_type", "other")
+                raise ValueError(f"Failed to get embeddings: {str(e)}")
 
     # 3) Embed each batch and concatenate results in-order
     out: list[list[float]] = []
