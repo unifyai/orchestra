@@ -5,7 +5,6 @@ For local, create `keys.sh` with following snippet to setup:
 ```bash
 #!/bin/bash
 
-export ORCHESTRA_ANYSCALE_API_KEY=""
 export ORCHESTRA_TOGETHER_AI_API_KEY=""
 export ORCHESTRA_ANTHROPIC_API_KEY=""
 export ORCHESTRA_REPLICATE_API_KEY=""
@@ -40,7 +39,7 @@ psql -h 127.0.0.1  -p 5432 -U orchestra -d orchestra
 
 To test, run benchmarks.py with either the minimal flag set to True, or with a custom list of endpoints. For simplicity, you only need to mention the provider and the model, and the benchmark will be run for those. See below an example of testing 2 custom endpoints. Endpoints is a list of dictionaries of endpoints.
 ```
-python benchmark.py --endpoints '[{"provider": "together-ai", "model": "llama-2-7b-chat"}, { "provider": "anyscale", "model": "llama-2-7b-chat"}]'
+python benchmark.py --endpoints '[{"provider": "together-ai", "model": "llama-2-7b-chat"}, {"provider": "deepinfra", "model": "llama-2-7b-chat"}]'
 ```
 You may also minimally run a set of benchmarks with the following command.
 ```
@@ -49,10 +48,8 @@ python benchmark.py --minimal True
 When running the command above, the following endpoints are run:
 ```
 [
-    {"provider": "anyscale", "model": "llama-2-7b-chat"},
     {"provider": "deepinfra", "model": "llama-2-7b-chat"},
     {"provider": "fireworks-ai", "model": "llama-2-7b-chat"},
-    {"provider": "lepton-ai", "model": "llama-2-7b-chat"},
     {"provider": "replicate", "model": "llama-2-7b-chat"},
     {"provider": "together-ai", "model": "llama-2-7b-chat"},
     {"provider": "aws-bedrock", "model": "mistral-7b-instruct-v0.2"},
