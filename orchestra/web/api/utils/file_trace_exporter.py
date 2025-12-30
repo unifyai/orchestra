@@ -5,13 +5,17 @@ Exports OpenTelemetry spans to JSON files for debugging and analysis
 when external trace collectors (Tempo, Jaeger) are not available.
 
 Organization:
-- index.jsonl: One line per HTTP request with summary info
 - requests/: One JSON file per trace (containing all spans for that request)
 
-This organization makes it easy for AI agents to:
+Filename format encodes key info for easy browsing:
+- In-progress: 2025-01-15T12-00-00.123_POST_contacts_PENDING_abc12345.json
+- Complete:    2025-01-15T12-00-00.123_POST_contacts_45ms_abc12345.json
+
+This makes it easy for AI agents to:
 1. Count requests: ls requests/ | wc -l
-2. Find slow requests: grep duration_ms index.jsonl
-3. Inspect one request: read a single small JSON file
+2. Find slow requests: ls requests/*_*ms_* | sort (duration in filename)
+3. Find in-progress: ls requests/*_PENDING_*
+4. Inspect one request: read a single small JSON file
 """
 
 import json
@@ -306,37 +310,27 @@ class FileSpanExporter(SpanExporter):
     """
     Exports spans to JSON files organized by HTTP request.
 
-    Creates:
-    - index.jsonl: Summary of all completed requests (one line per request)
-    - requests/: One JSON file per trace containing all spans
+    Creates one JSON file per trace in requests/ directory with filename:
+    - In-progress: TIME_METHOD_route_PENDING_traceID.json
+    - Complete:    TIME_METHOD_route_DURATIONms_traceID.json
 
     Features:
-    - Incremental writes: In-progress traces are written to disk periodically,
-      enabling debugging of long-running requests before they complete.
-    - Status tracking: Files indicate "in_progress" or "complete" status.
-    - Atomic completion: Final file is written when root HTTP span arrives.
-
-    This organization allows AI agents to quickly:
-    - Count total requests (count files or index lines)
-    - Find slow requests (grep index.jsonl)
-    - Inspect individual requests (read one small file)
-    - Debug in-flight requests (read in_progress files)
+    - Incremental writes: In-progress traces written to disk periodically
+    - Duration in filename: Easy to find slow requests via ls/sort
+    - File rename on completion: PENDING becomes actual duration
     """
 
     def __init__(self, trace_log_dir: str):
         self.trace_log_dir = Path(trace_log_dir)
         self.trace_log_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create subdirectories
+        # Create requests subdirectory
         self.requests_dir = self.trace_log_dir / "requests"
         self.requests_dir.mkdir(exist_ok=True)
 
-        # Index file for quick lookups (only completed requests)
-        self.index_path = self.trace_log_dir / "index.jsonl"
-
         # Buffers for collecting spans by trace_id
         self._trace_buffers: dict[str, TraceBuffer] = {}
-        # Track filenames for in-progress traces (to overwrite same file)
+        # Track filenames for in-progress traces (to rename on completion)
         self._trace_filenames: dict[str, str] = {}
         self._lock = threading.Lock()
 
@@ -373,24 +367,45 @@ class FileSpanExporter(SpanExporter):
         for trace_id in needs_incremental_write:
             self._write_in_progress_trace(trace_id)
 
+    def _build_filename(
+        self,
+        trace_id: str,
+        summary: dict,
+        duration_ms: float | None,
+    ) -> str:
+        """Build filename with duration indicator.
+
+        Format: TIME_METHOD_route_DURATION_traceID.json
+        - In-progress: ..._PENDING_...
+        - Complete: ..._45ms_... or ..._1234ms_...
+        """
+        trace_id_short = trace_id[-8:]
+        method = summary.get("method", "").upper() or "UNKNOWN"
+        route = summary.get("route", "") or "unknown"
+
+        # Sanitize route: /v0/contacts/{id} -> contacts-id
+        route_clean = route.strip("/")
+        if route_clean.startswith("v0/"):
+            route_clean = route_clean[3:]
+        route_safe = route_clean.replace("/", "-").replace("{", "").replace("}", "")
+        route_safe = route_safe[:40]
+
+        # Duration: PENDING for in-progress, Xms for complete
+        if duration_ms is None:
+            duration_str = "PENDING"
+        else:
+            duration_str = f"{int(duration_ms)}ms"
+
+        return f"{summary['time']}_{method}_{route_safe}_{duration_str}_{trace_id_short}.json"
+
     def _get_or_create_filename(self, trace_id: str, summary: dict) -> str:
-        """Get existing filename for trace or create a new one."""
+        """Get existing filename for in-progress trace or create a new one."""
         with self._lock:
             if trace_id in self._trace_filenames:
                 return self._trace_filenames[trace_id]
 
-            # Build filename: TIME_METHOD_route_<trace_id_suffix>.json
-            trace_id_short = trace_id[-8:]
-            method = summary.get("method", "").upper() or "UNKNOWN"
-            route = summary.get("route", "") or "unknown"
-            # Sanitize route: /v0/contacts/{id} -> contacts-id
-            route_clean = route.strip("/")
-            if route_clean.startswith("v0/"):
-                route_clean = route_clean[3:]
-            route_safe = route_clean.replace("/", "-").replace("{", "").replace("}", "")
-            route_safe = route_safe[:40]
-
-            filename = f"{summary['time']}_{method}_{route_safe}_{trace_id_short}.json"
+            # For in-progress, duration is unknown
+            filename = self._build_filename(trace_id, summary, duration_ms=None)
             self._trace_filenames[trace_id] = filename
             return filename
 
@@ -411,8 +426,6 @@ class FileSpanExporter(SpanExporter):
             )
 
             filename = self._get_or_create_filename(trace_id, summary)
-            summary["file"] = f"requests/{filename}"
-
             self.requests_dir.mkdir(parents=True, exist_ok=True)
 
             request_file = self.requests_dir / filename
@@ -444,8 +457,8 @@ class FileSpanExporter(SpanExporter):
         """Write a trace's final state to disk and remove from buffer."""
         with self._lock:
             buffer = self._trace_buffers.pop(trace_id, None)
-            # Get existing filename before removing from tracking
-            existing_filename = self._trace_filenames.pop(trace_id, None)
+            # Get existing filename before removing from tracking (for rename)
+            in_progress_filename = self._trace_filenames.pop(trace_id, None)
 
         if buffer is None or not buffer.spans:
             return
@@ -457,32 +470,22 @@ class FileSpanExporter(SpanExporter):
             )
 
             summary = buffer.get_summary(include_status=True)
+            duration_ms = summary.get("duration_ms")
 
-            # Use existing filename if we wrote in-progress, otherwise generate new
-            if existing_filename:
-                filename = existing_filename
-            else:
-                # Generate filename (won't be stored since trace is being flushed)
-                trace_id_short = trace_id[-8:]
-                method = summary.get("method", "").upper() or "UNKNOWN"
-                route = summary.get("route", "") or "unknown"
-                route_clean = route.strip("/")
-                if route_clean.startswith("v0/"):
-                    route_clean = route_clean[3:]
-                route_safe = (
-                    route_clean.replace("/", "-").replace("{", "").replace("}", "")
-                )
-                route_safe = route_safe[:40]
-                filename = (
-                    f"{summary['time']}_{method}_{route_safe}_{trace_id_short}.json"
-                )
-
-            summary["file"] = f"requests/{filename}"
+            # Generate final filename with actual duration
+            final_filename = self._build_filename(trace_id, summary, duration_ms)
 
             self.requests_dir.mkdir(parents=True, exist_ok=True)
 
-            # Write the final request file (overwrites in-progress version)
-            request_file = self.requests_dir / filename
+            # If we had an in-progress file, rename it to the final name
+            if in_progress_filename and in_progress_filename != final_filename:
+                in_progress_path = self.requests_dir / in_progress_filename
+                final_path = self.requests_dir / final_filename
+                if in_progress_path.exists():
+                    in_progress_path.rename(final_path)
+
+            # Write the final request file
+            request_file = self.requests_dir / final_filename
             with request_file.open("w", encoding="utf-8") as f:
                 json.dump(
                     {
@@ -495,32 +498,12 @@ class FileSpanExporter(SpanExporter):
                     default=str,
                 )
 
-            # Only add to index when complete (not for in-progress writes)
-            # Remove status field for index (it's always complete there)
-            index_summary = {k: v for k, v in summary.items() if k != "status"}
-            self._append_to_index(index_summary)
-
             logger.debug(
                 f"Flushed trace {trace_id[-8:]} with {len(spans_sorted)} spans",
             )
 
         except Exception as e:
             logger.error(f"Failed to flush trace {trace_id}: {e}")
-
-    def _append_to_index(self, summary: dict) -> None:
-        """Append a summary line to the index file."""
-        try:
-            # Ensure parent directory exists
-            self.index_path.parent.mkdir(parents=True, exist_ok=True)
-            with self.index_path.open("a", encoding="utf-8") as f:
-                json.dump(summary, f, default=str)
-                f.write("\n")
-        except OSError:
-            # Directory may have been deleted, try recreating
-            self.index_path.parent.mkdir(parents=True, exist_ok=True)
-            with self.index_path.open("a", encoding="utf-8") as f:
-                json.dump(summary, f, default=str)
-                f.write("\n")
 
     def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
         """Buffer spans by trace_id for later flushing."""
