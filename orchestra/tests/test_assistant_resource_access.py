@@ -1958,16 +1958,16 @@ async def test_transfer_creates_assistants_project_with_owner_access(
 
 
 @pytest.mark.anyio
-async def test_transfer_grants_admin_to_second_user_on_existing_project(
+async def test_transfer_grants_member_to_second_user_on_existing_project(
     client: AsyncClient,
     dbsession,
 ):
     """
-    Test that second user gets Admin access when Assistants project already exists.
+    Test that second user gets Member access when Assistants project already exists.
 
     When user transfers to org where Assistants project already exists:
-    - User should get Admin role (not Owner)
-    - User should be able to read/write but not delete
+    - User should get Member role (not Owner)
+    - User should be able to read but not write or delete
     """
     # First user creates org and Assistants project
     user1 = await create_test_user(
@@ -2055,7 +2055,7 @@ async def test_transfer_grants_admin_to_second_user_on_existing_project(
             "Assistants" in projects_resp.json()
         ), "User2 should have access to Assistants project"
 
-    # Verify user2 has Admin role (read/write but not delete)
+    # Verify user2 has Member role (read but not write/delete)
     resource_access_dao = ResourceAccessDAO(dbsession)
     context_dao = ContextDAO(dbsession)
     org_member_dao = OrganizationMemberDAO(dbsession)
@@ -2064,7 +2064,7 @@ async def test_transfer_grants_admin_to_second_user_on_existing_project(
     projects = project_dao.filter(organization_id=org_id, name="Assistants")
     project_id = projects[0][0].id
 
-    # Check user2 has project:read permission (Admin has this)
+    # Check user2 has project:read permission (Member has this)
     has_read = resource_access_dao.check_user_permission(
         user2["id"],
         "project",
@@ -2073,14 +2073,14 @@ async def test_transfer_grants_admin_to_second_user_on_existing_project(
     )
     assert has_read, "Second user should have read permission"
 
-    # Check user2 has project:write permission (Admin has this)
-    has_write = resource_access_dao.check_user_permission(
+    # Check user2 does NOT have project:delete permission (Member doesn't have this)
+    has_delete = resource_access_dao.check_user_permission(
         user2["id"],
         "project",
         project_id,
-        "project:write",
+        "project:delete",
     )
-    assert has_write, "Second user should have write permission"
+    assert not has_delete, "Second user should NOT have delete permission"
 
 
 @pytest.mark.anyio
