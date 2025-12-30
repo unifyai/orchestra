@@ -36,6 +36,9 @@ COMPLETED_TRACE_FLUSH_DELAY_SECONDS = 0.5
 # or in case root span is somehow missed
 ORPHAN_TRACE_FLUSH_TIMEOUT_SECONDS = 30.0
 
+# Interval for writing in-progress traces to disk (enables debugging long requests)
+IN_PROGRESS_WRITE_INTERVAL_SECONDS = 5.0
+
 
 def _span_to_dict(span: ReadableSpan) -> dict:
     """Convert a ReadableSpan to a JSON-serializable dictionary."""
@@ -145,6 +148,10 @@ class TraceBuffer:
     http_root_span: Optional[dict] = None
     # Time when root HTTP span was received (signals request completion)
     completed_at: Optional[float] = None
+    # Track when we last wrote this trace to disk (for incremental writes)
+    last_written_at: Optional[float] = None
+    # Number of spans at last write (to detect changes)
+    spans_at_last_write: int = 0
 
     def add_span(self, span_dict: dict) -> None:
         """Add a span to the buffer."""
@@ -173,7 +180,7 @@ class TraceBuffer:
         return any(s.get("parent_span_id") is not None for s in self.spans)
 
     def is_ready_to_flush(self) -> bool:
-        """Check if trace should be flushed.
+        """Check if trace should be flushed (final write, remove from buffer).
 
         Flush if:
         1. Complete (has root HTTP span) and short delay passed (catch stragglers)
@@ -196,25 +203,71 @@ class TraceBuffer:
         # Safe to timeout-flush these.
         return (now - self.last_update) > ORPHAN_TRACE_FLUSH_TIMEOUT_SECONDS
 
-    def get_summary(self) -> dict:
-        """Generate summary info for the index file."""
+    def needs_incremental_write(self) -> bool:
+        """Check if trace needs an incremental write to disk.
+
+        For in-progress traces, write periodically so debugging is possible
+        while the request is still processing.
+        """
+        # Don't write if already complete (will be flushed soon)
+        if self.is_complete():
+            return False
+
+        # Don't write if no spans yet
+        if not self.spans:
+            return False
+
+        # Don't write if no new spans since last write
+        if len(self.spans) == self.spans_at_last_write:
+            return False
+
+        now = time.monotonic()
+
+        # Write immediately on first span, then periodically
+        if self.last_written_at is None:
+            return True
+
+        return (now - self.last_written_at) > IN_PROGRESS_WRITE_INTERVAL_SECONDS
+
+    def mark_written(self) -> None:
+        """Mark that we've written this trace to disk."""
+        self.last_written_at = time.monotonic()
+        self.spans_at_last_write = len(self.spans)
+
+    def get_summary(self, include_status: bool = True) -> dict:
+        """Generate summary info for the index file.
+
+        Args:
+            include_status: Whether to include completion status in summary.
+        """
         # Count span types
         type_counts = {"http": 0, "db": 0, "openai": 0, "other": 0}
         for span in self.spans:
             type_counts[_get_span_type(span)] += 1
 
-        # Extract info from root HTTP span
-        root = self.http_root_span or {}
-        attrs = root.get("attributes") or {}
+        # Extract info from root HTTP span (if complete) or request_received span
+        root = self.http_root_span
+        attrs = (root.get("attributes") or {}) if root else {}
+
+        # If no root HTTP span yet, try to get info from request_received span
+        if not root:
+            for span in self.spans:
+                if span.get("name", "").startswith("http.request_received"):
+                    span_attrs = span.get("attributes") or {}
+                    attrs = {
+                        "http.method": span_attrs.get("http.request.method", ""),
+                        "http.route": span_attrs.get("http.request.route", ""),
+                    }
+                    break
 
         # Calculate request timing
-        start_time = root.get("start_time")
-        duration_ms = root.get("duration_ms")
+        start_time = (
+            root.get("start_time") if root else None
+        ) or self._get_earliest_start_time()
+        duration_ms = root.get("duration_ms") if root else None
 
-        # Format timestamp for filename and display (include date since orchestra
-        # server may run for extended periods spanning multiple test runs)
+        # Format timestamp for filename and display
         if start_time:
-            # start_time is in nanoseconds
             dt = datetime.fromtimestamp(start_time / 1e9, tz=timezone.utc)
             time_str = (
                 dt.strftime("%Y-%m-%dT%H-%M-%S")
@@ -226,17 +279,27 @@ class TraceBuffer:
                 now.strftime("%Y-%m-%dT%H-%M-%S") + f".{now.microsecond // 1000:03d}"
             )
 
-        return {
+        summary = {
             "time": time_str,
             "trace_id": self.trace_id,
             "method": attrs.get("http.method", ""),
             "route": attrs.get("http.route", attrs.get("http.target", "")),
-            "status": attrs.get("http.status_code"),
+            "status_code": attrs.get("http.status_code"),
             "duration_ms": round(duration_ms, 2) if duration_ms else None,
             "span_count": len(self.spans),
             "db_queries": type_counts["db"],
             "openai_calls": type_counts["openai"],
         }
+
+        if include_status:
+            summary["status"] = "complete" if self.is_complete() else "in_progress"
+
+        return summary
+
+    def _get_earliest_start_time(self) -> Optional[int]:
+        """Get the earliest start time from all spans."""
+        start_times = [s.get("start_time") for s in self.spans if s.get("start_time")]
+        return min(start_times) if start_times else None
 
 
 class FileSpanExporter(SpanExporter):
@@ -244,13 +307,20 @@ class FileSpanExporter(SpanExporter):
     Exports spans to JSON files organized by HTTP request.
 
     Creates:
-    - index.jsonl: Summary of all requests (one line per request)
+    - index.jsonl: Summary of all completed requests (one line per request)
     - requests/: One JSON file per trace containing all spans
+
+    Features:
+    - Incremental writes: In-progress traces are written to disk periodically,
+      enabling debugging of long-running requests before they complete.
+    - Status tracking: Files indicate "in_progress" or "complete" status.
+    - Atomic completion: Final file is written when root HTTP span arrives.
 
     This organization allows AI agents to quickly:
     - Count total requests (count files or index lines)
     - Find slow requests (grep index.jsonl)
     - Inspect individual requests (read one small file)
+    - Debug in-flight requests (read in_progress files)
     """
 
     def __init__(self, trace_log_dir: str):
@@ -261,11 +331,13 @@ class FileSpanExporter(SpanExporter):
         self.requests_dir = self.trace_log_dir / "requests"
         self.requests_dir.mkdir(exist_ok=True)
 
-        # Index file for quick lookups
+        # Index file for quick lookups (only completed requests)
         self.index_path = self.trace_log_dir / "index.jsonl"
 
         # Buffers for collecting spans by trace_id
         self._trace_buffers: dict[str, TraceBuffer] = {}
+        # Track filenames for in-progress traces (to overwrite same file)
+        self._trace_filenames: dict[str, str] = {}
         self._lock = threading.Lock()
 
         # Background thread for flushing stale traces
@@ -276,61 +348,73 @@ class FileSpanExporter(SpanExporter):
         logger.info(f"FileSpanExporter initialized at {self.trace_log_dir}")
 
     def _flush_loop(self) -> None:
-        """Background loop to flush completed/stale trace buffers."""
+        """Background loop to flush completed/stale traces and write in-progress ones."""
         # Check frequently (100ms) to flush completed traces promptly
         while not self._shutdown_event.wait(timeout=0.1):
-            self._flush_stale_traces()
+            self._process_traces()
 
-    def _flush_stale_traces(self) -> None:
-        """Flush traces that are ready (complete or orphaned timeout)."""
-        ready_trace_ids = []
+    def _process_traces(self) -> None:
+        """Process all traces: flush completed ones, write in-progress ones."""
+        ready_to_flush = []
+        needs_incremental_write = []
 
         with self._lock:
             for trace_id, buffer in self._trace_buffers.items():
                 if buffer.is_ready_to_flush():
-                    ready_trace_ids.append(trace_id)
+                    ready_to_flush.append(trace_id)
+                elif buffer.needs_incremental_write():
+                    needs_incremental_write.append(trace_id)
 
-        # Flush outside the lock to avoid blocking
-        for trace_id in ready_trace_ids:
+        # Flush completed traces (removes from buffer)
+        for trace_id in ready_to_flush:
             self._flush_trace(trace_id)
 
-    def _flush_trace(self, trace_id: str) -> None:
-        """Write a trace's spans to disk and remove from buffer."""
+        # Write in-progress traces (keeps in buffer)
+        for trace_id in needs_incremental_write:
+            self._write_in_progress_trace(trace_id)
+
+    def _get_or_create_filename(self, trace_id: str, summary: dict) -> str:
+        """Get existing filename for trace or create a new one."""
         with self._lock:
-            buffer = self._trace_buffers.pop(trace_id, None)
+            if trace_id in self._trace_filenames:
+                return self._trace_filenames[trace_id]
 
-        if buffer is None or not buffer.spans:
-            return
-
-        try:
-            # Sort spans by start_time for readability
-            spans_sorted = sorted(
-                buffer.spans,
-                key=lambda s: s.get("start_time") or 0,
-            )
-
-            # Generate summary for index
-            summary = buffer.get_summary()
-
-            # Build filename: HH-MM-SS.mmm_METHOD_route_<trace_id_suffix>.json
-            # Include method and route for easy identification at a glance
-            trace_id_short = trace_id[-8:]  # Last 8 chars for uniqueness
+            # Build filename: TIME_METHOD_route_<trace_id_suffix>.json
+            trace_id_short = trace_id[-8:]
             method = summary.get("method", "").upper() or "UNKNOWN"
             route = summary.get("route", "") or "unknown"
-            # Sanitize route for filesystem: /v0/contacts/{id} -> contacts-id
-            # Strip the /v0/ prefix as it's always present and redundant
+            # Sanitize route: /v0/contacts/{id} -> contacts-id
             route_clean = route.strip("/")
             if route_clean.startswith("v0/"):
                 route_clean = route_clean[3:]
             route_safe = route_clean.replace("/", "-").replace("{", "").replace("}", "")
-            route_safe = route_safe[:40]  # Limit length to avoid overly long filenames
+            route_safe = route_safe[:40]
+
             filename = f"{summary['time']}_{method}_{route_safe}_{trace_id_short}.json"
+            self._trace_filenames[trace_id] = filename
+            return filename
+
+    def _write_in_progress_trace(self, trace_id: str) -> None:
+        """Write an in-progress trace to disk (incremental update)."""
+        with self._lock:
+            buffer = self._trace_buffers.get(trace_id)
+            if buffer is None or not buffer.spans:
+                return
+            # Take a snapshot of current state
+            spans_snapshot = list(buffer.spans)
+            summary = buffer.get_summary(include_status=True)
+
+        try:
+            spans_sorted = sorted(
+                spans_snapshot,
+                key=lambda s: s.get("start_time") or 0,
+            )
+
+            filename = self._get_or_create_filename(trace_id, summary)
             summary["file"] = f"requests/{filename}"
 
-            # Ensure requests directory exists (may have been deleted)
             self.requests_dir.mkdir(parents=True, exist_ok=True)
 
-            # Write the request file
             request_file = self.requests_dir / filename
             with request_file.open("w", encoding="utf-8") as f:
                 json.dump(
@@ -344,11 +428,80 @@ class FileSpanExporter(SpanExporter):
                     default=str,
                 )
 
-            # Append to index (with retry for stale handle)
-            self._append_to_index(summary)
+            # Mark as written (inside lock to avoid race)
+            with self._lock:
+                if trace_id in self._trace_buffers:
+                    self._trace_buffers[trace_id].mark_written()
 
             logger.debug(
-                f"Flushed trace {trace_id_short} with {len(spans_sorted)} spans",
+                f"Wrote in-progress trace {trace_id[-8:]} with {len(spans_sorted)} spans",
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to write in-progress trace {trace_id}: {e}")
+
+    def _flush_trace(self, trace_id: str) -> None:
+        """Write a trace's final state to disk and remove from buffer."""
+        with self._lock:
+            buffer = self._trace_buffers.pop(trace_id, None)
+            # Get existing filename before removing from tracking
+            existing_filename = self._trace_filenames.pop(trace_id, None)
+
+        if buffer is None or not buffer.spans:
+            return
+
+        try:
+            spans_sorted = sorted(
+                buffer.spans,
+                key=lambda s: s.get("start_time") or 0,
+            )
+
+            summary = buffer.get_summary(include_status=True)
+
+            # Use existing filename if we wrote in-progress, otherwise generate new
+            if existing_filename:
+                filename = existing_filename
+            else:
+                # Generate filename (won't be stored since trace is being flushed)
+                trace_id_short = trace_id[-8:]
+                method = summary.get("method", "").upper() or "UNKNOWN"
+                route = summary.get("route", "") or "unknown"
+                route_clean = route.strip("/")
+                if route_clean.startswith("v0/"):
+                    route_clean = route_clean[3:]
+                route_safe = (
+                    route_clean.replace("/", "-").replace("{", "").replace("}", "")
+                )
+                route_safe = route_safe[:40]
+                filename = (
+                    f"{summary['time']}_{method}_{route_safe}_{trace_id_short}.json"
+                )
+
+            summary["file"] = f"requests/{filename}"
+
+            self.requests_dir.mkdir(parents=True, exist_ok=True)
+
+            # Write the final request file (overwrites in-progress version)
+            request_file = self.requests_dir / filename
+            with request_file.open("w", encoding="utf-8") as f:
+                json.dump(
+                    {
+                        "trace_id": trace_id,
+                        "summary": summary,
+                        "spans": spans_sorted,
+                    },
+                    f,
+                    indent=2,
+                    default=str,
+                )
+
+            # Only add to index when complete (not for in-progress writes)
+            # Remove status field for index (it's always complete there)
+            index_summary = {k: v for k, v in summary.items() if k != "status"}
+            self._append_to_index(index_summary)
+
+            logger.debug(
+                f"Flushed trace {trace_id[-8:]} with {len(spans_sorted)} spans",
             )
 
         except Exception as e:

@@ -186,7 +186,7 @@ class TestFileSpanExporterIndex:
                 summary = json.loads(line)
                 assert summary["method"] == "GET"
                 assert summary["route"] == "/api/users"
-                assert summary["status"] == 200
+                assert summary["status_code"] == 200
 
     def test_index_contains_span_counts(self):
         """Verify index includes counts of different span types."""
@@ -591,3 +591,306 @@ class TestRequestTraceMiddleware:
 
         result = _safe_json_dumps({"obj": Custom()})
         assert "custom_obj" in result
+
+
+# =============================================================================
+# Incremental Writing Tests
+# =============================================================================
+
+
+class TestIncrementalWriting:
+    """Test in-progress trace writing for long-running requests."""
+
+    def test_in_progress_trace_written_to_disk(self):
+        """Verify in-progress traces are written before completion."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            exporter = FileSpanExporter(tmpdir)
+
+            trace_id = 0xABCDEF1234567890
+            # Add a child span (indicates we're waiting for root)
+            child_span = _create_mock_span(
+                name="db_query",
+                trace_id=trace_id,
+                span_id=0x2222,
+                parent_span_id=0x1111,  # Has parent, so it's a child
+                attributes={"db.system": "postgresql"},
+            )
+            exporter.export([child_span])
+
+            # Manually trigger in-progress write
+            exporter._process_traces()
+
+            # Should have an in-progress file
+            requests_dir = Path(tmpdir) / "requests"
+            request_files = list(requests_dir.glob("*.json"))
+            assert len(request_files) == 1
+
+            # File should indicate in_progress status
+            with open(request_files[0]) as f:
+                data = json.load(f)
+                assert data["summary"]["status"] == "in_progress"
+                assert len(data["spans"]) == 1
+
+            exporter.shutdown()
+
+    def test_in_progress_file_updated_with_new_spans(self):
+        """Verify in-progress files are updated when new spans arrive."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            exporter = FileSpanExporter(tmpdir)
+
+            trace_id = 0xABCDEF1234567890
+
+            # First span
+            span1 = _create_mock_span(
+                name="span_1",
+                trace_id=trace_id,
+                span_id=0x2222,
+                parent_span_id=0x1111,
+                start_time=1000000000,
+            )
+            exporter.export([span1])
+            exporter._process_traces()
+
+            requests_dir = Path(tmpdir) / "requests"
+            request_files = list(requests_dir.glob("*.json"))
+            filename = request_files[0].name
+
+            with open(request_files[0]) as f:
+                data = json.load(f)
+                assert len(data["spans"]) == 1
+
+            # Add second span
+            span2 = _create_mock_span(
+                name="span_2",
+                trace_id=trace_id,
+                span_id=0x3333,
+                parent_span_id=0x1111,
+                start_time=2000000000,
+            )
+            exporter.export([span2])
+
+            # Force the buffer to think enough time has passed
+            with exporter._lock:
+                exporter._trace_buffers[f"{trace_id:032x}"].last_written_at = 0
+
+            exporter._process_traces()
+
+            # Should still be same file (overwritten)
+            request_files = list(requests_dir.glob("*.json"))
+            assert len(request_files) == 1
+            assert request_files[0].name == filename
+
+            # File should now have 2 spans
+            with open(request_files[0]) as f:
+                data = json.load(f)
+                assert len(data["spans"]) == 2
+
+            exporter.shutdown()
+
+    def test_complete_trace_overwrites_in_progress(self):
+        """Verify completing a trace updates status to complete."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            exporter = FileSpanExporter(tmpdir)
+
+            trace_id = 0xABCDEF1234567890
+
+            # Child span first
+            child_span = _create_mock_span(
+                name="db_query",
+                trace_id=trace_id,
+                span_id=0x2222,
+                parent_span_id=0x1111,
+                attributes={"db.system": "postgresql"},
+            )
+            exporter.export([child_span])
+            exporter._process_traces()
+
+            # Verify in_progress
+            requests_dir = Path(tmpdir) / "requests"
+            with open(list(requests_dir.glob("*.json"))[0]) as f:
+                assert json.load(f)["summary"]["status"] == "in_progress"
+
+            # Now add root HTTP span (completes the trace)
+            root_span = _create_mock_span(
+                name="GET /api/users",
+                trace_id=trace_id,
+                span_id=0x1111,
+                parent_span_id=None,  # Root span
+                attributes={"http.method": "GET", "http.route": "/api/users"},
+            )
+            exporter.export([root_span])
+
+            # Force flush
+            exporter.force_flush()
+
+            # Should have same file, now complete
+            request_files = list(requests_dir.glob("*.json"))
+            assert len(request_files) == 1
+
+            with open(request_files[0]) as f:
+                data = json.load(f)
+                assert data["summary"]["status"] == "complete"
+                assert len(data["spans"]) == 2
+
+            exporter.shutdown()
+
+    def test_index_only_contains_complete_traces(self):
+        """Verify index.jsonl only has entries for completed traces."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            exporter = FileSpanExporter(tmpdir)
+
+            trace_id = 0xABCDEF1234567890
+
+            # Add child span (in-progress)
+            child_span = _create_mock_span(
+                name="db_query",
+                trace_id=trace_id,
+                span_id=0x2222,
+                parent_span_id=0x1111,
+            )
+            exporter.export([child_span])
+            exporter._process_traces()
+
+            # Index should be empty (only in-progress)
+            index_path = Path(tmpdir) / "index.jsonl"
+            if index_path.exists():
+                with open(index_path) as f:
+                    assert f.read().strip() == ""
+
+            # Complete the trace
+            root_span = _create_mock_span(
+                name="GET /api",
+                trace_id=trace_id,
+                span_id=0x1111,
+                attributes={"http.method": "GET"},
+            )
+            exporter.export([root_span])
+            exporter.force_flush()
+
+            # Now index should have one entry
+            with open(index_path) as f:
+                lines = [l for l in f.readlines() if l.strip()]
+                assert len(lines) == 1
+
+            exporter.shutdown()
+
+    def test_request_received_span_available_in_progress(self):
+        """Verify request_received span provides params before root completes."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            exporter = FileSpanExporter(tmpdir)
+
+            trace_id = 0xABCDEF1234567890
+
+            # Simulate the synthetic request_received span from middleware
+            request_received_span = _create_mock_span(
+                name="http.request_received POST /v0/contacts",
+                trace_id=trace_id,
+                span_id=0x1000,
+                parent_span_id=0x1111,  # Child of root HTTP span
+                start_time=1000000000,
+                end_time=1000001000,  # Completes immediately
+                attributes={
+                    "http.request.method": "POST",
+                    "http.request.path": "/v0/contacts",
+                    "http.request.route": "/v0/contacts",
+                    "http.request.body": '{"name": "John"}',
+                },
+            )
+
+            # Then a DB span
+            db_span = _create_mock_span(
+                name="SELECT contacts",
+                trace_id=trace_id,
+                span_id=0x2222,
+                parent_span_id=0x1111,
+                start_time=2000000000,
+                attributes={"db.system": "postgresql"},
+            )
+
+            exporter.export([request_received_span, db_span])
+            exporter._process_traces()
+
+            # Read the in-progress file
+            requests_dir = Path(tmpdir) / "requests"
+            request_files = list(requests_dir.glob("*.json"))
+            assert len(request_files) == 1
+
+            with open(request_files[0]) as f:
+                data = json.load(f)
+
+            # Should be in_progress (no root HTTP span yet)
+            assert data["summary"]["status"] == "in_progress"
+
+            # Should have both spans, sorted by start_time
+            assert len(data["spans"]) == 2
+            assert data["spans"][0]["name"] == "http.request_received POST /v0/contacts"
+            assert data["spans"][1]["name"] == "SELECT contacts"
+
+            # The request params should be visible in the request_received span
+            attrs = data["spans"][0]["attributes"]
+            assert attrs["http.request.method"] == "POST"
+            assert attrs["http.request.body"] == '{"name": "John"}'
+
+            exporter.shutdown()
+
+
+class TestTraceBufferIncrementalLogic:
+    """Test TraceBuffer incremental write detection."""
+
+    def test_needs_incremental_write_first_span(self):
+        """First span should trigger immediate write."""
+        from orchestra.web.api.utils.file_trace_exporter import TraceBuffer
+
+        buffer = TraceBuffer(trace_id="test")
+        buffer.add_span({"name": "span1", "parent_span_id": "parent"})
+
+        assert buffer.needs_incremental_write() is True
+
+    def test_needs_incremental_write_no_new_spans(self):
+        """No write needed if no new spans since last write."""
+        from orchestra.web.api.utils.file_trace_exporter import TraceBuffer
+
+        buffer = TraceBuffer(trace_id="test")
+        buffer.add_span({"name": "span1", "parent_span_id": "parent"})
+        buffer.mark_written()
+
+        assert buffer.needs_incremental_write() is False
+
+    def test_needs_incremental_write_complete_trace(self):
+        """Complete traces don't need incremental writes (will be flushed)."""
+        from orchestra.web.api.utils.file_trace_exporter import TraceBuffer
+
+        buffer = TraceBuffer(trace_id="test")
+        # Add root HTTP span (completes the trace)
+        buffer.add_span(
+            {
+                "name": "GET /api",
+                "parent_span_id": None,
+                "attributes": {"http.method": "GET"},
+            },
+        )
+
+        assert buffer.is_complete() is True
+        assert buffer.needs_incremental_write() is False
+
+    def test_summary_uses_request_received_when_no_root(self):
+        """Summary should extract info from request_received span if no root."""
+        from orchestra.web.api.utils.file_trace_exporter import TraceBuffer
+
+        buffer = TraceBuffer(trace_id="test")
+        buffer.add_span(
+            {
+                "name": "http.request_received POST /v0/contacts",
+                "parent_span_id": "parent",
+                "start_time": 1000000000,
+                "attributes": {
+                    "http.request.method": "POST",
+                    "http.request.route": "/v0/contacts",
+                },
+            },
+        )
+
+        summary = buffer.get_summary()
+        assert summary["method"] == "POST"
+        assert summary["route"] == "/v0/contacts"
+        assert summary["status"] == "in_progress"
