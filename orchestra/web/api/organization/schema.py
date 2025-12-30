@@ -73,6 +73,7 @@ class OrganizationMemberResponse(BaseModel):
     image: Optional[str] = None
     bio: Optional[str] = None
     timezone: Optional[str] = None
+    phone_number: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

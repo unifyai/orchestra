@@ -8,7 +8,7 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
-from orchestra.tests.utils import create_test_user
+from orchestra.tests.utils import ADMIN_HEADERS, create_test_user
 
 
 @pytest.mark.anyio
@@ -1009,6 +1009,7 @@ async def test_list_members_by_api_key_with_org_key(client: AsyncClient):
         assert "email" in m
         assert "bio" in m
         assert "timezone" in m
+        assert "phone_number" in m
 
 
 @pytest.mark.anyio
@@ -1026,3 +1027,138 @@ async def test_list_members_by_api_key_with_personal_key(client: AsyncClient):
 
     # Should return empty list for personal API key
     assert members == []
+
+
+@pytest.mark.anyio
+async def test_list_members_includes_phone_number(client: AsyncClient):
+    """Test that listing org members includes phone_number field."""
+    # Create owner
+    owner = await create_test_user(client, "phone_test_owner@test.com")
+
+    # Create a user with phone_number via admin endpoint
+    phone_user_email = "phone_test_member@test.com"
+    phone_number = "+14155551234"
+    create_response = await client.post(
+        "/v0/admin/auth-user",
+        json={
+            "email": phone_user_email,
+            "name": "Phone",
+            "last_name": "User",
+            "phone_number": phone_number,
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert create_response.status_code == status.HTTP_200_OK
+    phone_user_data = create_response.json()
+    phone_user_id = phone_user_data["id"]
+
+    # Get phone user's API key
+    user_details_resp = await client.get(
+        f"/v0/admin/auth-user/by-user-id?user_id={phone_user_id}",
+        headers=ADMIN_HEADERS,
+    )
+    assert user_details_resp.status_code == status.HTTP_200_OK
+    phone_user_api_key = user_details_resp.json().get("apiKey")
+
+    phone_user = {
+        "id": phone_user_id,
+        "email": phone_user_email,
+        "headers": {"Authorization": f"Bearer {phone_user_api_key}"},
+    }
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Phone Number Test Org"},
+        headers=owner["headers"],
+    )
+    assert org_response.status_code == status.HTTP_201_CREATED
+    org_id = org_response.json()["id"]
+
+    # Add member with phone number
+    add_response = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": phone_user["id"]},
+        headers=owner["headers"],
+    )
+    assert add_response.status_code == status.HTTP_201_CREATED
+
+    # List members
+    list_response = await client.get(
+        f"/v0/organizations/{org_id}/members",
+        headers=owner["headers"],
+    )
+    assert list_response.status_code == status.HTTP_200_OK
+    members = list_response.json()
+
+    # Find the phone user in the list
+    phone_member = next(
+        (m for m in members if m["user_id"] == phone_user["id"]),
+        None,
+    )
+    assert phone_member is not None
+
+    # Verify phone_number is included and correct
+    assert "phone_number" in phone_member
+    assert phone_member["phone_number"] == phone_number
+
+    # Also verify owner (without phone) has phone_number field as None
+    owner_member = next(
+        (m for m in members if m["user_id"] == owner["id"]),
+        None,
+    )
+    assert owner_member is not None
+    assert "phone_number" in owner_member
+    assert owner_member["phone_number"] is None
+
+
+@pytest.mark.anyio
+async def test_update_member_role_includes_phone_number(client: AsyncClient):
+    """Test that updating member role returns phone_number in response."""
+    owner = await create_test_user(client, "role_phone_owner@test.com")
+
+    # Create a user with phone_number
+    phone_user_email = "role_phone_member@test.com"
+    phone_number = "+442071234567"
+    create_response = await client.post(
+        "/v0/admin/auth-user",
+        json={
+            "email": phone_user_email,
+            "name": "Role",
+            "last_name": "Phone",
+            "phone_number": phone_number,
+        },
+        headers=ADMIN_HEADERS,
+    )
+    assert create_response.status_code == status.HTTP_200_OK
+    phone_user_id = create_response.json()["id"]
+
+    # Create organization
+    org_response = await client.post(
+        "/v0/organizations",
+        json={"name": "Role Phone Test Org"},
+        headers=owner["headers"],
+    )
+    assert org_response.status_code == status.HTTP_201_CREATED
+    org_id = org_response.json()["id"]
+
+    # Add member
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": phone_user_id},
+        headers=owner["headers"],
+    )
+
+    # Update role to Admin (role_id 2)
+    update_response = await client.patch(
+        f"/v0/organizations/{org_id}/members/{phone_user_id}/role",
+        json={"role_id": 2},  # Admin role
+        headers=owner["headers"],
+    )
+    assert update_response.status_code == status.HTTP_200_OK
+
+    updated_member = update_response.json()
+
+    # Verify phone_number is in the response
+    assert "phone_number" in updated_member
+    assert updated_member["phone_number"] == phone_number
