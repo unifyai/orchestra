@@ -796,7 +796,6 @@ def list_assistants(
         False,
         description="If True and using an org API key, list ALL assistants in the organization (not just those created by the current user). Requires assistant:read permission.",
     ),
-    _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[List[AssistantRead]]:
     """
     List assistants based on API key context.
