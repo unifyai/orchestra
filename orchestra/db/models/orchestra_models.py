@@ -496,6 +496,7 @@ class AuthUser(Base):
     bio = Column(String, nullable=True)
     image = Column(String)
     timezone = Column(String, nullable=True)
+    phone_number = Column(String, nullable=True)
     # Account tier, developer, professional, enterprise
     tier = Column(String, nullable=False, server_default="developer")
     # Toggles managed by usage quotas

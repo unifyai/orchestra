@@ -30,6 +30,7 @@ class AuthUserDAO:
         bio: Optional[str] = None,
         image: Optional[str] = None,
         timezone: Optional[str] = None,
+        phone_number: Optional[str] = None,
         account_type: Optional[str] = None,
         business_name: Optional[str] = None,
         tax_id: Optional[str] = None,
@@ -44,6 +45,17 @@ class AuthUserDAO:
     ) -> None:
         if timezone is not None and timezone not in VALID_TIMEZONES:
             raise ValueError(f"'{timezone}' is not a valid IANA timezone.")
+
+        # Validate and format phone_number if provided
+        if phone_number is not None:
+            from orchestra.web.api.utils.phone_number_validator import (
+                validate_phone_number,
+            )
+
+            result = validate_phone_number(phone_number)
+            if not result["is_valid"]:
+                raise ValueError(f"Invalid phone number: {result['error']}")
+            phone_number = result["formatted_phone_number"]
 
         # Validate account_type if provided
         if account_type is not None and account_type not in ["individual", "business"]:
@@ -67,6 +79,7 @@ class AuthUserDAO:
                 bio=bio,
                 image=image,
                 timezone=timezone,
+                phone_number=phone_number,
                 account_type=account_type or "individual",
                 business_name=business_name,
                 tax_id=tax_id,
@@ -135,6 +148,7 @@ class AuthUserDAO:
         bio: Optional[str] = ...,
         image: Optional[str] = ...,
         timezone: Optional[str] = ...,
+        phone_number: Optional[str] = ...,
         tier: Optional[str] = ...,
         queries_enabled: Optional[bool] = ...,
         evaluations_enabled: Optional[bool] = ...,
@@ -184,6 +198,17 @@ class AuthUserDAO:
                 if timezone != old_timezone:
                     should_sync_timezone = True
                 setattr(entry, "timezone", timezone)
+            if phone_number is not ...:
+                if phone_number is not None:
+                    from orchestra.web.api.utils.phone_number_validator import (
+                        validate_phone_number,
+                    )
+
+                    result = validate_phone_number(phone_number)
+                    if not result["is_valid"]:
+                        raise ValueError(f"Invalid phone number: {result['error']}")
+                    phone_number = result["formatted_phone_number"]
+                setattr(entry, "phone_number", phone_number)
             if tier is not ...:
                 setattr(entry, "tier", tier)
             if queries_enabled is not ...:

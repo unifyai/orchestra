@@ -70,6 +70,7 @@ google-auth-oauthlib = "^1.2.2"
 python-stdnum = "^2.1"
 jsonschema = "^4.25.1"
 pytest-shard = "^0.1.2"
+phonenumbers = "^9.0.21"
 
 [tool.poetry.group.dev.dependencies]
 types-requests = "*"

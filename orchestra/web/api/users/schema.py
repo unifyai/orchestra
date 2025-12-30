@@ -18,6 +18,7 @@ class UserRequest(BaseModel):
     job_title: Optional[str] = None
     bio: Optional[str] = None
     timezone: Optional[str] = None
+    phone_number: Optional[str] = None
 
     @field_validator("timezone")
     @classmethod
@@ -29,6 +30,19 @@ class UserRequest(BaseModel):
         if v not in VALID_TIMEZONES:
             raise ValueError(f"'{v}' is not a valid IANA timezone.")
         return v
+
+    @field_validator("phone_number")
+    @classmethod
+    def validate_phone_number(cls, v: Optional[str]) -> Optional[str]:
+        """Validate phone number and normalize to E.164 format."""
+        if v is None:
+            return v
+        from orchestra.web.api.utils.phone_number_validator import validate_phone_number
+
+        result = validate_phone_number(v)
+        if not result["is_valid"]:
+            raise ValueError(f"Invalid phone number: {result['error']}")
+        return result["formatted_phone_number"]
 
 
 class AccountRequest(BaseModel):

@@ -47,6 +47,38 @@ async def test_create_user_with_invalid_timezone(
 
 
 @pytest.mark.anyio
+async def test_create_user_with_phone_number(client: AsyncClient):
+    url = "/v0/admin/auth-user"
+    params = {
+        "email": "phone_user@example.com",
+        "name": "Phone User",
+        "phone_number": "+1 (650) 253-0000",  # Valid US number format
+    }
+
+    response = await client.post(url, json=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    user_data = response.json()
+    assert user_data["email"] == "phone_user@example.com"
+    assert user_data["phone_number"] == "+16502530000"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "invalid_phone",
+    ["not-a-phone", "12345", "abc123", "+1", "555-1234"],
+)
+async def test_create_user_with_invalid_phone_number(
+    client: AsyncClient,
+    invalid_phone: str,
+):
+    url = "/v0/admin/auth-user"
+    params = {"email": "phone_fail@example.com", "phone_number": invalid_phone}
+    response = await client.post(url, json=params, headers=HEADERS)
+    assert response.status_code == 422, response.json()
+    assert "phone_number" in response.json()["detail"][0]["loc"]
+
+
+@pytest.mark.anyio
 async def test_get_user_by_user_id(client: AsyncClient):
     url = "/v0/admin/auth-user"
     params = {"email": "testuser2@example.com"}
@@ -100,6 +132,53 @@ async def test_update_user(client: AsyncClient):
     assert response.json()["name"] == "A"
     assert response.json()["bio"] == "A test user"
     assert response.json()["timezone"] == "Asia/Tokyo"
+
+
+@pytest.mark.anyio
+async def test_update_user_phone_number(client: AsyncClient):
+    # create user without phone number
+    url = "/v0/admin/auth-user"
+    params = {"email": "update_phone@example.com"}
+    response = await client.post(url, json=params, headers=HEADERS)
+    user_id = response.json()["id"]
+
+    # update with phone number (various formats should normalize to E.164)
+    url = "/v0/admin/auth-user"
+    params = {
+        "user_id": user_id,
+        "phone_number": "+44 20 7946 0958",
+    }
+    response = await client.put(url, json=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+
+    # check updated phone number is normalized
+    url = f"/v0/admin/auth-user/by-user-id?user_id={user_id}"
+    response = await client.get(url, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    assert response.json()["phoneNumber"] == "+442079460958"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "invalid_phone",
+    ["invalid", "123", "+", "abc"],
+)
+async def test_update_user_with_invalid_phone_number(
+    client: AsyncClient,
+    invalid_phone: str,
+):
+    # create user
+    url = "/v0/admin/auth-user"
+    params = {"email": f"update_phone_fail_{invalid_phone}@example.com"}
+    response = await client.post(url, json=params, headers=HEADERS)
+    user_id = response.json()["id"]
+
+    # try to update with invalid phone number
+    url = "/v0/admin/auth-user"
+    params = {"user_id": user_id, "phone_number": invalid_phone}
+    response = await client.put(url, json=params, headers=HEADERS)
+    assert response.status_code == 422, response.json()
+    assert "phone_number" in response.json()["detail"][0]["loc"]
 
 
 @pytest.mark.anyio
@@ -539,6 +618,59 @@ async def test_onboarding_status_workflow(client: AsyncClient):
     response = await client.get("/v0/user/onboarding-status", headers=user_headers)
     assert response.status_code == 200
     assert response.json() == {"onboarded": False}
+
+
+@pytest.mark.anyio
+async def test_phone_number_in_get_endpoints(client: AsyncClient):
+    """Verify phone number is returned in all GET endpoints for user retrieval."""
+    # create user with phone number
+    url = "/v0/admin/auth-user"
+    params = {
+        "email": "phone_get_test@example.com",
+        "phone_number": "+1 650 253 0000",
+    }
+    response = await client.post(url, json=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    user_id = response.json()["id"]
+    email = response.json()["email"]
+
+    # test GET by-user-id
+    url = f"/v0/admin/auth-user/by-user-id?user_id={user_id}"
+    response = await client.get(url, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    assert response.json()["phoneNumber"] == "+16502530000"
+
+    # test GET by-email
+    url = f"/v0/admin/auth-user/by-email?email={email}"
+    response = await client.get(url, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    assert response.json()["phoneNumber"] == "+16502530000"
+
+
+@pytest.mark.anyio
+async def test_basic_info_includes_phone_number(client: AsyncClient):
+    """Verify the user/basic-info endpoint returns phone_number."""
+    # create user with phone number
+    url = "/v0/admin/auth-user"
+    params = {
+        "email": "basic_info_phone@example.com",
+        "phone_number": "+49 30 12345678",
+    }
+    response = await client.post(url, json=params, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    user_id = response.json()["id"]
+
+    # get user API key
+    url = f"/v0/admin/auth-user/by-user-id?user_id={user_id}"
+    response = await client.get(url, headers=HEADERS)
+    assert response.status_code == 200, response.json()
+    api_key = response.json()["apiKey"]
+
+    # call basic-info with user's API key
+    user_headers = {"Authorization": f"Bearer {api_key}"}
+    response = await client.get("/v0/user/basic-info", headers=user_headers)
+    assert response.status_code == 200, response.json()
+    assert response.json()["phone_number"] == "+493012345678"
 
 
 if __name__ == "__main__":

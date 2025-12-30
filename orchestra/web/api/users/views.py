@@ -85,6 +85,7 @@ async def create_user(
         bio=user.bio,
         image=user.image,
         timezone=user.timezone,
+        phone_number=user.phone_number,
     )
     user_row = auth_user_dao.filter(email=user.email)
     new_user = user_row[0][0]
@@ -105,6 +106,7 @@ async def create_user(
         "image": new_user.image,
         "email": new_user.email,
         "timezone": new_user.timezone,
+        "phone_number": new_user.phone_number,
     }
 
 
@@ -182,6 +184,7 @@ async def get_user(
         "business_classification": format_business_classification(user_instance),
         "onboarded": user_instance.onboarded,
         "timezone": user_instance.timezone,
+        "phoneNumber": user_instance.phone_number,
     }
 
 
@@ -259,6 +262,7 @@ async def get_user_by_email(
         "business_classification": format_business_classification(user_instance),
         "onboarded": user_instance.onboarded,
         "timezone": user_instance.timezone,
+        "phoneNumber": user_instance.phone_number,
     }
 
 
@@ -317,6 +321,7 @@ async def get_user_by_account(
         "business_classification": format_business_classification(user_instance),
         "onboarded": user_instance.onboarded,
         "timezone": user_instance.timezone,
+        "phoneNumber": user_instance.phone_number,
     }
 
 
@@ -336,6 +341,7 @@ async def update_user(
         job_title=updated_user.job_title,
         bio=updated_user.bio,
         timezone=updated_user.timezone,
+        phone_number=updated_user.phone_number,
     )
     return "User information updated successfully!"
 
@@ -825,6 +831,7 @@ async def get_user_basic_info(
         "job_title": user.job_title,
         "bio": user.bio,
         "timezone": user.timezone,
+        "phone_number": user.phone_number,
     }
 
 
