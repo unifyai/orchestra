@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     workers_count: int = 1
     # Enable uvicorn reloading
     reload: bool = False
+    # HTTP keep-alive timeout in seconds (how long to keep idle connections open)
+    timeout_keep_alive: int = 15
 
     # Current environment
     environment: str = "dev"
