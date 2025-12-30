@@ -67,7 +67,7 @@ jobs:
       uses: 'google-github-actions/auth@v2'
       # This service account also needs pub/sub
       with:
-        credentials_json: '${{ secrets.ORCHESTRA_VERTEXAI_CREDENTIALS }}'
+        credentials_json: '${{ secrets.GCP_SERVICE_ACCOUNT_JSON }}'
 
     - name: Set up Python
       uses: actions/setup-python@v2
@@ -84,7 +84,13 @@ jobs:
       env:
         ORCHESTRA_HOST: "0.0.0.0"
         ORCHESTRA_DB_HOST: localhost
-        ORCHESTRA_VERTEXAI_PROJECT: saas-368716
+        # GCP configuration (from org-level variables)
+        ORCHESTRA_VERTEXAI_PROJECT: ${{ vars.GCP_PROJECT_ID }}
+        ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON: ${{ env.GOOGLE_APPLICATION_CREDENTIALS }}
+        ORCHESTRA_GCP_BUCKET_NAME: ${{ vars.GCP_BUCKET_LOGS }}
+        ORCHESTRA_GCP_ASSISTANT_IMAGES_BUCKET_NAME: ${{ vars.GCP_BUCKET_ASSISTANT_IMAGES }}
+        ORCHESTRA_GCP_ASSISTANT_RECORDINGS_BUCKET_NAME: ${{ vars.GCP_BUCKET_RECORDINGS }}
+        # LLM provider API keys (repo-level secrets)
         ORCHESTRA_OPENAI_API_KEY: ${{ secrets.ORCHESTRA_OPENAI_API_KEY }}
         ORCHESTRA_ANYSCALE_API_KEY: ${{ secrets.ORCHESTRA_ANYSCALE_API_KEY }}
         ORCHESTRA_REPLICATE_API_KEY: ${{ secrets.ORCHESTRA_REPLICATE_API_KEY }}
@@ -96,14 +102,11 @@ jobs:
         ORCHESTRA_MISTRAL_AI_API_KEY: ${{ secrets.ORCHESTRA_MISTRAL_AI_API_KEY }}
         ORCHESTRA_TOGETHER_AI_API_KEY: ${{ secrets.ORCHESTRA_TOGETHER_AI_API_KEY }}
         ORCHESTRA_DEEPSEEK_API_KEY: ${{ secrets.ORCHESTRA_DEEPSEEK_API_KEY }}
+        ORCHESTRA_XAI_API_KEY: ${{ secrets.ORCHESTRA_XAI_API_KEY }}
+        # Orchestra-specific configuration
         ORCHESTRA_ORGANIZATION_NAME: ${{ secrets.ORCHESTRA_ORGANIZATION_NAME }}
         ORCHESTRA_OWNER_ID: ${{ secrets.ORCHESTRA_OWNER_ID }}
         ORCHESTRA_PROD_TRAFFIC_NAME: ${{ secrets.ORCHESTRA_PROD_TRAFFIC_NAME }}
-        ORCHESTRA_XAI_API_KEY: ${{ secrets.ORCHESTRA_XAI_API_KEY }}
-        ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON: ${{ env.GOOGLE_APPLICATION_CREDENTIALS }}
-        ORCHESTRA_GCP_BUCKET_NAME: ${{ secrets.ORCHESTRA_GCP_BUCKET_NAME }}
-        ORCHESTRA_GCP_ASSISTANT_IMAGES_BUCKET_NAME: ${{ secrets.ORCHESTRA_GCP_ASSISTANT_IMAGES_BUCKET_NAME }}
-        ORCHESTRA_GCP_ASSISTANT_RECORDINGS_BUCKET_NAME: ${{ secrets.ORCHESTRA_GCP_ASSISTANT_RECORDINGS_BUCKET_NAME }}
         ORCHESTRA_ADMIN_KEY: ${{ secrets.ORCHESTRA_ADMIN_KEY }}
         AUTH_ACCOUNT_API_KEY: ${{ secrets.AUTH_ACCOUNT_API_KEY }}
         AUTH_ACCOUNT_USER_ID: ${{ secrets.AUTH_ACCOUNT_USER_ID }}
