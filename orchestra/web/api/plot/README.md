@@ -104,7 +104,7 @@ Delete a plot.
 
 **Access Control:** Requires `project:write` on the plot's project.
 
-#### POST /logs/plots/delete
+#### DELETE /logs/plots
 
 Batch delete all plots for a project, optionally filtered by context.
 
@@ -191,7 +191,7 @@ CREATE TABLE plot (
 | GET /logs/plots/{token} | `project:read` |
 | PATCH /logs/plots/{token} | `project:write` |
 | DELETE /logs/plots/{token} | `project:write` |
-| POST /logs/plots/delete | `project:write` |
+| DELETE /logs/plots | `project:write` |
 
 ### Cascade Behavior
 
