@@ -116,6 +116,7 @@ class PlotDAO:
         user_id: str,
         organization_id: Optional[int],
         project_id: Optional[int] = None,
+        context: Optional[str] = None,
     ) -> List[Plot]:
         """
         List plots accessible to a user based on API key context.
@@ -130,6 +131,7 @@ class PlotDAO:
             user_id: The user ID.
             organization_id: Organization ID from API key context (None for personal).
             project_id: Optional project ID to filter by.
+            context: Optional context to filter by (stored in project_config JSONB).
 
         Returns:
             List of plots matching the criteria.
@@ -145,6 +147,9 @@ class PlotDAO:
 
         if project_id is not None:
             query = query.filter(Plot.project_id == project_id)
+
+        if context is not None:
+            query = query.filter(Plot.project_config["context"].astext == context)
 
         return query.order_by(Plot.created_at.desc()).all()
 
@@ -219,6 +224,35 @@ class PlotDAO:
         self.session.flush()
         logger.info(f"Deleted plot with token {token}")
         return True
+
+    def delete_by_project(
+        self,
+        project_id: int,
+        context: Optional[str] = None,
+    ) -> int:
+        """
+        Delete all plots for a project, optionally filtered by context.
+
+        Args:
+            project_id: ID of the project.
+            context: Optional context stored in project_config to filter by.
+
+        Returns:
+            Number of plots deleted.
+        """
+        query = self.session.query(Plot).filter(Plot.project_id == project_id)
+
+        if context is not None:
+            query = query.filter(Plot.project_config["context"].astext == context)
+
+        count = query.delete(synchronize_session="fetch")
+        self.session.flush()
+
+        logger.info(
+            f"Deleted {count} plots for project {project_id}"
+            + (f" with context '{context}'" if context else ""),
+        )
+        return count
 
     def update_organization_id(
         self,

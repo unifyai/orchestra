@@ -348,7 +348,8 @@ async def test_create_plot_with_direct_config(client: AsyncClient, dbsession):
 
 @pytest.mark.anyio
 async def test_create_plot_missing_config_and_description(
-    client: AsyncClient, dbsession
+    client: AsyncClient,
+    dbsession,
 ):
     """Test that creating a plot without config or description fails."""
     user = await create_test_user(client, "plot_create_missing@test.com")
@@ -711,7 +712,8 @@ async def test_plot_organization_id_updated_on_transfer_to_org(
     dbsession.commit()
 
     projects = project_dao.filter(
-        user_id=user["id"], name="Plot_Transfer_To_Org_Project"
+        user_id=user["id"],
+        name="Plot_Transfer_To_Org_Project",
     )
     project = projects[0][0]
 
@@ -834,7 +836,8 @@ async def test_plots_deleted_on_project_deletion(client: AsyncClient, dbsession)
     dbsession.commit()
 
     projects = project_dao.filter(
-        user_id=user["id"], name="Plot_Cascade_Delete_Project"
+        user_id=user["id"],
+        name="Plot_Cascade_Delete_Project",
     )
     project = projects[0][0]
 
@@ -1748,3 +1751,529 @@ async def test_list_plots_nonexistent_project(client: AsyncClient, dbsession):
     assert list_response.status_code == 200
     data = list_response.json()
     assert data["count"] == 0
+
+
+# ==================== Context Filter Tests ====================
+
+
+@pytest.mark.anyio
+async def test_list_plots_by_context(client: AsyncClient, dbsession):
+    """Test listing plots filtered by context."""
+    user = await create_test_user(client, "plot_list_context@test.com")
+
+    # Create project
+    await client.post(
+        "/v0/project",
+        json={"name": "plot-context-project"},
+        headers=user["headers"],
+    )
+
+    # Create plots with different contexts
+    await client.post(
+        "/v0/logs/plot",
+        json={
+            "plot_config": {"type": "scatter", "x_axis": "x", "y_axis": "y"},
+            "project_config": {
+                "project_name": "plot-context-project",
+                "context": "context-a",
+            },
+            "title": "Plot Context A",
+        },
+        headers=user["headers"],
+    )
+
+    await client.post(
+        "/v0/logs/plot",
+        json={
+            "plot_config": {"type": "bar", "x_axis": "model", "y_axis": "count"},
+            "project_config": {
+                "project_name": "plot-context-project",
+                "context": "context-b",
+            },
+            "title": "Plot Context B",
+        },
+        headers=user["headers"],
+    )
+
+    await client.post(
+        "/v0/logs/plot",
+        json={
+            "plot_config": {"type": "histogram", "x_axis": "latency"},
+            "project_config": {
+                "project_name": "plot-context-project",
+                "context": "context-a",
+            },
+            "title": "Plot Context A 2",
+        },
+        headers=user["headers"],
+    )
+
+    # List plots with context-a filter
+    list_response = await client.get(
+        "/v0/logs/plots?project_name=plot-context-project&context=context-a",
+        headers=user["headers"],
+    )
+
+    assert list_response.status_code == 200
+    data = list_response.json()
+    assert data["count"] == 2
+    for plot in data["plots"]:
+        assert "Context A" in plot["title"]
+
+
+@pytest.mark.anyio
+async def test_list_plots_context_without_project(client: AsyncClient, dbsession):
+    """Test listing plots by context without project filter."""
+    user = await create_test_user(client, "plot_list_context_only@test.com")
+
+    # Create two projects
+    await client.post(
+        "/v0/project",
+        json={"name": "plot-ctx-project-1"},
+        headers=user["headers"],
+    )
+    await client.post(
+        "/v0/project",
+        json={"name": "plot-ctx-project-2"},
+        headers=user["headers"],
+    )
+
+    # Create plots in different projects with same context
+    await client.post(
+        "/v0/logs/plot",
+        json={
+            "plot_config": {"type": "scatter", "x_axis": "x", "y_axis": "y"},
+            "project_config": {
+                "project_name": "plot-ctx-project-1",
+                "context": "shared-context",
+            },
+            "title": "Project 1 Shared",
+        },
+        headers=user["headers"],
+    )
+
+    await client.post(
+        "/v0/logs/plot",
+        json={
+            "plot_config": {"type": "scatter", "x_axis": "x", "y_axis": "y"},
+            "project_config": {
+                "project_name": "plot-ctx-project-2",
+                "context": "shared-context",
+            },
+            "title": "Project 2 Shared",
+        },
+        headers=user["headers"],
+    )
+
+    await client.post(
+        "/v0/logs/plot",
+        json={
+            "plot_config": {"type": "scatter", "x_axis": "x", "y_axis": "y"},
+            "project_config": {
+                "project_name": "plot-ctx-project-1",
+                "context": "other-context",
+            },
+            "title": "Project 1 Other",
+        },
+        headers=user["headers"],
+    )
+
+    # List all plots with shared-context (across all projects)
+    list_response = await client.get(
+        "/v0/logs/plots?context=shared-context",
+        headers=user["headers"],
+    )
+
+    assert list_response.status_code == 200
+    data = list_response.json()
+    assert data["count"] == 2
+    titles = [plot["title"] for plot in data["plots"]]
+    assert "Project 1 Shared" in titles
+    assert "Project 2 Shared" in titles
+
+
+@pytest.mark.anyio
+async def test_plot_dao_list_by_user_context_with_context_filter(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test PlotDAO list_by_user_context with context filter."""
+    user = await create_test_user(client, "plot_dao_ctx_filter@test.com")
+
+    # Create project
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    project_dao.create(
+        name="PlotDAO_Context_Filter_Project",
+        user_id=user["id"],
+        organization_id=None,
+    )
+    dbsession.commit()
+
+    projects = project_dao.filter(
+        user_id=user["id"],
+        name="PlotDAO_Context_Filter_Project",
+    )
+    project = projects[0][0]
+
+    # Create plots with different contexts
+    plot_dao = PlotDAO(dbsession)
+    plot_dao.create(
+        project_id=project.id,
+        user_id=user["id"],
+        organization_id=None,
+        plot_config={"type": "scatter", "x_axis": "x", "y_axis": "y"},
+        project_config={
+            "project_name": "PlotDAO_Context_Filter_Project",
+            "context": "ctx1",
+        },
+        title="Plot ctx1",
+    )
+    plot_dao.create(
+        project_id=project.id,
+        user_id=user["id"],
+        organization_id=None,
+        plot_config={"type": "bar", "x_axis": "model", "y_axis": "count"},
+        project_config={
+            "project_name": "PlotDAO_Context_Filter_Project",
+            "context": "ctx2",
+        },
+        title="Plot ctx2",
+    )
+    plot_dao.create(
+        project_id=project.id,
+        user_id=user["id"],
+        organization_id=None,
+        plot_config={"type": "histogram", "x_axis": "latency"},
+        project_config={
+            "project_name": "PlotDAO_Context_Filter_Project",
+            "context": "ctx1",
+        },
+        title="Plot ctx1 second",
+    )
+    dbsession.commit()
+
+    # Filter by ctx1
+    plots = plot_dao.list_by_user_context(
+        user_id=user["id"],
+        organization_id=None,
+        project_id=project.id,
+        context="ctx1",
+    )
+
+    assert len(plots) == 2
+    for plot in plots:
+        assert plot.project_config.get("context") == "ctx1"
+
+
+# ==================== Batch Delete Tests ====================
+
+
+@pytest.mark.anyio
+async def test_delete_plots_by_project(client: AsyncClient, dbsession):
+    """Test batch deleting all plots for a project."""
+    user = await create_test_user(client, "plot_batch_delete@test.com")
+
+    # Create project
+    await client.post(
+        "/v0/project",
+        json={"name": "plot-batch-delete-project"},
+        headers=user["headers"],
+    )
+
+    # Create multiple plots
+    for i in range(5):
+        await client.post(
+            "/v0/logs/plot",
+            json={
+                "plot_config": {"type": "scatter", "x_axis": "x", "y_axis": "y"},
+                "project_config": {"project_name": "plot-batch-delete-project"},
+                "title": f"Plot {i}",
+            },
+            headers=user["headers"],
+        )
+
+    # Verify plots exist
+    list_response = await client.get(
+        "/v0/logs/plots?project_name=plot-batch-delete-project",
+        headers=user["headers"],
+    )
+    assert list_response.json()["count"] == 5
+
+    # Batch delete
+    delete_response = await client.post(
+        "/v0/logs/plots/delete",
+        json={"project_name": "plot-batch-delete-project"},
+        headers=user["headers"],
+    )
+
+    assert delete_response.status_code == 200
+    data = delete_response.json()
+    assert data["deleted_count"] == 5
+    assert data["project_name"] == "plot-batch-delete-project"
+    assert data["context"] is None
+
+    # Verify plots are gone
+    list_response = await client.get(
+        "/v0/logs/plots?project_name=plot-batch-delete-project",
+        headers=user["headers"],
+    )
+    assert list_response.json()["count"] == 0
+
+
+@pytest.mark.anyio
+async def test_delete_plots_by_project_and_context(client: AsyncClient, dbsession):
+    """Test batch deleting plots for a specific project/context pair."""
+    user = await create_test_user(client, "plot_batch_ctx_delete@test.com")
+
+    # Create project
+    await client.post(
+        "/v0/project",
+        json={"name": "plot-batch-ctx-project"},
+        headers=user["headers"],
+    )
+
+    # Create plots with different contexts
+    for i in range(3):
+        await client.post(
+            "/v0/logs/plot",
+            json={
+                "plot_config": {"type": "scatter", "x_axis": "x", "y_axis": "y"},
+                "project_config": {
+                    "project_name": "plot-batch-ctx-project",
+                    "context": "delete-me",
+                },
+                "title": f"Delete Me {i}",
+            },
+            headers=user["headers"],
+        )
+
+    for i in range(2):
+        await client.post(
+            "/v0/logs/plot",
+            json={
+                "plot_config": {"type": "scatter", "x_axis": "x", "y_axis": "y"},
+                "project_config": {
+                    "project_name": "plot-batch-ctx-project",
+                    "context": "keep-me",
+                },
+                "title": f"Keep Me {i}",
+            },
+            headers=user["headers"],
+        )
+
+    # Batch delete only delete-me context
+    delete_response = await client.post(
+        "/v0/logs/plots/delete",
+        json={
+            "project_name": "plot-batch-ctx-project",
+            "context": "delete-me",
+        },
+        headers=user["headers"],
+    )
+
+    assert delete_response.status_code == 200
+    data = delete_response.json()
+    assert data["deleted_count"] == 3
+    assert data["context"] == "delete-me"
+
+    # Verify only keep-me plots remain
+    list_response = await client.get(
+        "/v0/logs/plots?project_name=plot-batch-ctx-project",
+        headers=user["headers"],
+    )
+    assert list_response.json()["count"] == 2
+    for plot in list_response.json()["plots"]:
+        assert "Keep Me" in plot["title"]
+
+
+@pytest.mark.anyio
+async def test_delete_plots_by_project_not_found(client: AsyncClient, dbsession):
+    """Test batch delete for non-existent project."""
+    user = await create_test_user(client, "plot_batch_delete_notfound@test.com")
+
+    delete_response = await client.post(
+        "/v0/logs/plots/delete",
+        json={"project_name": "nonexistent-project-12345"},
+        headers=user["headers"],
+    )
+
+    assert delete_response.status_code == status.HTTP_404_NOT_FOUND
+
+
+@pytest.mark.anyio
+async def test_delete_plots_by_project_no_access(client: AsyncClient, dbsession):
+    """Test batch delete for project user doesn't have write access to."""
+    user1 = await create_test_user(client, "plot_batch_user1@test.com")
+    user2 = await create_test_user(client, "plot_batch_user2@test.com")
+
+    # User1 creates project and plot
+    await client.post(
+        "/v0/project",
+        json={"name": "user1-batch-project"},
+        headers=user1["headers"],
+    )
+
+    await client.post(
+        "/v0/logs/plot",
+        json={
+            "plot_config": {"type": "scatter", "x_axis": "x", "y_axis": "y"},
+            "project_config": {"project_name": "user1-batch-project"},
+        },
+        headers=user1["headers"],
+    )
+
+    # User2 tries to batch delete User1's plots
+    delete_response = await client.post(
+        "/v0/logs/plots/delete",
+        json={"project_name": "user1-batch-project"},
+        headers=user2["headers"],
+    )
+
+    # Should be forbidden or not found (project exists but user2 has no access)
+    assert delete_response.status_code in [
+        status.HTTP_403_FORBIDDEN,
+        status.HTTP_404_NOT_FOUND,
+    ]
+
+
+@pytest.mark.anyio
+async def test_delete_plots_by_project_empty_result(client: AsyncClient, dbsession):
+    """Test batch delete when no plots match the criteria."""
+    user = await create_test_user(client, "plot_batch_empty@test.com")
+
+    # Create project with no plots
+    await client.post(
+        "/v0/project",
+        json={"name": "plot-batch-empty-project"},
+        headers=user["headers"],
+    )
+
+    # Batch delete on project with no plots
+    delete_response = await client.post(
+        "/v0/logs/plots/delete",
+        json={"project_name": "plot-batch-empty-project"},
+        headers=user["headers"],
+    )
+
+    assert delete_response.status_code == 200
+    data = delete_response.json()
+    assert data["deleted_count"] == 0
+
+
+@pytest.mark.anyio
+async def test_plot_dao_delete_by_project(client: AsyncClient, dbsession):
+    """Test PlotDAO delete_by_project method."""
+    user = await create_test_user(client, "plot_dao_delete_project@test.com")
+
+    # Create project
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    project_dao.create(
+        name="PlotDAO_Delete_By_Project",
+        user_id=user["id"],
+        organization_id=None,
+    )
+    dbsession.commit()
+
+    projects = project_dao.filter(user_id=user["id"], name="PlotDAO_Delete_By_Project")
+    project = projects[0][0]
+
+    # Create plots
+    plot_dao = PlotDAO(dbsession)
+    for i in range(4):
+        plot_dao.create(
+            project_id=project.id,
+            user_id=user["id"],
+            organization_id=None,
+            plot_config={"type": "scatter", "x_axis": f"x{i}", "y_axis": f"y{i}"},
+            project_config={"project_name": "PlotDAO_Delete_By_Project"},
+            title=f"Plot {i}",
+        )
+    dbsession.commit()
+
+    # Verify plots exist
+    plots = plot_dao.list_by_project(project.id)
+    assert len(plots) == 4
+
+    # Delete all plots for project
+    deleted_count = plot_dao.delete_by_project(project.id)
+    dbsession.commit()
+
+    assert deleted_count == 4
+
+    # Verify plots are gone
+    plots = plot_dao.list_by_project(project.id)
+    assert len(plots) == 0
+
+
+@pytest.mark.anyio
+async def test_plot_dao_delete_by_project_with_context(client: AsyncClient, dbsession):
+    """Test PlotDAO delete_by_project with context filter."""
+    user = await create_test_user(client, "plot_dao_delete_ctx@test.com")
+
+    # Create project
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    project_dao.create(
+        name="PlotDAO_Delete_By_Context",
+        user_id=user["id"],
+        organization_id=None,
+    )
+    dbsession.commit()
+
+    projects = project_dao.filter(
+        user_id=user["id"],
+        name="PlotDAO_Delete_By_Context",
+    )
+    project = projects[0][0]
+
+    # Create plots with different contexts
+    plot_dao = PlotDAO(dbsession)
+    for i in range(3):
+        plot_dao.create(
+            project_id=project.id,
+            user_id=user["id"],
+            organization_id=None,
+            plot_config={"type": "scatter", "x_axis": f"x{i}", "y_axis": f"y{i}"},
+            project_config={
+                "project_name": "PlotDAO_Delete_By_Context",
+                "context": "ctx-to-delete",
+            },
+            title=f"Delete {i}",
+        )
+    for i in range(2):
+        plot_dao.create(
+            project_id=project.id,
+            user_id=user["id"],
+            organization_id=None,
+            plot_config={"type": "bar", "x_axis": "model", "y_axis": "count"},
+            project_config={
+                "project_name": "PlotDAO_Delete_By_Context",
+                "context": "ctx-to-keep",
+            },
+            title=f"Keep {i}",
+        )
+    dbsession.commit()
+
+    # Verify all plots exist
+    all_plots = plot_dao.list_by_project(project.id)
+    assert len(all_plots) == 5
+
+    # Delete only ctx-to-delete
+    deleted_count = plot_dao.delete_by_project(project.id, context="ctx-to-delete")
+    dbsession.commit()
+
+    assert deleted_count == 3
+
+    # Verify only ctx-to-keep plots remain
+    remaining_plots = plot_dao.list_by_project(project.id)
+    assert len(remaining_plots) == 2
+    for plot in remaining_plots:
+        assert plot.project_config.get("context") == "ctx-to-keep"

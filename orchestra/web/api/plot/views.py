@@ -27,6 +27,7 @@ from orchestra.web.api.plot.llm_inference import (
 from orchestra.web.api.plot.schema import (
     AdminPlotResponse,
     CreatePlotRequest,
+    DeletePlotsByProjectRequest,
     InferredConfigResponse,
     PlotListItem,
     PlotListResponse,
@@ -320,6 +321,10 @@ def list_plots(
         None,
         description="Filter by project name",
     ),
+    context: Optional[str] = Query(
+        None,
+        description="Filter by context (stored in project_config)",
+    ),
     session: Session = Depends(get_db_session),
 ) -> PlotListResponse:
     """
@@ -344,6 +349,7 @@ def list_plots(
         user_id=user_id,
         organization_id=organization_id,
         project_id=project_id,
+        context=context,
     )
 
     # Get project names for response
@@ -551,6 +557,70 @@ def delete_plot(
 
     plot_dao.delete(plot.id)
     session.commit()
+
+
+@router.post(
+    "/logs/plots/delete",
+    status_code=status.HTTP_200_OK,
+    responses={
+        200: {"description": "Plots deleted"},
+        403: {"description": "Access denied to project"},
+        404: {"description": "Project not found"},
+    },
+)
+def delete_plots_by_project(
+    request_fastapi: Request,
+    body: DeletePlotsByProjectRequest,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """
+    Delete all plots for a project, optionally filtered by context.
+
+    Requires project:write permission on the target project.
+    """
+    user_id = request_fastapi.state.user_id
+    organization_id = request_fastapi.state.organization_id
+
+    # Get and validate project
+    project = _get_project_by_name(
+        body.project_name,
+        user_id,
+        organization_id,
+        session,
+    )
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project '{body.project_name}' not found",
+        )
+
+    # Check project:write permission
+    if not _check_project_permission(
+        project,
+        user_id,
+        organization_id,
+        "project:write",
+        session,
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have write access to this project",
+        )
+
+    # Delete plots
+    plot_dao = PlotDAO(session)
+    deleted_count = plot_dao.delete_by_project(
+        project_id=project.id,
+        context=body.context,
+    )
+
+    session.commit()
+
+    return {
+        "deleted_count": deleted_count,
+        "project_name": body.project_name,
+        "context": body.context,
+    }
 
 
 # =============================================================================
