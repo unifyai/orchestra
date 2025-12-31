@@ -22,6 +22,7 @@ from orchestra.web.api import (  # noqa: WPS235
     project,
     provider,
     roles,
+    storage,
     supported_endpoints,
     teams,
     users,
@@ -138,6 +139,9 @@ groupings = {
         "Plots",
         "Configs",
     ],
+    "Storage": [
+        "Storage",
+    ],
     "Account": [
         "Credits",
         "Query Logging",
@@ -237,6 +241,14 @@ api_router.include_router(
 api_router.include_router(
     api_keys.router,
     tags=["API Keys"],
+    dependencies=API_KEY_AUTH,
+)
+
+# Storage
+
+api_router.include_router(
+    storage.router,
+    tags=["Storage"],
     dependencies=API_KEY_AUTH,
 )
 
