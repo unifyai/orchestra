@@ -194,6 +194,7 @@ def get_running_jobs(assistant_id: str):
         project="AssistantJobs",
         context="startup_events",
         filter=f"assistant_id == {assistant_id} and running == True",
+        api_key=os.environ.get("SHARED_UNIFY_KEY"),
     )
     job_names = [log.to_json()["entries"]["job_name"] for log in logs]
     return job_names
