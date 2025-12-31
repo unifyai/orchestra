@@ -1262,6 +1262,20 @@ async def test_delete_assistant_deletes_contexts(
             logs_after_delete.json()["count"] == 0
         ), f"Context still exists and is not empty. Found {logs_after_delete.json()['count']} logs."
 
+    # Verify the log is also removed from sibling contexts (User/All/Ctx and All/Ctx)
+    # The sibling cleanup should remove the log from these contexts when the
+    # User/Assistant/Ctx context is deleted
+    for sibling_ctx in [user_all_context, global_all_context]:
+        sibling_logs = await client.get(
+            f"/v0/logs?project={project_name}&context={sibling_ctx}",
+            headers=HEADERS,
+        )
+        if sibling_logs.status_code == 200:
+            log_ids = [log["id"] for log in sibling_logs.json()["logs"]]
+            assert (
+                log_id not in log_ids
+            ), f"Log {log_id} should be removed from sibling context {sibling_ctx}"
+
 
 @pytest.mark.anyio
 async def test_delete_assistant_contact(client: AsyncClient):
