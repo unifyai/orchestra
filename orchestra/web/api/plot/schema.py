@@ -213,6 +213,19 @@ class UpdatePlotRequest(BaseModel):
     )
 
 
+class DeletePlotsByProjectRequest(BaseModel):
+    """Request to delete all plots for a project/context pair."""
+
+    project_name: str = Field(
+        ...,
+        description="Name of the project",
+    )
+    context: Optional[str] = Field(
+        None,
+        description="Optional context to filter by (deletes all if not specified)",
+    )
+
+
 # =============================================================================
 # Output Schemas
 # =============================================================================
