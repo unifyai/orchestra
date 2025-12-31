@@ -3204,3 +3204,332 @@ async def test_delete_context_normalizes_slashes(client: AsyncClient):
         headers=HEADERS,
     )
     assert response.status_code == 404
+
+
+# =============================================================================
+# Tests for sibling context cleanup in Assistants/UnityTests projects
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_delete_context_assistants_cleans_all_tiers(client: AsyncClient):
+    """
+    Test that deleting a context in Assistants project cleans up sibling tiers.
+
+    Deleting 'User/Assistant/Transcripts' should also clean logs from:
+    - 'User/All/Transcripts' (tier 2)
+    - 'All/Transcripts' (tier 1)
+    """
+    project_name = "Assistants"
+    tier1 = "All/Transcripts"
+    tier2 = "SiblingUser/All/Transcripts"
+    tier3 = "SiblingUser/SiblingAssistant/Transcripts"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Create all 3 tier contexts
+    for ctx in [tier1, tier2, tier3]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": ctx},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+
+    # Create log with _user and _assistant fields in tier3
+    log_resp = await _create_log(
+        client,
+        project_name,
+        entries={
+            "message": "sibling test",
+            "_user": "SiblingUser",
+            "_assistant": "SiblingAssistant",
+        },
+        context=tier3,
+    )
+    assert log_resp.status_code == 200
+    log_id = log_resp.json()["log_event_ids"][0]
+
+    # Add log to tier1 and tier2
+    for ctx in [tier1, tier2]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts/add_logs",
+            json={"context_name": ctx, "log_ids": [log_id]},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    # Verify log is in all 3 contexts before deletion
+    for ctx in [tier1, tier2, tier3]:
+        logs = await fetch_logs(client, project_name, context=ctx)
+        assert log_id in [log["id"] for log in logs], f"Log should be in {ctx}"
+
+    # DELETE the tier3 context (this triggers DAO delete with sibling cleanup)
+    response = await client.delete(
+        f"/v0/project/{project_name}/contexts/{tier3}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Verify log is removed from ALL tiers (sibling cleanup worked)
+    for ctx in [tier1, tier2]:
+        logs = await fetch_logs(client, project_name, context=ctx)
+        assert log_id not in [
+            log["id"] for log in logs
+        ], f"Log should be removed from sibling context {ctx}"
+
+
+@pytest.mark.anyio
+async def test_delete_context_from_tier1_cleans_other_tiers(client: AsyncClient):
+    """
+    Test deleting from All/* (tier 1) also cleans logs from tier 2 and tier 3.
+    """
+    project_name = "Assistants"
+    tier1 = "All/Messages"
+    tier2 = "Tier1User/All/Messages"
+    tier3 = "Tier1User/Tier1Asst/Messages"
+
+    # Create project and contexts
+    await _create_project(client, project_name)
+    for ctx in [tier1, tier2, tier3]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": ctx},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    # Create log in tier1
+    log_resp = await _create_log(
+        client,
+        project_name,
+        entries={
+            "message": "tier1 deletion test",
+            "_user": "Tier1User",
+            "_assistant": "Tier1Asst",
+        },
+        context=tier1,
+    )
+    assert log_resp.status_code == 200
+    log_id = log_resp.json()["log_event_ids"][0]
+
+    # Add log to tier2 and tier3
+    for ctx in [tier2, tier3]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts/add_logs",
+            json={"context_name": ctx, "log_ids": [log_id]},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    # DELETE the tier1 context
+    response = await client.delete(
+        f"/v0/project/{project_name}/contexts/{tier1}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Verify log is removed from tier2 and tier3 as well
+    for ctx in [tier2, tier3]:
+        logs = await fetch_logs(client, project_name, context=ctx)
+        assert log_id not in [
+            log["id"] for log in logs
+        ], f"Log should be removed from {ctx} when tier1 is deleted"
+
+
+@pytest.mark.anyio
+async def test_delete_context_from_tier2_cleans_other_tiers(client: AsyncClient):
+    """
+    Test deleting from User/All/* (tier 2) also cleans logs from tier 1 and tier 3.
+    """
+    project_name = "Assistants"
+    tier1 = "All/Events"
+    tier2 = "Tier2User/All/Events"
+    tier3 = "Tier2User/Tier2Asst/Events"
+
+    # Create project and contexts
+    await _create_project(client, project_name)
+    for ctx in [tier1, tier2, tier3]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": ctx},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    # Create log in tier2
+    log_resp = await _create_log(
+        client,
+        project_name,
+        entries={
+            "message": "tier2 deletion test",
+            "_user": "Tier2User",
+            "_assistant": "Tier2Asst",
+        },
+        context=tier2,
+    )
+    assert log_resp.status_code == 200
+    log_id = log_resp.json()["log_event_ids"][0]
+
+    # Add log to tier1 and tier3
+    for ctx in [tier1, tier3]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts/add_logs",
+            json={"context_name": ctx, "log_ids": [log_id]},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    # DELETE the tier2 context
+    response = await client.delete(
+        f"/v0/project/{project_name}/contexts/{tier2}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Verify log is removed from tier1 and tier3 as well
+    for ctx in [tier1, tier3]:
+        logs = await fetch_logs(client, project_name, context=ctx)
+        assert log_id not in [
+            log["id"] for log in logs
+        ], f"Log should be removed from {ctx} when tier2 is deleted"
+
+
+@pytest.mark.anyio
+async def test_delete_context_include_children_with_sibling_cleanup(
+    client: AsyncClient,
+):
+    """
+    Test that include_children=True with sibling cleanup works correctly.
+
+    Deleting 'User/Assistant' with include_children=True should:
+    1. Delete all child contexts under User/Assistant/*
+    2. Clean up logs from sibling contexts (All/* and User/All/*)
+    """
+    project_name = "Assistants"
+    user = "ChildUser"
+    assistant = "ChildAsst"
+
+    # Tier structure for two different sub-contexts
+    contexts = [
+        f"All/Logs",
+        f"{user}/All/Logs",
+        f"{user}/{assistant}/Logs",
+        f"All/Chats",
+        f"{user}/All/Chats",
+        f"{user}/{assistant}/Chats",
+    ]
+
+    # Create project and all contexts
+    await _create_project(client, project_name)
+    for ctx in contexts:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": ctx},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    # Create logs for each sub-context
+    log_ids = []
+    for sub_ctx in ["Logs", "Chats"]:
+        tier3_ctx = f"{user}/{assistant}/{sub_ctx}"
+        log_resp = await _create_log(
+            client,
+            project_name,
+            entries={
+                "message": f"test {sub_ctx}",
+                "_user": user,
+                "_assistant": assistant,
+            },
+            context=tier3_ctx,
+        )
+        assert log_resp.status_code == 200
+        log_id = log_resp.json()["log_event_ids"][0]
+        log_ids.append(log_id)
+
+        # Add to sibling contexts
+        for sibling in [f"All/{sub_ctx}", f"{user}/All/{sub_ctx}"]:
+            response = await client.post(
+                f"/v0/project/{project_name}/contexts/add_logs",
+                json={"context_name": sibling, "log_ids": [log_id]},
+                headers=HEADERS,
+            )
+            assert response.status_code == 200
+
+    # DELETE User/Assistant with include_children=True
+    response = await client.delete(
+        f"/v0/project/{project_name}/contexts/{user}/{assistant}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert "Deleted 2 context(s)" in result["info"]
+
+    # Verify all logs are removed from sibling contexts
+    for sub_ctx in ["Logs", "Chats"]:
+        for sibling in [f"All/{sub_ctx}", f"{user}/All/{sub_ctx}"]:
+            logs = await fetch_logs(client, project_name, context=sibling)
+            for log_id in log_ids:
+                assert log_id not in [
+                    log["id"] for log in logs
+                ], f"Log should be removed from {sibling}"
+
+
+@pytest.mark.anyio
+async def test_unitytests_project_sibling_cleanup(client: AsyncClient):
+    """
+    Test that sibling cleanup also works for UnityTests project.
+    """
+    project_name = "UnityTests"
+    tier1 = "All/TestResults"
+    tier2 = "UnityUser/All/TestResults"
+    tier3 = "UnityUser/UnityAsst/TestResults"
+
+    # Create project and contexts
+    await _create_project(client, project_name)
+    for ctx in [tier1, tier2, tier3]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": ctx},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    # Create log in tier3
+    log_resp = await _create_log(
+        client,
+        project_name,
+        entries={
+            "result": "pass",
+            "_user": "UnityUser",
+            "_assistant": "UnityAsst",
+        },
+        context=tier3,
+    )
+    assert log_resp.status_code == 200
+    log_id = log_resp.json()["log_event_ids"][0]
+
+    # Add to sibling contexts
+    for ctx in [tier1, tier2]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts/add_logs",
+            json={"context_name": ctx, "log_ids": [log_id]},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    # DELETE tier3 context
+    response = await client.delete(
+        f"/v0/project/{project_name}/contexts/{tier3}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Verify log is removed from sibling contexts
+    for ctx in [tier1, tier2]:
+        logs = await fetch_logs(client, project_name, context=ctx)
+        assert log_id not in [
+            log["id"] for log in logs
+        ], f"Log should be removed from {ctx} in UnityTests project"

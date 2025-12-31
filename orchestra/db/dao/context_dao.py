@@ -3496,9 +3496,43 @@ class ContextDAO:
 
     def delete(self, id: int) -> None:
         from orchestra.db.dao.log_dao import LogDAO
+        from orchestra.db.dao.sibling_context_cleanup import (
+            get_assistants_sibling_context_info,
+            remove_logs_from_sibling_contexts,
+        )
 
         try:
             context = self.session.query(Context).filter_by(id=id).one()
+            project = context.project
+
+            # For Assistants/UnityTests projects, clean up sibling contexts first
+            # This must happen BEFORE deleting the context while associations exist
+            is_assistants_project = project.name in ("Assistants", "UnityTests")
+
+            if is_assistants_project and "/" in context.name:
+                # Get all log event IDs in this context before deletion
+                log_event_ids = [
+                    lec.log_event_id
+                    for lec in self.session.query(LogEventContext)
+                    .filter(LogEventContext.context_id == id)
+                    .all()
+                ]
+
+                if log_event_ids:
+                    # Find sibling contexts for these logs
+                    sibling_map = get_assistants_sibling_context_info(
+                        session=self.session,
+                        project_id=project.id,
+                        context_id=id,
+                        context_name=context.name,
+                        log_event_ids=log_event_ids,
+                        context_dao=self,
+                    )
+
+                    # Remove log associations from sibling contexts
+                    if sibling_map:
+                        remove_logs_from_sibling_contexts(self.session, sibling_map)
+                        self.session.flush()
 
             # Delete associated GCS media BEFORE deleting the context
             log_dao = LogDAO(self.session, self)

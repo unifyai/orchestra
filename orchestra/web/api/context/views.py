@@ -14,7 +14,7 @@ from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
-from orchestra.db.models.orchestra_models import Context, LogEventContext
+from orchestra.db.models.orchestra_models import Context
 from orchestra.web.api.context.schema import (
     AddLogsToContextRequest,
     ContextCommit,
@@ -23,7 +23,6 @@ from orchestra.web.api.context.schema import (
     ContextRollback,
     RenameContextRequest,
 )
-from orchestra.web.api.log.views import _get_assistants_sibling_context_info
 from orchestra.web.api.utils.http_responses import not_found
 
 router = APIRouter()
@@ -603,43 +602,12 @@ def delete_context(
                     detail="Cannot delete built-in Tasks context.",
                 )
 
-        # Detect Assistants/UnityTests project for sibling cleanup
-        is_assistants_dual_context = project_name in ("Assistants", "UnityTests")
-
         deleted_names = []
 
         for ctx in contexts_to_delete:
-            # Get all log event IDs in this context BEFORE deletion
-            log_event_ids = [
-                lec.log_event_id
-                for lec in session.query(LogEventContext)
-                .filter(LogEventContext.context_id == ctx.id)
-                .all()
-            ]
-
-            # For Assistants/UnityTests projects, handle sibling context cleanup
-            # This must happen BEFORE context deletion while associations still exist
-            if is_assistants_dual_context and log_event_ids and "/" in ctx.name:
-                sibling_context_map = _get_assistants_sibling_context_info(
-                    session=session,
-                    project_id=project_id,
-                    context_id=ctx.id,
-                    context_name=ctx.name,
-                    log_event_ids=log_event_ids,
-                    context_dao=context_dao,
-                )
-
-                # Remove log associations from sibling contexts
-                if sibling_context_map:
-                    for log_id, sibling_ctx_ids in sibling_context_map.items():
-                        for sibling_ctx_id in sibling_ctx_ids:
-                            session.query(LogEventContext).filter(
-                                LogEventContext.log_event_id == log_id,
-                                LogEventContext.context_id == sibling_ctx_id,
-                            ).delete(synchronize_session=False)
-                    session.flush()
-
-            # Delete the context (handles GCS cleanup, cascades, orphan cleanup, and commits)
+            # Delete the context
+            # The DAO handles sibling cleanup for Assistants/UnityTests projects,
+            # GCS media cleanup, cascade deletion, and orphan log event cleanup
             context_dao.delete(id=ctx.id)
             deleted_names.append(ctx.name)
 
