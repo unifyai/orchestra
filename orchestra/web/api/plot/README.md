@@ -62,6 +62,12 @@ List plots accessible to the user.
 
 **Query Parameters:**
 - `project_name` (optional): Filter by project name
+- `context` (optional): Filter by context stored in project_config
+
+**Example:**
+```
+GET /logs/plots?project_name=my-project&context=production
+```
 
 **Response:** `PlotListResponse` with metadata (no configs).
 
@@ -97,6 +103,34 @@ Update a plot's title or configuration.
 Delete a plot.
 
 **Access Control:** Requires `project:write` on the plot's project.
+
+#### POST /logs/plots/delete
+
+Batch delete all plots for a project, optionally filtered by context.
+
+**Request Body:**
+```json
+{
+  "project_name": "my-project",
+  "context": "production"
+}
+```
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `project_name` | string | Yes | Name of the project |
+| `context` | string | No | Optional context filter (deletes all if not specified) |
+
+**Response:**
+```json
+{
+  "deleted_count": 5,
+  "project_name": "my-project",
+  "context": "production"
+}
+```
+
+**Access Control:** Requires `project:write` on the target project.
 
 ### Admin Endpoints
 
@@ -157,6 +191,7 @@ CREATE TABLE plot (
 | GET /logs/plots/{token} | `project:read` |
 | PATCH /logs/plots/{token} | `project:write` |
 | DELETE /logs/plots/{token} | `project:write` |
+| POST /logs/plots/delete | `project:write` |
 
 ### Cascade Behavior
 
