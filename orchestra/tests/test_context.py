@@ -2891,3 +2891,316 @@ async def test_individual_field_uniqueness_with_auto_counting(client: AsyncClien
 
     # Field uniqueness would be enforced if we had set unique=True on email field
     # But with auto_counting, user_id is the only unique field
+
+
+# =============================================================================
+# Tests for include_children parameter
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_delete_context_with_children(client: AsyncClient):
+    """Test that include_children=True deletes parent and all child contexts."""
+    project_name = "test-include-children"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Create parent and child contexts
+    contexts = [
+        "experiments",
+        "experiments/trial1",
+        "experiments/trial2",
+        "experiments/trial1/sub1",
+        "other_context",  # Should NOT be deleted
+    ]
+    for ctx in contexts:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": ctx},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    # Delete with include_children=True (default)
+    response = await client.delete(
+        f"/v0/project/{project_name}/contexts/experiments",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert "Deleted 4 context(s) successfully!" in result["info"]
+    assert set(result["deleted"]) == {
+        "experiments",
+        "experiments/trial1",
+        "experiments/trial2",
+        "experiments/trial1/sub1",
+    }
+
+    # Verify parent and children are deleted
+    for ctx in ["experiments", "experiments/trial1", "experiments/trial2"]:
+        response = await client.get(
+            f"/v0/project/{project_name}/contexts/{ctx}",
+            headers=HEADERS,
+        )
+        assert response.status_code == 404
+
+    # Verify other_context still exists
+    response = await client.get(
+        f"/v0/project/{project_name}/contexts/other_context",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_delete_virtual_parent_with_children(client: AsyncClient):
+    """Test deleting children when parent context doesn't exist."""
+    project_name = "test-virtual-parent"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Create only child contexts (no parent "tests" context)
+    contexts = [
+        "tests/test_something",
+        "tests/test_something_else",
+    ]
+    for ctx in contexts:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": ctx},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    # Delete "tests" with include_children=True - should succeed even though
+    # "tests" context doesn't exist, as children do
+    response = await client.delete(
+        f"/v0/project/{project_name}/contexts/tests",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    result = response.json()
+    assert "Deleted 2 context(s) successfully!" in result["info"]
+    assert set(result["deleted"]) == {
+        "tests/test_something",
+        "tests/test_something_else",
+    }
+
+    # Verify children are deleted
+    for ctx in contexts:
+        response = await client.get(
+            f"/v0/project/{project_name}/contexts/{ctx}",
+            headers=HEADERS,
+        )
+        assert response.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_delete_context_include_children_false(client: AsyncClient):
+    """Test that include_children=False only deletes exact match."""
+    project_name = "test-no-children"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Create parent and child contexts
+    contexts = ["parent", "parent/child1", "parent/child2"]
+    for ctx in contexts:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": ctx},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    # Delete with include_children=False
+    response = await client.delete(
+        f"/v0/project/{project_name}/contexts/parent?include_children=false",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert "Context deleted successfully!" in response.json()["info"]
+
+    # Verify parent is deleted
+    response = await client.get(
+        f"/v0/project/{project_name}/contexts/parent",
+        headers=HEADERS,
+    )
+    assert response.status_code == 404
+
+    # Verify children still exist
+    for ctx in ["parent/child1", "parent/child2"]:
+        response = await client.get(
+            f"/v0/project/{project_name}/contexts/{ctx}",
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_delete_context_include_children_false_404(client: AsyncClient):
+    """Test that include_children=False returns 404 when only children exist."""
+    project_name = "test-no-parent-404"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Create only child contexts
+    contexts = ["virtual/child1", "virtual/child2"]
+    for ctx in contexts:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": ctx},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    # Delete with include_children=False - should 404 because "virtual" doesn't exist
+    response = await client.delete(
+        f"/v0/project/{project_name}/contexts/virtual?include_children=false",
+        headers=HEADERS,
+    )
+    assert response.status_code == 404
+
+    # Verify children still exist
+    for ctx in contexts:
+        response = await client.get(
+            f"/v0/project/{project_name}/contexts/{ctx}",
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_delete_context_include_children_404_no_matches(client: AsyncClient):
+    """Test that 404 is returned when neither parent nor children exist."""
+    project_name = "test-no-matches"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Create unrelated context
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": "other"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Delete non-existent context with include_children=True
+    response = await client.delete(
+        f"/v0/project/{project_name}/contexts/nonexistent",
+        headers=HEADERS,
+    )
+    assert response.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_delete_context_no_sibling_deletion_for_non_assistants(
+    client: AsyncClient,
+):
+    """Test that sibling cleanup only happens for Assistants/UnityTests projects."""
+    project_name = "test-regular-project"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Create contexts that look like sibling pattern but in regular project
+    contexts = ["All/Transcripts", "User/Assistant/Transcripts"]
+    for ctx in contexts:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": ctx},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200
+
+    # Create a log and add to both contexts
+    log_response = await _create_log(
+        client,
+        project_name,
+        entries={"message": "test"},
+        context="All/Transcripts",
+    )
+    assert log_response.status_code == 200
+    log_id = log_response.json()["log_event_ids"][0]
+
+    # Add same log to second context
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts/add_logs",
+        json={"context_name": "User/Assistant/Transcripts", "log_ids": [log_id]},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Delete User/Assistant/Transcripts
+    response = await client.delete(
+        f"/v0/project/{project_name}/contexts/User/Assistant/Transcripts",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Verify All/Transcripts still has the log (no sibling cleanup for regular projects)
+    logs = await fetch_logs(client, project_name, context="All/Transcripts")
+    assert len(logs) == 1
+    assert logs[0]["entries"]["message"] == "test"
+
+
+@pytest.mark.anyio
+async def test_delete_context_protected_context_in_children(client: AsyncClient):
+    """Test that deleting children fails if a protected context is in the set."""
+    project_name = "Unity"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Create Tasks context (protected) and a child
+    for ctx in ["Tasks", "Tasks/subtask"]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": ctx},
+            headers=HEADERS,
+        )
+        # May fail if already exists, that's ok
+        assert response.status_code in [200, 400]
+
+    # Try to delete Tasks with children - should fail due to protected context
+    response = await client.delete(
+        f"/v0/project/{project_name}/contexts/Tasks",
+        headers=HEADERS,
+    )
+    assert response.status_code == 403
+    assert "Cannot delete built-in Tasks context" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_delete_context_normalizes_slashes(client: AsyncClient):
+    """Test that leading/trailing slashes are normalized."""
+    project_name = "test-slash-normalization"
+
+    # Create project
+    await _create_project(client, project_name)
+
+    # Create context
+    response = await client.post(
+        f"/v0/project/{project_name}/contexts",
+        json={"name": "experiments/trial1"},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Delete with leading slash
+    response = await client.delete(
+        f"/v0/project/{project_name}/contexts//experiments/trial1/",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+
+    # Verify deleted
+    response = await client.get(
+        f"/v0/project/{project_name}/contexts/experiments/trial1",
+        headers=HEADERS,
+    )
+    assert response.status_code == 404
