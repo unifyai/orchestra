@@ -2003,8 +2003,9 @@ async def test_delete_plots_by_project(client: AsyncClient, dbsession):
     assert list_response.json()["count"] == 5
 
     # Batch delete
-    delete_response = await client.post(
-        "/v0/logs/plots/delete",
+    delete_response = await client.request(
+        "DELETE",
+        "/v0/logs/plots",
         json={"project_name": "plot-batch-delete-project"},
         headers=user["headers"],
     )
@@ -2065,8 +2066,9 @@ async def test_delete_plots_by_project_and_context(client: AsyncClient, dbsessio
         )
 
     # Batch delete only delete-me context
-    delete_response = await client.post(
-        "/v0/logs/plots/delete",
+    delete_response = await client.request(
+        "DELETE",
+        "/v0/logs/plots",
         json={
             "project_name": "plot-batch-ctx-project",
             "context": "delete-me",
@@ -2094,8 +2096,9 @@ async def test_delete_plots_by_project_not_found(client: AsyncClient, dbsession)
     """Test batch delete for non-existent project."""
     user = await create_test_user(client, "plot_batch_delete_notfound@test.com")
 
-    delete_response = await client.post(
-        "/v0/logs/plots/delete",
+    delete_response = await client.request(
+        "DELETE",
+        "/v0/logs/plots",
         json={"project_name": "nonexistent-project-12345"},
         headers=user["headers"],
     )
@@ -2126,8 +2129,9 @@ async def test_delete_plots_by_project_no_access(client: AsyncClient, dbsession)
     )
 
     # User2 tries to batch delete User1's plots
-    delete_response = await client.post(
-        "/v0/logs/plots/delete",
+    delete_response = await client.request(
+        "DELETE",
+        "/v0/logs/plots",
         json={"project_name": "user1-batch-project"},
         headers=user2["headers"],
     )
@@ -2152,8 +2156,9 @@ async def test_delete_plots_by_project_empty_result(client: AsyncClient, dbsessi
     )
 
     # Batch delete on project with no plots
-    delete_response = await client.post(
-        "/v0/logs/plots/delete",
+    delete_response = await client.request(
+        "DELETE",
+        "/v0/logs/plots",
         json={"project_name": "plot-batch-empty-project"},
         headers=user["headers"],
     )
