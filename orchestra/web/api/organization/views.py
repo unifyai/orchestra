@@ -1147,7 +1147,12 @@ async def _send_invite_email(
 
     try:
         email_task = asyncio.create_task(
-            send_email_async(invite.invitee_email, email_subject, email_body),
+            send_email_async(
+                invite.invitee_email,
+                email_subject,
+                email_body,
+                from_email="hello@unify.ai",
+            ),
         )
 
         def _log_email_result(task: asyncio.Task) -> None:
