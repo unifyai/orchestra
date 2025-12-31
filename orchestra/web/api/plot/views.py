@@ -559,8 +559,8 @@ def delete_plot(
     session.commit()
 
 
-@router.post(
-    "/logs/plots/delete",
+@router.delete(
+    "/logs/plots",
     status_code=status.HTTP_200_OK,
     responses={
         200: {"description": "Plots deleted"},
