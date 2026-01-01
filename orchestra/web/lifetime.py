@@ -126,7 +126,7 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
     if (
         not settings.opentelemetry_endpoint
         and not settings.tempo_url
-        and not settings.trace_log_dir
+        and not settings.log_dir
     ):
         return
 
@@ -209,14 +209,14 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
             # Continue without Tempo tracing
 
     # Add file-based exporter for local development
-    if settings.trace_log_dir:
+    if settings.log_dir:
         try:
             from orchestra.web.api.utils.file_trace_exporter import FileSpanExporter
 
-            file_exporter = FileSpanExporter(settings.trace_log_dir)
+            file_exporter = FileSpanExporter(settings.log_dir)
             tracer_provider.add_span_processor(BatchSpanProcessor(file_exporter))
             logger.info(
-                f"Configured file-based trace exporter at {settings.trace_log_dir}",
+                f"Configured file-based trace exporter at {settings.log_dir}",
             )
         except Exception as e:
             logger.warning(f"Failed to configure file trace exporter: {e}")
