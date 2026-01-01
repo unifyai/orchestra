@@ -85,14 +85,19 @@ class Settings(BaseSettings):
     sentry_dsn: Optional[str] = None
     sentry_sample_rate: float = 1.0
 
-    # Grpc endpoint for opentelemetry.
-    # E.G. http://localhost:4317
-    opentelemetry_endpoint: Optional[str] = os.environ.get(
-        "ORCHESTRA_OPENTELEMETRY_ENDPOINT",
+    # OpenTelemetry master switch
+    # Set to "false" to disable all OTel tracing
+    otel_enabled: bool = os.environ.get("ORCHESTRA_OTEL", "true").lower() in (
+        "true",
+        "1",
     )
-    opentelemetry_secure: bool = (
-        os.environ.get("ORCHESTRA_OPENTELEMETRY_SECURE", "").lower() == "true"
-    )
+
+    # OTLP endpoint for OpenTelemetry export (e.g., http://localhost:4317)
+    # When set, traces are exported via OTLP to Tempo/Jaeger
+    otel_endpoint: Optional[str] = os.environ.get("ORCHESTRA_OTEL_ENDPOINT")
+
+    # Use secure (TLS) connection for OTLP export
+    otel_secure: bool = os.environ.get("ORCHESTRA_OTEL_SECURE", "").lower() == "true"
 
     # Observability Stack Configuration
     # Set these to None to disable the respective service
