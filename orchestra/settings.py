@@ -123,6 +123,10 @@ class Settings(BaseSettings):
         None,
     )
 
+    # Master logging switch (console + file if log_dir is set)
+    # Set to "false" to disable all logging
+    log_enabled: bool = os.environ.get("ORCHESTRA_LOG", "true").lower() in ("true", "1")
+
     # Local file-based logging directory
     # When set, traces are written to JSON files in this directory
     # Example: /Users/user/unity/logs/orchestra/2025-01-01T12-00-00
