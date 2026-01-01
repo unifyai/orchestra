@@ -16,7 +16,7 @@ from opentelemetry.sdk.resources import (
     Resource,
 )
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 from opentelemetry.trace import set_tracer_provider
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -213,20 +213,36 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
             )
             # Continue without Tempo tracing
 
-    # Add file-based exporter for local development
-    # Prefer otel_log_dir if set (allows sharing with Unity), otherwise fall back to log_dir
-    otel_log_dir = settings.otel_log_dir or settings.log_dir
-    if settings.log_enabled and otel_log_dir:
+    # Add JSONL exporter for unified traces with Unity (ORCHESTRA_OTEL_LOG_DIR)
+    # This writes {trace_id}.jsonl files matching Unity's format
+    if settings.log_enabled and settings.otel_log_dir:
+        try:
+            from orchestra.web.api.utils.file_trace_exporter import JsonlSpanExporter
+
+            jsonl_exporter = JsonlSpanExporter(
+                settings.otel_log_dir,
+                service_name="orchestra",
+            )
+            tracer_provider.add_span_processor(SimpleSpanProcessor(jsonl_exporter))
+            logger.info(
+                f"Configured JSONL span exporter at {settings.otel_log_dir}",
+            )
+        except Exception as e:
+            logger.warning(f"Failed to configure JSONL span exporter: {e}")
+
+    # Add per-request JSON exporter for Orchestra-centric debugging (ORCHESTRA_LOG_DIR)
+    # This writes detailed per-request JSON files to requests/ subdirectory
+    if settings.log_enabled and settings.log_dir:
         try:
             from orchestra.web.api.utils.file_trace_exporter import FileSpanExporter
 
-            file_exporter = FileSpanExporter(otel_log_dir)
+            file_exporter = FileSpanExporter(settings.log_dir)
             tracer_provider.add_span_processor(BatchSpanProcessor(file_exporter))
             logger.info(
-                f"Configured file-based trace exporter at {otel_log_dir}",
+                f"Configured per-request JSON exporter at {settings.log_dir}",
             )
         except Exception as e:
-            logger.warning(f"Failed to configure file trace exporter: {e}")
+            logger.warning(f"Failed to configure per-request JSON exporter: {e}")
 
     excluded_endpoints = [
         app.url_path_for("health_check"),
