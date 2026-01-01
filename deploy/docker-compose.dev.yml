@@ -13,4 +13,4 @@ services:
     environment:
       # Enables autoreload.
       ORCHESTRA_RELOAD: "True"
-      ORCHESTRA_OPENTELEMETRY_SECURE: "False"
+      ORCHESTRA_OTEL_SECURE: "false"
