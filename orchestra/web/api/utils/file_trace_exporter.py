@@ -1,21 +1,21 @@
 """
-File-based trace exporter for local development.
+File-based trace exporters for local development.
 
-Exports OpenTelemetry spans to JSON files for debugging and analysis
-when external trace collectors (Tempo, Jaeger) are not available.
+Provides two exporters for different use cases:
 
-Organization:
-- requests/: One JSON file per trace (containing all spans for that request)
+1. FileSpanExporter (ORCHESTRA_LOG_DIR):
+   - Exports spans to JSON files organized by HTTP request
+   - One JSON file per trace in requests/ directory
+   - Rich filename format: TIME_METHOD_route_DURATION_traceID.json
+   - Best for Orchestra-centric debugging
 
-Filename format encodes key info for easy browsing:
-- In-progress: 2025-01-15T12-00-00.123_POST_contacts_PENDING_abc12345.json
-- Complete:    2025-01-15T12-00-00.123_POST_contacts_45ms_abc12345.json
+2. JsonlSpanExporter (ORCHESTRA_OTEL_LOG_DIR):
+   - Exports spans to JSONL files keyed by trace_id
+   - Format: {trace_id}.jsonl (one JSON line per span)
+   - Matches Unity's FileSpanExporter format
+   - Best for unified traces when running from Unity's test suite
 
-This makes it easy for AI agents to:
-1. Count requests: ls requests/ | wc -l
-2. Find slow requests: ls requests/*_*ms_* | sort (duration in filename)
-3. Find in-progress: ls requests/*_PENDING_*
-4. Inspect one request: read a single small JSON file
+When both are configured, both exporters run (different output formats).
 """
 
 import json
@@ -549,4 +549,91 @@ class FileSpanExporter(SpanExporter):
         for trace_id in trace_ids:
             self._flush_trace(trace_id)
 
+        return True
+
+
+class JsonlSpanExporter(SpanExporter):
+    """
+    Exports spans to JSONL files, one file per trace_id.
+
+    Format: {log_dir}/{trace_id}.jsonl (one JSON line per span)
+
+    This matches Unity's FileSpanExporter format, enabling unified traces
+    when Orchestra and Unity write to the same directory. All spans from
+    a single test (Unity → Unillm → Unify → Orchestra) appear in one file.
+
+    Use ORCHESTRA_OTEL_LOG_DIR to enable this exporter.
+    """
+
+    def __init__(self, log_dir: str, service_name: str = "orchestra"):
+        self.log_dir = Path(log_dir)
+        self.service_name = service_name
+        self._lock = threading.Lock()
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        logger.info(f"JsonlSpanExporter initialized at {self.log_dir}")
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        """Export spans to JSONL files keyed by trace_id."""
+        try:
+            for span in spans:
+                self._write_span(span)
+            return SpanExportResult.SUCCESS
+        except Exception as e:
+            logger.error(f"JsonlSpanExporter failed to export spans: {e}")
+            return SpanExportResult.FAILURE
+
+    def _write_span(self, span: ReadableSpan) -> None:
+        """Write a single span to its trace file."""
+        ctx = span.get_span_context()
+        if ctx is None or not ctx.is_valid:
+            return
+
+        trace_id = f"{ctx.trace_id:032x}"
+        span_id = f"{ctx.span_id:016x}"
+
+        parent_span_id = None
+        if span.parent is not None:
+            parent_span_id = f"{span.parent.span_id:016x}"
+
+        # Build span data matching Unity's format
+        span_data = {
+            "trace_id": trace_id,
+            "span_id": span_id,
+            "parent_span_id": parent_span_id,
+            "name": span.name,
+            "service": self.service_name,
+            "start_time": (
+                datetime.fromtimestamp(
+                    span.start_time / 1e9,
+                    tz=timezone.utc,
+                ).isoformat()
+                if span.start_time
+                else None
+            ),
+            "end_time": (
+                datetime.fromtimestamp(span.end_time / 1e9, tz=timezone.utc).isoformat()
+                if span.end_time
+                else None
+            ),
+            "duration_ms": (
+                (span.end_time - span.start_time) / 1e6
+                if span.end_time and span.start_time
+                else None
+            ),
+            "status": span.status.status_code.name if span.status else None,
+            "attributes": dict(span.attributes) if span.attributes else {},
+        }
+
+        # Write to trace file (append mode, one span per line)
+        trace_file = self.log_dir / f"{trace_id}.jsonl"
+        with self._lock:
+            with open(trace_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(span_data, default=str) + "\n")
+
+    def shutdown(self) -> None:
+        """Shutdown the exporter (no-op for JSONL exporter)."""
+        logger.info("JsonlSpanExporter shutdown complete")
+
+    def force_flush(self, timeout_millis: int = 30000) -> bool:
+        """Force flush any buffered spans (no-op for JSONL exporter)."""
         return True
