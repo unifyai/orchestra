@@ -271,7 +271,18 @@ def setup_logging(log_level: str = "INFO"):
     """
     Set up logging with JSON formatting and Loki integration if available.
     This is the main entry point for configuring logging in the application.
+
+    Respects the ORCHESTRA_LOG environment variable:
+    - ORCHESTRA_LOG=true (default): Enable logging
+    - ORCHESTRA_LOG=false: Disable all logging (set WARNING level)
     """
+    # Check master switch
+    if not settings.log_enabled:
+        # Disable most logging when master switch is off
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.WARNING)
+        return
+
     # Convert string log level to logging constant
     numeric_level = getattr(logging, log_level.upper(), logging.INFO)
 
