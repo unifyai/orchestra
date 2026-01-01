@@ -122,12 +122,12 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
 
     :param app: current application.
     """
+    # Check master switch first
+    if not settings.otel_enabled:
+        return
+
     # Enable tracing if any backend is configured (OTLP, Tempo, or local file)
-    if (
-        not settings.opentelemetry_endpoint
-        and not settings.tempo_url
-        and not settings.log_dir
-    ):
+    if not settings.otel_endpoint and not settings.tempo_url and not settings.log_dir:
         return
 
     # Create resource with service information
@@ -142,19 +142,19 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
     tracer_provider = TracerProvider(resource=resource)
 
     # Add OTLP exporter if configured
-    if settings.opentelemetry_endpoint:
+    if settings.otel_endpoint:
         try:
             tracer_provider.add_span_processor(
                 BatchSpanProcessor(
                     OTLPSpanExporter(
-                        endpoint=settings.opentelemetry_endpoint,
-                        insecure=not settings.opentelemetry_secure,
+                        endpoint=settings.otel_endpoint,
+                        insecure=not settings.otel_secure,
                         timeout=5,  # Add timeout to prevent hanging
                     ),
                 ),
             )
             logger.info(
-                f"Configured OTLP exporter at {settings.opentelemetry_endpoint}",
+                f"Configured OTLP exporter at {settings.otel_endpoint}",
             )
         except Exception as e:
             logger.warning(f"Failed to configure OTLP exporter: {e}")
@@ -256,7 +256,7 @@ def stop_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
 
     :param app: current application.
     """
-    if not settings.opentelemetry_endpoint:
+    if not settings.otel_enabled:
         return
 
     FastAPIInstrumentor().uninstrument_app(app)
