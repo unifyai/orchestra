@@ -209,7 +209,7 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
             # Continue without Tempo tracing
 
     # Add file-based exporter for local development
-    if settings.log_dir:
+    if settings.log_enabled and settings.log_dir:
         try:
             from orchestra.web.api.utils.file_trace_exporter import FileSpanExporter
 
