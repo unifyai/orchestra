@@ -140,6 +140,17 @@ class Settings(BaseSettings):
         None,
     )
 
+    # OTel span log directory (for file-based span export)
+    # When set, OTel spans are written to JSONL files in this directory.
+    # If not set, falls back to log_dir for backward compatibility.
+    # This enables writing spans to a shared directory with Unity for
+    # full-stack trace correlation across processes.
+    # Example: /Users/user/unity/logs/otel
+    otel_log_dir: Optional[str] = os.environ.get(
+        "ORCHESTRA_OTEL_LOG_DIR",
+        None,
+    )
+
     # Production Traffic Project (for internal monitoring)
     orchestra_organization_name: str = os.environ.get(
         "ORCHESTRA_ORGANIZATION_NAME",
