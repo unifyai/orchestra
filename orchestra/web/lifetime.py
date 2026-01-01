@@ -127,7 +127,12 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
         return
 
     # Enable tracing if any backend is configured (OTLP, Tempo, or local file)
-    if not settings.otel_endpoint and not settings.tempo_url and not settings.log_dir:
+    if (
+        not settings.otel_endpoint
+        and not settings.tempo_url
+        and not settings.log_dir
+        and not settings.otel_log_dir
+    ):
         return
 
     # Create resource with service information
@@ -209,14 +214,16 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
             # Continue without Tempo tracing
 
     # Add file-based exporter for local development
-    if settings.log_enabled and settings.log_dir:
+    # Prefer otel_log_dir if set (allows sharing with Unity), otherwise fall back to log_dir
+    otel_log_dir = settings.otel_log_dir or settings.log_dir
+    if settings.log_enabled and otel_log_dir:
         try:
             from orchestra.web.api.utils.file_trace_exporter import FileSpanExporter
 
-            file_exporter = FileSpanExporter(settings.log_dir)
+            file_exporter = FileSpanExporter(otel_log_dir)
             tracer_provider.add_span_processor(BatchSpanProcessor(file_exporter))
             logger.info(
-                f"Configured file-based trace exporter at {settings.log_dir}",
+                f"Configured file-based trace exporter at {otel_log_dir}",
             )
         except Exception as e:
             logger.warning(f"Failed to configure file trace exporter: {e}")
