@@ -4,7 +4,13 @@ from datetime import datetime, timezone
 import pytest
 from httpx import AsyncClient, Request
 
-from .test_log import HEADERS, _create_log, _create_project, _update_logs, fetch_logs
+from orchestra.tests.test_log import (
+    HEADERS,
+    _create_log,
+    _create_project,
+    _update_logs,
+    fetch_logs,
+)
 
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
 

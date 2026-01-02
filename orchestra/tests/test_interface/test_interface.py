@@ -1054,7 +1054,7 @@ async def test_export_interface_template_with_valid_schema(client: AsyncClient):
     tab2_id = tab2_response.json()["id"]
 
     # Create tiles in tabs
-    from orchestra.tests.test_tile import (
+    from orchestra.tests.test_interface.test_tile import (
         _create_test_plot_tile,
         _create_test_table_tile,
     )
@@ -1587,7 +1587,7 @@ async def test_export_import_interface_template_with_valid_schema_roundtrip(
     )
     tab_id = tab_response.json()["id"]
 
-    from orchestra.tests.test_tile import (
+    from orchestra.tests.test_interface.test_tile import (
         _create_test_editor_tile,
         _create_test_table_tile,
     )
