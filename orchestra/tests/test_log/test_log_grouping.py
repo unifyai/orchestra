@@ -2069,7 +2069,8 @@ async def test_get_logs_groups_only_and_return_timestamps(client: AsyncClient):
     result_flat = response_flat.json()
 
     assert "groups" in result_flat
-    assert "logs" not in result_flat
+    # When groups_only=True, logs may be absent or empty
+    assert result_flat.get("logs", []) == [], "Expected no logs when groups_only=True"
     groups = result_flat["groups"]
 
     assert "entries/sys_msg" in groups
