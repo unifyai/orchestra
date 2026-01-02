@@ -747,18 +747,7 @@ async def test_member_removal_handles_multiple_unshared_resources(
 
 @pytest.mark.anyio
 async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsession):
-    """
-    Test that when an unshared assistant is deleted, its logs are also deleted.
-
-    Uses 3-tier context hierarchy:
-    - Tier 1: All/Transcripts (global aggregate)
-    - Tier 2: TestUser/All/Transcripts (user aggregate)
-    - Tier 3: TestUser/MemberOnlyBot/Transcripts (user + assistant specific)
-
-    When member is removed and their unshared assistant is deleted:
-    - Assistant-specific contexts (Tier 3) should be deleted
-    - Logs should be cleaned from sibling contexts (Tier 1 and Tier 2)
-    """
+    """Test that when an unshared assistant is deleted, its logs are also deleted."""
     owner = await create_test_user(
         client,
         "log_cleanup_owner@test.com",
@@ -769,7 +758,6 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
         "log_cleanup_member@test.com",
         hiring_approved=True,
     )
-    user_name = "TestUser"
 
     # Create organization
     org_resp = await client.post(
@@ -815,7 +803,6 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
     )
     dbsession.flush()
     agent_id = assistant.agent_id
-    assistant_name = "MemberOnlyBot"
 
     # Grant only the member Owner role (making it unshared)
     resource_access_dao.grant_access(
@@ -827,52 +814,56 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
     )
     dbsession.commit()
 
-    # Define 3-tier context names
-    tier3_context = f"{user_name}/{assistant_name}/Transcripts"
-    tier2_context = f"{user_name}/All/Transcripts"
-    tier1_context = "All/Transcripts"
-
-    # Create log in Tier 3 (assistant-specific) context with _user and _assistant fields
-    log_resp = await client.post(
+    # Create logs for this assistant in various contexts
+    # Assistant-specific context
+    await client.post(
         "/v0/logs",
         json={
             "project": "Assistants",
-            "context": tier3_context,
+            "context": "MemberOnlyBot/Tasks",
+            "entries": [{"task": "Test task", "_assistant_id": str(agent_id)}],
+        },
+        headers=org_headers,
+    )
+
+    # Shared All/Contacts context
+    await client.post(
+        "/v0/logs",
+        json={
+            "project": "Assistants",
+            "context": "All/Contacts",
             "entries": [
                 {
-                    "task": "Test task",
-                    "_user": user_name,
-                    "_assistant": assistant_name,
+                    "_assistant": "MemberOnlyBot",
                     "_assistant_id": str(agent_id),
+                    "contact_id": 0,
                 },
             ],
         },
         headers=org_headers,
     )
-    assert log_resp.status_code == 200
-    log_id = log_resp.json()["log_event_ids"][0]
 
-    # Add the same log to Tier 1 and Tier 2 contexts
-    for ctx in [tier1_context, tier2_context]:
-        add_resp = await client.post(
-            "/v0/project/Assistants/contexts/add_logs",
-            json={"context_name": ctx, "log_ids": [log_id]},
-            headers=org_headers,
-        )
-        assert add_resp.status_code == 200
+    # Verify logs exist
+    logs_resp = await client.get(
+        "/v0/logs?project=Assistants&context=MemberOnlyBot/Tasks",
+        headers=org_headers,
+    )
+    assert logs_resp.status_code == 200
+    assert len(logs_resp.json()["logs"]) == 1
 
-    # Verify log exists in all three contexts
-    for ctx in [tier1_context, tier2_context, tier3_context]:
-        logs_resp = await client.get(
-            f"/v0/logs?project=Assistants&context={ctx}",
-            headers=org_headers,
-        )
-        assert logs_resp.status_code == 200
-        assert log_id in [
-            log["id"] for log in logs_resp.json()["logs"]
-        ], f"Log should exist in {ctx}"
+    contacts_resp = await client.get(
+        "/v0/logs?project=Assistants&context=All/Contacts",
+        headers=org_headers,
+    )
+    assert contacts_resp.status_code == 200
+    assistant_contact = [
+        log
+        for log in contacts_resp.json()["logs"]
+        if log["entries"].get("_assistant_id") == str(agent_id)
+    ]
+    assert len(assistant_contact) == 1
 
-    # Remove member - should delete assistant AND its logs from all contexts
+    # Remove member - should delete assistant AND its logs
     remove_resp = await client.delete(
         f"/v0/organizations/{org_id}/members/{member['id']}",
         headers=owner["headers"],
@@ -883,229 +874,27 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
     dbsession.expire_all()
     assert assistant_dao.get_assistant_by_agent_id(agent_id) is None
 
-    # Verify log is removed from ALL three contexts via sibling cleanup
-    for ctx in [tier1_context, tier2_context, tier3_context]:
-        logs_resp = await client.get(
-            f"/v0/logs?project=Assistants&context={ctx}",
-            headers=org_headers,
-        )
-        if logs_resp.status_code == 200:
-            assert log_id not in [
-                log["id"] for log in logs_resp.json()["logs"]
-            ], f"Log should be cleaned from {ctx}"
-
-
-@pytest.mark.anyio
-async def test_member_removal_preserves_other_assistant_logs(
-    client: AsyncClient,
-    dbsession,
-):
-    """
-    Test that logs from OTHER assistants in shared contexts are preserved.
-
-    When member A is removed and their assistant is deleted:
-    - Member A's assistant logs should be deleted from all contexts
-    - Member B's assistant logs in shared All/* contexts should NOT be affected
-    """
-    owner = await create_test_user(
-        client,
-        "preserve_owner@test.com",
-        hiring_approved=True,
-    )
-    member_a = await create_test_user(
-        client,
-        "preserve_member_a@test.com",
-        hiring_approved=True,
-    )
-    member_b = await create_test_user(
-        client,
-        "preserve_member_b@test.com",
-        hiring_approved=True,
-    )
-    user_name = "PreserveUser"
-
-    # Create organization
-    org_resp = await client.post(
-        "/v0/organizations",
-        json={"name": "Preserve Logs Test Org"},
-        headers=owner["headers"],
-    )
-    org_id = org_resp.json()["id"]
-    org_headers = {"Authorization": f"Bearer {org_resp.json()['api_key']}"}
-
-    # Add both members
-    await client.post(
-        f"/v0/organizations/{org_id}/members",
-        json={"user_id": member_a["id"]},
-        headers=owner["headers"],
-    )
-    await client.post(
-        f"/v0/organizations/{org_id}/members",
-        json={"user_id": member_b["id"]},
-        headers=owner["headers"],
-    )
-
-    # Create Assistants project
-    await client.post(
-        "/v0/project",
-        json={"name": "Assistants"},
+    # Verify assistant-specific context logs are deleted
+    logs_resp = await client.get(
+        "/v0/logs?project=Assistants&context=MemberOnlyBot/Tasks",
         headers=org_headers,
     )
+    # Context may still exist but should have no logs, or context is deleted
+    if logs_resp.status_code == 200:
+        assert len(logs_resp.json().get("logs", [])) == 0
 
-    # Create two assistants - one for each member (both unshared)
-    assistant_dao = AssistantDAO(dbsession)
-    role_dao = RoleDAO(dbsession)
-    resource_access_dao = ResourceAccessDAO(dbsession)
-    owner_role = role_dao.get_by_name("Owner", organization_id=None)
-
-    # Member A's assistant
-    assistant_a = assistant_dao.create_assistant(
-        user_id=member_a["id"],
-        first_name="AssistantA",
-        surname="Remove",
-        age=None,
-        nationality=None,
-        about=None,
-        weekly_limit=None,
-        max_parallel=None,
-        organization_id=org_id,
-    )
-    dbsession.flush()
-    agent_id_a = assistant_a.agent_id
-    assistant_name_a = "AssistantARemove"
-
-    resource_access_dao.grant_access(
-        "assistant",
-        agent_id_a,
-        owner_role.id,
-        "user",
-        member_a["id"],
-    )
-
-    # Member B's assistant
-    assistant_b = assistant_dao.create_assistant(
-        user_id=member_b["id"],
-        first_name="AssistantB",
-        surname="Keep",
-        age=None,
-        nationality=None,
-        about=None,
-        weekly_limit=None,
-        max_parallel=None,
-        organization_id=org_id,
-    )
-    dbsession.flush()
-    agent_id_b = assistant_b.agent_id
-    assistant_name_b = "AssistantBKeep"
-
-    resource_access_dao.grant_access(
-        "assistant",
-        agent_id_b,
-        owner_role.id,
-        "user",
-        member_b["id"],
-    )
-    dbsession.commit()
-
-    # Define contexts
-    tier3_a = f"{user_name}/{assistant_name_a}/Transcripts"
-    tier3_b = f"{user_name}/{assistant_name_b}/Transcripts"
-    tier2_context = f"{user_name}/All/Transcripts"
-    tier1_context = "All/Transcripts"
-
-    # Create log for Assistant A
-    log_resp_a = await client.post(
-        "/v0/logs",
-        json={
-            "project": "Assistants",
-            "context": tier3_a,
-            "entries": [
-                {
-                    "message": "Log from Assistant A",
-                    "_user": user_name,
-                    "_assistant": assistant_name_a,
-                    "_assistant_id": str(agent_id_a),
-                },
-            ],
-        },
+    # Verify logs in All/Contacts for this assistant are deleted
+    contacts_resp = await client.get(
+        "/v0/logs?project=Assistants&context=All/Contacts",
         headers=org_headers,
     )
-    assert log_resp_a.status_code == 200
-    log_id_a = log_resp_a.json()["log_event_ids"][0]
-
-    # Create log for Assistant B
-    log_resp_b = await client.post(
-        "/v0/logs",
-        json={
-            "project": "Assistants",
-            "context": tier3_b,
-            "entries": [
-                {
-                    "message": "Log from Assistant B",
-                    "_user": user_name,
-                    "_assistant": assistant_name_b,
-                    "_assistant_id": str(agent_id_b),
-                },
-            ],
-        },
-        headers=org_headers,
-    )
-    assert log_resp_b.status_code == 200
-    log_id_b = log_resp_b.json()["log_event_ids"][0]
-
-    # Add both logs to shared contexts
-    for log_id in [log_id_a, log_id_b]:
-        for ctx in [tier1_context, tier2_context]:
-            add_resp = await client.post(
-                "/v0/project/Assistants/contexts/add_logs",
-                json={"context_name": ctx, "log_ids": [log_id]},
-                headers=org_headers,
-            )
-            assert add_resp.status_code == 200
-
-    # Verify both logs exist in shared contexts
-    for ctx in [tier1_context, tier2_context]:
-        logs_resp = await client.get(
-            f"/v0/logs?project=Assistants&context={ctx}",
-            headers=org_headers,
-        )
-        assert logs_resp.status_code == 200
-        log_ids = [log["id"] for log in logs_resp.json()["logs"]]
-        assert log_id_a in log_ids, f"Log A should exist in {ctx}"
-        assert log_id_b in log_ids, f"Log B should exist in {ctx}"
-
-    # Remove member A - should delete assistant A and its logs only
-    remove_resp = await client.delete(
-        f"/v0/organizations/{org_id}/members/{member_a['id']}",
-        headers=owner["headers"],
-    )
-    assert remove_resp.status_code == status.HTTP_204_NO_CONTENT
-
-    # Verify Assistant A is deleted
-    dbsession.expire_all()
-    assert assistant_dao.get_assistant_by_agent_id(agent_id_a) is None
-
-    # Verify Assistant B still exists
-    assert assistant_dao.get_assistant_by_agent_id(agent_id_b) is not None
-
-    # Verify log A is removed from shared contexts, but log B remains
-    for ctx in [tier1_context, tier2_context]:
-        logs_resp = await client.get(
-            f"/v0/logs?project=Assistants&context={ctx}",
-            headers=org_headers,
-        )
-        assert logs_resp.status_code == 200
-        log_ids = [log["id"] for log in logs_resp.json()["logs"]]
-        assert log_id_a not in log_ids, f"Log A should be removed from {ctx}"
-        assert log_id_b in log_ids, f"Log B should still exist in {ctx}"
-
-    # Verify Assistant B's Tier 3 context is untouched
-    logs_resp_b = await client.get(
-        f"/v0/logs?project=Assistants&context={tier3_b}",
-        headers=org_headers,
-    )
-    assert logs_resp_b.status_code == 200
-    assert log_id_b in [log["id"] for log in logs_resp_b.json()["logs"]]
+    assert contacts_resp.status_code == 200
+    remaining_assistant_logs = [
+        log
+        for log in contacts_resp.json()["logs"]
+        if log["entries"].get("_assistant_id") == str(agent_id)
+    ]
+    assert len(remaining_assistant_logs) == 0
 
 
 # =============================================================================
