@@ -41,6 +41,7 @@ from orchestra.db.models.orchestra_models import (
     Context,
     LogEvent,
     LogEventContext,
+    Project,
 )
 from orchestra.services.bucket_service import BucketService
 from orchestra.services.call_recording_service import CallRecordingService
@@ -1131,11 +1132,23 @@ def delete_assistant(
         # Delete the associated chat transcript context from the "Assistants" project
         try:
             ASSISTANTS_PROJECT_NAME = "Assistants"
-            assistants_project = project_dao.get_by_user_and_name(
-                user_id=request.state.user_id if organization_id is None else None,
-                name=ASSISTANTS_PROJECT_NAME,
-                organization_id=organization_id,
-            )
+            if organization_id is not None:
+                # Org context: lookup directly by org_id + name (no user access check needed)
+                assistants_project = (
+                    session.query(Project)
+                    .filter(
+                        Project.organization_id == organization_id,
+                        Project.name == ASSISTANTS_PROJECT_NAME,
+                    )
+                    .first()
+                )
+            else:
+                # Personal context: use user access check
+                assistants_project = project_dao.get_by_user_and_name(
+                    user_id=request.state.user_id,
+                    name=ASSISTANTS_PROJECT_NAME,
+                    organization_id=None,
+                )
             if assistants_project:
                 assistant_context_prefix = f"{assistant.first_name}{assistant.surname}"
                 # Find all contexts related to the assistant
