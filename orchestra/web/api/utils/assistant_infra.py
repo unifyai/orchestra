@@ -1,7 +1,16 @@
 import os
+from typing import List
 
 import requests
-import unify
+from sqlalchemy import and_
+from sqlalchemy.orm import Session
+
+from orchestra.db.models.orchestra_models import (
+    Context,
+    LogEvent,
+    LogEventContext,
+    Project,
+)
 
 COMMS_URL = os.environ.get("UNITY_COMMS_URL")
 ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
@@ -185,26 +194,66 @@ def get_social_platforms_costs():
     ).json()
 
 
-def get_running_jobs(assistant_id: str):
+def get_running_jobs(assistant_id: str, session: Session) -> List[str]:
     """
-    Get running jobs for the assistant.
+    Get running jobs for the assistant by querying the database directly.
+
+    Args:
+        assistant_id: The assistant ID to find running jobs for
+        session: SQLAlchemy database session
+
+    Returns:
+        List of job names that are currently running for this assistant
     """
-    # get running jobs for the assistant
-    logs = unify.get_logs(
-        project="AssistantJobs",
-        context="startup_events",
-        filter=f"assistant_id == {assistant_id} and running == True",
-        api_key=os.environ.get("SHARED_UNIFY_KEY"),
+    # Find the AssistantJobs project and startup_events context
+    project = session.query(Project).filter(Project.name == "AssistantJobs").first()
+    if not project:
+        return []
+
+    context = (
+        session.query(Context)
+        .filter(
+            and_(
+                Context.project_id == project.id,
+                Context.name == "startup_events",
+            ),
+        )
+        .first()
     )
-    job_names = [log.to_json()["entries"]["job_name"] for log in logs]
+    if not context:
+        return []
+
+    # Query LogEvent entries where assistant_id matches and running is True
+    log_events = (
+        session.query(LogEvent)
+        .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
+        .filter(
+            and_(
+                LogEventContext.context_id == context.id,
+                LogEvent.data["assistant_id"].astext == str(assistant_id),
+                LogEvent.data["running"].astext == "true",
+            ),
+        )
+        .all()
+    )
+
+    job_names = [
+        log_event.data.get("job_name")
+        for log_event in log_events
+        if log_event.data.get("job_name")
+    ]
     return job_names
 
 
-def stop_jobs(assistant_id: str):
+def stop_jobs(assistant_id: str, session: Session):
     """
     Stop a job by making a POST request to the comms endpoint.
+
+    Args:
+        assistant_id: The assistant ID to stop jobs for
+        session: SQLAlchemy database session
     """
-    job_names = get_running_jobs(assistant_id)
+    job_names = get_running_jobs(assistant_id, session)
     # if running job found, stop it
     if len(job_names) > 0:
         response = requests.post(
