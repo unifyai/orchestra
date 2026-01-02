@@ -1456,6 +1456,27 @@ async def accept_invite(
 
         session.commit()
 
+        # Trigger contact sync for all org assistants (non-blocking)
+        from orchestra.db.dao.assistant_dao import AssistantDAO
+        from orchestra.web.api.utils.assistant_infra import trigger_contact_sync
+
+        assistant_dao = AssistantDAO(session)
+        org_assistants = assistant_dao.list_all_org_assistants(
+            organization_id=invite.organization_id,
+        )
+
+        for assistant in org_assistants:
+            try:
+                trigger_contact_sync(assistant.agent_id)
+                logger.info(
+                    f"Triggered contact sync for assistant {assistant.agent_id}",
+                )
+            except Exception as e_sync:
+                logger.warning(
+                    f"Failed to trigger contact sync for assistant "
+                    f"{assistant.agent_id}: {e_sync}",
+                )
+
         return AcceptInviteResponse(
             message="Successfully joined organization",
             organization_id=org.id,

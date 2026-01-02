@@ -265,3 +265,30 @@ def log_pre_hire_chat(assistant_id: str, messages: list, is_staging: bool = Fals
     )
     response.raise_for_status()
     return {"status": "success"}
+
+
+def trigger_contact_sync(assistant_id: int) -> dict:
+    """
+    Trigger contact sync for an assistant via the system-event webhook.
+
+    Args:
+        assistant_id: The assistant ID to sync contacts for
+
+    Returns:
+        JSON response from the webhook
+    """
+    url = f"{ADAPTERS_URL}/unity/system-event"
+    response = requests.post(
+        url,
+        headers={
+            "Authorization": f"Bearer {ADMIN_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "assistant_id": assistant_id,
+            "event_type": "sync_contacts",
+            "message": "Contacts sync triggered.",
+        },
+    )
+    response.raise_for_status()
+    return response.json()
