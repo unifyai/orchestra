@@ -4,11 +4,21 @@ import os
 import pytest
 from httpx import AsyncClient
 
-from .test_interface import _create_test_interface, _list_interfaces, _update_interface
-from .test_legacy_interface import _create_context, _create_project
-from .test_log import _create_derived_entry, _create_log, _update_logs
-from .test_tab import _create_test_tab, _list_tabs, _update_tab
-from .test_tile import (
+from orchestra.tests.test_interface.test_interface import (
+    _create_test_interface,
+    _list_interfaces,
+    _update_interface,
+)
+from orchestra.tests.test_interface.test_legacy_interface import (
+    _create_context,
+    _create_project,
+)
+from orchestra.tests.test_interface.test_tab import (
+    _create_test_tab,
+    _list_tabs,
+    _update_tab,
+)
+from orchestra.tests.test_interface.test_tile import (
     _create_test_editor_tile,
     _create_test_plot_tile,
     _create_test_table_tile,
@@ -17,6 +27,7 @@ from .test_tile import (
     _list_tiles,
     _update_tile,
 )
+from orchestra.tests.test_log import _create_derived_entry, _create_log, _update_logs
 
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
 
@@ -1773,7 +1784,9 @@ async def test_projects_tree(client: AsyncClient):
     project_name = "tree-proj"
     await _create_project(client, project_name)
     # create an interface via existing helper
-    from .test_interface import _create_test_interface as _create_ifc
+    from orchestra.tests.test_interface.test_interface import (
+        _create_test_interface as _create_ifc,
+    )
 
     await _create_ifc(client, name="iface1", project=project_name)
 

@@ -56,7 +56,9 @@ def mock_assistant_infra_calls(request):
 
 
 def _get_sample_wav_bytes() -> bytes:
-    sample_path = Path(__file__).parent / "sample_datasets" / "sample_recording.wav"
+    sample_path = (
+        Path(__file__).parent.parent / "sample_datasets" / "sample_recording.wav"
+    )
     if not sample_path.exists():
         # Create a tiny dummy wav if not found, to prevent test setup failure
         # This is a placeholder and not a valid WAV for actual processing
