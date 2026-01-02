@@ -220,7 +220,7 @@ def _get_distinct_group_values(
                 .label("rn"),
             )
             .join(LogEventLog, LogEventLog.log_id == Log.id)
-            .filter(LogEventLog.log_event_id.in_(log_event_ids))
+            .filter(LogEventLog.log_event_id.in_(select(log_event_ids)))
             .filter(Log.key == group_key)
             .subquery()
         )
@@ -232,7 +232,7 @@ def _get_distinct_group_values(
                 LogEventLog.log_event_id.label("log_event_id"),
             )
             .join(LogEventLog, LogEventLog.log_id == Log.id)
-            .filter(LogEventLog.log_event_id.in_(log_event_ids))
+            .filter(LogEventLog.log_event_id.in_(select(log_event_ids)))
             .filter(Log.key == group_key)
         )
 
@@ -245,7 +245,7 @@ def _get_distinct_group_values(
                 LogEventDerivedLog,
                 LogEventDerivedLog.derived_log_id == DerivedLog.id,
             )
-            .filter(LogEventDerivedLog.log_event_id.in_(log_event_ids))
+            .filter(LogEventDerivedLog.log_event_id.in_(select(log_event_ids)))
             .filter(DerivedLog.key == group_key)
         )
 
@@ -318,29 +318,24 @@ def _get_distinct_group_values_jsonb(
         session.query(
             func.distinct(LogEvent.data.op("->>")(raw_key)).label("value"),
         )
-        .filter(LogEvent.id.in_(log_event_ids))
+        .filter(LogEvent.id.in_(select(log_event_ids)))
         .filter(LogEvent.data.op("?")(raw_key))  # Key exists check
     )
 
-    # Apply sorting
+    # Apply sorting - for DISTINCT queries, ORDER BY must reference selected columns
+    field_type = field_types.get(raw_key, "str")
+    if field_type in ("float", "int"):
+        sort_expr = cast(LogEvent.data.op("->>")(raw_key), Float)
+    else:
+        sort_expr = LogEvent.data.op("->>")(raw_key)
+
     if sort_direction == "ascending":
-        # Cast to appropriate type for numeric sorting
-        field_type = field_types.get(raw_key, "str")
-        if field_type in ("float", "int"):
-            sort_expr = cast(LogEvent.data.op("->>")(raw_key), Float)
-        else:
-            sort_expr = LogEvent.data.op("->>")(raw_key)
         query = query.order_by(asc(sort_expr).nulls_last())
     elif sort_direction == "descending":
-        field_type = field_types.get(raw_key, "str")
-        if field_type in ("float", "int"):
-            sort_expr = cast(LogEvent.data.op("->>")(raw_key), Float)
-        else:
-            sort_expr = LogEvent.data.op("->>")(raw_key)
         query = query.order_by(desc(sort_expr).nulls_first())
     else:
-        # Default: order by most recent log_event_id
-        query = query.order_by(desc(LogEvent.id))
+        # Default: order by value for deterministic results (required for DISTINCT)
+        query = query.order_by(asc(sort_expr).nulls_last())
 
     # Capture SQL for test analysis (if enabled)
     try:
@@ -433,7 +428,7 @@ def _get_log_event_ids_for_group_value(
         query = (
             session.query(LogEventLog.log_event_id)
             .join(Log, Log.id == LogEventLog.log_id)
-            .filter(LogEventLog.log_event_id.in_(log_event_ids))
+            .filter(LogEventLog.log_event_id.in_(select(log_event_ids)))
             .filter(Log.key == group_key)
             .filter(Log.param_version == group_value)
         )
@@ -442,7 +437,7 @@ def _get_log_event_ids_for_group_value(
         query = (
             session.query(LogEventDerivedLog.log_event_id)
             .join(DerivedLog, DerivedLog.id == LogEventDerivedLog.derived_log_id)
-            .filter(LogEventDerivedLog.log_event_id.in_(log_event_ids))
+            .filter(LogEventDerivedLog.log_event_id.in_(select(log_event_ids)))
             .filter(DerivedLog.key == group_key)
             .filter(cast(DerivedLog.value, JSONB) == cast(group_value, JSONB))
         )
@@ -451,7 +446,7 @@ def _get_log_event_ids_for_group_value(
         base_query = (
             session.query(LogEventLog.log_event_id)
             .join(Log, Log.id == LogEventLog.log_id)
-            .filter(LogEventLog.log_event_id.in_(log_event_ids))
+            .filter(LogEventLog.log_event_id.in_(select(log_event_ids)))
             .filter(Log.key == group_key)
             .filter(cast(Log.value, JSONB) == cast(group_value, JSONB))
         )
@@ -459,7 +454,7 @@ def _get_log_event_ids_for_group_value(
         derived_query = (
             session.query(LogEventDerivedLog.log_event_id)
             .join(DerivedLog, DerivedLog.id == LogEventDerivedLog.derived_log_id)
-            .filter(LogEventDerivedLog.log_event_id.in_(log_event_ids))
+            .filter(LogEventDerivedLog.log_event_id.in_(select(log_event_ids)))
             .filter(DerivedLog.key == group_key)
             .filter(cast(DerivedLog.value, JSONB) == cast(group_value, JSONB))
         )
@@ -510,7 +505,7 @@ def _get_log_event_ids_for_group_value_jsonb(
 
     query = (
         session.query(LogEvent.id)
-        .filter(LogEvent.id.in_(log_event_ids))
+        .filter(LogEvent.id.in_(select(log_event_ids)))
         .filter(LogEvent.data.op("@>")(func.cast(literal(containment_obj), JSONB)))
     )
 
