@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import imagehash
-import unify
 from fastapi import HTTPException
 from pgvector.sqlalchemy import Vector
 from PIL import Image
@@ -36,6 +35,7 @@ from sqlalchemy.sql.selectable import ColumnClause, Subquery
 
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.models.orchestra_models import Log, LogEventLog
+from orchestra.lib.parallel import threaded_map
 from orchestra.services.bucket_service import BucketService
 from orchestra.settings import settings
 
@@ -1128,8 +1128,9 @@ def _handle_functions(
             bucket_service = BucketService()
 
             # 3. Compute embeddings for each image using parallel processing (like phash)
-            def compute_image_embedding(log_event_id, image_url, bucket_svc):
+            def compute_image_embedding(args):
                 """Helper function to compute embedding for a single image."""
+                log_event_id, image_url, bucket_svc = args
                 embedding_vector = None
                 error_msg = None
                 if image_url and isinstance(image_url, str):
@@ -1146,15 +1147,12 @@ def _handle_functions(
                 }
 
             # Use parallel processing to compute embeddings for all images
-            formatted_args = [
-                ((log_event_id, image_url, bucket_service), {})
-                for log_event_id, image_url in rows
-            ]
-            results = unify.map(
+            results = threaded_map(
                 compute_image_embedding,
-                formatted_args,
-                mode="threading",
-                name="compute_image_embeddings",
+                [
+                    (log_event_id, image_url, bucket_service)
+                    for log_event_id, image_url in rows
+                ],
             )
 
             # 4. Log any failures and track success/failure counts
@@ -1248,8 +1246,9 @@ def _handle_functions(
             bucket_service = BucketService()
 
             # 3. Compute pHash for each image URL using parallel processing
-            def compute_image_hash(log_event_id, image_url, bucket_svc):
+            def compute_image_hash(args):
                 """Helper function to compute perceptual hash for a single image."""
+                log_event_id, image_url, bucket_svc = args
                 phash_hex = None
                 error_msg = None
                 if image_url and isinstance(image_url, str):
@@ -1275,15 +1274,12 @@ def _handle_functions(
                 }
 
             # Use parallel processing to compute hashes for all images
-            formatted_args = [
-                ((log_event_id, image_url, bucket_service), {})
-                for log_event_id, image_url in rows
-            ]
-            results = unify.map(
+            results = threaded_map(
                 compute_image_hash,
-                formatted_args,
-                mode="threading",
-                name="compute_image_hashes",
+                [
+                    (log_event_id, image_url, bucket_service)
+                    for log_event_id, image_url in rows
+                ],
             )
 
             # 4. Log any failures and track success/failure counts
