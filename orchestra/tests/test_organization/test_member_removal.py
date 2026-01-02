@@ -1220,3 +1220,161 @@ async def test_member_removal_sets_contact_is_system_false(
     assert (
         member_contact["entries"].get("is_system") is False
     ), "is_system should be False after member removal"
+
+
+# =============================================================================
+# Self-Removal Tests
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_member_can_remove_themselves_from_org(client: AsyncClient, dbsession):
+    """Test that a member can remove themselves from an organization (leave)."""
+    owner = await create_test_user(client, "self_removal_owner@test.com")
+    member = await create_test_user(client, "self_removal_member@test.com")
+
+    # Create organization
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Self Removal Test Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_resp.json()["id"]
+
+    # Add member
+    add_resp = await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+    assert add_resp.status_code == status.HTTP_201_CREATED
+    member_org_key = add_resp.json()["api_key"]
+    member_org_headers = {"Authorization": f"Bearer {member_org_key}"}
+
+    # Verify member exists in org
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    membership = org_member_dao.get_member(member["id"], org_id)
+    assert membership is not None, "Member should exist in org"
+
+    # Member removes themselves (self-removal / leave org)
+    remove_resp = await client.delete(
+        f"/v0/organizations/{org_id}/members/{member['id']}",
+        headers=member["headers"],  # Using member's personal API key
+    )
+    assert remove_resp.status_code == status.HTTP_204_NO_CONTENT
+
+    # Verify member no longer exists in org
+    dbsession.expire_all()
+    membership = org_member_dao.get_member(member["id"], org_id)
+    assert membership is None, "Member should be removed from org"
+
+
+@pytest.mark.anyio
+async def test_member_cannot_remove_other_members(client: AsyncClient, dbsession):
+    """Test that a member cannot remove other members (only self-removal allowed)."""
+    owner = await create_test_user(client, "member_remove_owner@test.com")
+    member1 = await create_test_user(client, "member_remove_member1@test.com")
+    member2 = await create_test_user(client, "member_remove_member2@test.com")
+
+    # Create organization
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Member Remove Test Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_resp.json()["id"]
+
+    # Add both members
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member1["id"]},
+        headers=owner["headers"],
+    )
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member2["id"]},
+        headers=owner["headers"],
+    )
+
+    # Member1 tries to remove member2 - should fail
+    remove_resp = await client.delete(
+        f"/v0/organizations/{org_id}/members/{member2['id']}",
+        headers=member1["headers"],
+    )
+    assert remove_resp.status_code == status.HTTP_403_FORBIDDEN
+    assert "permission" in remove_resp.json()["detail"].lower()
+
+    # Verify member2 still exists in org
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    membership = org_member_dao.get_member(member2["id"], org_id)
+    assert membership is not None, "Member2 should still exist in org"
+
+
+@pytest.mark.anyio
+async def test_owner_cannot_remove_themselves(client: AsyncClient, dbsession):
+    """Test that the owner cannot remove themselves from the organization."""
+    owner = await create_test_user(client, "owner_self_remove@test.com")
+
+    # Create organization
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Owner Self Remove Test Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_resp.json()["id"]
+
+    # Owner tries to remove themselves - should fail
+    remove_resp = await client.delete(
+        f"/v0/organizations/{org_id}/members/{owner['id']}",
+        headers=owner["headers"],
+    )
+    assert remove_resp.status_code == status.HTTP_400_BAD_REQUEST
+    assert "owner" in remove_resp.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_admin_can_remove_other_members(client: AsyncClient, dbsession):
+    """Test that an admin (with org:write) can remove other members."""
+    owner = await create_test_user(client, "admin_remove_owner@test.com")
+    admin = await create_test_user(client, "admin_remove_admin@test.com")
+    member = await create_test_user(client, "admin_remove_member@test.com")
+
+    # Create organization
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Admin Remove Test Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_resp.json()["id"]
+
+    # Get Admin role
+    role_dao = RoleDAO(dbsession)
+    admin_role = role_dao.get_by_name("Admin", organization_id=None)
+    assert admin_role is not None
+
+    # Add admin with Admin role
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": admin["id"], "role_id": admin_role.id},
+        headers=owner["headers"],
+    )
+
+    # Add member with default Member role
+    await client.post(
+        f"/v0/organizations/{org_id}/members",
+        json={"user_id": member["id"]},
+        headers=owner["headers"],
+    )
+
+    # Admin removes member - should succeed
+    remove_resp = await client.delete(
+        f"/v0/organizations/{org_id}/members/{member['id']}",
+        headers=admin["headers"],
+    )
+    assert remove_resp.status_code == status.HTTP_204_NO_CONTENT
+
+    # Verify member is gone
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    dbsession.expire_all()
+    membership = org_member_dao.get_member(member["id"], org_id)
+    assert membership is None, "Member should be removed from org"
