@@ -18,8 +18,11 @@ from orchestra.db.dao.auth_user_dao import (
     AuthUser,
     AuthUserDAO,
 )
+from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dependencies import get_db_session
@@ -750,6 +753,27 @@ async def add_organization_member(
         user_id=new_user[0][0].id,
         role_id=role_id,
     )
+
+    # Grant Member access to Assistants project if it exists
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    resource_access_dao = ResourceAccessDAO(session)
+    assistants_projects = project_dao.filter(
+        organization_id=org[0][0].id,
+        name="Assistants",
+    )
+    if assistants_projects:
+        assistants_project = assistants_projects[0][0]
+        member_role = role_dao.get_by_name("Member", organization_id=None)
+        if member_role:
+            resource_access_dao.grant_access(
+                resource_type="project",
+                resource_id=assistants_project.id,
+                role_id=member_role.id,
+                grantee_type="user",
+                grantee_id=new_user[0][0].id,
+            )
+
     return "Member added successfully to the organization!"
 
 
