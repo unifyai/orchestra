@@ -77,6 +77,9 @@ jobs:
     - name: Install Poetry
       run: pip install poetry
 
+    - name: Configure git for private repos
+      run: git config --global url."https://${{ secrets.UNIFY_CLONE_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
     - name: Install deps
       run: poetry install
       env:
