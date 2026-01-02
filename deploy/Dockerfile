@@ -1,4 +1,4 @@
-FROM python:3.11.4-slim-bullseye AS prod
+FROM python:3.12-slim-bookworm AS prod
 RUN apt-get update && apt-get install -y \
   gcc \
   g++ \
