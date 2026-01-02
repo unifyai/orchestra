@@ -533,7 +533,10 @@ async def remove_organization_member(
     """
     Remove a member from an organization.
 
-    Requires org:write permission.
+    Permission: self-removal OR org:write permission.
+    - Any member can remove themselves (leave the organization)
+    - Users with org:write permission can remove other members
+
     Automatically revokes all organization-specific API keys for the member.
     Personal API keys are NOT affected.
     """
@@ -551,13 +554,14 @@ async def remove_organization_member(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if requesting user has org:write permission via org membership role
-    has_permission = resource_access_dao.check_org_member_permission(
+    # Permission check: self-removal OR org:write
+    is_self_removal = requesting_user_id == user_id
+    has_admin_permission = resource_access_dao.check_org_member_permission(
         requesting_user_id,
         organization_id,
         "org:write",
     )
-    if not has_permission:
+    if not (is_self_removal or has_admin_permission):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have permission to remove members from this organization",
