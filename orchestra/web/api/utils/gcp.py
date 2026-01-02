@@ -27,11 +27,6 @@ def send_pubsub_msg(topic: str, msg: Dict[str, str]) -> None:
     if PUBLISHER is None:
         return
 
-    # To instantiate with specific credentials
-    # from google.oauth2 import service_account
-    # key_path = "./archive/pubsub_2_clickhouse.json"
-    # credentials = service_account.Credentials.from_service_account_file(key_path)
-    # publisher = pubsub_v1.PublisherClient(credentials=credentials)
     try:
         PUBLISHER.publish(topic, json.dumps(msg, cls=CustomEncoder).encode())
     except MessageTooLargeError as e:

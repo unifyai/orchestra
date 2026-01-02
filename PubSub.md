@@ -46,6 +46,21 @@ future = publisher.publish(topic_name, msg)
 future.result()
 ```
 
-To consume data, the script needs to define a SubscriberClient and connect to a subscription. Dealing with interrumptions correctly requires some additional code, [this file](./pubsub_2_clickhouse/main.py) is a good example on how to integrate a subscriber in a Python file. Given that most application-specific code is inside the corresponding callback, this file can be used as a template.
+To consume data, the script needs to define a SubscriberClient and connect to a subscription:
 
-Keep in mind that this file (only the subscriber) needs to proactively pull the topic for requests and won't receive any (push) request. Therefore, something like this needs to be deployed as an always-on VM and not as a serverless/reactive service such as the ones running on Cloud-Run.
+```python
+from google.cloud import pubsub_v1
+
+def callback(message):
+    print(f"Received: {message.data}")
+    message.ack()
+
+subscriber = pubsub_v1.SubscriberClient()
+subscription_name = "projects/saas-368716/subscriptions/<sub-name>"
+future = subscriber.subscribe(subscription_name, callback)
+
+# Block to keep the subscriber running
+future.result()
+```
+
+Note that pull subscribers need to proactively pull the topic for messages and won't receive any push requests. Therefore, subscriber scripts need to be deployed as always-on services (e.g., a VM) rather than serverless/reactive services like Cloud Run.

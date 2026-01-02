@@ -6,9 +6,8 @@ import json
 import math
 import os
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, Literal, Optional, Union
 
-import clickhouse_connect
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 from fastapi.param_functions import Depends
 from providers.completion import PROVIDER_CLASSES
@@ -22,17 +21,7 @@ from orchestra.db.dao.tag_dao import TagDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.utils.http_responses import not_found
-from orchestra.web.api.utils.on_prem import handle_on_prem
 
-try:
-    client = clickhouse_connect.get_client(
-        host=os.environ.get("CLICKHOUSE_HOST"),
-        port=8443,
-        username="default",
-        password=os.environ.get("CLICKHOUSE_PASS"),
-    )
-except:
-    client = None
 router = APIRouter()
 
 
@@ -319,101 +308,3 @@ def log_query(
     except Exception as e:
         print(e)
         raise HTTPException(status_code=400, detail="Error in logging query")
-
-
-@router.get("/metrics")
-@handle_on_prem(endpoint="/metrics", method="none")
-def get_query_metrics(
-    request_fastapi: Request,
-    start_time: str = Query(
-        None,
-        description="Timestamp of the earliest query to aggregate. "
-        "Format is `YYYY-MM-DD hh:mm:ss`.",
-        example="2024-07-12 04:20:32",
-    ),
-    end_time: str = Query(
-        None,
-        description="Timestamp of the latest query to aggregate. "
-        "Format is `YYYY-MM-DD hh:mm:ss`.",
-        example="2024-08-12 04:20:32",
-    ),
-    models: str = Query(
-        None,
-        description=(
-            "Models to fetch metrics from. "
-            "The list must be a set of comma-separated strings. "
-            "i.e. `gpt-3.5-turbo,gpt-4o`"
-        ),
-        example="gpt-4o,llama-3.1-405b-chat,claude-3.5-sonnet",
-    ),
-    providers: str = Query(
-        None,
-        description=(
-            "Providers to fetch metrics from. "
-            "The list must be a set of comma-separated strings. "
-            "i.e. `openai,together-ai`"
-        ),
-        example="openai,anthropic,fireworks-ai",
-    ),
-    interval: str = Query(
-        300,
-        description="Number of seconds in the aggregation interval.",
-        example=300,
-    ),
-    secondary_user_id: str = Query(
-        None,
-        description=(
-            "Secondary user id. The secondary user id will match any string "
-            "previously sent in the `user` attribute of `/chat/completions`."
-        ),
-        example="sample_user_id",
-    ),
-) -> List[Dict[str, Any]]:
-    """
-    Returns aggregated telemetry data from previous queries to the `/chat/completions`
-    endpoint, specifically the p50 and p95 for generation time and tokens per second,
-    and also the total prompt and completion tokens processed within the interval. The
-    user id and total request count within the interval are also returned.
-    """
-    # fallback for the secondary user id
-    if secondary_user_id is None:
-        secondary_user_id = ""
-
-    # base query
-    query = (
-        f"SELECT toStartOfInterval(timestamp, INTERVAL {interval} SECOND) AS time_bin, "
-        "count(*) AS request_count, "
-        "quantile(0.5)(processing_time) AS generation_time_p50, "
-        "quantile(0.95)(processing_time) AS generation_time_p95, "
-        "quantile(0.5)(processing_time / resp_tokens) AS tokens_per_sec_p50, "
-        "quantile(0.95)(processing_time / resp_tokens) AS tokens_per_sec_p95, "
-        "SUM(req_tokens) AS total_prompt_tokens, "
-        "SUM(resp_tokens) AS total_completion_tokens "
-        "FROM telemetry WHERE "
-        f"user_id = '{request_fastapi.state.user_id}' "
-        f"AND secondary_user_id = '{secondary_user_id}' "
-    )
-
-    # add time filters
-    if start_time and end_time:
-        query += f"AND timestamp BETWEEN '{start_time}' AND '{end_time}' "
-    if start_time:
-        query += f"AND timestamp >= '{start_time}' "
-    elif end_time:
-        query += f"AND timestamp <= '{end_time}' "
-
-    # add models and providers filter
-    if models:
-        query += f"AND model in ({models.split(',')}) "
-    if providers:
-        query += f"AND provider in ({providers.split(',')}) "
-
-    # group by bins
-    query += "GROUP BY time_bin ORDER BY time_bin"
-
-    # run query
-    output = client.query(query)
-    columns = output.column_names
-    rows = output.result_rows
-
-    return [dict(zip(columns, row)) for row in rows]
