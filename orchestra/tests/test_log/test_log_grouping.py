@@ -3331,3 +3331,43 @@ async def test_grouping_sets_sorting_vs_recursive_baseline(
     opt_counts = {g["key"]: g["value"] for g in opt_status["group"]}
     base_counts = {g["key"]: g["value"] for g in base_status["group"]}
     assert opt_counts == base_counts, f"Counts mismatch: {opt_counts} vs {base_counts}"
+
+
+@pytest.mark.anyio
+async def test_get_logs_group_by_nested_groups_false(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """
+    Test that group_by with nested_groups=False returns successfully.
+
+    This test currently fails with a 500 error, indicating a backend bug.
+    """
+    mode_suffix = "jsonb" if use_jsonb_mode else "eav"
+    project_name = f"test-group-by-not-nested-{mode_suffix}"
+    _ = await _create_project(client, project_name)
+
+    # Create some simple logs with a field to group by
+    for i in range(3):
+        for j in range(2):
+            response = await _create_log(
+                client,
+                project_name,
+                params={},
+                entries={"x": i, "y": j},
+            )
+            assert response.status_code == 200, response.json()
+
+    # Query with group_by and nested_groups=False
+    response = await client.get(
+        f"/v0/logs?project={project_name}",
+        params={
+            "group_by": ["x"],
+            "nested_groups": False,
+        },
+        headers=HEADERS,
+    )
+
+    assert (
+        response.status_code == 200
+    ), f"Expected 200, got {response.status_code}: {response.text}"
