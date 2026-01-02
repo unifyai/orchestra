@@ -8,7 +8,6 @@ import logging
 from typing import Any, Iterable, Optional, Tuple, Union
 
 import imagehash
-import unify
 from pgvector.sqlalchemy import Vector
 from PIL import Image
 from sqlalchemy import (
@@ -37,6 +36,7 @@ from sqlalchemy.sql.elements import BinaryExpression, BindParameter, Cast, Claus
 from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.models.orchestra_models import Embedding, LogEvent
+from orchestra.lib.parallel import threaded_map
 from orchestra.services.bucket_service import BucketService
 
 from . import alias_utils
@@ -4196,7 +4196,8 @@ def _handle_embed_image_jsonb(
 
         bucket_service = BucketService()
 
-        def compute_image_embedding(log_event_id, image_url, bucket_svc):
+        def compute_image_embedding(args):
+            log_event_id, image_url, bucket_svc = args
             embedding_vector = None
             error_msg = None
 
@@ -4216,15 +4217,12 @@ def _handle_embed_image_jsonb(
                 "error": error_msg,
             }
 
-        formatted_args = [
-            ((log_event_id, image_url, bucket_service), {})
-            for log_event_id, image_url in rows
-        ]
-        results = unify.map(
+        results = threaded_map(
             compute_image_embedding,
-            formatted_args,
-            mode="threading",
-            name="compute_image_embeddings_jsonb",
+            [
+                (log_event_id, image_url, bucket_service)
+                for log_event_id, image_url in rows
+            ],
         )
 
         failed_count = sum(1 for r in results if r["value"] is None)
@@ -4355,7 +4353,8 @@ def _handle_phash_jsonb(
 
         bucket_service = BucketService()
 
-        def compute_image_hash(log_event_id, image_url, bucket_svc):
+        def compute_image_hash(args):
+            log_event_id, image_url, bucket_svc = args
             phash_hex = None
             error_msg = None
 
@@ -4397,15 +4396,12 @@ def _handle_phash_jsonb(
                 "error": error_msg,
             }
 
-        formatted_args = [
-            ((log_event_id, image_url, bucket_service), {})
-            for log_event_id, image_url in rows
-        ]
-        results = unify.map(
+        results = threaded_map(
             compute_image_hash,
-            formatted_args,
-            mode="threading",
-            name="compute_image_hashes_jsonb",
+            [
+                (log_event_id, image_url, bucket_service)
+                for log_event_id, image_url in rows
+            ],
         )
 
         failed_count = sum(1 for r in results if r["value"] is None)

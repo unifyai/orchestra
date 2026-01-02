@@ -11,7 +11,6 @@ import threading
 from typing import Optional, Union
 
 import httpx
-import unify
 from dotenv import load_dotenv
 from google.auth.transport.requests import Request
 from openai import OpenAI
@@ -38,6 +37,8 @@ from sqlalchemy import (
     or_,
     select,
 )
+
+from orchestra.lib.parallel import threaded_map
 
 load_dotenv()
 from sqlalchemy.dialects.postgresql import JSONB, insert
@@ -524,23 +525,7 @@ def _get_image_embedding_batch(image_urls: list[str]) -> list[list[float]]:
     if not image_urls:
         return []
 
-    # Use parallel processing to compute embeddings for all images
-    def compute_single_embedding(image_url):
-        """Helper function to compute embedding for a single image."""
-        return _get_image_embedding_from_url(image_url)
-
-    # Format arguments for unify.map
-    formatted_args = [((url,), {}) for url in image_urls]
-
-    # Use parallel processing with threading
-    embeddings = unify.map(
-        compute_single_embedding,
-        formatted_args,
-        mode="threading",
-        name="compute_image_embeddings",
-    )
-
-    return embeddings
+    return threaded_map(_get_image_embedding_from_url, image_urls)
 
 
 def _extract_placeholders(equation: str) -> list:
@@ -2562,20 +2547,20 @@ def _ensure_vectors_exist(
 
     texts_to_embed = [id_to_text[id] for id in ids_to_embed]
 
-    # 2. Get embeddings in batches and parallelize batches with unify.map
+    # 2. Get embeddings in batches and parallelize batches
     # OpenAI recommends batch sizes of 2048 for their models.
     BATCH_SIZE = 2048
     text_batches = [
         texts_to_embed[i : i + BATCH_SIZE]
         for i in range(0, len(texts_to_embed), BATCH_SIZE)
     ]
-    embedding_batches = unify.map(
-        _get_embeddings_batch,
+    embedding_batches = threaded_map(
+        functools.partial(
+            _get_embeddings_batch,
+            model=model_name,
+            dimensions=dimensions,
+        ),
         text_batches,
-        model=model_name,
-        dimensions=dimensions,
-        mode="threading",
-        name="embedding_creation",
     )
 
     # Flatten the list of lists of embeddings
