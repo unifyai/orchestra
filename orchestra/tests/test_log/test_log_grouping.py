@@ -1872,7 +1872,6 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient, use_json
 
 
 @pytest.mark.anyio
-@pytest.mark.skip(reason="Skipping test due to change in response structure")
 async def test_get_logs_multi_level_nested_and_flat(client: AsyncClient):
     project_name = "test-multi-level-grouping"
     await _create_project(client, project_name)
@@ -1955,7 +1954,6 @@ async def test_get_logs_multi_level_nested_and_flat(client: AsyncClient):
 
 
 @pytest.mark.anyio
-@pytest.mark.skip(reason="Skipping test due to change in response structure")
 async def test_get_logs_groups_only_and_return_timestamps(client: AsyncClient):
     project_name = "test-groups-only"
     await _create_project(client, project_name)
