@@ -55,7 +55,6 @@ redis = "^5.0.7"
 litellm = "^1.80.11"
 shortuuid = "^1.0.13"
 unifyai = { git = "https://github.com/unifyai/unify.git", branch = "main"}
-clickhouse-connect = "^0.8.9"
 opencv-python = "^4.10.0.84"
 imagehash = "^4.3.1"
 Pillow = "^10.0.0"
