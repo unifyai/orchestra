@@ -17,10 +17,12 @@ from orchestra.db.models.orchestra_models import (
     LogEventContext,
     LogEventJSONLog,
     LogEventLog,
+    LogEventVersion,
     LogVersion,
     ProjectVersion,
 )
 from orchestra.db.utils import FKPathParser, PathSegment
+from orchestra.settings import settings
 
 
 def delete_orphaned_log_events(session: Session, project_id: int) -> None:
@@ -632,7 +634,7 @@ class ContextDAO:
         if not context or not context.foreign_keys:
             return {}  # No foreign keys to validate
 
-        # Phase 1: Collect all FK values grouped by FK definition
+        # Step 1: Collect all FK values grouped by FK definition
         # Structure: {(ref_context_name, ref_column, fk_path, is_nested): {values}}
         fk_values_by_ref = defaultdict(set)
 
@@ -698,7 +700,7 @@ class ContextDAO:
         if not fk_values_by_ref:
             return {}
 
-        # Phase 2: Query valid values for each unique FK in a single query
+        # Step 2: Query valid values for each unique FK in a single query
         # Structure: {(ref_context_name, ref_column, fk_path, is_nested): set of valid values}
         valid_fk_values = {}
 
@@ -762,7 +764,7 @@ class ContextDAO:
                 (ref_context_name, ref_column, fk_path, is_nested)
             ] = valid_values
 
-        # Phase 3: Check each log's FK values against valid sets
+        # Step 3: Check each log's FK values against valid sets
         failed_validations = {}
 
         for idx, entries in enumerate(batch_entries):
@@ -1189,7 +1191,10 @@ class ContextDAO:
         old_value_json: str,
     ) -> int:
         """Delete all log events where FK column matches old value."""
-        # Find all log_event_ids that reference this value
+        if settings.use_jsonb_queries:
+            return self._cascade_delete_jsonb(context_id, fk_column, old_value_json)
+
+        # EAV mode: Find all log_event_ids that reference this value
         query = text(
             """
             SELECT DISTINCT lec.log_event_id, le.project_id
@@ -1261,6 +1266,68 @@ class ContextDAO:
 
         return len(log_event_ids)
 
+    def _cascade_delete_jsonb(
+        self,
+        context_id: int,
+        fk_column: str,
+        old_value_json: str,
+    ) -> int:
+        """JSONB mode: Delete all log events where FK column matches old value."""
+        # Find all log_event_ids that reference this value in LogEvent.data
+        query = text(
+            """
+            SELECT DISTINCT le.id, le.project_id, le.data
+            FROM log_event le
+            JOIN log_event_context lec ON le.id = lec.log_event_id
+            WHERE lec.context_id = :context_id
+              AND le.data @> jsonb_build_object(:fk_column, CAST(:json_str AS jsonb))
+        """,
+        )
+
+        result = self.session.execute(
+            query,
+            {
+                "context_id": context_id,
+                "fk_column": fk_column,
+                "json_str": old_value_json,
+            },
+        )
+        rows = result.fetchall()
+
+        if not rows:
+            return 0
+
+        log_event_ids = [row[0] for row in rows]
+        project_id = rows[0][1]  # All should have same project_id
+
+        # Before deleting, collect all column values from JSONB data
+        # to trigger cascading deletes recursively
+        columns_values: Dict[str, List[Any]] = {}
+        for _, _, data in rows:
+            if data:
+                for key, value in data.items():
+                    if value is not None:
+                        if key not in columns_values:
+                            columns_values[key] = []
+                        columns_values[key].append(value)
+
+        # Recursively apply FK actions for the context being deleted
+        if columns_values:
+            self.apply_fk_actions(
+                project_id=project_id,
+                context_id=context_id,
+                columns_values=columns_values,
+                action="DELETE",
+            )
+
+        # Now delete the log events
+        from orchestra.db.dao.log_event_dao import LogEventDAO
+
+        log_event_dao = LogEventDAO(self.session)
+        log_event_dao.delete(log_event_ids)
+
+        return len(log_event_ids)
+
     def _cascade_update(
         self,
         context_id: int,
@@ -1269,9 +1336,17 @@ class ContextDAO:
         new_value: Any,
     ) -> int:
         """Update all FK column values from old to new."""
+        if settings.use_jsonb_queries:
+            return self._cascade_update_jsonb(
+                context_id,
+                fk_column,
+                old_value_json,
+                new_value,
+            )
+
+        # EAV mode: Update all Log rows where FK column = old value
         new_value_json = json.dumps(new_value)
 
-        # Update all Log rows where FK column = old value
         query = text(
             """
             UPDATE log
@@ -1327,9 +1402,49 @@ class ContextDAO:
 
         return result.rowcount
 
+    def _cascade_update_jsonb(
+        self,
+        context_id: int,
+        fk_column: str,
+        old_value_json: str,
+        new_value: Any,
+    ) -> int:
+        """JSONB mode: Update FK column values from old to new in LogEvent.data."""
+        new_value_json = json.dumps(new_value)
+
+        # Update LogEvent.data using jsonb_set
+        query = text(
+            """
+            UPDATE log_event
+            SET data = jsonb_set(data, ARRAY[:fk_column], CAST(:new_value AS jsonb))
+            WHERE id IN (
+                SELECT le.id
+                FROM log_event le
+                JOIN log_event_context lec ON le.id = lec.log_event_id
+                WHERE lec.context_id = :context_id
+                  AND le.data @> jsonb_build_object(:fk_column, CAST(:old_value AS jsonb))
+            )
+        """,
+        )
+
+        result = self.session.execute(
+            query,
+            {
+                "context_id": context_id,
+                "fk_column": fk_column,
+                "old_value": old_value_json,
+                "new_value": new_value_json,
+            },
+        )
+
+        return result.rowcount
+
     def _set_null(self, context_id: int, fk_column: str, old_value_json: str) -> int:
         """Delete FK column entries (effectively setting to NULL)."""
-        # Delete all Log rows where FK column = old value
+        if settings.use_jsonb_queries:
+            return self._set_null_jsonb(context_id, fk_column, old_value_json)
+
+        # EAV mode: Delete all Log rows where FK column = old value
         query = text(
             """
             DELETE FROM log
@@ -1381,6 +1496,39 @@ class ContextDAO:
 
         return result.rowcount
 
+    def _set_null_jsonb(
+        self,
+        context_id: int,
+        fk_column: str,
+        old_value_json: str,
+    ) -> int:
+        """JSONB mode: Remove FK column from LogEvent.data (effectively setting to NULL)."""
+        # Remove the FK field from LogEvent.data using the - operator
+        query = text(
+            """
+            UPDATE log_event
+            SET data = data - :fk_column
+            WHERE id IN (
+                SELECT le.id
+                FROM log_event le
+                JOIN log_event_context lec ON le.id = lec.log_event_id
+                WHERE lec.context_id = :context_id
+                  AND le.data @> jsonb_build_object(:fk_column, CAST(:json_str AS jsonb))
+            )
+        """,
+        )
+
+        result = self.session.execute(
+            query,
+            {
+                "context_id": context_id,
+                "fk_column": fk_column,
+                "json_str": old_value_json,
+            },
+        )
+
+        return result.rowcount
+
     def _cascade_update_batch(
         self,
         context_id: int,
@@ -1405,6 +1553,15 @@ class ContextDAO:
         if not old_values_json:
             return 0
 
+        if settings.use_jsonb_queries:
+            return self._cascade_update_batch_jsonb(
+                context_id,
+                fk_column,
+                old_values_json,
+                new_value,
+            )
+
+        # EAV mode
         new_value_json = json.dumps(new_value)
 
         # Build placeholders for IN clause
@@ -1463,6 +1620,55 @@ class ContextDAO:
             return row[0] + row[1]  # Total updated rows
         return 0
 
+    def _cascade_update_batch_jsonb(
+        self,
+        context_id: int,
+        fk_column: str,
+        old_values_json: List[str],
+        new_value: Any,
+    ) -> int:
+        """JSONB mode: Update FK column values for multiple old values.
+
+        Uses JSONB containment (@>) semantics for type-safe comparison,
+        avoiding text conversion issues with booleans and numeric types.
+        """
+        new_value_json = json.dumps(new_value)
+
+        # Build JSONB array from old values for unnest
+        # Each old_val is already a JSON string (e.g., "1", '"hello"', "true")
+        array_elements = ", ".join(
+            [f"CAST(:old_val_{i} AS jsonb)" for i in range(len(old_values_json))],
+        )
+
+        # Use CTE with unnest to check JSONB containment for each old value
+        # This avoids large OR chains while maintaining JSONB type semantics
+        query_str = f"""
+            UPDATE log_event
+            SET data = jsonb_set(data, ARRAY[:fk_column], CAST(:new_value AS jsonb))
+            WHERE id IN (
+                SELECT DISTINCT le.id
+                FROM log_event le
+                JOIN log_event_context lec ON le.id = lec.log_event_id
+                CROSS JOIN unnest(ARRAY[{array_elements}]) AS old_val(v)
+                WHERE lec.context_id = :context_id
+                  AND le.data @> jsonb_build_object(:fk_column, old_val.v)
+            )
+        """
+
+        query = text(query_str)
+
+        # Build parameters dict - pass JSON strings directly without transformation
+        params = {
+            "context_id": context_id,
+            "fk_column": fk_column,
+            "new_value": new_value_json,
+        }
+        for i, old_val in enumerate(old_values_json):
+            params[f"old_val_{i}"] = old_val
+
+        result = self.session.execute(query, params)
+        return result.rowcount
+
     def _set_null_batch(
         self,
         context_id: int,
@@ -1485,7 +1691,10 @@ class ContextDAO:
         if not old_values_json:
             return 0
 
-        # Build placeholders for IN clause
+        if settings.use_jsonb_queries:
+            return self._set_null_batch_jsonb(context_id, fk_column, old_values_json)
+
+        # EAV mode: Build placeholders for IN clause
         placeholders = ", ".join([f":old_val_{i}" for i in range(len(old_values_json))])
 
         # Use CTE to delete from both tables in a single query (Priority 4 optimization)
@@ -1537,6 +1746,51 @@ class ContextDAO:
         if row:
             return row[0] + row[1]  # Total deleted rows
         return 0
+
+    def _set_null_batch_jsonb(
+        self,
+        context_id: int,
+        fk_column: str,
+        old_values_json: List[str],
+    ) -> int:
+        """JSONB mode: Remove FK column from LogEvent.data for multiple values.
+
+        Uses JSONB containment (@>) semantics for type-safe comparison,
+        avoiding text conversion issues with booleans and numeric types.
+        """
+        # Build JSONB array from old values for unnest
+        # Each old_val is already a JSON string (e.g., "1", '"hello"', "true")
+        array_elements = ", ".join(
+            [f"CAST(:old_val_{i} AS jsonb)" for i in range(len(old_values_json))],
+        )
+
+        # Use CTE with unnest to check JSONB containment for each old value
+        # This avoids large OR chains while maintaining JSONB type semantics
+        query_str = f"""
+            UPDATE log_event
+            SET data = data - :fk_column
+            WHERE id IN (
+                SELECT DISTINCT le.id
+                FROM log_event le
+                JOIN log_event_context lec ON le.id = lec.log_event_id
+                CROSS JOIN unnest(ARRAY[{array_elements}]) AS old_val(v)
+                WHERE lec.context_id = :context_id
+                  AND le.data @> jsonb_build_object(:fk_column, old_val.v)
+            )
+        """
+
+        query = text(query_str)
+
+        # Build parameters dict - pass JSON strings directly without transformation
+        params = {
+            "context_id": context_id,
+            "fk_column": fk_column,
+        }
+        for i, old_val in enumerate(old_values_json):
+            params[f"old_val_{i}"] = old_val
+
+        result = self.session.execute(query, params)
+        return result.rowcount
 
     def _cascade_delete_nested_remove_elements(
         self,
@@ -1714,6 +1968,15 @@ class ContextDAO:
         """
         from orchestra.db.utils import FKPathParser
 
+        # JSONB mode: Use JSONB-specific implementation
+        if settings.use_jsonb_queries:
+            return self._cascade_delete_nested_jsonb(
+                context_id,
+                fk_path,
+                path_segments,
+                old_value_json,
+            )
+
         # Check if path has wildcard - determines CASCADE behavior
         has_wildcard = FKPathParser.has_wildcard(path_segments)
 
@@ -1827,6 +2090,250 @@ class ContextDAO:
 
         return len(matching_log_event_ids)
 
+    def _cascade_delete_nested_jsonb(
+        self,
+        context_id: int,
+        fk_path: str,
+        path_segments: List,
+        old_value_json: str,
+    ) -> int:
+        """JSONB mode: Handle CASCADE DELETE for nested paths.
+
+        Behavior depends on whether the path contains wildcards:
+        - Wildcard paths: Remove matching elements from arrays
+        - Non-wildcard paths: Delete entire log events
+
+        Implementation Notes:
+        ---------------------
+        This method uses a Python-level traversal strategy (FKPathParser.extract_values)
+        combined with bulk SQL updates, rather than PostgreSQL JSONPath expressions
+        (jsonb_path_query_array, jsonb_set). This approach was chosen for:
+        - Simplicity and maintainability
+        - Reuse of existing tested Python helpers
+        - Compatibility with complex wildcard patterns (e.g., teams[*].members[*].user_id)
+
+        If profiling identifies this as a bottleneck, consider incrementally replacing
+        Python-side traversal with jsonb_path_query expressions in SQL while preserving
+        method signatures and high-level semantics for caller/test compatibility.
+        """
+        from orchestra.db.utils import FKPathParser
+
+        has_wildcard = FKPathParser.has_wildcard(path_segments)
+
+        if has_wildcard:
+            # Wildcard path: Remove matching elements from arrays
+            return self._cascade_delete_nested_remove_elements_jsonb(
+                context_id,
+                fk_path,
+                path_segments,
+                [old_value_json],  # Wrap in list for batch method
+            )
+
+        # Non-wildcard nested path: Delete entire log events
+        root_field = FKPathParser.get_root_field(fk_path)
+        old_value = json.loads(old_value_json)
+
+        # Find all log_event_ids that have this value at the nested path
+        # Query LogEvent.data directly
+        query = text(
+            """
+            SELECT DISTINCT le.id, le.data, le.project_id
+            FROM log_event le
+            JOIN log_event_context lec ON le.id = lec.log_event_id
+            WHERE lec.context_id = :context_id
+              AND le.data ? :root_field
+        """,
+        )
+
+        result = self.session.execute(
+            query,
+            {
+                "context_id": context_id,
+                "root_field": root_field,
+            },
+        )
+
+        # Check each log's data to see if it contains the target value
+        matching_log_event_ids = []
+        project_id = None
+
+        for row in result.fetchall():
+            log_event_id = row[0]
+            data = row[1]  # JSONB value, already Python object
+            if project_id is None:
+                project_id = row[2]
+
+            # Extract values from this log's data
+            try:
+                extracted_values = FKPathParser.extract_values(
+                    data,
+                    path_segments,
+                )
+                if old_value in extracted_values:
+                    matching_log_event_ids.append(log_event_id)
+            except Exception:
+                continue
+
+        if not matching_log_event_ids:
+            return 0
+
+        # Collect all column values for recursive cascading
+        columns_values: Dict[str, List[Any]] = {}
+
+        # Re-query to get full data for matched events
+        data_query = text(
+            """
+            SELECT data
+            FROM log_event
+            WHERE id = ANY(:log_event_ids)
+        """,
+        )
+
+        result = self.session.execute(
+            data_query,
+            {"log_event_ids": matching_log_event_ids},
+        )
+
+        for (data,) in result.fetchall():
+            if data:
+                for key, value in data.items():
+                    if value is not None:
+                        if key not in columns_values:
+                            columns_values[key] = []
+                        columns_values[key].append(value)
+
+        # Recursively apply FK actions
+        if columns_values:
+            self.apply_fk_actions(
+                project_id=project_id,
+                context_id=context_id,
+                columns_values=columns_values,
+                action="DELETE",
+            )
+
+        # Delete the log events
+        from orchestra.db.dao.log_event_dao import LogEventDAO
+
+        log_event_dao = LogEventDAO(self.session)
+        log_event_dao.delete(matching_log_event_ids)
+
+        return len(matching_log_event_ids)
+
+    def _cascade_delete_nested_remove_elements_jsonb(
+        self,
+        context_id: int,
+        fk_path: str,
+        path_segments: List,
+        old_values_json: List[str],
+    ) -> int:
+        """JSONB mode: Remove matching elements from nested arrays (wildcard paths).
+
+        Handles paths like:
+        - image_ids[*]: Remove matching primitive values
+        - images[*].image_id: Remove matching objects
+        - teams[*].members[*].user_id: Remove matching nested objects
+
+        Implementation Notes:
+        ---------------------
+        This method uses Python-level array manipulation (_remove_matching_array_elements)
+        combined with bulk SQL updates that fully replace LogEvent.data. This approach:
+        - Reuses tested Python helpers for complex nested path traversal
+        - Is correct but rewrites the entire JSONB document on each update
+
+        Performance Considerations:
+        - For large JSONB payloads, full document replacement may be costly
+        - If profiling shows this as a bottleneck, refactor to use jsonb_set with
+          computed path arrays to update only affected nested keys
+        - Consider jsonb_path_query for PostgreSQL 12+ to handle wildcards in SQL
+        - Keep method signatures unchanged for caller/test compatibility
+        """
+        from orchestra.db.utils import FKPathParser
+
+        if not old_values_json:
+            return 0
+
+        # Parse old values
+        old_values = [json.loads(v) for v in old_values_json]
+        old_values_set = set(old_values)
+
+        # Get root field name
+        root_field = FKPathParser.get_root_field(fk_path)
+
+        # Find all logs that need updating
+        # Query LogEvent.data directly
+        query = text(
+            """
+            SELECT le.id, le.data
+            FROM log_event le
+            JOIN log_event_context lec ON le.id = lec.log_event_id
+            WHERE lec.context_id = :context_id
+              AND le.data ? :root_field
+        """,
+        )
+
+        result = self.session.execute(
+            query,
+            {
+                "context_id": context_id,
+                "root_field": root_field,
+            },
+        )
+
+        # Process each log and remove matching array elements
+        import copy
+
+        updates = []  # (log_event_id, new_data)
+
+        for row in result.fetchall():
+            log_event_id = row[0]
+            data = row[1]  # JSONB value, already Python object
+
+            if not data or root_field not in data:
+                continue
+
+            # Make a deep copy to modify
+            modified_data = copy.deepcopy(data)
+
+            # Remove matching array elements using existing helper
+            removed = self._remove_matching_array_elements(
+                modified_data,
+                path_segments,
+                old_values_set,
+            )
+
+            if removed:
+                updates.append((log_event_id, modified_data))
+
+        if not updates:
+            return 0
+
+        # OPTIMIZATION: Bulk update using PostgreSQL unnest
+        # Single query instead of N individual UPDATEs
+        log_event_ids = [log_event_id for log_event_id, _ in updates]
+        data_values = [json.dumps(new_data) for _, new_data in updates]
+
+        bulk_update = text(
+            """
+            UPDATE log_event
+            SET data = CAST(v.new_data AS jsonb)
+            FROM (
+                SELECT unnest(CAST(:log_event_ids AS bigint[])) as id,
+                       unnest(CAST(:new_data_values AS text[])) as new_data
+            ) v
+            WHERE log_event.id = v.id
+        """,
+        )
+
+        result = self.session.execute(
+            bulk_update,
+            {
+                "log_event_ids": log_event_ids,
+                "new_data_values": data_values,
+            },
+        )
+
+        return result.rowcount
+
     def _cascade_update_nested_batch(
         self,
         context_id: int,
@@ -1854,6 +2361,16 @@ class ContextDAO:
             Number of log entries updated (log + json_log)
         """
         from orchestra.db.utils import FKPathParser
+
+        # JSONB mode: Use JSONB-specific implementation
+        if settings.use_jsonb_queries:
+            return self._cascade_update_nested_batch_jsonb(
+                context_id,
+                fk_path,
+                path_segments,
+                old_values_json,
+                new_value,
+            )
 
         if not old_values_json:
             return 0
@@ -1981,6 +2498,122 @@ class ContextDAO:
 
         return update_count
 
+    def _cascade_update_nested_batch_jsonb(
+        self,
+        context_id: int,
+        fk_path: str,
+        path_segments: List,
+        old_values_json: List[str],
+        new_value: Any,
+    ) -> int:
+        """JSONB mode: Update nested FK values in multiple logs.
+
+        Handles nested FKs like 'images[*].image_id' where we need to find
+        all logs that have any of the old values at the nested path and update
+        them to the new value.
+
+        For array paths with [*], updates ALL matching occurrences within each array.
+
+        Implementation Notes:
+        ---------------------
+        This method uses Python-level value updates (_update_nested_value) combined
+        with bulk SQL updates that fully replace LogEvent.data. This approach:
+        - Reuses tested Python helpers for complex nested path traversal
+        - Is correct but rewrites the entire JSONB document on each update
+
+        Performance Considerations:
+        - For large JSONB payloads, full document replacement may be costly
+        - If profiling shows this as a bottleneck, refactor to use jsonb_set with
+          computed path arrays to update only affected nested keys
+        - Consider jsonb_path_query for PostgreSQL 12+ to handle wildcards in SQL
+        - Keep method signatures unchanged for caller/test compatibility
+        """
+        from orchestra.db.utils import FKPathParser
+
+        if not old_values_json:
+            return 0
+
+        # Parse old values
+        old_values = [json.loads(v) for v in old_values_json]
+        old_values_set = set(old_values)
+
+        # Get root field name
+        root_field = FKPathParser.get_root_field(fk_path)
+
+        # Find all logs that need updating
+        query = text(
+            """
+            SELECT le.id, le.data
+            FROM log_event le
+            JOIN log_event_context lec ON le.id = lec.log_event_id
+            WHERE lec.context_id = :context_id
+              AND le.data ? :root_field
+        """,
+        )
+
+        result = self.session.execute(
+            query,
+            {
+                "context_id": context_id,
+                "root_field": root_field,
+            },
+        )
+
+        # Process each log and update nested values
+        import copy
+
+        updates = []  # (log_event_id, new_data)
+
+        for row in result.fetchall():
+            log_event_id = row[0]
+            data = row[1]  # JSONB value, already Python object
+
+            if not data:
+                continue
+
+            # Make a deep copy to modify
+            modified_data = copy.deepcopy(data)
+
+            # Update nested values using existing helper
+            updated = self._update_nested_value(
+                modified_data,
+                path_segments,
+                old_values_set,
+                new_value,
+            )
+
+            if updated:
+                updates.append((log_event_id, modified_data))
+
+        if not updates:
+            return 0
+
+        # OPTIMIZATION: Bulk update using PostgreSQL unnest
+        log_event_ids = [log_event_id for log_event_id, _ in updates]
+        data_values = [json.dumps(new_data) for _, new_data in updates]
+
+        bulk_update = text(
+            """
+            UPDATE log_event
+            SET data = CAST(v.new_data AS jsonb)
+            FROM (
+                SELECT unnest(CAST(:log_event_ids AS bigint[])) as id,
+                       unnest(CAST(:new_data_values AS text[])) as new_data
+            ) v
+            WHERE log_event.id = v.id
+        """,
+        )
+
+        result = self.session.execute(
+            bulk_update,
+            {
+                "log_event_ids": log_event_ids,
+                "new_data_values": data_values,
+            },
+        )
+
+        return result.rowcount
+
     def _set_null_nested_batch(
         self,
         context_id: int,
@@ -2006,6 +2639,15 @@ class ContextDAO:
             Number of log entries updated (log + json_log)
         """
         from orchestra.db.utils import FKPathParser
+
+        # JSONB mode: Use JSONB-specific implementation
+        if settings.use_jsonb_queries:
+            return self._set_null_nested_batch_jsonb(
+                context_id,
+                fk_path,
+                path_segments,
+                old_values_json,
+            )
 
         if not old_values_json:
             return 0
@@ -2130,6 +2772,121 @@ class ContextDAO:
         update_count += result.rowcount
 
         return update_count
+
+    def _set_null_nested_batch_jsonb(
+        self,
+        context_id: int,
+        fk_path: str,
+        path_segments: List,
+        old_values_json: List[str],
+    ) -> int:
+        """JSONB mode: Set nested FK values to null in multiple logs.
+
+        Handles nested FKs like 'images[*].image_id' where we need to find
+        all logs that have any of the old values at the nested path and set
+        them to null.
+
+        For array paths with [*], sets ALL matching occurrences to null.
+
+        Implementation Notes:
+        ---------------------
+        This method uses Python-level value updates (_update_nested_value with None)
+        combined with bulk SQL updates that fully replace LogEvent.data. This approach:
+        - Reuses tested Python helpers for complex nested path traversal
+        - Is correct but rewrites the entire JSONB document on each update
+
+        Performance Considerations:
+        - For large JSONB payloads, full document replacement may be costly
+        - If profiling shows this as a bottleneck, refactor to use jsonb_set with
+          computed path arrays to update only affected nested keys
+        - Consider jsonb_path_query for PostgreSQL 12+ to handle wildcards in SQL
+        - Keep method signatures unchanged for caller/test compatibility
+        """
+        from orchestra.db.utils import FKPathParser
+
+        if not old_values_json:
+            return 0
+
+        # Parse old values
+        old_values = [json.loads(v) for v in old_values_json]
+        old_values_set = set(old_values)
+
+        # Get root field name
+        root_field = FKPathParser.get_root_field(fk_path)
+
+        # Find all logs that need updating
+        query = text(
+            """
+            SELECT le.id, le.data
+            FROM log_event le
+            JOIN log_event_context lec ON le.id = lec.log_event_id
+            WHERE lec.context_id = :context_id
+              AND le.data ? :root_field
+        """,
+        )
+
+        result = self.session.execute(
+            query,
+            {
+                "context_id": context_id,
+                "root_field": root_field,
+            },
+        )
+
+        # Process each log and set nested values to null
+        import copy
+
+        updates = []  # (log_event_id, new_data)
+
+        for row in result.fetchall():
+            log_event_id = row[0]
+            data = row[1]  # JSONB value, already Python object
+
+            if not data:
+                continue
+
+            # Make a deep copy to modify
+            modified_data = copy.deepcopy(data)
+
+            # Set nested values to null using existing helper
+            updated = self._update_nested_value(
+                modified_data,
+                path_segments,
+                old_values_set,
+                None,  # Set to null
+            )
+
+            if updated:
+                updates.append((log_event_id, modified_data))
+
+        if not updates:
+            return 0
+
+        # OPTIMIZATION: Bulk update using PostgreSQL unnest
+        log_event_ids = [log_event_id for log_event_id, _ in updates]
+        data_values = [json.dumps(new_data) for _, new_data in updates]
+
+        bulk_update = text(
+            """
+            UPDATE log_event
+            SET data = CAST(v.new_data AS jsonb)
+            FROM (
+                SELECT unnest(CAST(:log_event_ids AS bigint[])) as id,
+                       unnest(CAST(:new_data_values AS text[])) as new_data
+            ) v
+            WHERE log_event.id = v.id
+        """,
+        )
+
+        result = self.session.execute(
+            bulk_update,
+            {
+                "log_event_ids": log_event_ids,
+                "new_data_values": data_values,
+            },
+        )
+
+        return result.rowcount
 
     def _remove_matching_array_elements(
         self,
@@ -2739,9 +3496,43 @@ class ContextDAO:
 
     def delete(self, id: int) -> None:
         from orchestra.db.dao.log_dao import LogDAO
+        from orchestra.db.dao.sibling_context_cleanup import (
+            get_assistants_sibling_context_info,
+            remove_logs_from_sibling_contexts,
+        )
 
         try:
             context = self.session.query(Context).filter_by(id=id).one()
+            project = context.project
+
+            # For Assistants/UnityTests projects, clean up sibling contexts first
+            # This must happen BEFORE deleting the context while associations exist
+            is_assistants_project = project.name in ("Assistants", "UnityTests")
+
+            if is_assistants_project and "/" in context.name:
+                # Get all log event IDs in this context before deletion
+                log_event_ids = [
+                    lec.log_event_id
+                    for lec in self.session.query(LogEventContext)
+                    .filter(LogEventContext.context_id == id)
+                    .all()
+                ]
+
+                if log_event_ids:
+                    # Find sibling contexts for these logs
+                    sibling_map = get_assistants_sibling_context_info(
+                        session=self.session,
+                        project_id=project.id,
+                        context_id=id,
+                        context_name=context.name,
+                        log_event_ids=log_event_ids,
+                        context_dao=self,
+                    )
+
+                    # Remove log associations from sibling contexts
+                    if sibling_map:
+                        remove_logs_from_sibling_contexts(self.session, sibling_map)
+                        self.session.flush()
 
             # Delete associated GCS media BEFORE deleting the context
             log_dao = LogDAO(self.session, self)
@@ -3039,6 +3830,9 @@ class ContextDAO:
 
         Returns True if there exists another log_event in the same context whose
         values for keys_to_check match the updated log_event's values for those keys.
+
+        Note: For batch operations, use `check_for_duplicates_subset_batch` to avoid
+        N+1 queries. This method executes one query per call.
         """
         if not keys_to_check:
             return False
@@ -3080,11 +3874,139 @@ class ContextDAO:
         )
         return result.scalar()
 
+    def check_for_duplicates_subset_batch(
+        self,
+        context_id: int,
+        log_event_ids: List[int],
+        keys_to_check: List[str],
+    ) -> List[int]:
+        """
+        Batch check for duplicates based on a subset of keys for multiple log events.
+
+        This method checks which log_event_ids have duplicates in the context by
+        comparing only the specified keys in LogEvent.data JSONB columns. It uses
+        a single efficient SQL query instead of N individual queries.
+
+        Args:
+            context_id: ID of the context to check
+            log_event_ids: List of log event IDs to check for duplicates
+            keys_to_check: List of field keys to compare for duplicate detection
+
+        Returns:
+            List of log_event_ids that have duplicates (should be marked as failed)
+        """
+        if not log_event_ids or not keys_to_check:
+            return []
+
+        # Build the key extraction for JSONB comparison
+        # We extract the specified keys from LogEvent.data and compare them
+        query = """
+        WITH check_logs AS (
+            SELECT le.id, le.data
+            FROM log_event le
+            WHERE le.id = ANY(:log_event_ids)
+        ),
+        existing_logs AS (
+            SELECT le.id, le.data
+            FROM log_event le
+            JOIN log_event_context lec ON le.id = lec.log_event_id
+            WHERE lec.context_id = :context_id
+              AND le.id != ALL(:log_event_ids)
+        ),
+        duplicates AS (
+            SELECT DISTINCT cl.id
+            FROM check_logs cl
+            WHERE EXISTS (
+                SELECT 1 FROM existing_logs el
+                WHERE (
+                    SELECT jsonb_object_agg(k, el.data->k)
+                    FROM unnest(:keys) AS k
+                    WHERE el.data ? k
+                ) = (
+                    SELECT jsonb_object_agg(k, cl.data->k)
+                    FROM unnest(:keys) AS k
+                    WHERE cl.data ? k
+                )
+            )
+        )
+        SELECT id FROM duplicates
+        """
+        result = self.session.execute(
+            text(query),
+            {
+                "context_id": context_id,
+                "log_event_ids": log_event_ids,
+                "keys": keys_to_check,
+            },
+        )
+        return [row[0] for row in result.fetchall()]
+
+    def check_for_duplicates_jsonb_batch(
+        self,
+        context_id: int,
+        log_event_ids: List[int],
+    ) -> List[int]:
+        """
+        Check for duplicates in JSONB mode for a batch of log events.
+
+        This method checks which log_event_ids have duplicates in the context by
+        comparing LogEvent.data JSONB columns. It uses a single efficient SQL query
+        instead of N individual queries.
+
+        Args:
+            context_id: ID of the context to check
+            log_event_ids: List of log event IDs to check for duplicates
+
+        Returns:
+            List of log_event_ids that have duplicates (should be deleted/rejected)
+        """
+        if not log_event_ids:
+            return []
+
+        # Use a single SQL query to find all duplicates in the batch
+        # This compares LogEvent.data JSONB columns for exact matches
+        query = """
+        WITH new_logs AS (
+            SELECT le.id, le.data
+            FROM log_event le
+            WHERE le.id = ANY(:log_event_ids)
+        ),
+        existing_logs AS (
+            SELECT le.id, le.data
+            FROM log_event le
+            JOIN log_event_context lec ON le.id = lec.log_event_id
+            WHERE lec.context_id = :context_id
+              AND le.id != ALL(:log_event_ids)
+        ),
+        duplicates AS (
+            SELECT DISTINCT nl.id
+            FROM new_logs nl
+            WHERE EXISTS (
+                SELECT 1 FROM existing_logs el
+                WHERE el.data = nl.data
+            )
+        )
+        SELECT id FROM duplicates
+        """
+        result = self.session.execute(
+            text(query),
+            {"context_id": context_id, "log_event_ids": log_event_ids},
+        )
+        return [row[0] for row in result.fetchall()]
+
     def add_logs_copy(self, context_id: int, log_ids: List[int]) -> None:
         """Associate copies of LogEvent instances with the specified context.
 
         This method creates new copies of the specified log events and their associated
         Log and JSONLog entries, then associates these copies with the context.
+
+        In JSONB mode (settings.use_jsonb_queries=True):
+            - Copies LogEvent.data and LogEvent.key_order JSONB fields
+            - Also copies Log/JSONLog entries for backward compatibility
+
+        In EAV mode (settings.use_jsonb_queries=False):
+            - Copies Log and JSONLog entries (primary data source)
+            - LogEvent.data remains empty (default: {})
 
         Args:
             context_id: ID of the context to associate logs with
@@ -3094,6 +4016,8 @@ class ContextDAO:
             ValueError: If context_id doesn't exist or any log_ids don't exist
             ValueError: If duplicates are found and context doesn't allow duplicates
         """
+        from orchestra.settings import settings
+
         try:
             # Get the context to check if duplicates are allowed
             context = self.session.query(Context).filter_by(id=context_id).one_or_none()
@@ -3122,11 +4046,18 @@ class ContextDAO:
                         )
 
                 # Create a new LogEvent by copying necessary fields
-                new_log_event = LogEvent(
-                    project_id=original_log_event.project_id,
-                    created_at=current_time,
-                    updated_at=current_time,
-                )
+                new_log_event_data = {
+                    "project_id": original_log_event.project_id,
+                    "created_at": current_time,
+                    "updated_at": current_time,
+                }
+
+                # In JSONB mode, copy the data and key_order fields
+                if settings.use_jsonb_queries:
+                    new_log_event_data["data"] = original_log_event.data
+                    new_log_event_data["key_order"] = original_log_event.key_order
+
+                new_log_event = LogEvent(**new_log_event_data)
                 self.session.add(new_log_event)
                 self.session.flush()  # Get the new ID
 
@@ -3325,7 +4256,7 @@ class ContextDAO:
 
             context = self.session.query(Context).filter_by(id=context_id).one()
 
-            # Phase 1: Restore the state.
+            # Step 1: Restore the state
             self.rollback_to_version(context_id, context_version.id)
             context.updated_at = datetime.now(timezone.utc)
 
@@ -3334,7 +4265,7 @@ class ContextDAO:
 
             self.session.commit()
 
-            # Phase 2: Garbage collection in a new transaction.
+            # Step 2: Garbage collection in a new transaction
             delete_orphaned_log_events(self.session, context.project_id)
             self.session.commit()
 
@@ -3383,6 +4314,17 @@ class ContextDAO:
         prev_commit_hash: Optional[str] = None,
     ) -> None:
         """Creates a snapshot of the context's current state."""
+        from orchestra.settings import settings
+
+        if settings.use_jsonb_queries:
+            return self.create_version_snapshot_jsonb(
+                context=context,
+                commit_hash=commit_hash,
+                commit_message=commit_message,
+                project_version=project_version,
+                prev_commit_hash=prev_commit_hash,
+            )
+
         if not context.is_versioned:
             return
 
@@ -3451,6 +4393,14 @@ class ContextDAO:
         Helper method to prepare the rollback.
         This method only prepares the operations and does NOT commit.
         """
+        from orchestra.settings import settings
+
+        if settings.use_jsonb_queries:
+            return self.rollback_to_version_jsonb(
+                context_id=context_id,
+                context_version_id=context_version_id,
+            )
+
         log_versions_to_restore = (
             self.session.query(LogVersion)
             .filter_by(context_version_id=context_version_id)
@@ -3556,3 +4506,140 @@ class ContextDAO:
                         log_event_json_log_values,
                     )
                     self.session.execute(stmt_json_assoc)
+
+    def create_version_snapshot_jsonb(
+        self,
+        context: Context,
+        commit_hash: str,
+        commit_message: Optional[str] = None,
+        project_version: Optional[ProjectVersion] = None,
+        prev_commit_hash: Optional[str] = None,
+    ) -> None:
+        """Creates a snapshot of the context's current state.
+
+        This method stores complete JSONB documents in LogEventVersion (one row per event),
+        capturing both data and key_order for each log event.
+        """
+        if not context.is_versioned:
+            return
+
+        # 1. Create a ContextVersion record
+        context_version = ContextVersion(
+            context_id=context.id,
+            project_version_id=project_version.id if project_version else None,
+            name=context.name,
+            description=context.description,
+            commit_hash=commit_hash,
+            commit_message=commit_message,
+            prev_commit_hash=prev_commit_hash,
+        )
+        self.session.add(context_version)
+        self.session.flush()  # Flush to get the context_version.id
+
+        # Update the previous version's next_commit_hash array if it exists
+        if prev_commit_hash:
+            prev_version = (
+                self.session.query(ContextVersion)
+                .filter_by(
+                    context_id=context.id,
+                    commit_hash=prev_commit_hash,
+                )
+                .with_for_update()
+                .one()
+            )
+            if commit_hash not in prev_version.next_commit_hash:
+                prev_version.next_commit_hash = prev_version.next_commit_hash + [
+                    commit_hash,
+                ]
+
+        # 2. Get all LogEvents for the context with their JSONB data
+        log_events = (
+            self.session.query(
+                LogEvent.id,
+                LogEvent.data,
+                LogEvent.key_order,
+                LogEvent.created_at,
+                LogEvent.updated_at,
+            )
+            .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
+            .filter(LogEventContext.context_id == context.id)
+            .all()
+        )
+
+        if not log_events:
+            return
+
+        # 3. Create LogEventVersion snapshots
+        log_event_versions = [
+            LogEventVersion(
+                context_version_id=context_version.id,
+                log_event_id=le.id,
+                data=le.data,
+                key_order=le.key_order,
+                created_at=le.created_at,
+                updated_at=le.updated_at,
+            )
+            for le in log_events
+        ]
+
+        # 4. Bulk insert the log event snapshots for efficiency
+        self.session.bulk_save_objects(log_event_versions)
+
+    def rollback_to_version_jsonb(
+        self,
+        context_id: int,
+        context_version_id: int,
+    ) -> None:
+        """Restores context state from snapshots.
+
+        This method recreates LogEvent rows with data and key_order copied from
+        LogEventVersion snapshots.
+
+        This method only prepares the operations and does NOT commit.
+        """
+        # 1. Query all LogEventVersion snapshots for the target version
+        log_event_versions = (
+            self.session.query(LogEventVersion)
+            .filter_by(context_version_id=context_version_id)
+            .all()
+        )
+
+        # 2. Get the context for project_id
+        context = self.session.query(Context).filter_by(id=context_id).one()
+
+        # 3. Clear existing context associations
+        self.session.query(LogEventContext).filter_by(context_id=context_id).delete(
+            synchronize_session=False,
+        )
+
+        if not log_event_versions:
+            return
+
+        # 4. Bulk insert new LogEvents with RETURNING to get IDs
+        stmt = (
+            pg_insert(LogEvent)
+            .values(
+                [
+                    {
+                        "project_id": context.project_id,
+                        "data": lev.data,
+                        "key_order": lev.key_order,
+                        "created_at": lev.created_at,
+                        "updated_at": lev.updated_at,
+                    }
+                    for lev in log_event_versions
+                ],
+            )
+            .returning(LogEvent.id)
+        )
+        result = self.session.execute(stmt)
+        new_log_event_ids = [row[0] for row in result]
+
+        # 5. Bulk insert LogEventContext associations
+        if new_log_event_ids:
+            assoc_values = [
+                {"log_event_id": le_id, "context_id": context_id}
+                for le_id in new_log_event_ids
+            ]
+            stmt_assoc = pg_insert(LogEventContext).values(assoc_values)
+            self.session.execute(stmt_assoc)

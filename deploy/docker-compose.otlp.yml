@@ -1,9 +1,10 @@
 services:
   api:
     environment:
-      # Adds opentelemetry endpoint.
-      ORCHESTRA_OPENTELEMETRY_ENDPOINT: "jaeger:4317"
-      ORCHESTRA_OPENTELEMETRY_SECURE: "True"
+      # OpenTelemetry configuration
+      ORCHESTRA_OTEL: "true"
+      ORCHESTRA_OTEL_ENDPOINT: "jaeger:4317"
+      ORCHESTRA_OTEL_SECURE: "true"
 
   jaeger:
     image: jaegertracing/all-in-one:1.52

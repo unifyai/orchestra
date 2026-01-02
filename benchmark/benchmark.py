@@ -430,20 +430,6 @@ async def main(endpoints=None):  # noqa: WPS210
             for ep in endpoints
         ]
     logger.info(f"Found {len(endpoints)} endpoints where Model is active in the db.")
-    # TODO: remove this
-    """
-    endpoints = [
-        {"id": 1240, "provider": "together-ai", "model": "llama-2-7b-chat"},
-        {"id": 1239, "provider": "anyscale", "model": "llama-2-7b-chat"},
-        {"id": 1241, "provider": "replicate", "model": "llama-2-7b-chat"},
-        {"id": 1250, "provider": "anyscale", "model": "llama-2-70b-chat"},
-        {"id": 1252, "provider": "together-ai", "model": "llama-2-70b-chat"},
-        {"id": 1253, "provider": "replicate", "model": "llama-2-70b-chat"},
-        {"id": 1383, "provider": "fireworks-ai", "model": "llama-2-70b-chat"},
-        {"id": 1395, "provider": "lepton-ai", "model": "llama-2-70b-chat"},
-        {"id": 1398, "provider": "deepinfra", "model": "llama-2-70b-chat"},
-    ]
-    """
     # Configure concurrent workers and tasks
     num_workers = int(os.getenv("BENCHMARK_NUM_WORKERS", "3"))
     db_commit_period = int(os.getenv("BENCHMARK_DB_COMMIT_PERIOD", "60"))
@@ -514,10 +500,8 @@ if __name__ == "__main__":
     minimal = args.minimal if args.minimal else False
     if not endpoints and minimal:
         endpoints = [
-            {"provider": "anyscale", "model": "llama-2-7b-chat"},
             {"provider": "deepinfra", "model": "llama-2-7b-chat"},
             {"provider": "fireworks-ai", "model": "llama-2-7b-chat"},
-            {"provider": "lepton-ai", "model": "llama-2-7b-chat"},
             {"provider": "replicate", "model": "llama-2-7b-chat"},
             {"provider": "together-ai", "model": "llama-2-7b-chat"},
             {"provider": "aws-bedrock", "model": "mistral-7b-instruct-v0.2"},

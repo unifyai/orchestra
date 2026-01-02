@@ -127,9 +127,11 @@ def _get_interface(
     # Get by project and name
     elif project and name:
         # Verify project exists and user has access
+        organization_id = getattr(request_fastapi.state, "organization_id", None)
         project_obj = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
             name=project,
+            organization_id=organization_id,
         )
         if not project_obj:
             raise HTTPException(
@@ -228,9 +230,11 @@ def create_interface(
     tab_dao = TabDAO(session)
 
     # Verify project exists and user has access
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
         name=request.project,  # Assuming project is the name for now
+        organization_id=organization_id,
     )
     if not project:
         raise HTTPException(
@@ -425,9 +429,11 @@ def list_interfaces(
     tab_dao = TabDAO(session)
 
     # Verify project exists and user has access
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
         name=project,
+        organization_id=organization_id,
     )
     if not project:
         raise HTTPException(
@@ -545,9 +551,11 @@ def update_interface(
     # Get by project and name
     elif project and name:
         # Verify project exists and user has access
+        organization_id = getattr(request_fastapi.state, "organization_id", None)
         project_obj = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
             name=project,
+            organization_id=organization_id,
         )
         if not project_obj:
             raise HTTPException(
@@ -1217,9 +1225,11 @@ def import_interface_template(
     tile_dao = TileDAO(session)
 
     # Get target project
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
         name=request.project,
+        organization_id=organization_id,
     )
     if not project:
         raise HTTPException(
@@ -1232,10 +1242,12 @@ def import_interface_template(
 
     # Validate template if requested
     if request.validate_first:
+        organization_id = getattr(request_fastapi.state, "organization_id", None)
         validator = TemplateValidator(session)
         validation_schema = validator.get_project_validation_schema(
             user_id=request_fastapi.state.user_id,
             project_name=request.project,
+            organization_id=organization_id,
         )
         validation_result = validator.validate_interface_template(
             interface_template=request.template,

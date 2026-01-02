@@ -7,8 +7,10 @@ from typing import List
 
 import sqlalchemy
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.derived_log_dao import DerivedLogDAO
@@ -17,6 +19,7 @@ from orchestra.db.dao.interface_dao import InterfaceDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+from orchestra.db.dao.plot_dao import PlotDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
@@ -50,6 +53,7 @@ from orchestra.web.api.interface.template_utils import (
     TemplateValidator,
 )
 from orchestra.web.api.project.schema import (
+    AdminResourceAccessGrant,
     DuplicateProjectRequest,
     ExportProjectTemplateRequest,
     FavoriteProjectIn,
@@ -69,6 +73,7 @@ from orchestra.web.api.project.schema import (
     TransferResponse,
     TransferToOrganizationRequest,
 )
+from orchestra.web.api.users.views import generate_key
 from orchestra.web.api.utils.http_responses import not_found
 
 router = APIRouter()
@@ -83,19 +88,38 @@ def get_project_or_404(
     ),
     session: Session = Depends(get_db_session),
 ) -> Project:
+    """
+    Get a project by name, validating API key context.
 
+    When using a personal API key, only personal projects are accessible.
+    When using an organization API key, only that organization's projects are accessible.
+
+    Raises 404 if project not found or not accessible with the current API key context.
+    """
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+
+    # Get API key context (None = personal, int = org-specific)
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
+
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
         name=project_name,
+        organization_id=organization_id,
     )
     if not project:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Project {project_name} not found.",
-        )
+        # Provide helpful error message based on context
+        if organization_id is not None:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Project '{project_name}' not found in organization. Use the correct organization API key.",
+            )
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Project '{project_name}' not found in personal workspace. Use a personal API key for personal projects or an organization API key for organization projects.",
+            )
     return project
 
 
@@ -663,10 +687,9 @@ def create_project(
     try:
         if organization_id:
             # Org API key - create organizational project
-            # Check if user has project:write permission in the org
-            has_permission = resource_access_dao.check_user_permission(
+            # Check if user has project:write permission via org membership role
+            has_permission = resource_access_dao.check_org_member_permission(
                 request_fastapi.state.user_id,
-                "org",
                 organization_id,
                 "project:write",
             )
@@ -1142,6 +1165,13 @@ def transfer_project_to_organization(
             grantee_id=user_id,
         )
 
+        # Update organization_id for all plots belonging to this project
+        plot_dao = PlotDAO(session)
+        plot_dao.update_organization_id(
+            project_id=project_id,
+            organization_id=transfer_request.organization_id,
+        )
+
         session.commit()
 
         return TransferResponse(
@@ -1276,6 +1306,14 @@ def transfer_project_to_personal(
         # Transfer the project to personal ownership (direct SQLAlchemy update to ensure None is set)
         project.user_id = user_id
         project.organization_id = None
+
+        # Update organization_id for all plots belonging to this project
+        plot_dao = PlotDAO(session)
+        plot_dao.update_organization_id(
+            project_id=project_id,
+            organization_id=None,  # Personal project
+        )
+
         session.commit()
 
         return TransferResponse(
@@ -1341,6 +1379,8 @@ def get_project(
         is_versioned=project.is_versioned,
         created_at=project.created_at.isoformat() if project.created_at else None,
         updated_at=project.updated_at.isoformat() if project.updated_at else None,
+        user_id=project.user_id,
+        organization_id=project.organization_id,
     )
 
 
@@ -1367,13 +1407,20 @@ def list_projects(
 ):
     """
     Returns the names of all projects stored in your account.
+
+    When using a personal API key, returns only personal projects.
+    When using an organization API key, returns only that organization's projects.
     """
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
+    # Get API key context (None = personal, int = org-specific)
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
+
     raw_projects = project_dao.filter_by_user_access(
         user_id=request_fastapi.state.user_id,
+        organization_id=organization_id,
     )
     return [p[0].name for p in raw_projects]
 
@@ -1383,7 +1430,12 @@ async def list_projects_tree(
     request_fastapi: Request,
     session: Session = Depends(get_db_session),
 ):
-    """Return all projects the user can access with their icons and interface names."""
+    """
+    Return all projects the user can access with their icons and interface names.
+
+    When using a personal API key, returns only personal projects.
+    When using an organization API key, returns only that organization's projects.
+    """
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
@@ -1391,7 +1443,13 @@ async def list_projects_tree(
     tab_dao = TabDAO(session)
     favorite_project_dao = FavoriteProjectDAO(session)
 
-    projects = project_dao.filter_by_user_access(user_id=request_fastapi.state.user_id)
+    # Get API key context (None = personal, int = org-specific)
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
+
+    projects = project_dao.filter_by_user_access(
+        user_id=request_fastapi.state.user_id,
+        organization_id=organization_id,
+    )
     favorites = favorite_project_dao.filter_by_user(request_fastapi.state.user_id)
     fav_map = {f.project_id: f for f in favorites}
 
@@ -1657,10 +1715,12 @@ def import_project_template(
 
     # Validate template if requested
     if request.validate_first:
+        organization_id = getattr(request_fastapi.state, "organization_id", None)
         validator = TemplateValidator(session)
         validation_schema = validator.get_project_validation_schema(
             user_id=request_fastapi.state.user_id,
             project_name=request.project,
+            organization_id=organization_id,
         )
 
     # Import each interface from the project template
@@ -1856,6 +1916,9 @@ def admin_share_project(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     auth_user_dao = AuthUserDAO(session)
     organization_dao = OrganizationDAO(session)
+    role_dao = RoleDAO(session)
+    api_key_dao = ApiKeyDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
 
     # Lookup the from_user and to_user
     from_user = auth_user_dao.get_by_id(request.from_user_id)
@@ -1864,13 +1927,12 @@ def admin_share_project(
     if not from_user or not to_user:
         raise not_found("User")
 
-    # Retrieve the project
-    try:
-        project = project_dao.get_by_user_and_name(
-            user_id=request.from_user_id,
-            name=request.project_name,
-        )
-    except HTTPException:
+    # Retrieve the project (using any_context for admin operations)
+    project = project_dao.get_by_user_and_name_any_context(
+        user_id=request.from_user_id,
+        name=request.project_name,
+    )
+    if not project:
         raise not_found(f"Project {request.project_name}")
 
     # Handle organization assignment
@@ -1903,11 +1965,61 @@ def admin_share_project(
         orgs = organization_dao.filter(id=project.organization_id)
         organization = orgs[0][0]
 
-    # Add the to_user to the organization
+    # Add the to_user to the organization with Admin role
+    admin_role = role_dao.get_by_name("Admin", organization_id=None)
+    if not admin_role:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Admin system role not found",
+        )
     organization_member_dao.create(
         organization_id=organization.id,
         user_id=request.to_user_id,
-        level="admin",  # Give admin access to the shared user
+        role_id=admin_role.id,
+    )
+
+    # Create org API keys for both users if they don't have them
+    for user_id in [request.from_user_id, request.to_user_id]:
+        existing_key = api_key_dao.filter(
+            user_id=user_id,
+            organization_id=organization.id,
+        )
+        if not existing_key:
+            new_api_key = generate_key()
+            api_key_dao.create(
+                key=new_api_key,
+                name=f"org_{organization.name}",
+                user_id=user_id,
+                organization_id=organization.id,
+            )
+
+    # Grant explicit project access to both users
+    # from_user gets Owner, to_user gets Admin access
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+    admin_grant_role = role_dao.get_by_name("Admin", organization_id=None)
+
+    # Check if from_user already has a grant (might exist if project was already org-owned)
+    existing_from_grant = resource_access_dao.get_user_access(
+        user_id=request.from_user_id,
+        resource_type="project",
+        resource_id=project.id,
+    )
+    if not existing_from_grant:
+        resource_access_dao.grant_access(
+            resource_type="project",
+            resource_id=project.id,
+            role_id=owner_role.id,
+            grantee_type="user",
+            grantee_id=request.from_user_id,
+        )
+
+    # Grant Admin access to to_user for this project
+    resource_access_dao.grant_access(
+        resource_type="project",
+        resource_id=project.id,
+        role_id=admin_grant_role.id,
+        grantee_type="user",
+        grantee_id=request.to_user_id,
     )
 
     # Commit all changes
@@ -2141,20 +2253,30 @@ def admin_duplicate_project(
             stats["field_types_copied"] = len(field_type_values)
 
     # 7. Duplicate Log Events using bulk insert with RETURNING
-    log_events = log_event_dao.filter(project_id=source_project.id)
+    # In JSONB mode: copies data and key_order fields (primary storage)
+    # In EAV mode: only copies metadata (data stored in Log/JSONLog tables)
+    log_events = (
+        session.query(LogEvent).filter(LogEvent.project_id == source_project.id).all()
+    )
     log_event_values = []
     old_log_event_ids = []
 
-    for le_tuple in log_events:
-        le = le_tuple[0]
+    for le in log_events:
         old_log_event_ids.append(le.id)
-        log_event_values.append(
-            {
-                "project_id": new_project.id,
-                "created_at": datetime.now(timezone.utc),
-                "updated_at": datetime.now(timezone.utc),
-            },
-        )
+
+        # Build base fields
+        new_event_data = {
+            "project_id": new_project.id,
+            "created_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc),
+        }
+
+        # Conditionally add JSONB fields in JSONB mode
+        if settings.use_jsonb_queries:
+            new_event_data["data"] = le.data
+            new_event_data["key_order"] = le.key_order
+
+        log_event_values.append(new_event_data)
 
     if log_event_values:
         # Bulk insert log events and get back the new IDs
@@ -2169,6 +2291,26 @@ def admin_duplicate_project(
             log_event_id_map[old_id] = new_log_event_ids[i]
 
         stats["log_events_copied"] = len(log_event_values)
+
+        # In JSONB mode, all log data (logs, json_logs, derived_logs) is in LogEvent.data
+        # Set these stats to reflect that the data was copied via LogEvent
+        if settings.use_jsonb_queries:
+            stats["logs_copied"] = len(log_event_values)
+            stats["json_logs_copied"] = 0  # Data is in LogEvent.data
+            # Count derived_entry fields in source to estimate derived logs copied
+            # In JSONB mode, derived values are stored in LogEvent.data
+            derived_field_count = (
+                session.query(func.count(FieldType.id))
+                .filter(
+                    FieldType.project_id == source_project.id,
+                    FieldType.field_category == "derived_entry",
+                )
+                .scalar()
+            )
+            # If derived fields exist, derived values were copied with LogEvent.data
+            stats["derived_logs_copied"] = (
+                len(log_event_values) if derived_field_count > 0 else 0
+            )
 
     # 8. Duplicate Log Event Context relationships using bulk insert
     if log_event_id_map and context_id_map:
@@ -2199,7 +2341,8 @@ def admin_duplicate_project(
             session.execute(stmt)
 
     # 9. Duplicate Logs using batched bulk insert
-    if log_event_id_map:
+    # In JSONB mode, log data is stored in LogEvent.data, so we skip EAV table copying
+    if log_event_id_map and not settings.use_jsonb_queries:
         # Query for Log objects directly
         logs = (
             session.query(Log, LogEventLog.log_event_id)
@@ -2261,7 +2404,8 @@ def admin_duplicate_project(
         stats["logs_copied"] = len(log_values)
 
     # 10. Duplicate JSON Logs using batched bulk insert
-    if log_event_id_map:
+    # In JSONB mode, JSON log data is stored in LogEvent.data, so we skip EAV table copying
+    if log_event_id_map and not settings.use_jsonb_queries:
         # Query for JSONLog objects via LogEventJSONLog association
         json_logs_with_event_ids = (
             session.query(JSONLog, LogEventJSONLog.log_event_id)
@@ -2322,7 +2466,8 @@ def admin_duplicate_project(
         stats["json_logs_copied"] = len(json_log_values)
 
     # 11. Duplicate Derived Logs using bulk insert
-    if log_event_id_map:
+    # In JSONB mode, derived log values are stored in LogEvent.data, so we skip EAV table copying
+    if log_event_id_map and not settings.use_jsonb_queries:
         derived_log_values = []
         derived_log_associations = (
             []
@@ -2429,3 +2574,147 @@ def admin_duplicate_project(
         "info": f"Project '{request.from_project_name}' duplicated successfully to '{request.new_project_name}'!",
         "details": stats,
     }
+
+
+@admin_router.get(
+    "/projects/org/{org_id}",
+    response_model=List[ProjectOut],
+    summary="Admin: List all projects in an organization",
+    description="Lists ALL projects in an org, bypassing ResourceAccess checks. "
+    "Useful for finding orphaned projects.",
+)
+def admin_list_org_projects(
+    org_id: int,
+    session=Depends(get_db_session),
+) -> List[ProjectOut]:
+    """List all projects in an org without access control checks."""
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+
+    # Use filter() which bypasses RBAC (not filter_by_user_access)
+    projects = project_dao.filter(organization_id=org_id)
+
+    return [
+        ProjectOut(
+            id=p[0].id,
+            name=p[0].name,
+            description=p[0].description,
+            icon=p[0].icon or "folder",
+            is_versioned=p[0].is_versioned,
+            created_at=p[0].created_at.isoformat() if p[0].created_at else None,
+            updated_at=p[0].updated_at.isoformat() if p[0].updated_at else None,
+            user_id=p[0].user_id,
+            organization_id=p[0].organization_id,
+        )
+        for p in projects
+    ]
+
+
+@admin_router.delete(
+    "/project/{project_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Admin: Delete project by ID",
+    description="Deletes any project by ID, including orphaned projects. "
+    "Use with caution - this bypasses all access checks.",
+)
+def admin_delete_project(
+    project_id: int,
+    session=Depends(get_db_session),
+):
+    """Delete a project by ID (admin bypass)."""
+    organization_member_dao = OrganizationMemberDAO(session)
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    # Get project
+    project = project_dao.get(project_id)
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Project with id {project_id} not found",
+        )
+
+    # Store info for response
+    project_name = project.name
+    org_id = project.organization_id
+
+    try:
+        # Remove all ResourceAccess grants for this project
+        existing_grants = resource_access_dao.get_resource_access(
+            resource_type="project",
+            resource_id=project_id,
+        )
+        for grant in existing_grants:
+            resource_access_dao.revoke_access(
+                resource_type="project",
+                resource_id=project_id,
+                grantee_type=grant.grantee_type,
+                grantee_id=grant.grantee_id,
+            )
+
+        # Delete the project (cascades to contexts, logs, etc.)
+        project_dao.delete(project_id)
+        session.commit()
+
+        return {
+            "info": f"Project '{project_name}' (id={project_id}) deleted successfully",
+            "organization_id": org_id,
+        }
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete project: {str(e)}",
+        )
+
+
+@admin_router.post(
+    "/resources/access",
+    status_code=status.HTTP_201_CREATED,
+    summary="Admin: Grant resource access",
+    description="Grants access to any resource, bypassing permission checks. "
+    "Useful for fixing orphaned resources.",
+)
+def admin_grant_resource_access(
+    request: AdminResourceAccessGrant,
+    session=Depends(get_db_session),
+):
+    """Grant resource access (admin bypass)."""
+    resource_access_dao = ResourceAccessDAO(session)
+    role_dao = RoleDAO(session)
+
+    # Verify role exists
+    role = role_dao.get(request.role_id)
+    if not role:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Role with id {request.role_id} not found",
+        )
+
+    try:
+        access = resource_access_dao.grant_access(
+            resource_type=request.resource_type,
+            resource_id=request.resource_id,
+            role_id=request.role_id,
+            grantee_type=request.grantee_type,
+            grantee_id=request.grantee_id,
+        )
+        session.commit()
+
+        return {
+            "info": "Access granted successfully",
+            "access_id": access.id,
+            "resource_type": access.resource_type,
+            "resource_id": access.resource_id,
+            "role_name": role.name,
+            "grantee_type": access.grantee_type,
+            "grantee_id": access.grantee_id,
+        }
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to grant access: {str(e)}",
+        )

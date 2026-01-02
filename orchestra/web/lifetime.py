@@ -6,6 +6,8 @@ from fastapi import FastAPI
 from google.cloud import aiplatform
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+from opentelemetry.instrumentation.openai import OpenAIInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.sdk.resources import (
     DEPLOYMENT_ENVIRONMENT,
@@ -14,7 +16,7 @@ from opentelemetry.sdk.resources import (
     Resource,
 )
 from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 from opentelemetry.trace import set_tracer_provider
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -120,7 +122,17 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
 
     :param app: current application.
     """
-    if not settings.opentelemetry_endpoint and not settings.tempo_url:
+    # Check master switch first
+    if not settings.otel_enabled:
+        return
+
+    # Enable tracing if any backend is configured (OTLP, Tempo, or local file)
+    if (
+        not settings.otel_endpoint
+        and not settings.tempo_url
+        and not settings.log_dir
+        and not settings.otel_log_dir
+    ):
         return
 
     # Create resource with service information
@@ -135,19 +147,19 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
     tracer_provider = TracerProvider(resource=resource)
 
     # Add OTLP exporter if configured
-    if settings.opentelemetry_endpoint:
+    if settings.otel_endpoint:
         try:
             tracer_provider.add_span_processor(
                 BatchSpanProcessor(
                     OTLPSpanExporter(
-                        endpoint=settings.opentelemetry_endpoint,
-                        insecure=not settings.opentelemetry_secure,
+                        endpoint=settings.otel_endpoint,
+                        insecure=not settings.otel_secure,
                         timeout=5,  # Add timeout to prevent hanging
                     ),
                 ),
             )
             logger.info(
-                f"Configured OTLP exporter at {settings.opentelemetry_endpoint}",
+                f"Configured OTLP exporter at {settings.otel_endpoint}",
             )
         except Exception as e:
             logger.warning(f"Failed to configure OTLP exporter: {e}")
@@ -201,6 +213,37 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
             )
             # Continue without Tempo tracing
 
+    # Add JSONL exporter for unified traces with Unity (ORCHESTRA_OTEL_LOG_DIR)
+    # This writes {trace_id}.jsonl files matching Unity's format
+    if settings.log_enabled and settings.otel_log_dir:
+        try:
+            from orchestra.web.api.utils.file_trace_exporter import JsonlSpanExporter
+
+            jsonl_exporter = JsonlSpanExporter(
+                settings.otel_log_dir,
+                service_name="orchestra",
+            )
+            tracer_provider.add_span_processor(SimpleSpanProcessor(jsonl_exporter))
+            logger.info(
+                f"Configured JSONL span exporter at {settings.otel_log_dir}",
+            )
+        except Exception as e:
+            logger.warning(f"Failed to configure JSONL span exporter: {e}")
+
+    # Add per-request JSON exporter for Orchestra-centric debugging (ORCHESTRA_LOG_DIR)
+    # This writes detailed per-request JSON files to requests/ subdirectory
+    if settings.log_enabled and settings.log_dir:
+        try:
+            from orchestra.web.api.utils.file_trace_exporter import FileSpanExporter
+
+            file_exporter = FileSpanExporter(settings.log_dir)
+            tracer_provider.add_span_processor(BatchSpanProcessor(file_exporter))
+            logger.info(
+                f"Configured per-request JSON exporter at {settings.log_dir}",
+            )
+        except Exception as e:
+            logger.warning(f"Failed to configure per-request JSON exporter: {e}")
+
     excluded_endpoints = [
         app.url_path_for("health_check"),
         app.url_path_for("openapi"),
@@ -219,6 +262,13 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
         tracer_provider=tracer_provider,
         engine=app.state.db_engine,
     )
+    OpenAIInstrumentor().instrument(tracer_provider=tracer_provider)
+    logger.info("Instrumented OpenAI client for tracing")
+
+    # Instrument httpx to capture actual HTTP request timing for OpenAI SDK calls
+    # This provides visibility into individual HTTP requests, retries, and rate limiting
+    HTTPXClientInstrumentor().instrument(tracer_provider=tracer_provider)
+    logger.info("Instrumented httpx client for HTTP-level tracing")
 
     set_tracer_provider(tracer_provider=tracer_provider)
 
@@ -229,11 +279,13 @@ def stop_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
 
     :param app: current application.
     """
-    if not settings.opentelemetry_endpoint:
+    if not settings.otel_enabled:
         return
 
     FastAPIInstrumentor().uninstrument_app(app)
     SQLAlchemyInstrumentor().uninstrument()
+    OpenAIInstrumentor().uninstrument()
+    HTTPXClientInstrumentor().uninstrument()
 
 
 def setup_observability(app: FastAPI) -> None:  # pragma: no cover

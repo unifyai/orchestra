@@ -320,6 +320,8 @@ class LogDAO:
         Returns:
             List of log_event_ids that match the filters
         """
+        from orchestra.settings import settings
+
         if not filters:
             return []
 
@@ -335,7 +337,20 @@ class LogDAO:
                 LogEventContext.log_event_id == LogEvent.id,
             ).where(LogEventContext.context_id.in_(context_ids))
 
-        # For each key-value pair in filters, add a join to Log and filter condition
+        # JSONB Mode: Filter directly on LogEvent.data JSONB column
+        if settings.use_jsonb_queries:
+            for key, value in filters.items():
+                # Use JSONB containment operator @> or path-based filtering
+                # LogEvent.data @> '{"key": value}'::jsonb
+                query = query.where(
+                    LogEvent.data[key].astext == str(value)
+                    if isinstance(value, str)
+                    else LogEvent.data[key] == cast(literal(value), JSONB),
+                )
+            result = self.session.execute(query)
+            return [row[0] for row in result]
+
+        # EAV Mode: Use Log/LogEventLog tables
         for idx, (key, value) in enumerate(filters.items()):
             # Create a unique alias for each Log join to avoid conflicts
             log_alias = f"log_{idx}"
@@ -504,6 +519,33 @@ class LogDAO:
                 .update({"key": new_field_name}, synchronize_session=False)
             )
 
+            # JSONB Mode: Update LogEvent.data JSONB column - rename key within the JSON object
+            # Only executed when JSONB mode is enabled to maintain EAV/JSONB separation
+            from orchestra.settings import settings
+
+            if settings.use_jsonb_queries and log_event_ids:
+                from sqlalchemy import text
+
+                # Use raw SQL for JSONB key rename since SQLAlchemy doesn't have
+                # direct support for this operation
+                # Uses PostgreSQL JSONB operators: remove old key (-), add new key with same value (||)
+                # This is a single bulk UPDATE - O(1) query regardless of number of log events
+                self.session.execute(
+                    text(
+                        """
+                        UPDATE log_event
+                        SET data = (data - :old_key) || jsonb_build_object(:new_key, data->:old_key)
+                        WHERE id = ANY(:log_event_ids)
+                        AND data ? :old_key
+                    """,
+                    ),
+                    {
+                        "old_key": old_field_name,
+                        "new_key": new_field_name,
+                        "log_event_ids": log_event_ids,
+                    },
+                )
+
             self.session.commit()
 
         except Exception as e:
@@ -548,6 +590,97 @@ class LogDAO:
                         logging.error(
                             f"Failed to delete file from GCS for log {log.id}: {str(e)}",
                         )
+
+    def _bulk_delete_gcs_media_jsonb(
+        self,
+        log_event_ids: List[int],
+        project_id: int,
+        field_names: Optional[List[str]] = None,
+    ):
+        """
+        Finds all image/audio fields in LogEvent.data for the given log_event_ids
+        and deletes the corresponding files from GCS.
+
+        This is the JSONB equivalent of _bulk_delete_gcs_media, used when
+        settings.use_jsonb_queries is enabled.
+
+        Args:
+            log_event_ids: List of LogEvent IDs to check for media fields
+            project_id: The project ID to query FieldTypes for
+            field_names: Optional list of field names to check. If None, checks all
+                        media fields in the project.
+        """
+        if not log_event_ids:
+            return
+
+        gcs_url_prefix = (
+            f"https://storage.googleapis.com/{self.bucket_service.bucket_name}/"
+        )
+
+        # Query FieldType for media fields (field_type IN ('image', 'audio'))
+        media_field_query = self.session.query(FieldType.field_name).filter(
+            FieldType.project_id == project_id,
+            FieldType.field_type.in_(("image", "audio")),
+        )
+
+        # Filter to only specified field names if provided
+        if field_names:
+            media_field_query = media_field_query.filter(
+                FieldType.field_name.in_(field_names),
+            )
+
+        media_fields = [row[0] for row in media_field_query.all()]
+
+        if not media_fields:
+            return
+
+        logging.info(
+            f"Found {len(media_fields)} media field(s) to check for GCS deletion in JSONB mode.",
+        )
+
+        # Query LogEvent.data for the media field values
+        log_events = (
+            self.session.query(LogEvent.id, LogEvent.data)
+            .filter(
+                LogEvent.id.in_(log_event_ids),
+                LogEvent.project_id == project_id,
+            )
+            .all()
+        )
+
+        # Extract GCS URLs from the data JSONB column
+        urls_to_delete = []
+        for log_event_id, data in log_events:
+            if not data:
+                continue
+            for field_name in media_fields:
+                value = data.get(field_name)
+                if isinstance(value, str):
+                    # Strip potential quotes from JSONB string literal
+                    clean_value = value.strip("\"'")
+                    if clean_value.startswith(gcs_url_prefix):
+                        urls_to_delete.append((log_event_id, field_name, clean_value))
+
+        if not urls_to_delete:
+            return
+
+        logging.info(
+            f"Found {len(urls_to_delete)} GCS URL(s) to delete from LogEvent.data.",
+        )
+
+        # Delete each file from GCS
+        for log_event_id, field_name, url in urls_to_delete:
+            try:
+                filename = url.split("/")[-1]
+                logging.warning(
+                    f"Deleting GCS file: {filename} for log_event_id: {log_event_id}, field: {field_name}",
+                )
+                self.bucket_service.delete_media(filename)
+            except Exception as e:
+                # Log the error but don't stop the overall delete process
+                logging.error(
+                    f"Failed to delete GCS file for log_event_id {log_event_id}, field {field_name}: {str(e)}",
+                )
 
     def delete(self, id: int):
         """Deletes a single Log record and its associated GCS file if applicable."""
@@ -708,7 +841,8 @@ class LogDAO:
             )
 
             if composite_keys:
-                # Handle composite key check
+                # Handle composite key check - BATCH OPTIMIZED
+                # Collect all complete composite key combinations from this batch
                 log_events_to_check = defaultdict(dict)
                 for entry in context_entries:
                     if entry["key"] in composite_keys:
@@ -716,11 +850,29 @@ class LogDAO:
                             entry["key"]
                         ] = entry["value"]
 
-                for log_event_id, key_values in log_events_to_check.items():
-                    if len(key_values) != len(composite_keys):
-                        continue
+                # Filter to only complete composite key sets
+                complete_key_values = [
+                    (log_event_id, key_values)
+                    for log_event_id, key_values in log_events_to_check.items()
+                    if len(key_values) == len(composite_keys)
+                ]
 
-                    # Find existing log_events that have the exact same set of key-value pairs
+                if complete_key_values:
+                    # Build a single batch query to check ALL composite key combinations
+                    # Use OR of AND conditions for each composite key combination
+                    all_conditions = []
+                    for _, key_values in complete_key_values:
+                        # Each composite key set needs ALL its key-value pairs to match
+                        key_conditions = [
+                            and_(
+                                Log.key == k,
+                                Log.value == literal(v, type_=JSONB),
+                            )
+                            for k, v in key_values.items()
+                        ]
+                        all_conditions.extend(key_conditions)
+
+                    # Single query to find any log_events with matching composite keys
                     q = (
                         select(LogEventLog.log_event_id)
                         .join(Log, Log.id == LogEventLog.log_id)
@@ -729,25 +881,50 @@ class LogDAO:
                             LogEventContext.log_event_id == LogEventLog.log_event_id,
                         )
                         .where(LogEventContext.context_id == context_id)
-                        .where(
-                            or_(
-                                *[
-                                    and_(
-                                        Log.key == k,
-                                        Log.value == literal(v, type_=JSONB),
-                                    )
-                                    for k, v in key_values.items()
-                                ],
-                            ),
-                        )
+                        .where(or_(*all_conditions))
                         .group_by(LogEventLog.log_event_id)
-                        .having(func.count(Log.id) == len(composite_keys))
+                        .having(func.count(Log.id) >= len(composite_keys))
                     )
 
-                    if self.session.execute(q.limit(1)).first():
-                        raise ValueError(
-                            f"Duplicate entry for composite key {key_values}.",
-                        )
+                    # Get all potentially matching log_event_ids
+                    potential_matches = [
+                        row[0] for row in self.session.execute(q).fetchall()
+                    ]
+
+                    if potential_matches:
+                        # For each potential match, verify it's an exact composite key match
+                        # by checking if it has exactly the same key-value pairs
+                        for _, key_values in complete_key_values:
+                            # Check if this specific composite key combination exists
+                            verify_q = (
+                                select(LogEventLog.log_event_id)
+                                .join(Log, Log.id == LogEventLog.log_id)
+                                .join(
+                                    LogEventContext,
+                                    LogEventContext.log_event_id
+                                    == LogEventLog.log_event_id,
+                                )
+                                .where(LogEventContext.context_id == context_id)
+                                .where(LogEventLog.log_event_id.in_(potential_matches))
+                                .where(
+                                    or_(
+                                        *[
+                                            and_(
+                                                Log.key == k,
+                                                Log.value == literal(v, type_=JSONB),
+                                            )
+                                            for k, v in key_values.items()
+                                        ],
+                                    ),
+                                )
+                                .group_by(LogEventLog.log_event_id)
+                                .having(func.count(Log.id) == len(composite_keys))
+                            )
+
+                            if self.session.execute(verify_q.limit(1)).first():
+                                raise ValueError(
+                                    f"Duplicate entry for composite key {key_values}.",
+                                )
             else:
                 # Handle simple unique key check (original logic, but scoped to this context group)
                 keys_and_values = defaultdict(list)
@@ -761,6 +938,7 @@ class LogDAO:
                         keys_and_values[entry["key"]].append(entry["value"])
 
                 for key, values in keys_and_values.items():
+                    # Check in Log table (EAV mode)
                     q = (
                         select(Log.id)
                         .join(LogEventLog, LogEventLog.log_id == Log.id)
@@ -780,6 +958,59 @@ class LogDAO:
 
                     if self.session.execute(q.limit(1)).first():
                         raise ValueError(f"Duplicate entry for unique field '{key}'.")
+
+                    # JSONB Mode: Also check in LogEvent.data JSONB column
+                    # Only executed when JSONB mode is enabled to maintain EAV/JSONB separation
+                    from orchestra.settings import settings
+
+                    if settings.use_jsonb_queries and values:
+                        import json as json_module
+
+                        from sqlalchemy import text as sql_text
+
+                        # BATCH OPTIMIZED: Build a single query to check all values at once
+                        # Uses JSONB @> operator with OR conditions for each value
+                        # This is O(1) query instead of O(N) queries
+                        or_conditions = " OR ".join(
+                            f"le.data @> CAST(:value_{i} AS jsonb)"
+                            for i in range(len(values))
+                        )
+
+                        if context_id is not None:
+                            jsonb_query = f"""
+                                SELECT le.id FROM log_event le
+                                JOIN log_event_context lec ON le.id = lec.log_event_id
+                                WHERE le.project_id = :project_id
+                                AND lec.context_id = :context_id
+                                AND ({or_conditions})
+                                LIMIT 1
+                            """
+                            params = {
+                                "project_id": project_id,
+                                "context_id": context_id,
+                            }
+                        else:
+                            jsonb_query = f"""
+                                SELECT le.id FROM log_event le
+                                WHERE le.project_id = :project_id
+                                AND ({or_conditions})
+                                LIMIT 1
+                            """
+                            params = {"project_id": project_id}
+
+                        # Add value parameters
+                        for i, value in enumerate(values):
+                            params[f"value_{i}"] = json_module.dumps({key: value})
+
+                        jsonb_result = self.session.execute(
+                            sql_text(jsonb_query),
+                            params,
+                        ).first()
+
+                        if jsonb_result:
+                            raise ValueError(
+                                f"Duplicate entry for unique field '{key}'.",
+                            )
 
     def bulk_create(
         self,
@@ -1291,6 +1522,9 @@ class LogDAO:
     ) -> bool:
         """
         Validates that a log with the given parent ID combination already exists in the context.
+
+        Note: For batch operations, use `_batch_validate_parents` to avoid N+1 queries.
+        This method is kept for single-item validation or backward compatibility.
         """
         if not parent_ids:
             return True
@@ -1313,6 +1547,78 @@ class LogDAO:
         )
         return self.session.execute(q.limit(1)).first() is not None
 
+    def _batch_validate_parents(
+        self,
+        context_id: int,
+        parent_combinations: List[Dict[str, Any]],
+    ) -> set:
+        """
+        Validate multiple parent combinations in a single query.
+
+        Args:
+            context_id: The context ID to check within
+            parent_combinations: List of parent key-value dicts to validate
+
+        Returns:
+            Set of valid parent combinations as frozensets of (key, value) tuples.
+            Each frozenset represents a parent combination that exists in the context.
+        """
+        if not parent_combinations:
+            return set()
+
+        # Deduplicate parent combinations
+        unique_parents = []
+        seen = set()
+        for parent_dict in parent_combinations:
+            frozen = frozenset(parent_dict.items())
+            if frozen not in seen:
+                seen.add(frozen)
+                unique_parents.append(parent_dict)
+
+        if not unique_parents:
+            return set()
+
+        # Build OR conditions for all unique parent combinations
+        all_conditions = []
+        for parent_dict in unique_parents:
+            for k, v in parent_dict.items():
+                all_conditions.append(
+                    and_(Log.key == k, Log.value == literal(v, type_=JSONB)),
+                )
+
+        # Single query to find all log_events that have ANY of these key-value pairs
+        q = (
+            select(LogEventLog.log_event_id, Log.key, Log.value)
+            .join(Log, Log.id == LogEventLog.log_id)
+            .join(
+                LogEventContext,
+                LogEventContext.log_event_id == LogEventLog.log_event_id,
+            )
+            .where(LogEventContext.context_id == context_id)
+            .where(or_(*all_conditions))
+        )
+
+        results = self.session.execute(q).fetchall()
+
+        # Group results by log_event_id
+        log_event_keys: Dict[int, Dict[str, Any]] = defaultdict(dict)
+        for log_event_id, key, value in results:
+            log_event_keys[log_event_id][key] = value
+
+        # Check which parent combinations are fully satisfied
+        valid_parents = set()
+        for parent_dict in unique_parents:
+            parent_frozen = frozenset(parent_dict.items())
+            # Check if any log_event has all the required key-value pairs
+            for le_id, le_keys in log_event_keys.items():
+                if all(
+                    k in le_keys and le_keys[k] == v for k, v in parent_dict.items()
+                ):
+                    valid_parents.add(parent_frozen)
+                    break
+
+        return valid_parents
+
     def get_next_composite_ids(
         self,
         project_id: int,
@@ -1324,6 +1630,14 @@ class LogDAO:
         Generates composite key values, handling both counting and non-counting columns.
         For counting columns, generates auto-incrementing values respecting hierarchy.
         For non-counting columns, uses the provided values directly.
+
+        OPTIMIZED: Uses batch operations for parent validation and ID reservation
+        to achieve O(K) queries where K = unique param_key patterns, instead of
+        O(N × C) queries where N = batch size and C = counting columns per entry.
+
+        Note: For hierarchical counters where parent is also auto-generated,
+        we process those sequentially as the param_key depends on the parent's
+        auto-generated value.
         """
         if not provided_values:
             return []
@@ -1348,11 +1662,162 @@ class LogDAO:
         counting_columns = [k for k in all_columns if k in auto_counting]
         non_counting_columns = [k for k in all_columns if k not in auto_counting]
 
+        # =====================================================================
+        # PHASE 1: PRE-COLLECT PARENT VALIDATIONS AND CATEGORIZE COLUMNS
+        # Identify which columns can be batch-reserved vs need sequential processing
+        # =====================================================================
+        parents_to_validate: List[Dict[str, Any]] = []
+
+        # Categorize counting columns:
+        # - "independent": no parent (auto_counting[col] is None)
+        # - "provided_parent": parent value is explicitly provided in the request
+        # - "auto_parent": parent is also auto-generated (needs sequential processing)
+        column_categories: Dict[str, str] = {}
+        for col_name in counting_columns:
+            parent_col = auto_counting.get(col_name)
+            if parent_col is None:
+                column_categories[col_name] = "independent"
+            else:
+                column_categories[col_name] = "hierarchical"
+
+        # Pre-collect data for batch operations
+        # For independent counters, we can count how many IDs we need
+        independent_counts: Dict[str, int] = defaultdict(int)
+        # For counters with PROVIDED parents, collect param_keys
+        provided_parent_counts: Dict[str, int] = defaultdict(int)
+        # Store entry metadata for processing
+        entry_metadata: List[Dict[str, Any]] = []
+
+        for provided_value in provided_values:
+            provided_counting = {
+                k: v for k, v in provided_value.items() if k in counting_columns
+            }
+
+            entry_info = {
+                "provided_value": provided_value,
+                "provided_counting": provided_counting,
+                "independent_keys": [],  # (col_name, param_key) for independent counters
+                "provided_parent_keys": [],  # (col_name, param_key) for provided parents
+                "auto_parent_cols": [],  # col_names needing sequential processing
+                "parent_validations": [],
+            }
+
+            for col_name in counting_columns:
+                if col_name in provided_counting:
+                    continue  # Value provided, no auto-increment needed
+
+                parent_col = auto_counting.get(col_name)
+
+                if parent_col is None:
+                    # Independent counter
+                    param_key = col_name
+                    entry_info["independent_keys"].append((col_name, param_key))
+                    independent_counts[param_key] += 1
+                else:
+                    # Hierarchical counter - check if parent is provided or auto
+                    # Walk up hierarchy to see if all ancestors are provided
+                    can_precompute = True
+                    param_key_parts = []
+                    current_col = col_name
+
+                    while current_col in auto_counting:
+                        parent_of_current = auto_counting[current_col]
+                        if parent_of_current is None:
+                            break
+
+                        if parent_of_current in provided_counting:
+                            # Parent is provided
+                            parent_value = provided_counting[parent_of_current]
+                            param_key_parts.insert(
+                                0,
+                                f"{parent_of_current}={parent_value}",
+                            )
+
+                            # Collect for parent validation
+                            if current_col == col_name:
+                                parent_check = {parent_of_current: parent_value}
+                                entry_info["parent_validations"].append(parent_check)
+                                parents_to_validate.append(parent_check)
+                        elif parent_of_current not in counting_columns:
+                            # Parent is a non-counting column that should be provided
+                            if parent_of_current in provided_value:
+                                parent_value = provided_value[parent_of_current]
+                                param_key_parts.insert(
+                                    0,
+                                    f"{parent_of_current}={parent_value}",
+                                )
+                            else:
+                                raise ValueError(
+                                    f"Parent column '{parent_of_current}' value must be provided for '{current_col}'",
+                                )
+                        else:
+                            # Parent is also a counting column needing auto-increment
+                            can_precompute = False
+                            break
+
+                        current_col = parent_of_current
+
+                    if can_precompute:
+                        param_key_parts.append(col_name)
+                        param_key = "::".join(param_key_parts)
+                        entry_info["provided_parent_keys"].append((col_name, param_key))
+                        provided_parent_counts[param_key] += 1
+                    else:
+                        # Needs sequential processing
+                        entry_info["auto_parent_cols"].append(col_name)
+
+            entry_metadata.append(entry_info)
+
+        # =====================================================================
+        # PHASE 2: BATCH VALIDATE PARENTS (single query)
+        # =====================================================================
+        if parents_to_validate:
+            valid_parents = self._batch_validate_parents(
+                context_id,
+                parents_to_validate,
+            )
+
+            for parent_dict in parents_to_validate:
+                parent_frozen = frozenset(parent_dict.items())
+                if parent_frozen not in valid_parents:
+                    k, v = next(iter(parent_dict.items()))
+                    raise ValueError(
+                        f"Parent ID {k}={v} does not exist in this context.",
+                    )
+
+        # =====================================================================
+        # PHASE 3: BATCH RESERVE IDS FOR INDEPENDENT AND PROVIDED-PARENT COLUMNS
+        # =====================================================================
+        reserved_ids: Dict[str, List[int]] = {}
+        id_consumption_index: Dict[str, int] = defaultdict(int)
+
+        # Reserve for independent counters
+        for param_key, count in independent_counts.items():
+            reserved_ids[param_key] = self.get_next_row_ids(
+                project_id=project_id,
+                context_id=context_id,
+                param_key=param_key,
+                count=count,
+            )
+
+        # Reserve for provided-parent counters
+        for param_key, count in provided_parent_counts.items():
+            reserved_ids[param_key] = self.get_next_row_ids(
+                project_id=project_id,
+                context_id=context_id,
+                param_key=param_key,
+                count=count,
+            )
+
+        # =====================================================================
+        # PHASE 4: PROCESS ENTRIES
+        # Use pre-reserved IDs where possible, sequential for auto-parent cols
+        # =====================================================================
         completed_ids = []
 
-        # Process each requested log
-        for i in range(len(provided_values)):
-            provided_value = provided_values[i]
+        for entry_info in entry_metadata:
+            provided_value = entry_info["provided_value"]
+            provided_counting = entry_info["provided_counting"]
             final_values = {}
 
             # Copy all non-counting values directly
@@ -1362,77 +1827,55 @@ class LogDAO:
 
             # Handle counting columns
             if counting_columns:
-                # Separate provided counting values
-                provided_counting = {
-                    k: v for k, v in provided_value.items() if k in counting_columns
-                }
+                # First: Use pre-reserved IDs for independent counters
+                for col_name, param_key in entry_info["independent_keys"]:
+                    idx = id_consumption_index[param_key]
+                    next_id = reserved_ids[param_key][idx]
+                    id_consumption_index[param_key] += 1
+                    final_values[col_name] = next_id
 
-                # Process each counting column
-                for col_name in counting_columns:
-                    if col_name not in provided_counting:
-                        # This column needs auto-increment
-                        parent_col = auto_counting.get(col_name)
+                # Second: Use pre-reserved IDs for provided-parent counters
+                for col_name, param_key in entry_info["provided_parent_keys"]:
+                    idx = id_consumption_index[param_key]
+                    next_id = reserved_ids[param_key][idx]
+                    id_consumption_index[param_key] += 1
+                    final_values[col_name] = next_id
 
-                        if parent_col is None:
-                            # Independent counter - only use column name
-                            param_key = col_name
+                # Third: Process auto-parent columns sequentially
+                for col_name in entry_info["auto_parent_cols"]:
+                    # Build param_key using auto-generated parent values
+                    param_key_parts = []
+                    current_col = col_name
+
+                    while current_col in auto_counting:
+                        parent_of_current = auto_counting[current_col]
+                        if parent_of_current is None:
+                            break
+
+                        # Get parent value from final_values or provided
+                        if parent_of_current in provided_counting:
+                            parent_value = provided_counting[parent_of_current]
+                        elif parent_of_current in final_values:
+                            parent_value = final_values[parent_of_current]
                         else:
-                            # Hierarchical counter - build full hierarchy path
-                            # We need to include all ancestors in the param_key, not just immediate parent
-                            param_key_parts = []
-                            current_col = col_name
+                            raise ValueError(
+                                f"Parent column '{parent_of_current}' value must be provided for '{current_col}'",
+                            )
 
-                            # Walk up the hierarchy to build the full path
-                            while current_col in auto_counting:
-                                parent_of_current = auto_counting[current_col]
-                                if parent_of_current is None:
-                                    # Reached a root column
-                                    break
+                        param_key_parts.insert(0, f"{parent_of_current}={parent_value}")
+                        current_col = parent_of_current
 
-                                # Get the parent value
-                                if parent_of_current in provided_counting:
-                                    parent_value = provided_counting[parent_of_current]
-                                elif parent_of_current in final_values:
-                                    parent_value = final_values[parent_of_current]
-                                else:
-                                    raise ValueError(
-                                        f"Parent column '{parent_of_current}' value must be provided for '{current_col}'",
-                                    )
+                    param_key_parts.append(col_name)
+                    param_key = "::".join(param_key_parts)
 
-                                # Only validate if parent was explicitly provided
-                                if (
-                                    parent_of_current in provided_counting
-                                    and current_col == col_name
-                                ):
-                                    parent_check = {parent_of_current: parent_value}
-                                    if not self._validate_parent_exists(
-                                        context_id,
-                                        parent_check,
-                                    ):
-                                        raise ValueError(
-                                            f"Parent ID {parent_of_current}={parent_value} does not exist in this context.",
-                                        )
-
-                                param_key_parts.insert(
-                                    0,
-                                    f"{parent_of_current}={parent_value}",
-                                )
-                                current_col = parent_of_current
-
-                            # Add the column name at the end
-                            param_key_parts.append(col_name)
-                            param_key = "::".join(param_key_parts)
-
-                        # Get next ID for this specific combination
-                        next_id = self.get_next_row_ids(
-                            project_id=project_id,
-                            context_id=context_id,
-                            param_key=param_key,
-                            count=1,
-                        )[0]
-
-                        # Add the auto-incremented value
-                        final_values[col_name] = next_id
+                    # Get next ID (this is sequential, but only for auto-parent cols)
+                    next_id = self.get_next_row_ids(
+                        project_id=project_id,
+                        context_id=context_id,
+                        param_key=param_key,
+                        count=1,
+                    )[0]
+                    final_values[col_name] = next_id
 
                 # Add all provided counting values
                 final_values.update(provided_counting)
@@ -1960,6 +2403,11 @@ class LogDAO:
         """
         Handle enum field type creation, update, and validation.
 
+        Note: For batch operations, use the batch enum handling implemented in
+        `bulk_update_jsonb` (Steps 1-5) to avoid N+1 queries. This method
+        executes a database query per call and should only be used for
+        single-field operations (e.g., EAV mode, single updates).
+
         Args:
             project_id: The project ID
             context_id: Optional context ID
@@ -2251,3 +2699,792 @@ class LogDAO:
         except Exception as e:
             self.session.rollback()
             raise ValueError(f"Failed to apply JSONB patch: {str(e)}")
+
+    def bulk_update_jsonb(
+        self,
+        updates: List[Dict[str, Any]],
+        overwrite: bool = False,
+        field_types: Optional[Dict] = None,
+    ) -> Dict[str, Any]:
+        """
+        Update multiple LogEvent.data JSONB fields with partial success support.
+
+        Directly updates the LogEvent.data JSONB column using atomic
+        `data || jsonb_build_object(...)` operations.
+
+        Key features:
+        - **Bulk Operations**: Fetches all LogEvents in a single query
+        - **Race Condition Safe**: Uses PostgreSQL's atomic `||` operator for JSONB merge
+        - **No param versioning**: Updates overwrite current values directly
+        - **Partial Success**: Each log_event_id is handled independently
+
+        Args:
+            updates: List of dictionaries with the following keys:
+                - log_event_id: int
+                - key: str
+                - value: Any
+                - explicit_types: Dict (optional)
+                - context_id: int (optional)
+                - project_id: int (optional)
+                - overwrite: bool (optional, per-update override)
+            overwrite: Whether to allow overwriting existing values
+            field_types: Dictionary of field types with mutable flags
+
+        Returns:
+            Dictionary with:
+                - successful_update_ids: List of log_event_ids that were updated successfully
+                - failed: List of dicts with log_event_id and error message
+        """
+        import json
+
+        from sqlalchemy import text
+
+        if not updates:
+            return {"successful_update_ids": [], "failed": []}
+
+        field_types = field_types or {}
+
+        # Group updates by log_event_id for partial success handling
+        updates_by_log_id: Dict[int, List[Dict[str, Any]]] = {}
+        for update_item in updates:
+            le_id = update_item.get("log_event_id")
+            if le_id:
+                updates_by_log_id.setdefault(le_id, []).append(update_item)
+
+        update_result = {"successful_update_ids": [], "failed": []}
+
+        if not updates_by_log_id:
+            return update_result
+
+        # =====================================================================
+        # BULK FETCH: Get all LogEvents in a SINGLE query with FOR UPDATE to
+        # prevent race conditions (pessimistic locking)
+        # =====================================================================
+        all_log_ids = list(updates_by_log_id.keys())
+        log_events = (
+            self.session.query(LogEvent)
+            .filter(LogEvent.id.in_(all_log_ids))
+            .with_for_update()  # Lock rows to prevent concurrent modifications
+            .all()
+        )
+
+        # Build a lookup map for O(1) access
+        log_event_map = {le.id: le for le in log_events}
+
+        # Identify missing log_event_ids
+        found_ids = set(log_event_map.keys())
+        for log_id in all_log_ids:
+            if log_id not in found_ids:
+                update_result["failed"].append(
+                    {
+                        "log_event_id": log_id,
+                        "error": f"LogEvent with id {log_id} not found",
+                    },
+                )
+
+        now = datetime.now(timezone.utc)
+
+        # =====================================================================
+        # STEP 1: EXTRACT ENUM FIELDS FROM UPDATE BATCH
+        # Scan through all updates to identify fields with inferred_type == "enum"
+        # =====================================================================
+        enum_field_info: Dict[tuple, Dict[str, Any]] = {}
+        # Maps (project_id, context_id, field_name) -> {
+        #   "values": set of enum values from batch,
+        #   "enum_values": explicit enum_values list,
+        #   "enum_restrict": restrict flag
+        # }
+
+        for process_log_id_scan, log_updates_scan in updates_by_log_id.items():
+            if process_log_id_scan not in log_event_map:
+                continue
+            log_event_scan = log_event_map[process_log_id_scan]
+            for update_data in log_updates_scan:
+                key = update_data.get("key")
+                value = update_data.get("value")
+                explicit_types = update_data.get("explicit_types", {})
+                key_explicit_type = explicit_types.get(key, {})
+                context_id = update_data.get("context_id")
+                project_id = update_data.get("project_id") or log_event_scan.project_id
+
+                if not key or project_id is None:
+                    continue
+
+                # Determine inferred type
+                inferred_type = key_explicit_type.get("type")
+                if inferred_type is None:
+                    inferred_type = self.infer_type(key, value)
+
+                if inferred_type == "enum":
+                    field_key = (project_id, context_id, key)
+                    if field_key not in enum_field_info:
+                        enum_field_info[field_key] = {
+                            "values": set(),
+                            "enum_values": key_explicit_type.get("values"),
+                            "enum_restrict": key_explicit_type.get("restrict", False),
+                        }
+                    if isinstance(value, str):
+                        enum_field_info[field_key]["values"].add(value)
+
+        # =====================================================================
+        # STEP 2: BATCH FETCH FIELDTYPE RECORDS FOR ENUM FIELDS
+        # Execute a single SELECT query to fetch all relevant FieldType records
+        # =====================================================================
+        field_type_map: Dict[tuple, FieldType] = {}
+        if enum_field_info:
+            # Build OR conditions for each (project_id, context_id, field_name) tuple
+            or_conditions = []
+            for (proj_id, ctx_id, fld_name) in enum_field_info.keys():
+                if ctx_id is None:
+                    or_conditions.append(
+                        and_(
+                            FieldType.project_id == proj_id,
+                            FieldType.context_id.is_(None),
+                            FieldType.field_name == fld_name,
+                        ),
+                    )
+                else:
+                    or_conditions.append(
+                        and_(
+                            FieldType.project_id == proj_id,
+                            FieldType.context_id == ctx_id,
+                            FieldType.field_name == fld_name,
+                        ),
+                    )
+
+            if or_conditions:
+                existing_field_types = (
+                    self.session.query(FieldType).filter(or_(*or_conditions)).all()
+                )
+                for ft in existing_field_types:
+                    field_type_map[(ft.project_id, ft.context_id, ft.field_name)] = ft
+
+        # =====================================================================
+        # STEP 3: VALIDATE AND COLLECT ENUM EXPANSIONS
+        # For each enum field, validate values and determine which need expansion
+        # =====================================================================
+        fields_to_expand: Dict[tuple, List[str]] = {}  # field_key -> new values to add
+        fields_to_create: List[Dict[str, Any]] = []  # FieldType records to create
+        restricted_enum_errors: Dict[tuple, str] = {}  # field_key -> error message
+
+        for field_key, info in enum_field_info.items():
+            proj_id, ctx_id, fld_name = field_key
+            batch_values = info["values"]
+            explicit_enum_values = info["enum_values"]
+            enum_restrict = info["enum_restrict"]
+
+            if field_key in field_type_map:
+                # FieldType exists - validate and collect expansions
+                ft = field_type_map[field_key]
+                current_enum_values = set(ft.enum_values or [])
+
+                # Check which values are new
+                new_values = batch_values - current_enum_values
+
+                if new_values:
+                    if ft.enum_restrict:
+                        # Restricted enum - record error for later
+                        restricted_enum_errors[field_key] = (
+                            f"Value(s) {sorted(new_values)} not in allowed enum values "
+                            f"for field '{fld_name}': {sorted(current_enum_values)}"
+                        )
+                    else:
+                        # Open enum - collect for batch expansion
+                        # Also include any explicit enum_values that aren't in current
+                        values_to_add = list(new_values)
+                        if isinstance(explicit_enum_values, list):
+                            for ev in explicit_enum_values:
+                                if (
+                                    ev not in current_enum_values
+                                    and ev not in values_to_add
+                                ):
+                                    values_to_add.append(ev)
+                        fields_to_expand[field_key] = values_to_add
+            else:
+                # FieldType doesn't exist - prepare for creation
+                initial_values = []
+                if isinstance(explicit_enum_values, list):
+                    initial_values.extend(explicit_enum_values)
+                # Add batch values to initial values
+                for v in batch_values:
+                    if v not in initial_values:
+                        initial_values.append(v)
+
+                fields_to_create.append(
+                    {
+                        "project_id": proj_id,
+                        "context_id": ctx_id,
+                        "field_name": fld_name,
+                        "field_type": "enum",
+                        "field_category": "entry",
+                        "enum_values": initial_values,
+                        "enum_restrict": enum_restrict,
+                    },
+                )
+
+        # =====================================================================
+        # STEP 4: BATCH UPDATE ENUM VALUES
+        # Execute bulk UPDATE to expand enum values for all fields that need it
+        # =====================================================================
+        if fields_to_expand:
+            for field_key, new_values in fields_to_expand.items():
+                proj_id, ctx_id, fld_name = field_key
+                if ctx_id is None:
+                    stmt = (
+                        update(FieldType)
+                        .where(
+                            FieldType.project_id == proj_id,
+                            FieldType.context_id.is_(None),
+                            FieldType.field_name == fld_name,
+                        )
+                        .values(
+                            enum_values=FieldType.enum_values.concat(new_values),
+                        )
+                    )
+                else:
+                    stmt = (
+                        update(FieldType)
+                        .where(
+                            FieldType.project_id == proj_id,
+                            FieldType.context_id == ctx_id,
+                            FieldType.field_name == fld_name,
+                        )
+                        .values(
+                            enum_values=FieldType.enum_values.concat(new_values),
+                        )
+                    )
+                self.session.execute(stmt)
+
+        # =====================================================================
+        # STEP 5: BULK CREATE MISSING FIELDTYPE RECORDS
+        # Use INSERT ON CONFLICT DO NOTHING for atomic creation
+        # =====================================================================
+        if fields_to_create:
+            stmt = pg_insert(FieldType).values(fields_to_create)
+            stmt = stmt.on_conflict_do_nothing(
+                index_elements=["project_id", "field_name", "context_id"],
+            )
+            self.session.execute(stmt)
+
+        # =====================================================================
+        # UNIQUENESS CHECK: Validate unique field constraints for JSONB mode
+        # BATCH OPTIMIZED: Single query to check all unique field violations
+        # =====================================================================
+        unique_fields = {
+            k: v
+            for k, v in field_types.items()
+            if isinstance(v, dict) and v.get("unique", False)
+        }
+        unique_violations: Dict[int, str] = {}  # log_event_id -> error message
+
+        if unique_fields:
+            import json as json_module
+
+            from sqlalchemy import text as sql_text
+
+            # Collect all unique field updates to check in batch
+            # Structure: [(log_id, key, value, context_id, project_id), ...]
+            unique_checks = []
+            for check_log_id, log_updates in updates_by_log_id.items():
+                if check_log_id not in log_event_map:
+                    continue
+
+                log_event = log_event_map[check_log_id]
+                project_id = log_event.project_id
+
+                for update_data in log_updates:
+                    key = update_data.get("key")
+                    value = update_data.get("value")
+                    context_id = update_data.get("context_id")
+
+                    if key in unique_fields and value is not None:
+                        unique_checks.append(
+                            (check_log_id, key, value, context_id, project_id),
+                        )
+
+            if unique_checks:
+                # Group checks by (project_id, context_id) for efficient batching
+                from collections import defaultdict
+
+                checks_by_scope = defaultdict(list)
+                for check_log_id, key, value, context_id, project_id in unique_checks:
+                    checks_by_scope[(project_id, context_id)].append(
+                        (check_log_id, key, value),
+                    )
+
+                # Execute one batch query per (project_id, context_id) scope
+                for (project_id, context_id), scope_checks in checks_by_scope.items():
+                    # Build OR conditions for all values in this scope
+                    or_conditions = []
+                    params = {"project_id": project_id}
+                    if context_id is not None:
+                        params["context_id"] = context_id
+
+                    # Map value index to (log_id, key) for result processing
+                    value_to_log_info = {}
+                    for i, (check_log_id, key, value) in enumerate(scope_checks):
+                        value_json = json_module.dumps({key: value})
+                        params[f"value_{i}"] = value_json
+                        params[f"exclude_id_{i}"] = check_log_id
+                        or_conditions.append(
+                            f"(le.data @> CAST(:value_{i} AS jsonb) AND le.id != :exclude_id_{i})",
+                        )
+                        value_to_log_info[i] = (check_log_id, key)
+
+                    # Build the batch query
+                    if context_id is not None:
+                        # Query with context_id filter and return which condition matched
+                        case_parts = [
+                            f"WHEN le.data @> CAST(:value_{i} AS jsonb) AND le.id != :exclude_id_{i} THEN {i}"
+                            for i in range(len(scope_checks))
+                        ]
+                        jsonb_query = f"""
+                            SELECT DISTINCT CASE {' '.join(case_parts)} END AS match_idx
+                            FROM log_event le
+                            JOIN log_event_context lec ON le.id = lec.log_event_id
+                            WHERE le.project_id = :project_id
+                            AND lec.context_id = :context_id
+                            AND ({' OR '.join(or_conditions)})
+                        """
+                    else:
+                        case_parts = [
+                            f"WHEN le.data @> CAST(:value_{i} AS jsonb) AND le.id != :exclude_id_{i} THEN {i}"
+                            for i in range(len(scope_checks))
+                        ]
+                        jsonb_query = f"""
+                            SELECT DISTINCT CASE {' '.join(case_parts)} END AS match_idx
+                            FROM log_event le
+                            WHERE le.project_id = :project_id
+                            AND ({' OR '.join(or_conditions)})
+                        """
+
+                    # Execute batch query
+                    results = self.session.execute(
+                        sql_text(jsonb_query),
+                        params,
+                    ).fetchall()
+
+                    # Process results to identify violated log_ids
+                    for (match_idx,) in results:
+                        if match_idx is not None:
+                            log_id, key = value_to_log_info[match_idx]
+                            if log_id not in unique_violations:
+                                unique_violations[
+                                    log_id
+                                ] = f"Duplicate entry for unique field '{key}'."
+
+        # Mark violated logs as failed
+        for log_id, error_msg in unique_violations.items():
+            update_result["failed"].append(
+                {
+                    "log_event_id": log_id,
+                    "error": error_msg,
+                },
+            )
+
+        # =====================================================================
+        # PROCESS UPDATES: Validate and prepare atomic updates
+        # Collect all valid updates first, then execute single batch UPDATE
+        # =====================================================================
+        batch_updates: List[tuple] = []  # List of (log_id, json_data_str)
+
+        for process_log_id, log_updates in updates_by_log_id.items():
+            if process_log_id not in log_event_map:
+                continue  # Already marked as failed above
+
+            if process_log_id in unique_violations:
+                continue  # Already marked as failed due to uniqueness violation
+
+            try:
+                log_event = log_event_map[process_log_id]
+                current_data = dict(log_event.data or {})
+
+                # Process each update for this log_event_id
+                updates_to_apply = {}
+                for update_data in log_updates:
+                    key = update_data.get("key")
+                    value = update_data.get("value")
+                    explicit_types = update_data.get("explicit_types", {})
+                    key_explicit_type = explicit_types.get(key, {})
+                    context_id = update_data.get("context_id")
+                    project_id = update_data.get("project_id") or log_event.project_id
+                    per_update_overwrite = update_data.get("overwrite", overwrite)
+
+                    if not key:
+                        continue
+
+                    # Check if field exists in current data
+                    field_exists_in_data = key in current_data
+
+                    # Check overwrite permission
+                    if field_exists_in_data and not per_update_overwrite:
+                        if current_data[key] != value:
+                            raise OverwriteError(
+                                f"Cannot overwrite existing value for key '{key}'",
+                            )
+
+                    # Check field mutability
+                    if key in field_types and context_id is not None:
+                        field_info = field_types.get(key)
+                        if field_info and not field_info.get("mutable", False):
+                            if field_exists_in_data:
+                                raise ImmutableFieldError(
+                                    f"Field '{key}' is immutable",
+                                )
+
+                    # Determine inferred type for media handling
+                    inferred_type = key_explicit_type.get("type")
+                    if inferred_type is None:
+                        inferred_type = self.infer_type(key, value)
+
+                    # Handle media uploads
+                    json_value = value
+                    if inferred_type == "image" and isinstance(value, str):
+                        json_value = self.upload_image_to_bucket(value)
+                    elif inferred_type == "audio" and isinstance(value, str):
+                        json_value = self.upload_audio_to_bucket(value)
+
+                    # Handle enum field type validation using pre-fetched data
+                    # (Batch enum handling was done in Steps 1-5 above)
+                    if inferred_type == "enum" and project_id is not None:
+                        field_key = (project_id, context_id, key)
+                        # Check if this field had a restricted enum violation
+                        if field_key in restricted_enum_errors:
+                            # Only raise if this specific value is the problem
+                            if isinstance(value, str):
+                                ft = field_type_map.get(field_key)
+                                if ft and value not in (ft.enum_values or []):
+                                    raise ValueError(restricted_enum_errors[field_key])
+
+                    updates_to_apply[key] = json_value
+
+                # Stage this update for batch execution
+                if updates_to_apply:
+                    update_json = json.dumps(updates_to_apply)
+                    batch_updates.append((process_log_id, update_json))
+
+                # Mark this log_event_id as successful
+                update_result["successful_update_ids"].append(process_log_id)
+
+            except OverwriteError as e:
+                update_result["failed"].append(
+                    {
+                        "log_event_id": process_log_id,
+                        "error": f"Existing value cannot be overwritten because overwrite is set to False: {str(e)}",
+                    },
+                )
+            except ImmutableFieldError as e:
+                update_result["failed"].append(
+                    {
+                        "log_event_id": process_log_id,
+                        "error": f"Field is immutable and cannot be modified: {str(e)}",
+                    },
+                )
+            except ValueError as e:
+                update_result["failed"].append(
+                    {
+                        "log_event_id": process_log_id,
+                        "error": str(e),
+                    },
+                )
+            except Exception as e:
+                update_result["failed"].append(
+                    {
+                        "log_event_id": process_log_id,
+                        "error": f"Unexpected error: {str(e)}",
+                    },
+                )
+
+        # =====================================================================
+        # BATCH UPDATE: Execute single UPDATE with parameterized arrays for O(1) roundtrip
+        # This issues one SQL statement regardless of batch size and safely handles
+        # special characters in JSON payloads via parameter binding
+        # =====================================================================
+        if batch_updates:
+            from orchestra.web.api.log.utils.logging_utils import extract_key_order
+
+            ids_array = [log_id for log_id, _ in batch_updates]
+            data_array = [json_str for _, json_str in batch_updates]
+
+            # Extract key_order for new data to preserve nested dict ordering
+            key_order_array = []
+            for _, json_str in batch_updates:
+                update_data = json.loads(json_str)
+                new_key_order = extract_key_order(update_data)
+                key_order_array.append(json.dumps(new_key_order))
+
+            # Use unnest with parameterized arrays - safe from SQL injection
+            # Also update key_order by merging with existing key_order to preserve
+            # nested dict ordering for new fields added during update
+            update_sql = text(
+                """
+                UPDATE log_event
+                SET data = COALESCE(log_event.data, '{}'::jsonb) || v.new_data::jsonb,
+                    key_order = COALESCE(log_event.key_order, '{}'::jsonb) || v.new_key_order::jsonb,
+                    updated_at = :now
+                FROM unnest(:ids, :data, :key_orders) AS v(id, new_data, new_key_order)
+                WHERE log_event.id = v.id
+            """,
+            )
+            self.session.execute(
+                update_sql,
+                {
+                    "now": now,
+                    "ids": ids_array,
+                    "data": data_array,
+                    "key_orders": key_order_array,
+                },
+            )
+
+        # Commit all successful updates
+        self.session.commit()
+        return update_result
+
+    def apply_jsonb_patch_jsonb(
+        self,
+        patches: List[Dict[str, Any]],
+        overwrite: bool = False,
+        field_types: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Apply JSONB patches to nested paths within LogEvent.data.
+
+        Directly updates nested paths within the LogEvent.data JSONB column
+        using jsonb_set().
+
+        Key features:
+        - **Bulk Operations**: Fetches all LogEvents in a single query
+        - **Race Condition Safe**: Uses FOR UPDATE locking and atomic jsonb_set()
+        - No Log/JSONLog table operations
+        - Updates LogEvent.data directly
+        - Returns result dict with successful/failed IDs for partial success
+
+        Args:
+            patches: List of dictionaries with the following keys:
+                - log_event_id: int
+                - base_key: str
+                - path_segments: str (e.g., ".field" or "[0]")
+                - new_value: Any
+                - context_id: int (optional)
+                - overwrite: bool (optional)
+                - explicit_types: Dict (optional)
+            overwrite: Whether to allow overwriting existing values
+            field_types: Dictionary of field types with mutable flags
+
+        Returns:
+            Dict with:
+                - successful_update_ids: List[int] - IDs successfully updated
+                - failed: List[Dict] - List of {"log_event_id": int, "error": str}
+        """
+        import json
+
+        result = {
+            "successful_update_ids": [],
+            "failed": [],
+        }
+
+        if not patches:
+            return result
+
+        field_types = field_types or {}
+
+        try:
+            now = datetime.now(timezone.utc)
+
+            # Group patches by (log_event_id, base_key)
+            grouped = {}
+            for patch in patches:
+                le_id = patch.get("log_event_id")
+                base_key = patch.get("base_key")
+                if not le_id or not base_key:
+                    continue
+                grouped.setdefault((le_id, base_key), []).append(patch)
+
+            # =====================================================================
+            # BULK FETCH: Get all LogEvents in a SINGLE query with FOR UPDATE
+            # =====================================================================
+            all_log_ids = list(set(le_id for (le_id, _) in grouped.keys()))
+            log_events = (
+                self.session.query(LogEvent)
+                .filter(LogEvent.id.in_(all_log_ids))
+                .with_for_update()  # Lock rows to prevent concurrent modifications
+                .all()
+            )
+
+            # Build lookup map
+            log_event_map = {le.id: le for le in log_events}
+
+            # Check for missing LogEvents and mark as failed
+            for le_id in all_log_ids:
+                if le_id not in log_event_map:
+                    result["failed"].append(
+                        {
+                            "log_event_id": le_id,
+                            "error": f"LogEvent not found for log_event_id={le_id}",
+                        },
+                    )
+
+            # =====================================================================
+            # PROCESS PATCHES: Validate and prepare updates
+            # Track successful/failed IDs per (log_event_id, base_key) group
+            # =====================================================================
+            batch_patch_updates: List[tuple] = []  # List of (log_id, json_data_str)
+            processed_log_ids: set = set()
+            failed_log_ids: set = set()
+
+            for (le_id, base_key), group in grouped.items():
+                if le_id not in log_event_map:
+                    failed_log_ids.add(le_id)
+                    continue  # Already marked as failed above
+
+                try:
+                    log_event = log_event_map[le_id]
+
+                    # Check mutability
+                    ft_info = field_types.get(base_key)
+                    if ft_info and not ft_info.get("mutable", False):
+                        raise ImmutableFieldError(f"Field '{base_key}' is immutable")
+
+                    # Get current data from LogEvent
+                    current_data = dict(log_event.data or {})
+
+                    # Get the current document for this base_key
+                    if base_key not in current_data:
+                        # Initialize if not exists
+                        current_data[base_key] = {}
+
+                    current_doc = copy.deepcopy(current_data.get(base_key, {}))
+
+                    # Apply each patch to the document
+                    for patch in group:
+                        path_str = patch.get("path_segments", "")
+                        new_value = patch.get("new_value")
+                        patch_overwrite = patch.get("overwrite", overwrite)
+
+                        # Parse path_segments into list of keys and indices
+                        segments = []
+                        s = path_str
+                        i = 0
+                        while i < len(s):
+                            if s[i] == ".":
+                                j = i + 1
+                                token = ""
+                                while j < len(s) and s[j] not in ".[":
+                                    token += s[j]
+                                    j += 1
+                                segments.append(token)
+                                i = j
+                            elif s[i] == "[":
+                                j = i + 1
+                                token = ""
+                                while j < len(s) and s[j] != "]":
+                                    token += s[j]
+                                    j += 1
+                                segments.append(token)
+                                i = j + 1
+                            else:
+                                j = i
+                                token = ""
+                                while j < len(s) and s[j] not in ".[":
+                                    token += s[j]
+                                    j += 1
+                                if token:
+                                    segments.append(token)
+                                i = j
+
+                        # Apply the patch to the document
+                        current_doc = self._apply_patch_to_doc(
+                            current_doc,
+                            segments,
+                            new_value,
+                            patch_overwrite,
+                        )
+
+                    # Stage this update for batch execution
+                    update_json = json.dumps({base_key: current_doc})
+                    batch_patch_updates.append((le_id, update_json))
+                    processed_log_ids.add(le_id)
+
+                except OverwriteError as e:
+                    failed_log_ids.add(le_id)
+                    result["failed"].append(
+                        {
+                            "log_event_id": le_id,
+                            "error": f"Existing nested value cannot be overwritten: {str(e)}",
+                        },
+                    )
+                except ImmutableFieldError as e:
+                    failed_log_ids.add(le_id)
+                    result["failed"].append(
+                        {
+                            "log_event_id": le_id,
+                            "error": f"Field or nested path is immutable: {str(e)}",
+                        },
+                    )
+                except (IndexError, Exception) as e:
+                    failed_log_ids.add(le_id)
+                    result["failed"].append(
+                        {
+                            "log_event_id": le_id,
+                            "error": f"Error applying nested update: {str(e)}",
+                        },
+                    )
+
+            # =============================================================
+            # BATCH UPDATE: Execute single UPDATE with parameterized arrays
+            # This issues one SQL statement regardless of batch size and safely
+            # handles special characters in JSON payloads via parameter binding
+            # =============================================================
+            if batch_patch_updates:
+                from orchestra.web.api.log.utils.logging_utils import extract_key_order
+
+                ids_array = [log_id for log_id, _ in batch_patch_updates]
+                data_array = [json_str for _, json_str in batch_patch_updates]
+
+                # Extract key_order for new data to preserve nested dict ordering
+                key_order_array = []
+                for _, json_str in batch_patch_updates:
+                    update_data = json.loads(json_str)
+                    new_key_order = extract_key_order(update_data)
+                    key_order_array.append(json.dumps(new_key_order))
+
+                # Use unnest with parameterized arrays - safe from SQL injection
+                # Also update key_order by merging with existing key_order
+                update_sql = text(
+                    """
+                    UPDATE log_event
+                    SET data = COALESCE(log_event.data, '{}'::jsonb) || v.new_data::jsonb,
+                        key_order = COALESCE(log_event.key_order, '{}'::jsonb) || v.new_key_order::jsonb,
+                        updated_at = :now
+                    FROM unnest(:ids, :data, :key_orders) AS v(id, new_data, new_key_order)
+                    WHERE log_event.id = v.id
+                """,
+                )
+                self.session.execute(
+                    update_sql,
+                    {
+                        "now": now,
+                        "ids": ids_array,
+                        "data": data_array,
+                        "key_orders": key_order_array,
+                    },
+                )
+
+            self.session.commit()
+
+            # Populate successful IDs (processed but not failed)
+            result["successful_update_ids"] = list(processed_log_ids - failed_log_ids)
+
+        except Exception as e:
+            self.session.rollback()
+            # On catastrophic failure, mark all as failed
+            for le_id in all_log_ids:
+                if le_id not in failed_log_ids:
+                    result["failed"].append(
+                        {
+                            "log_event_id": le_id,
+                            "error": f"Failed to apply JSONB patch: {str(e)}",
+                        },
+                    )
+
+        return result

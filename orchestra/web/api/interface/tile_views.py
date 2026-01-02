@@ -1581,9 +1581,11 @@ def import_tile_template(
         )
     elif request.interface_name and request.tab_name:
         # Get project first
+        organization_id = getattr(request_fastapi.state, "organization_id", None)
         project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
             name=request.project,
+            organization_id=organization_id,
         )
         if not project:
             raise HTTPException(

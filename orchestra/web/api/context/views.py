@@ -5,6 +5,7 @@ Includes endpoints related to context management within projects.
 from typing import Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
+from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 
 from orchestra.db.dao.context_dao import ContextDAO
@@ -13,6 +14,7 @@ from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
+from orchestra.db.models.orchestra_models import Context
 from orchestra.web.api.context.schema import (
     AddLogsToContextRequest,
     ContextCommit,
@@ -132,10 +134,12 @@ def create_context(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
         project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
             name=project_name,
+            organization_id=organization_id,
         )
         if not project:
             raise IndexError
@@ -304,10 +308,12 @@ def get_contexts(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
         project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
             name=project_name,
+            organization_id=organization_id,
         )
         if not project:
             raise IndexError
@@ -360,8 +366,13 @@ def get_context_commits(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
 
-    project = project_dao.get_by_user_and_name(user_id=user_id, name=project_name)
+    project = project_dao.get_by_user_and_name(
+        user_id=user_id,
+        name=project_name,
+        organization_id=organization_id,
+    )
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -425,10 +436,12 @@ def get_context(
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
         project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
             name=project_name,
+            organization_id=organization_id,
         )
         if not project:
             raise IndexError("Project not found")
@@ -464,7 +477,23 @@ def get_context(
             "description": "Successful Response",
             "content": {
                 "application/json": {
-                    "example": {"info": "Context deleted successfully!"},
+                    "examples": {
+                        "single": {
+                            "summary": "Single context deleted",
+                            "value": {"info": "Context deleted successfully!"},
+                        },
+                        "with_children": {
+                            "summary": "Context and children deleted",
+                            "value": {
+                                "info": "Deleted 3 context(s) successfully!",
+                                "deleted": [
+                                    "experiments",
+                                    "experiments/trial1",
+                                    "experiments/trial2",
+                                ],
+                            },
+                        },
+                    },
                 },
             },
         },
@@ -493,49 +522,102 @@ def get_context(
 def delete_context(
     request_fastapi: Request,
     project_name: str = Path(
-        description="Name of the project to create context in.",
+        description="Name of the project to delete context from.",
         example="my_project",
     ),
     context_name: str = Path(
         description="Name of the context to delete.",
         example="my_context",
     ),
+    include_children: bool = Query(
+        default=True,
+        description=(
+            "Whether to delete child contexts (which share the same '/' separated "
+            "prefix). When True, deleting 'experiments' will also delete "
+            "'experiments/trial1', 'experiments/trial2', etc. The parent context "
+            "does not need to exist for children to be deleted."
+        ),
+    ),
     session=Depends(get_db_session),
 ):
     """
     Deletes a context from a project. This will not delete the logs or artifacts
     within the context, but will remove their association with this context.
+
+    When include_children is True (default), all child contexts sharing the same
+    prefix will also be deleted. For Assistants/UnityTests projects, logs that
+    exist in sibling contexts (All/X, User/All/X) will also have their associations
+    cleaned up.
     """
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    # Normalize context name: remove leading slash to treat '/exp1/name1' the same as 'exp1/name1'
-    context_name = context_name.lstrip("/")
 
-    # Protect the built-in Tasks context in Unity project
-    if project_name == "Unity" and context_name == "Tasks":
-        raise HTTPException(
-            status_code=403,
-            detail="Cannot delete built-in Tasks context.",
-        )
+    # Normalize context name: remove leading/trailing slashes
+    context_name = context_name.strip("/")
+
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
         project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
             name=project_name,
+            organization_id=organization_id,
         )
         if not project:
             raise IndexError("Project not found")
         project_id = project.id
 
-        context = context_dao.filter(
-            project_id=project_id,
-            name=context_name,
-        )
-        if not context:
+        # Find contexts to delete
+        if include_children:
+            # Find exact match OR children (name starts with context_name/)
+            contexts_to_delete = (
+                session.query(Context)
+                .filter(
+                    Context.project_id == project_id,
+                    or_(
+                        Context.name == context_name,
+                        Context.name.like(f"{context_name}/%"),
+                    ),
+                )
+                .all()
+            )
+        else:
+            # Exact match only
+            context_result = context_dao.filter(
+                project_id=project_id,
+                name=context_name,
+            )
+            contexts_to_delete = (
+                [c[0] for c in context_result] if context_result else []
+            )
+
+        if not contexts_to_delete:
             raise IndexError("Context not found")
 
-        context_dao.delete(id=context[0][0].id)
-        return {"info": "Context deleted successfully!"}
+        # Check for protected contexts
+        for ctx in contexts_to_delete:
+            if project_name == "Unity" and ctx.name == "Tasks":
+                raise HTTPException(
+                    status_code=403,
+                    detail="Cannot delete built-in Tasks context.",
+                )
+
+        deleted_names = []
+
+        for ctx in contexts_to_delete:
+            # Delete the context
+            # The DAO handles sibling cleanup for Assistants/UnityTests projects,
+            # GCS media cleanup, cascade deletion, and orphan log event cleanup
+            context_dao.delete(id=ctx.id)
+            deleted_names.append(ctx.name)
+
+        if len(deleted_names) == 1:
+            return {"info": "Context deleted successfully!"}
+        else:
+            return {
+                "info": f"Deleted {len(deleted_names)} context(s) successfully!",
+                "deleted": deleted_names,
+            }
     except IndexError as e:
         raise not_found(str(e))
 
@@ -588,10 +670,12 @@ def add_logs_to_context(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = FieldTypeDAO(session)
     log_dao = LogDAO(session, context_dao)
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
         project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
             name=project_name,
+            organization_id=organization_id,
         )
         if not project:
             raise IndexError("Project not found")
@@ -627,30 +711,56 @@ def add_logs_to_context(
         if hasattr(request, "log_ids") and request.log_ids:
             log_ids = request.log_ids
         elif hasattr(request, "log_args") and request.log_args:
-            from orchestra.web.api.log.views import _get_logs_query
+            from orchestra.settings import settings
+            from orchestra.web.api.log.utils.logging_utils import (
+                _get_logs_query,
+                _get_logs_query_jsonb,
+            )
 
             # Use log_args to query for matching logs
             log_args = request.log_args
-            raw_rows, _, _ = _get_logs_query(
-                request_fastapi,
-                project_name,
-                column_context=log_args.get("column_context"),
-                context=log_args.get("context"),
-                filter_expr=log_args.get("filter_expr"),
-                sorting=log_args.get("sorting"),
-                from_ids=log_args.get("from_ids"),
-                exclude_ids=log_args.get("exclude_ids"),
-                from_fields=log_args.get("from_fields"),
-                exclude_fields=log_args.get("exclude_fields"),
-                limit=log_args.get("limit"),
-                offset=log_args.get("offset", 0),
-                project_dao=project_dao,
-                field_type_dao=field_type_dao,
-                context_dao=context_dao,
-                session=session,
-            )
 
-            log_ids = list({row[7] for row in raw_rows})
+            if settings.use_jsonb_queries:
+                # JSONB mode: returns (rows, count) where rows are (id, data, created_at)
+                rows, _ = _get_logs_query_jsonb(
+                    request_fastapi=request_fastapi,
+                    project=project_name,
+                    context=log_args.get("context"),
+                    filter_expr=log_args.get("filter_expr"),
+                    sorting=log_args.get("sorting"),
+                    from_ids=log_args.get("from_ids"),
+                    exclude_ids=log_args.get("exclude_ids"),
+                    from_fields=log_args.get("from_fields"),
+                    exclude_fields=log_args.get("exclude_fields"),
+                    limit=log_args.get("limit"),
+                    offset=log_args.get("offset", 0),
+                    project_dao=project_dao,
+                    field_type_dao=field_type_dao,
+                    context_dao=context_dao,
+                    session=session,
+                )
+                log_ids = list({row[0] for row in rows})  # row[0] is log_event_id
+            else:
+                # EAV mode: returns (raw_rows, _, count)
+                raw_rows, _, _ = _get_logs_query(
+                    request_fastapi=request_fastapi,
+                    project=project_name,
+                    column_context=log_args.get("column_context"),
+                    context=log_args.get("context"),
+                    filter_expr=log_args.get("filter_expr"),
+                    sorting=log_args.get("sorting"),
+                    from_ids=log_args.get("from_ids"),
+                    exclude_ids=log_args.get("exclude_ids"),
+                    from_fields=log_args.get("from_fields"),
+                    exclude_fields=log_args.get("exclude_fields"),
+                    limit=log_args.get("limit"),
+                    offset=log_args.get("offset", 0),
+                    project_dao=project_dao,
+                    field_type_dao=field_type_dao,
+                    context_dao=context_dao,
+                    session=session,
+                )
+                log_ids = list({row[7] for row in raw_rows})  # row[7] is log_event_id
 
             if not log_ids:
                 raise HTTPException(
@@ -693,32 +803,80 @@ def add_logs_to_context(
             context_id=context_id,
         )
         existing_field_names = set(existing_fields)
-        logs = log_dao.filter(
-            project_id=project_id,
-            log_event_id=log_ids,
-        )
 
-        # Create field types for each field found, but only if not already existing
-        for row in logs:
-            field_name = row[0].key
-            value = row[0].value
-            param_version = row[0].param_version
-            inferred_type = row[0].inferred_type
-            field_category = "param" if param_version is not None else "entry"
+        from orchestra.settings import settings
 
-            # Skip if field already exists in this context
-            if field_name not in existing_field_names:
-                field_type_dao.create_field_type_if_absent(
-                    project_id=project_id,
-                    field_name=field_name,
-                    value=value,
-                    context_id=context_id,
-                    mutable=False,
-                    field_category=field_category,
-                    field_type=inferred_type,
+        if settings.use_jsonb_queries:
+            # JSONB mode: query LogEvent.data directly
+            from orchestra.db.models.orchestra_models import LogEvent
+
+            log_events = (
+                session.query(LogEvent.id, LogEvent.data, LogEvent.key_order)
+                .filter(
+                    LogEvent.id.in_(log_ids),
+                    LogEvent.project_id == project_id,
                 )
-                # Add to set to prevent duplicate creation in this batch
-                existing_field_names.add(field_name)
+                .all()
+            )
+            # Create field types for each field found in LogEvent.data
+            for log_event_id, data, key_order in log_events:
+                if not data:
+                    continue
+
+                for field_name, value in data.items():
+                    # Skip if field already exists in this context
+                    if field_name in existing_field_names:
+                        continue
+
+                    # In JSONB mode, we can't determine param vs entry from stored data
+                    # (unlike EAV mode which uses Log.param_version).
+                    # Default to "entry" which matches the typical use case.
+                    # If logs were originally created with a context, field types
+                    # would already exist from that creation.
+                    field_category = "entry"
+
+                    # Infer type using LogDAO's static method
+                    inferred_type = LogDAO.infer_type(field_name, value)
+
+                    field_type_dao.create_field_type_if_absent(
+                        project_id=project_id,
+                        field_name=field_name,
+                        value=value,
+                        context_id=context_id,
+                        mutable=False,
+                        field_category=field_category,
+                        field_type=inferred_type,
+                    )
+                    # Add to set to prevent duplicate creation in this batch
+                    existing_field_names.add(field_name)
+        else:
+            # EAV mode: query Log table
+            logs = log_dao.filter(
+                project_id=project_id,
+                log_event_id=log_ids,
+            )
+
+            # Create field types for each field found, but only if not already existing
+            for row in logs:
+                field_name = row[0].key
+                value = row[0].value
+                param_version = row[0].param_version
+                inferred_type = row[0].inferred_type
+                field_category = "param" if param_version is not None else "entry"
+
+                # Skip if field already exists in this context
+                if field_name not in existing_field_names:
+                    field_type_dao.create_field_type_if_absent(
+                        project_id=project_id,
+                        field_name=field_name,
+                        value=value,
+                        context_id=context_id,
+                        mutable=False,
+                        field_category=field_category,
+                        field_type=inferred_type,
+                    )
+                    # Add to set to prevent duplicate creation in this batch
+                    existing_field_names.add(field_name)
 
         return {"info": "Logs added to context successfully!"}
     except IndexError as e:
@@ -795,9 +953,11 @@ def rename_context(
             detail="Cannot modify built-in Tasks context.",
         )
     # 1) Verify project
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
         name=project_name,
+        organization_id=organization_id,
     )
     if not project:
         raise not_found("Project")
@@ -840,8 +1000,13 @@ def commit_context_version(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
 
-    project = project_dao.get_by_user_and_name(user_id=user_id, name=project_name)
+    project = project_dao.get_by_user_and_name(
+        user_id=user_id,
+        name=project_name,
+        organization_id=organization_id,
+    )
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
@@ -875,8 +1040,13 @@ def rollback_context_version(
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
 
-    project = project_dao.get_by_user_and_name(user_id=user_id, name=project_name)
+    project = project_dao.get_by_user_and_name(
+        user_id=user_id,
+        name=project_name,
+        organization_id=organization_id,
+    )
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 

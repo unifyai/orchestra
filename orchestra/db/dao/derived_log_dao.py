@@ -1,11 +1,14 @@
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Union
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
+from sqlalchemy.sql import func
 
 from orchestra.db.models.orchestra_models import (
+    ActiveDerivedLog,
     DerivedLog,
     LogEvent,
     LogEventDerivedLog,
@@ -16,6 +19,8 @@ from orchestra.web.api.log.python2SQL import (
     _substitute_placeholders,
     str_filter_exp_to_dict,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class OverwriteError(Exception):
@@ -43,6 +48,55 @@ def _transform_referenced_logs(equation: str, referenced_logs: Dict) -> List[Dic
         transformed[log_key] = referenced_logs[original_key]
 
     return transformed
+
+
+def _extract_field_names_from_equation(equation: str) -> List[str]:
+    """
+    Extract base field names from derived log equation for dependency tracking.
+
+    This function is used during template creation/update to populate the
+    `referenced_keys` JSONB column in ActiveDerivedLog. The stored keys enable
+    fast indexed lookups for the "Ripple Effect" system.
+
+    **Usage Pattern:**
+    - Called when creating/updating ActiveDerivedLog templates to populate `referenced_keys`
+    - NOT used during ripple effect queries (those use indexed `referenced_keys @>` lookups)
+
+    Args:
+        equation: String containing placeholders like '{log0:field_a} + {log1:field_b}'
+
+    Returns:
+        List of unique field names extracted from placeholders.
+
+    Example:
+        equation = "{log0:score} + {log1:accuracy}"
+        result = _extract_field_names_from_equation(equation)
+        # Returns: ['score', 'accuracy']
+
+    Note:
+        This function is intentionally kept simple (string parsing) since it only runs
+        during template creation/update (rare operations). The performance-critical
+        ripple effect queries use the pre-computed `referenced_keys` column with GIN indexing.
+    """
+    if not equation:
+        return []
+
+    try:
+        placeholders = _extract_placeholders(
+            equation,
+        )  # ['log0:field_a', 'log1:field_b']
+        field_names = set()
+        for p in placeholders:
+            if ":" in p:
+                # 'log0:field_a' -> 'field_a'
+                field_name = p.split(":", 1)[1]
+                field_names.add(field_name)
+            else:
+                logger.warning(f"Malformed placeholder '{p}' in equation: {equation}")
+        return list(field_names)
+    except Exception as e:
+        logger.warning(f"Failed to extract field names from equation '{equation}': {e}")
+        return []
 
 
 # noinspection PyBroadException
@@ -183,6 +237,115 @@ class DerivedLogDAO:
 
             session.commit()
         except Exception as e:
+            raise e
+
+    def recompute_derived_logs_jsonb(
+        self,
+        template: ActiveDerivedLog,
+        log_ids: List[int],
+        json_encoder: json.JSONEncoder,
+        field_type_dao=None,
+    ) -> int:
+        """
+        Recompute derived log values by materializing them directly into LogEvent.data.
+
+        This method stores computed values in the LogEvent.data JSONB column rather than
+        creating separate DerivedLog rows.
+
+        Args:
+            template: ActiveDerivedLog template containing equation and metadata
+            log_ids: List of log_event_ids to recompute
+            json_encoder: JSON encoder class for serializing values
+            field_type_dao: Optional FieldTypeDAO for creating field type if absent
+
+        Returns:
+            Number of logs successfully updated
+        """
+        if not log_ids:
+            return 0
+
+        try:
+            # Build resolved_ids dict for _substitute_placeholders
+            # For JSONB mode, all placeholders reference the same log IDs
+            placeholders = _extract_placeholders(template.equation)
+            resolved_ids = {}
+            for p in placeholders:
+                log_key = p.split(":")[0]  # 'log0:field_a' -> 'log0'
+                resolved_ids[log_key] = log_ids
+
+            # Substitute placeholders to get filter expression
+            filter_expr, alias_to_key_map = _substitute_placeholders(
+                template.equation,
+                resolved_ids,
+            )
+            filter_dict = str_filter_exp_to_dict(filter_expr)
+
+            # Compute expression for all log_ids
+            computed_values = _compute_expression(
+                filter_dict,
+                LogEvent,
+                self.session,
+                log_ids,
+            )
+
+            if not computed_values:
+                return 0
+
+            # Track non-null value for field type inference
+            non_null_val = None
+            updates_count = 0
+
+            # Update each log's data JSONB column
+            for log_event_id, value in computed_values:
+                try:
+                    # Serialize value using provided encoder
+                    val = json.loads(json.dumps(value, cls=json_encoder))
+                    if val is not None:
+                        non_null_val = val
+
+                    # Update LogEvent.data by merging the new derived field
+                    # Using JSONB concatenation: data || jsonb_build_object('key', value)
+                    stmt = (
+                        update(LogEvent)
+                        .where(LogEvent.id == log_event_id)
+                        .values(
+                            data=LogEvent.data.concat(
+                                func.jsonb_build_object(template.key, val),
+                            ),
+                            updated_at=datetime.now(timezone.utc),
+                        )
+                    )
+                    self.session.execute(stmt)
+                    updates_count += 1
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to recompute derived log for log_event_id={log_event_id}: {e}",
+                    )
+                    continue
+
+            self.session.commit()
+
+            # Create field type if DAO provided
+            if field_type_dao and non_null_val is not None:
+                try:
+                    field_type_dao.create_field_type_if_absent(
+                        project_id=template.project_id,
+                        field_name=template.key,
+                        value=non_null_val,
+                        context_id=template.context_id,
+                        field_category="derived_entry",
+                        infer_type=True,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to create field type for '{template.key}': {e}",
+                    )
+
+            return updates_count
+
+        except Exception as e:
+            self.session.rollback()
+            logger.error(f"Error in recompute_derived_logs_jsonb: {e}")
             raise e
 
     def update(

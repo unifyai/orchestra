@@ -18,8 +18,12 @@ from orchestra.db.dao.auth_user_dao import (
     AuthUser,
     AuthUserDAO,
 )
+from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
+from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
@@ -84,6 +88,7 @@ async def create_user(
         bio=user.bio,
         image=user.image,
         timezone=user.timezone,
+        phone_number=user.phone_number,
     )
     user_row = auth_user_dao.filter(email=user.email)
     new_user = user_row[0][0]
@@ -104,6 +109,7 @@ async def create_user(
         "image": new_user.image,
         "email": new_user.email,
         "timezone": new_user.timezone,
+        "phone_number": new_user.phone_number,
     }
 
 
@@ -116,6 +122,7 @@ async def get_user(
     api_key_dao = ApiKeyDAO(session)
     organization_member_dao = OrganizationMemberDAO(session)
     organization_dao = OrganizationDAO(session)
+    role_dao = RoleDAO(session)
 
     user = auth_user_dao.filter(id=user_id)
     if not user:
@@ -125,53 +132,12 @@ async def get_user(
     api_key = api_key_dao.filter(user_id=user[0][0].id)
     api_key_instance = api_key[0][0]
 
-    org_member = organization_member_dao.filter(user_id=user[0][0].id)
-    org_name, org_level = None, None
-    if org_member:
-        org_level = org_member[0][0].level
-        org = organization_dao.filter(id=org_member[0][0].organization_id)
-        org_name = org[0][0].name
-    return {
-        "id": user_instance.id,
-        "name": user_instance.name,
-        "lastName": user_instance.last_name,
-        "jobTitle": user_instance.job_title,
-        "bio": user_instance.bio,
-        "image": user_instance.image,
-        "email": user_instance.email,
-        "createdAt": user_instance.created_at,
-        "apiKey": api_key_instance.key,
-        "organization": {"name": org_name, "level": org_level},
-        "assistant_hiring_approval": user_instance.assistant_hiring_approval,
-        "has_claimed_approval_link": user_instance.has_claimed_approval_link,
-        "business_classification": format_business_classification(user_instance),
-        "onboarded": user_instance.onboarded,
-        "timezone": user_instance.timezone,
-    }
-
-
-@admin_router.get("/auth-user/by-email")
-async def get_user_by_email(
-    email: str,
-    session: Session = Depends(get_db_session),
-):
-    auth_user_dao = AuthUserDAO(session)
-    api_key_dao = ApiKeyDAO(session)
-    organization_member_dao = OrganizationMemberDAO(session)
-    organization_dao = OrganizationDAO(session)
-
-    user = auth_user_dao.filter(email=email)
-    if not user:
-        return None
-    user_instance = user[0][0]
-
-    api_key = api_key_dao.filter(user_id=user[0][0].id)
-    api_key_instance = api_key[0][0]
-
     org_members = organization_member_dao.filter(user_id=user[0][0].id)
-    org_name, org_level = None, None
+    org_name, org_role_id, org_role_name = None, None, None
     if org_members:
-        org_level = org_members[0][0].level
+        org_role_id = org_members[0][0].role_id
+        role = role_dao.get(org_role_id)
+        org_role_name = role.name if role else None
         org = organization_dao.filter(id=org_members[0][0].organization_id)
         org_name = org[0][0].name
 
@@ -187,11 +153,15 @@ async def get_user_by_email(
                 organization_id=member.organization_id,
             )
             org_api_key = org_keys[0][0].key if org_keys else None
+            # Get role name for this membership
+            member_role = role_dao.get(member.role_id)
+            member_role_name = member_role.name if member_role else None
             organizations.append(
                 {
                     "id": member.organization_id,
                     "name": org_result.name,
-                    "level": member.level,
+                    "role_id": member.role_id,
+                    "role_name": member_role_name,
                     "apiKey": org_api_key,
                 },
             )
@@ -206,13 +176,96 @@ async def get_user_by_email(
         "email": user_instance.email,
         "createdAt": user_instance.created_at,
         "apiKey": api_key_instance.key,
-        "organization": {"name": org_name, "level": org_level},
+        "organization": {
+            "name": org_name,
+            "role_id": org_role_id,
+            "role_name": org_role_name,
+        },
         "organizations": organizations,
         "assistant_hiring_approval": user_instance.assistant_hiring_approval,
         "has_claimed_approval_link": user_instance.has_claimed_approval_link,
         "business_classification": format_business_classification(user_instance),
         "onboarded": user_instance.onboarded,
         "timezone": user_instance.timezone,
+        "phone_number": user_instance.phone_number,
+    }
+
+
+@admin_router.get("/auth-user/by-email")
+async def get_user_by_email(
+    email: str,
+    session: Session = Depends(get_db_session),
+):
+    auth_user_dao = AuthUserDAO(session)
+    api_key_dao = ApiKeyDAO(session)
+    organization_member_dao = OrganizationMemberDAO(session)
+    organization_dao = OrganizationDAO(session)
+    role_dao = RoleDAO(session)
+
+    user = auth_user_dao.filter(email=email)
+    if not user:
+        return None
+    user_instance = user[0][0]
+
+    api_key = api_key_dao.filter(user_id=user[0][0].id)
+    api_key_instance = api_key[0][0]
+
+    org_members = organization_member_dao.filter(user_id=user[0][0].id)
+    org_name, org_role_id, org_role_name = None, None, None
+    if org_members:
+        org_role_id = org_members[0][0].role_id
+        role = role_dao.get(org_role_id)
+        org_role_name = role.name if role else None
+        org = organization_dao.filter(id=org_members[0][0].organization_id)
+        org_name = org[0][0].name
+
+    # Build organizations list with org-specific API keys
+    organizations = []
+    for member_row in org_members:
+        member = member_row[0]
+        org_result = organization_dao.get(member.organization_id)
+        if org_result:
+            # Get org-specific API key for this user+org
+            org_keys = api_key_dao.get_organization_keys(
+                user_instance.id,
+                organization_id=member.organization_id,
+            )
+            org_api_key = org_keys[0][0].key if org_keys else None
+            # Get role name for this membership
+            member_role = role_dao.get(member.role_id)
+            member_role_name = member_role.name if member_role else None
+            organizations.append(
+                {
+                    "id": member.organization_id,
+                    "name": org_result.name,
+                    "role_id": member.role_id,
+                    "role_name": member_role_name,
+                    "apiKey": org_api_key,
+                },
+            )
+
+    return {
+        "id": user_instance.id,
+        "name": user_instance.name,
+        "lastName": user_instance.last_name,
+        "jobTitle": user_instance.job_title,
+        "bio": user_instance.bio,
+        "image": user_instance.image,
+        "email": user_instance.email,
+        "createdAt": user_instance.created_at,
+        "apiKey": api_key_instance.key,
+        "organization": {
+            "name": org_name,
+            "role_id": org_role_id,
+            "role_name": org_role_name,
+        },
+        "organizations": organizations,
+        "assistant_hiring_approval": user_instance.assistant_hiring_approval,
+        "has_claimed_approval_link": user_instance.has_claimed_approval_link,
+        "business_classification": format_business_classification(user_instance),
+        "onboarded": user_instance.onboarded,
+        "timezone": user_instance.timezone,
+        "phone_number": user_instance.phone_number,
     }
 
 
@@ -227,6 +280,7 @@ async def get_user_by_account(
     api_key_dao = ApiKeyDAO(session)
     organization_member_dao = OrganizationMemberDAO(session)
     organization_dao = OrganizationDAO(session)
+    role_dao = RoleDAO(session)
 
     account = account_dao.filter(
         provider_account_id=provider_account_id,
@@ -243,9 +297,11 @@ async def get_user_by_account(
     api_key_instance = api_key[0][0]
 
     org_member = organization_member_dao.filter(user_id=user[0][0].id)
-    org_name, org_level = None, None
+    org_name, org_role_id, org_role_name = None, None, None
     if org_member:
-        org_level = org_member[0][0].level
+        org_role_id = org_member[0][0].role_id
+        role = role_dao.get(org_role_id)
+        org_role_name = role.name if role else None
         org = organization_dao.filter(id=org_member[0][0].organization_id)
         org_name = org[0][0].name
     return {
@@ -258,12 +314,17 @@ async def get_user_by_account(
         "email": user_instance.email,
         "createdAt": user_instance.created_at,
         "apiKey": api_key_instance.key,
-        "organization": {"name": org_name, "level": org_level},
+        "organization": {
+            "name": org_name,
+            "role_id": org_role_id,
+            "role_name": org_role_name,
+        },
         "assistant_hiring_approval": user_instance.assistant_hiring_approval,
         "has_claimed_approval_link": user_instance.has_claimed_approval_link,
         "business_classification": format_business_classification(user_instance),
         "onboarded": user_instance.onboarded,
         "timezone": user_instance.timezone,
+        "phone_number": user_instance.phone_number,
     }
 
 
@@ -283,6 +344,7 @@ async def update_user(
         job_title=updated_user.job_title,
         bio=updated_user.bio,
         timezone=updated_user.timezone,
+        phone_number=updated_user.phone_number,
     )
     return "User information updated successfully!"
 
@@ -636,6 +698,7 @@ async def create_organization(
 ):
     organization_dao = OrganizationDAO(session)
     organization_member_dao = OrganizationMemberDAO(session)
+    role_dao = RoleDAO(session)
 
     existing_org = organization_dao.filter(owner_id=owner_id)
     if existing_org:
@@ -643,9 +706,19 @@ async def create_organization(
             status_code=400,
             detail="This user already has an organization.",
         )
+
+    # Get Owner role
+    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+    if not owner_role:
+        raise HTTPException(status_code=500, detail="Owner system role not found")
+
     organization_dao.create(name=name, owner_id=owner_id)
     new_org = organization_dao.filter(owner_id=owner_id)
-    organization_member_dao.create(new_org[0][0].id, user_id=owner_id, level="owner")
+    organization_member_dao.create(
+        organization_id=new_org[0][0].id,
+        user_id=owner_id,
+        role_id=owner_role.id,
+    )
     return "Organization created successfully!"
 
 
@@ -653,11 +726,13 @@ async def create_organization(
 async def add_organization_member(
     name: str,
     new_member_email: str,
+    role_id: Optional[int] = None,
     session: Session = Depends(get_db_session),
 ):
     auth_user_dao = AuthUserDAO(session)
     organization_dao = OrganizationDAO(session)
     organization_member_dao = OrganizationMemberDAO(session)
+    role_dao = RoleDAO(session)
 
     new_user = auth_user_dao.filter(email=new_member_email)
     if not new_user:
@@ -665,30 +740,62 @@ async def add_organization_member(
     org = organization_dao.filter(name=name)
     if not org:
         raise not_found("Organization")
+
+    # Default to Member role if not specified
+    if role_id is None:
+        member_role = role_dao.get_by_name("Member", organization_id=None)
+        if not member_role:
+            raise HTTPException(status_code=500, detail="Member system role not found")
+        role_id = member_role.id
+
     organization_member_dao.create(
         organization_id=org[0][0].id,
         user_id=new_user[0][0].id,
-        level="user",
+        role_id=role_id,
     )
+
+    # Grant Member access to Assistants project if it exists
+    context_dao = ContextDAO(session)
+    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    resource_access_dao = ResourceAccessDAO(session)
+    assistants_projects = project_dao.filter(
+        organization_id=org[0][0].id,
+        name="Assistants",
+    )
+    if assistants_projects:
+        assistants_project = assistants_projects[0][0]
+        member_role = role_dao.get_by_name("Member", organization_id=None)
+        if member_role:
+            resource_access_dao.grant_access(
+                resource_type="project",
+                resource_id=assistants_project.id,
+                role_id=member_role.id,
+                grantee_type="user",
+                grantee_id=new_user[0][0].id,
+            )
+
     return "Member added successfully to the organization!"
 
 
-@admin_router.put("/organization/member/level")
-async def update_organization_member_level(
+@admin_router.put("/organization/member/role")
+async def update_organization_member_role(
     organization: str,
     member_email: str,
-    new_level: str,
+    role_id: int,
     session: Session = Depends(get_db_session),
 ):
     auth_user_dao = AuthUserDAO(session)
     organization_dao = OrganizationDAO(session)
     organization_member_dao = OrganizationMemberDAO(session)
+    role_dao = RoleDAO(session)
 
-    if new_level not in ["user", "admin", "owner"]:
-        raise HTTPException(
-            status_code=400,
-            detail="Level must be one of user, admin, or owner.",
-        )
+    # Validate role exists
+    role = role_dao.get(role_id)
+    if not role:
+        raise HTTPException(status_code=404, detail="Role not found")
+    if not role.is_system_role:
+        raise HTTPException(status_code=400, detail="Only system roles can be assigned")
+
     user = auth_user_dao.filter(email=member_email)
     if not user:
         raise not_found("User")
@@ -700,9 +807,14 @@ async def update_organization_member_level(
         organization_id=org[0][0].id,
     )
     if not org_member:
-        raise not_found("User")
-    organization_member_dao.update(id=org_member[0][0].id, level=new_level)
-    return "Member level successfully updated!"
+        raise not_found("Member")
+
+    organization_member_dao.update_member_role(
+        user_id=user[0][0].id,
+        organization_id=org[0][0].id,
+        role_id=role_id,
+    )
+    return f"Member role updated to {role.name}!"
 
 
 @router.get("/user/query-logging")
@@ -742,6 +854,8 @@ async def get_user_basic_info(
         "email": user.email,
         "job_title": user.job_title,
         "bio": user.bio,
+        "timezone": user.timezone,
+        "phone_number": user.phone_number,
     }
 
 

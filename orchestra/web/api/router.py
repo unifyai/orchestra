@@ -22,6 +22,7 @@ from orchestra.web.api import (  # noqa: WPS235
     project,
     provider,
     roles,
+    storage,
     supported_endpoints,
     teams,
     users,
@@ -34,6 +35,8 @@ from orchestra.web.api.dependencies import (
     check_account_not_frozen,
 )
 from orchestra.web.api.log.views import admin_router as log_admin_router
+from orchestra.web.api.plot.views import admin_router as plot_admin_router
+from orchestra.web.api.plot.views import router as plot_router
 from orchestra.web.api.project.views import admin_router as project_admin_router
 from orchestra.web.api.webhooks import stripe as stripe_webhooks
 
@@ -101,6 +104,13 @@ api_router.include_router(
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
 )
+api_router.include_router(
+    plot_admin_router,
+    prefix="/admin",
+    tags=["Plots"],
+    include_in_schema=False,
+    dependencies=ADMIN_AUTH,
+)
 # API_KEY_AUTH endpoints
 
 groupings = {
@@ -126,7 +136,11 @@ groupings = {
         "Contexts",
         "Context Artifacts",
         "Logs",
+        "Plots",
         "Configs",
+    ],
+    "Storage": [
+        "Storage",
     ],
     "Account": [
         "Credits",
@@ -191,6 +205,11 @@ api_router.include_router(
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
+    plot_router,
+    tags=["Plots"],
+    dependencies=API_KEY_AUTH,
+)
+api_router.include_router(
     interface.router,
     tags=["Configs"],
     dependencies=API_KEY_AUTH,
@@ -222,6 +241,14 @@ api_router.include_router(
 api_router.include_router(
     api_keys.router,
     tags=["API Keys"],
+    dependencies=API_KEY_AUTH,
+)
+
+# Storage
+
+api_router.include_router(
+    storage.router,
+    tags=["Storage"],
     dependencies=API_KEY_AUTH,
 )
 

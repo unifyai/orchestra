@@ -79,7 +79,7 @@ REQUESTS_WITH_USER = Counter(
 INVOICE_CREATED_TOTAL = Counter(
     "invoice_created_total",
     "Stripe invoices created by the monthly invoicer",
-    ["user_id"],
+    ["entity_type", "entity_id"],  # entity_type: "user" or "organization"
 )
 
 INVOICE_PAID_TOTAL = Counter(

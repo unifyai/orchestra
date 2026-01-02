@@ -1090,6 +1090,78 @@ def terminal_strategy(draw, type_hint: Optional[str] = None) -> Tuple[str, str]:
             )
 
 
+# Strategy for standalone truthiness expressions (no comparison)
+@st.composite
+def truthiness_strategy(draw) -> Tuple[str, str]:
+    """
+    Generates expressions that test Python truthiness of a value.
+
+    These are expressions like `dict_col.get('key')` used as boolean conditions,
+    testing whether a value exists and is truthy.
+
+    Returns:
+        Tuple[str, str]: (expression_string, type_string)
+    """
+    expr_kind = draw(st.sampled_from(["dict_get", "column_direct", "negated"]))
+
+    if expr_kind == "dict_get":
+        # dict_col.get('key') - checks if key exists and value is truthy
+        col_name, _ = draw(column_ref_strategy(allowed_types=["dict"]))
+        key = draw(st.sampled_from(["a", "b", "c", "missing_key"]))
+        return (f"{col_name}.get('{key}')", "bool")
+
+    elif expr_kind == "column_direct":
+        # Direct column as truthiness (e.g., bool_col, int_col, str_col)
+        # Any type can be used for truthiness
+        col_name, col_type = draw(column_ref_strategy())
+        return (col_name, "bool")
+
+    else:  # negated
+        # not dict_col.get('key')
+        col_name, _ = draw(column_ref_strategy(allowed_types=["dict"]))
+        key = draw(st.sampled_from(["a", "b", "c"]))
+        return (f"(not {col_name}.get('{key}'))", "bool")
+
+
+# Strategy for membership with (expr or []) fallback pattern
+@st.composite
+def membership_or_fallback_strategy(draw) -> Tuple[str, str]:
+    """
+    Generates membership tests with the (expr or []) fallback pattern.
+
+    Pattern: value in (list_expr or [])
+
+    This tests safe iteration over potentially null/missing arrays.
+
+    Returns:
+        Tuple[str, str]: (expression_string, type_string)
+    """
+    # Left side: value to search for
+    left_kind = draw(st.sampled_from(["literal", "column"]))
+
+    if left_kind == "literal":
+        # Use integer literals that might be in test data
+        val = draw(st.sampled_from([1, 2, 3, 4, 5]))
+        left_expr = str(val)
+    else:
+        # Use an integer column
+        left_expr, _ = draw(column_ref_strategy(allowed_types=["int"]))
+
+    # Right side: (list_col or []) or (dict_col.get('key') or [])
+    right_kind = draw(st.sampled_from(["list_column", "dict_get"]))
+
+    if right_kind == "list_column":
+        list_col, _ = draw(column_ref_strategy(allowed_types=["list"]))
+        right_expr = f"({list_col} or [])"
+    else:
+        dict_col, _ = draw(column_ref_strategy(allowed_types=["dict"]))
+        key = draw(st.sampled_from(["a", "b", "c", "arr"]))
+        right_expr = f"({dict_col}.get('{key}') or [])"
+
+    op = draw(st.sampled_from(MEMBERSHIP_OPS))
+    return (f"({left_expr} {op} {right_expr})", "bool")
+
+
 # Enhanced strategy for membership tests
 @st.composite
 def membership_strategy(draw) -> Tuple[str, str]:
@@ -1237,7 +1309,9 @@ def bool_filter_strategy(draw, max_depth: int = 3) -> Tuple[str, str]:
                     "function",  # Boolean function (exists, isNone, etc.)
                     "value_comparison",  # Compare results of functions or complex expressions
                     "null_comparison",  # Explicit NULL comparison (is None, is not None)
-                    "complex_indexing",  # NEW: Complex indexing with arithmetic
+                    "complex_indexing",  # Complex indexing with arithmetic
+                    "truthiness",  # Standalone truthiness (dict.get('key') as bool)
+                    "membership_or_fallback",  # Safe membership (x in (arr or []))
                 ],
             ),
         )
@@ -1258,8 +1332,16 @@ def bool_filter_strategy(draw, max_depth: int = 3) -> Tuple[str, str]:
             return (f"({col_name} {op} None)", "bool")
 
         elif expr_kind == "complex_indexing":
-            # NEW: Use the complex indexing comparison strategy
+            # Use the complex indexing comparison strategy
             return draw(complex_indexing_comparison_strategy())
+
+        elif expr_kind == "truthiness":
+            # Standalone truthiness expression (e.g., dict_col.get('key'))
+            return draw(truthiness_strategy())
+
+        elif expr_kind == "membership_or_fallback":
+            # Membership with (expr or []) fallback
+            return draw(membership_or_fallback_strategy())
 
         else:  # value_comparison
             # Compare complex values
