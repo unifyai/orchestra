@@ -369,6 +369,23 @@ def create_assistant(
                             grantee_type="user",
                             grantee_id=user_id,
                         )
+
+                    # Grant Member access to all other existing org members
+                    org_members = organization_member_dao.filter(
+                        organization_id=organization_id,
+                    )
+                    member_role = role_dao.get_by_name("Member", organization_id=None)
+                    if member_role:
+                        for member_row in org_members:
+                            member = member_row[0]
+                            if member.user_id != user_id:
+                                resource_access_dao.grant_access(
+                                    resource_type="project",
+                                    resource_id=assistants_project.id,
+                                    role_id=member_role.id,
+                                    grantee_type="user",
+                                    grantee_id=member.user_id,
+                                )
             else:
                 # Project exists - check if user already has access
                 has_access = resource_access_dao.check_user_permission(
@@ -1772,6 +1789,23 @@ def transfer_assistant_to_org(
                             grantee_type="user",
                             grantee_id=user_id,
                         )
+
+                    # Grant Member access to all other existing org members
+                    org_members = organization_member_dao.filter(
+                        organization_id=target_org_id,
+                    )
+                    member_role = role_dao.get_by_name("Member", organization_id=None)
+                    if member_role:
+                        for member_row in org_members:
+                            member = member_row[0]
+                            if member.user_id != user_id:
+                                resource_access_dao.grant_access(
+                                    resource_type="project",
+                                    resource_id=org_project.id,
+                                    role_id=member_role.id,
+                                    grantee_type="user",
+                                    grantee_id=member.user_id,
+                                )
                 else:
                     # Project exists - check if user already has access
                     has_access = resource_access_dao.check_user_permission(

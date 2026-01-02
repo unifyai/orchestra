@@ -10,9 +10,11 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.auth_user_dao import AuthUserDAO
+from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_invite_dao import OrganizationInviteDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.team_dao import TeamDAO
@@ -483,6 +485,25 @@ async def add_organization_member(
             user_id=member_data.user_id,
             organization_id=organization_id,
         )
+
+        # Grant Member access to Assistants project if it exists
+        context_dao = ContextDAO(session)
+        project_dao = ProjectDAO(session, org_member_dao, context_dao)
+        assistants_projects = project_dao.filter(
+            organization_id=organization_id,
+            name="Assistants",
+        )
+        if assistants_projects:
+            assistants_project = assistants_projects[0][0]
+            member_role = role_dao.get_by_name("Member", organization_id=None)
+            if member_role:
+                resource_access_dao.grant_access(
+                    resource_type="project",
+                    resource_id=assistants_project.id,
+                    role_id=member_role.id,
+                    grantee_type="user",
+                    grantee_id=member_data.user_id,
+                )
 
         session.commit()
 
@@ -1404,6 +1425,27 @@ async def accept_invite(
             user_id=user_id,
             organization_id=invite.organization_id,
         )
+
+        # Grant Member access to Assistants project if it exists
+        context_dao = ContextDAO(session)
+        project_dao = ProjectDAO(session, org_member_dao, context_dao)
+        role_dao = RoleDAO(session)
+        resource_access_dao = ResourceAccessDAO(session)
+        assistants_projects = project_dao.filter(
+            organization_id=invite.organization_id,
+            name="Assistants",
+        )
+        if assistants_projects:
+            assistants_project = assistants_projects[0][0]
+            member_role = role_dao.get_by_name("Member", organization_id=None)
+            if member_role:
+                resource_access_dao.grant_access(
+                    resource_type="project",
+                    resource_id=assistants_project.id,
+                    role_id=member_role.id,
+                    grantee_type="user",
+                    grantee_id=user_id,
+                )
 
         # Delete the invite (accepted)
         invite_dao.delete_invite(invite)
