@@ -1436,13 +1436,145 @@ async def test_delete_org_assistant_deletes_logs(client: AsyncClient, dbsession)
     delete_resp = await client.delete(f"/v0/assistant/{agent_id}", headers=org_headers)
     assert delete_resp.status_code == 200
 
-    # The primary assertion is that the assistant was deleted successfully
-    # Log cleanup is best-effort and may depend on project structure
     # Verify assistant is no longer accessible
     list_resp = await client.get("/v0/assistant", headers=org_headers)
     assert list_resp.status_code == 200
     remaining_ids = {a["agent_id"] for a in list_resp.json()["info"]}
     assert agent_id not in remaining_ids, "Deleted assistant should not appear in list"
+
+    # Verify context and logs are cleaned up
+    logs_after = await client.get(
+        f"/v0/logs?project={project_name}&context={context_name}",
+        headers=org_headers,
+    )
+    # Context should be deleted (404) or empty (200 with count=0)
+    assert logs_after.status_code in [
+        200,
+        404,
+    ], f"Expected 200 or 404, got {logs_after.status_code}"
+    if logs_after.status_code == 200:
+        assert (
+            logs_after.json()["count"] == 0
+        ), f"Logs should be deleted but found {logs_after.json()['count']}"
+
+
+@pytest.mark.anyio
+async def test_delete_org_assistant_cleans_3tier_contexts(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test that deleting an org assistant cleans up 3-tier contexts including All/*."""
+    user = await create_test_user(
+        client,
+        "org_3tier_cleanup@test.com",
+        hiring_approved=True,
+    )
+
+    # Create organization
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "3Tier Cleanup Org"},
+        headers=user["headers"],
+    )
+    org_headers = {"Authorization": f"Bearer {org_resp.json()['api_key']}"}
+
+    # Create the org "Assistants" project
+    project_name = "Assistants"
+    proj_resp = await client.post(
+        "/v0/project",
+        json={"name": project_name},
+        headers=org_headers,
+    )
+    assert proj_resp.status_code == 200
+
+    # Create org assistant
+    create_resp = await client.post(
+        "/v0/assistant",
+        json={"first_name": "ThreeTier", "surname": "Test", "create_infra": False},
+        headers=org_headers,
+    )
+    assert create_resp.status_code == 200
+    assistant_info = create_resp.json()["info"]
+    agent_id = assistant_info["agent_id"]
+    assistant_name = f"{assistant_info['first_name']}{assistant_info['surname']}"
+
+    # Set up 3-tier context structure
+    user_name = "TestUser"
+    tier3_context = f"{user_name}/{assistant_name}/Transcripts"
+    tier2_context = f"{user_name}/All/Transcripts"
+    tier1_context = "All/Transcripts"
+
+    # Create log in tier3 context with _user and _assistant fields
+    log_payload = {
+        "project": project_name,
+        "context": tier3_context,
+        "entries": [
+            {
+                "message": "3-tier test log",
+                "_user": user_name,
+                "_assistant": assistant_name,
+            },
+        ],
+    }
+    log_resp = await client.post("/v0/logs", json=log_payload, headers=org_headers)
+    assert log_resp.status_code == 200
+    log_id = log_resp.json()["log_event_ids"][0]
+
+    # Create tier2 and tier1 contexts and add the log to them
+    for ctx in [tier2_context, tier1_context]:
+        ctx_resp = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": ctx},
+            headers=org_headers,
+        )
+        assert ctx_resp.status_code == 200, ctx_resp.json()
+
+        add_resp = await client.post(
+            f"/v0/project/{project_name}/contexts/add_logs",
+            json={"context_name": ctx, "log_ids": [log_id]},
+            headers=org_headers,
+        )
+        assert add_resp.status_code == 200, add_resp.json()
+
+    # Verify log exists in all 3 tiers before deletion
+    for ctx in [tier3_context, tier2_context, tier1_context]:
+        logs_before = await client.get(
+            f"/v0/logs?project={project_name}&context={ctx}",
+            headers=org_headers,
+        )
+        assert logs_before.status_code == 200
+        assert (
+            logs_before.json()["count"] > 0
+        ), f"Log should exist in {ctx} before deletion"
+
+    # Delete the assistant
+    delete_resp = await client.delete(f"/v0/assistant/{agent_id}", headers=org_headers)
+    assert delete_resp.status_code == 200
+
+    # Verify assistant is deleted
+    list_resp = await client.get("/v0/assistant", headers=org_headers)
+    assert agent_id not in {a["agent_id"] for a in list_resp.json()["info"]}
+
+    # Verify tier3 context (User/Assistant/Transcripts) is deleted or empty
+    logs_tier3 = await client.get(
+        f"/v0/logs?project={project_name}&context={tier3_context}",
+        headers=org_headers,
+    )
+    assert logs_tier3.status_code in [200, 404]
+    if logs_tier3.status_code == 200:
+        assert logs_tier3.json()["count"] == 0, "Tier3 context should be empty"
+
+    # Verify log is removed from sibling contexts (tier2 and tier1)
+    for sibling_ctx in [tier2_context, tier1_context]:
+        sibling_logs = await client.get(
+            f"/v0/logs?project={project_name}&context={sibling_ctx}",
+            headers=org_headers,
+        )
+        if sibling_logs.status_code == 200:
+            log_ids = [log["id"] for log in sibling_logs.json()["logs"]]
+            assert (
+                log_id not in log_ids
+            ), f"Log {log_id} should be removed from sibling context {sibling_ctx}"
 
 
 # =============================================================================
