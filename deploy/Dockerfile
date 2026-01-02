@@ -1,7 +1,4 @@
 FROM python:3.11.4-slim-bullseye AS prod
-
-ARG UNIFY_CLONE_TOKEN
-
 RUN apt-get update && apt-get install -y \
   gcc \
   g++ \
@@ -18,9 +15,6 @@ RUN pip install poetry>=2.1.0
 # Configuring poetry
 RUN poetry config virtualenvs.create false
 RUN poetry config cache-dir /tmp/poetry-cache
-
-# Configure git for private repos
-RUN git config --global url."https://${UNIFY_CLONE_TOKEN}@github.com/".insteadOf "https://github.com/"
 
 # Copying requirements of a project
 COPY pyproject.toml poetry.lock /app/src/
