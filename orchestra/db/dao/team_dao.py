@@ -178,3 +178,34 @@ class TeamDAO:
             .first()
         )
         return team_member is not None
+
+    def remove_user_from_all_org_teams(
+        self,
+        user_id: str,
+        organization_id: int,
+    ) -> int:
+        """
+        Remove a user from all teams in an organization.
+        Called when a member is removed from an organization.
+
+        :param user_id: User ID.
+        :param organization_id: Organization ID.
+        :returns: Count of team memberships removed.
+        """
+        # Get all team IDs in this org
+        org_team_ids = [t.id for t in self.list_organization_teams(organization_id)]
+
+        if not org_team_ids:
+            return 0
+
+        deleted = (
+            self.session.query(TeamMember)
+            .filter(
+                TeamMember.user_id == user_id,
+                TeamMember.team_id.in_(org_team_ids),
+            )
+            .delete(synchronize_session=False)
+        )
+
+        self.session.flush()
+        return deleted

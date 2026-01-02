@@ -552,13 +552,6 @@ metrics = {
         "input_cost": 0.6,
         "output_cost": 0.6,
     },
-    "mixtral-8x7b-instruct-v0.1@lepton-ai": {
-        "cost": 0.5,
-        "ttft": 872.5847029999159,
-        "itl": 12.631626471590804,
-        "input_cost": 0.5,
-        "output_cost": 0.5,
-    },
     "mixtral-8x7b-instruct-v0.1@deepinfra": {
         "cost": 0.27,
         "ttft": 1130.8457239999825,
@@ -699,13 +692,6 @@ metrics = {
         "input_cost": 0.2,
         "output_cost": 0.2,
     },
-    "llama-2-7b-chat@lepton-ai": {
-        "cost": 0.1,
-        "ttft": 1386.99,
-        "itl": 6.31,
-        "input_cost": 0.1,
-        "output_cost": 0.1,
-    },
     "llama-2-7b-chat@deepinfra": {
         "cost": 0.13,
         "ttft": 1194.73,
@@ -734,13 +720,6 @@ metrics = {
         "input_cost": 0.2,
         "output_cost": 0.2,
     },
-    "llama-2-13b-chat@lepton-ai": {
-        "cost": 0.3,
-        "ttft": 1164.06,
-        "itl": 10.06,
-        "input_cost": 0.3,
-        "output_cost": 0.3,
-    },
     "llama-2-13b-chat@deepinfra": {
         "cost": 0.22,
         "ttft": 675.47,
@@ -768,13 +747,6 @@ metrics = {
         "itl": 8.3,
         "input_cost": 0.9,
         "output_cost": 0.9,
-    },
-    "llama-2-70b-chat@lepton-ai": {
-        "cost": 0.8,
-        "ttft": 1077.08,
-        "itl": 30.35,
-        "input_cost": 0.8,
-        "output_cost": 0.8,
     },
     "llama-2-70b-chat@deepinfra": {
         "cost": 0.7,

@@ -31,13 +31,14 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.sql.elements import ClauseElement
 from sqlalchemy.sql.expression import Exists, UnaryExpression
-from sqlalchemy.sql.selectable import Subquery
+from sqlalchemy.sql.selectable import CTE, Subquery
 
 from orchestra.db.dao.log_dao import LogDAO
 
-from . import alias_utils
+from . import alias_utils, jsonb_builder
 from .core import build_sql_query
 from .helpers import (
+    _is_jsonb_expression,
     _join_subqueries,
     _parse_rhs_list_or_dict_if_needed,
     _select_value,
@@ -254,51 +255,36 @@ def _create_truthiness_condition(subq_or_literal, session):
     if isinstance(subq_or_literal, (Exists, UnaryExpression)):
         return subq_or_literal
 
-    # If it's a literal value, we can determine truthiness directly in Python.
-    if not isinstance(subq_or_literal, Subquery):
-        # Let SQLAlchemy handle the boolean conversion for literals
-        return literal(
-            bool(
-                (
-                    subq_or_literal.value
-                    if isinstance(subq_or_literal, BindParameter)
-                    else subq_or_literal
-                ),
-            ),
-        )
-
     # If it's a subquery, build the condition based on its value and type.
-    val_col, val_type = _select_value(subq_or_literal, session)
+    if isinstance(subq_or_literal, Subquery):
+        val_col, val_type = _select_value(subq_or_literal, session)
 
-    # Handle cases where the subquery returns no value (e.g., key does not exist).
-    # This should be treated as falsy.
-    if val_col is None:
-        return literal(False)
+        # Handle cases where the subquery returns no value (e.g., key does not exist).
+        # This should be treated as falsy.
+        if val_col is None:
+            return literal(False)
 
-    if val_type == "bool":
-        # The value column might be JSONB, so we must cast it to Boolean.
-        return cast(val_col, Boolean).is_(True)
-    elif val_type in ("int", "float"):
-        # For numbers, check if not 0
-        return case(
-            (func.jsonb_typeof(val_col) == "null", literal(False)),
-            else_=(cast(val_col, Float) != 0),
-        )
-    elif val_type == "str":
-        # For strings, check if not empty
-        return func.length(func.replace(cast(val_col, String), '"', "")) > 0
-    elif val_type == "list":
-        # For lists, check if not empty
-        return func.jsonb_array_length(val_col) > 0
-    elif val_type == "dict":
-        # For dicts, check if not empty
-        return val_col != cast(literal("{}"), JSONB)
-    elif val_type == "NoneType":
-        # None is always falsy
-        return literal(False)
-    else:
-        # For other types (timestamp, etc.), check if not null
-        return val_col.isnot(None)
+        return _build_truthiness_sql(val_col, val_type)
+
+    # Handle general SQL expressions (Case, BinaryExpression, ColumnElement, etc.)
+    # These are SQLAlchemy clause elements that cannot be converted to Python bool
+    if isinstance(subq_or_literal, ClauseElement):
+        from .helpers import _infer_expression_type
+
+        val_type = _infer_expression_type(subq_or_literal, session)
+        return _build_truthiness_sql(subq_or_literal, val_type)
+
+    # If it's a BindParameter, extract the value
+    if isinstance(subq_or_literal, BindParameter):
+        return literal(bool(subq_or_literal.value))
+
+    # For plain Python literals, determine truthiness directly
+    return literal(bool(subq_or_literal))
+
+
+# Import shared truthiness logic
+from .truthiness import build_truthiness_sql as _build_truthiness_sql
+from .truthiness import get_or_list_fallback as _get_or_list_fallback
 
 
 def _handle_logical_operator(
@@ -441,7 +427,7 @@ def _handle_logical_operator(
                 select(
                     identifier_subq.c.log_event_id.label("log_event_id"),
                     combined_condition.label("value"),
-                    literal("bool").label("inferred_type"),
+                    literal("bool", type_=Boolean).label("inferred_type"),
                 )
                 .select_from(identifier_subq)
                 .where(combined_condition),
@@ -471,10 +457,24 @@ def _handle_logical_operator(
     lhs_is_sub = isinstance(lhs, Subquery)
     rhs_is_sub = isinstance(rhs, Subquery)
 
+    # For JOIN conditions, we want simple SQL AND/OR operators, not CASE expressions.
+    # The CASE-based truthiness logic is for WHERE clause filtering where Python
+    # semantics (e.g. NULL handling) need to be matched. JOIN conditions work
+    # differently and need direct boolean expressions for proper query planning.
+    comparison_context = None
+    if isinstance(local_scope, dict):
+        comparison_context = local_scope.get("__comparison_context__")
+
+    if comparison_context == "join" and not lhs_is_sub and not rhs_is_sub:
+        # For JOIN context with non-subquery expressions, use simple SQL operators
+        return and_(lhs, rhs) if operand == "and" else or_(lhs, rhs)
+
     # If neither are subqueries, the operation is happening in a simple WHERE clause
     # where standard `and_` and `or_` are sufficient.
-    if not lhs_is_sub and not rhs_is_sub:
-        return and_(lhs, rhs) if operand == "and" else or_(lhs, rhs)
+    # CRITICAL FIX: We MUST apply truthiness checks even for simple expressions
+    # because Python semantics differ from SQL (e.g. NULL handling).
+    # if not lhs_is_sub and not rhs_is_sub:
+    #     return and_(lhs, rhs) if operand == "and" else or_(lhs, rhs)
 
     # 1. Define the truthiness conditions for the CASE statement
     lhs_condition = _create_truthiness_condition(lhs, session)
@@ -534,8 +534,14 @@ def _arithmetic_expr(lval, rval, operand, lval_type, rval_type):
         expr = lval - rval
         result_type = "datetime"
     elif operand == "-" and lval_type == "datetime" and rval_type == "datetime":
-        lval = cast(cast(lval, Text), TIMESTAMP)
-        rval = cast(cast(rval, Text), TIMESTAMP)
+        # Strip timezone offset to compare "wall clock" times, not UTC instants.
+        # This ensures "2023-06-15T12:00:00-05:00" - "2023-06-15T12:00:00+00:00" = PT0S
+        # (both represent 12:00 local time) rather than PT5H (the UTC difference).
+        # Use regexp_replace to remove timezone offset pattern like +00:00 or -05:00
+        lval_text = func.regexp_replace(cast(lval, Text), r"[+-]\d{2}:\d{2}$", "", "g")
+        rval_text = func.regexp_replace(cast(rval, Text), r"[+-]\d{2}:\d{2}$", "", "g")
+        lval = cast(lval_text, TIMESTAMP)
+        rval = cast(rval_text, TIMESTAMP)
         expr = lval - rval
         result_type = "timedelta"
     elif operand == "-" and lval_type == "date" and rval_type == "date":
@@ -818,21 +824,39 @@ def _handle_comparison_operator(
     rval, rval_type = _select_value(rhs_sql, session)
 
     # --- Build the core boolean expression ---
-    # `is` and `is not` are handled specially
-    if operand in ("is", "is not"):
+    # None comparisons are handled specially for all equality/identity operators
+    # JSONB null values can be either SQL NULL or the JSONB literal "null"
+    # This applies to: `field == None`, `None == field`, `field != None`, `None != field`
+    # and their `is`/`is not` variants
+    if operand in ("is", "is not", "==", "!=") and (
+        rval_type == "NoneType" or lval_type == "NoneType"
+    ):
+        # Determine which side is None and which is the field expression/subquery
         if rval_type == "NoneType":
-            # Robust check for `is None` / `is not None` against JSONB
-            lval_as_text = cast(lval, Text)
-            expr = (
-                or_(lval_as_text.is_(None), lval_as_text == "null")
-                if operand == "is"
-                else and_(lval_as_text.isnot(None), lval_as_text != "null")
-            )
+            field_val = lval
+            field_subq = lhs_sql
+            field_dict = filter_dict.get("lhs")
         else:
-            # For `is True` or `is False`, treat as equality. For other `is` cases, use IS.
-            # Note: `val IS TRUE` is the same as `val = TRUE` in SQL for boolean types.
-            bool_val = cast_expr(lval, lval_type, "bool")
-            expr = (bool_val == rval) if operand == "is" else (bool_val != rval)
+            field_val = rval
+            field_subq = rhs_sql
+            field_dict = filter_dict.get("rhs")
+        is_equality = operand in ("is", "==")
+
+        # Cast field to text for comparison (handles both SQL NULL and JSONB "null")
+        field_as_text = cast(field_val, Text)
+        if is_equality:
+            # `field is None` / `field == None` → field is SQL NULL OR field equals the string "null"
+            expr = or_(field_as_text.is_(None), field_as_text == "null")
+        else:
+            # `field is not None` / `field != None` → field is NOT SQL NULL AND field is not "null"
+            expr = and_(field_as_text.isnot(None), field_as_text != "null")
+
+    # `is` and `is not` for non-None values
+    elif operand in ("is", "is not"):
+        # For `is True` or `is False`, treat as equality. For other `is` cases, use IS.
+        # Note: `val IS TRUE` is the same as `val = TRUE` in SQL for boolean types.
+        bool_val = cast_expr(lval, lval_type, "bool")
+        expr = (bool_val == rval) if operand == "is" else (bool_val != rval)
 
     # Handle `==` and `!=` for list comparisons
     elif (
@@ -883,6 +907,57 @@ def _handle_comparison_operator(
     # --- Wrap the expression in a subquery or join as needed ---
     lhs_is_sub = isinstance(lhs_sql, Subquery)
     rhs_is_sub = isinstance(rhs_sql, Subquery)
+
+    # Special handling for EAV mode None equality comparisons (== None, is None)
+    # In EAV mode, each field is a separate row. Missing fields have no row.
+    # For `field == None`, we need to match BOTH:
+    #   1. Logs where field exists with null value (standard subquery)
+    #   2. Logs where field doesn't exist at all (use LEFT JOIN)
+    if (
+        operand in ("is", "==")
+        and (rval_type == "NoneType" or lval_type == "NoneType")
+        and (lhs_is_sub or rhs_is_sub)
+        and log_event_ids is not None
+    ):
+        field_subq = lhs_sql if lhs_is_sub else rhs_sql
+
+        # Build all_events from log_event_ids (either Subquery/CTE or list)
+        if isinstance(log_event_ids, (Subquery, CTE)):
+            all_events = log_event_ids
+        elif isinstance(log_event_ids, list):
+            from sqlalchemy import column, values
+
+            all_events = (
+                select(literal_column("id"))
+                .select_from(
+                    values(column("id", Integer)).data(
+                        [(id_,) for id_ in log_event_ids],
+                    ),
+                )
+                .subquery("all_event_ids")
+            )
+        else:
+            all_events = None
+
+        if all_events is not None:
+            # LEFT JOIN: all log_event_ids with field_subq
+            # Result is True where field is NULL (missing) or explicitly null
+            left_join_subq = (
+                select(
+                    all_events.c.id.label("log_event_id"),
+                    or_(
+                        field_subq.c.log_event_id.is_(None),  # No row = missing field
+                        expr,  # Existing row matches null check
+                    ).label("value"),
+                    literal("bool").label("inferred_type"),
+                )
+                .select_from(all_events)
+                .outerjoin(field_subq, all_events.c.id == field_subq.c.log_event_id)
+            )
+            return alias_utils.subquery_with_unique_alias(
+                left_join_subq,
+                prefix="none_eq_op",
+            )
 
     if lhs_is_sub and rhs_is_sub:
         # If both sides are subqueries, they MUST be joined to avoid a cartesian product.
@@ -948,6 +1023,25 @@ def _handle_membership_operator(
     operand = filter_dict.get("operand")
     is_in = operand == "in"
 
+    rhs_dict = filter_dict.get("rhs")
+
+    # Handle the (expr or <list>) fallback pattern specially.
+    # In Python, `'x' in (arr or [])` uses arr if truthy, else [].
+    # We must NOT convert the `or` to boolean SQL OR - we need the array value.
+    or_fallback_list = _get_or_list_fallback(rhs_dict)
+    or_fallback_array_expr = None
+    if or_fallback_list is not None:
+        # Build only the LHS of the 'or' (the array expression)
+        or_fallback_array_expr = build_sql_query(
+            rhs_dict["lhs"],
+            log_event_alias,
+            session,
+            log_event_ids=log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+        )
+
     lhs = build_sql_query(
         filter_dict.get("lhs"),
         log_event_alias,
@@ -957,15 +1051,20 @@ def _handle_membership_operator(
         local_scope=local_scope,
         is_vector=is_vector,
     )
-    rhs = build_sql_query(
-        filter_dict.get("rhs"),
-        log_event_alias,
-        session,
-        log_event_ids=log_event_ids,
-        is_derived=is_derived,
-        local_scope=local_scope,
-        is_vector=is_vector,
-    )
+
+    # Use the or-fallback array expression if detected, otherwise build normally
+    if or_fallback_array_expr is not None:
+        rhs = or_fallback_array_expr
+    else:
+        rhs = build_sql_query(
+            rhs_dict,
+            log_event_alias,
+            session,
+            log_event_ids=log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+        )
 
     lhs_is_sub = isinstance(lhs, Subquery)
     rhs_is_sub = isinstance(rhs, Subquery)
@@ -974,6 +1073,18 @@ def _handle_membership_operator(
     if lhs_is_sub and rhs_is_sub:
         lval, lval_type = _select_value(lhs, session)
         rval, rval_type = _select_value(rhs, session)
+
+        # Handle (expr or <list>) fallback pattern with COALESCE
+        if or_fallback_list is not None:
+            fallback_json = json.dumps(or_fallback_list)
+            # NULLIF converts JSON null to SQL NULL, then COALESCE provides fallback
+            rval_with_fallback = func.coalesce(
+                func.nullif(cast(rval, JSONB), cast(literal("null"), JSONB)),
+                cast(literal(fallback_json), JSONB),
+            )
+            condition = rval_with_fallback.op("@>")(func.jsonb_build_array(lval))
+            expr = condition if is_in else ~condition
+            return _join_subqueries(lhs, rhs, expr, "bool", session=session)
 
         # Check if RHS is a JSONB list for containment check
         if rval_type == "list" and is_in:
@@ -1044,6 +1155,13 @@ def _handle_membership_operator(
                     lval = lhs.c.float_value
                 elif first_item_type == "bool":
                     lval = lhs.c.bool_value
+
+            # For string-typed columns, cast to TEXT to avoid JSONB type coercion issues.
+            # The str_value column is defined via CASE on JSONB, which SQLAlchemy infers as JSONB.
+            # Without explicit TEXT cast, SQLAlchemy converts list elements to JSONB, causing
+            # "operator does not exist: text = jsonb" errors when rhs_list contains None.
+            if lval_type == "str":
+                lval = cast(lval, Text)
             expr = lval.in_(rhs_list) if is_in else ~lval.in_(rhs_list)
         else:
             substring_cond = _substring_expr(lval, rhs)
@@ -1065,6 +1183,36 @@ def _handle_membership_operator(
     # Only RHS is a subquery
     elif rhs_is_sub and not lhs_is_sub:
         rval, rval_type = _select_value(rhs, session)
+
+        # Handle (expr or <list>) fallback pattern with COALESCE
+        # This handles cases like `'x' in (arr or [])` where arr might be null/missing
+        if or_fallback_list is not None:
+            lhs_value = lhs.value if isinstance(lhs, BindParameter) else lhs
+            try:
+                lhs_value = json.loads(lhs_value)
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+            fallback_json = json.dumps(or_fallback_list)
+            # NULLIF converts JSON null to SQL NULL, then COALESCE provides fallback
+            rval_with_fallback = func.coalesce(
+                func.nullif(cast(rval, JSONB), cast(literal("null"), JSONB)),
+                cast(literal(fallback_json), JSONB),
+            )
+            containment_expr = rval_with_fallback.op("@>")(
+                func.jsonb_build_array(lhs_value),
+            )
+            cond = containment_expr if is_in else ~containment_expr
+            select_cols = [rhs.c.log_event_id.label("log_event_id")]
+            if "__comp_idx__" in rhs.c.keys():
+                select_cols.append(rhs.c.__comp_idx__.label("__comp_idx__"))
+            select_cols.extend(
+                [cond.label("value"), literal("bool").label("inferred_type")],
+            )
+            return alias_utils.subquery_with_unique_alias(
+                select(*select_cols).select_from(rhs),
+                prefix="membership_op",
+            )
 
         # Check if we're trying to do membership test on a boolean column
         if rval_type == "bool" and not isinstance(rval, list):
@@ -1142,6 +1290,8 @@ def _handle_index_operator(
     is_derived=False,
     local_scope=None,
     is_vector=False,
+    project_id=None,
+    context_id=None,
 ):
     """
     Handle the INDEX operator in a filter expression.
@@ -1153,6 +1303,7 @@ def _handle_index_operator(
 
     Returns:
         Subquery: A subquery that extracts the sub-value from the LHS JSON object/array using the RHS key/index.
+        Wraps in subqueries when needed for comprehension context.
     """
     lhs_node = filter_dict.get("lhs")
     rhs_node = filter_dict.get("rhs")
@@ -1165,6 +1316,8 @@ def _handle_index_operator(
         is_derived=is_derived,
         local_scope=local_scope,
         is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
     )
     rhs_expr = build_sql_query(
         rhs_node,
@@ -1174,7 +1327,53 @@ def _handle_index_operator(
         is_derived=is_derived,
         local_scope=local_scope,
         is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
     )
+
+    # Handle direct JSONB expressions
+    if _is_jsonb_expression(lhs_expr) and not isinstance(lhs_expr, Subquery):
+        lhs_type = jsonb_builder._infer_expression_type(
+            lhs_expr,
+            session,
+            project_id,
+            context_id,
+        )
+
+        # Get RHS value for indexing
+        if isinstance(rhs_expr, BindParameter):
+            rhs_val = rhs_expr.value
+        elif hasattr(rhs_expr, "value"):
+            rhs_val = rhs_expr.value
+        else:
+            rhs_val = rhs_expr
+
+        if lhs_type == "str":
+            # String indexing: use func.substring with 1-based index
+            if isinstance(rhs_val, int):
+                pg_index = rhs_val + 1  # Convert 0-based to 1-based
+                if rhs_val < 0:
+                    # Negative index: compute from end
+                    str_len = func.length(cast(lhs_expr, String))
+                    pg_index_expr = str_len + literal(rhs_val) + literal(1)
+                    return func.substring(cast(lhs_expr, String), pg_index_expr, 1)
+                return func.substring(cast(lhs_expr, String), literal(pg_index), 1)
+            else:
+                # Dynamic index
+                return func.substring(
+                    cast(lhs_expr, String),
+                    cast(rhs_val, Integer) + 1,
+                    1,
+                )
+
+        elif lhs_type in ("list", "dict"):
+            # JSONB array/object indexing using -> operator
+            if isinstance(rhs_val, int):
+                return lhs_expr.op("->")(literal(rhs_val))
+            else:
+                return lhs_expr.op("->")(cast(rhs_val, String))
+
+        # For other types, fall through to subquery handling
 
     if isinstance(lhs_expr, Subquery):
         lhs_valcol, lhs_type = _select_value(lhs_expr, session)
@@ -1317,7 +1516,7 @@ def _handle_slice_operator(
 
     Returns:
         Subquery: A subquery that extracts the substring from the LHS string or subarray from the LHS list
-        using the slice bounds.
+        using the slice bounds. Wraps in subqueries when needed for comprehension context.
     """
     lhs_node = filter_dict.get("lhs")
     rhs_bounds = filter_dict.get("rhs")
@@ -1334,6 +1533,57 @@ def _handle_slice_operator(
         local_scope=local_scope,
         is_vector=is_vector,
     )
+
+    # Handle direct JSONB expressions
+    if _is_jsonb_expression(lhs_expr) and not isinstance(lhs_expr, Subquery):
+        lhs_type = jsonb_builder._infer_expression_type(lhs_expr, session)
+
+        if lhs_type == "str":
+            # String slicing using substring
+            str_txt = cast(lhs_expr, String)
+            str_len = func.char_length(str_txt)
+
+            # Compute start position (1-based for PostgreSQL)
+            if lower is None:
+                start_expr = literal(1)
+                lower_index = 0
+            elif isinstance(lower, int) and lower >= 0:
+                start_expr = literal(lower + 1)
+                lower_index = lower
+            elif isinstance(lower, int):  # negative
+                start_expr = str_len + literal(lower) + literal(1)
+                lower_index = lower
+            else:
+                raise ValueError("Slice start must be int or None")
+
+            # Compute slice
+            if upper is None:
+                return func.substring(str_txt, start_expr)
+            elif isinstance(upper, int) and upper >= 0:
+                slice_len = max(upper - (lower or 0), 0)
+                return func.substring(str_txt, start_expr, literal(slice_len))
+            elif isinstance(upper, int):  # negative stop
+                end_index_expr = str_len + literal(upper)
+                slice_len_expr = end_index_expr - literal(lower_index)
+                return func.substring(str_txt, start_expr, slice_len_expr)
+            else:
+                raise ValueError("Slice stop must be int or None")
+
+        elif lhs_type == "list":
+            # JSONB array slicing using jsonb_path_query_array
+            start = lower if lower is not None else 0
+            end = (upper - 1) if upper is not None else "last"
+
+            # Build JSON path expression
+            if isinstance(end, int):
+                path_expr = f"'$[{start} to {end}]'"
+            else:
+                path_expr = f"'$[{start} to last]'"
+
+            return func.jsonb_path_query_array(
+                cast(lhs_expr, JSONB),
+                literal_column(path_expr),
+            )
 
     if isinstance(lhs_expr, Subquery):
         lhs_valcol, lhs_type = _select_value(lhs_expr, session)
@@ -1500,6 +1750,7 @@ def _vector_binary_op(
         select_cols.extend(
             [expr.label("value"), literal(result_type_label).label("inferred_type")],
         )
+
         return alias_utils.subquery_with_unique_alias(
             select(*select_cols).select_from(lsub),
             prefix=subquery_prefix,
@@ -1793,6 +2044,11 @@ def _handle_phash_distance(
         select_cols.extend(
             [expr.label("value"), literal("int").label("inferred_type")],
         )
+        subq = alias_utils.subquery_with_unique_alias(
+            select(*select_cols).select_from(lhs),
+            prefix="phash_distance",
+        )
+        print(session.execute(select(subq)).fetchall())
         return alias_utils.subquery_with_unique_alias(
             select(*select_cols).select_from(lhs),
             prefix="phash_distance",

@@ -105,6 +105,14 @@ class ProjectOut(BaseModel):
     is_versioned: bool = Field(description="Whether the project is versioned")
     created_at: Optional[str] = Field(description="When the project was created")
     updated_at: Optional[str] = Field(description="When the project was last updated")
+    user_id: Optional[str] = Field(
+        None,
+        description="The ID of the user who owns the project",
+    )
+    organization_id: Optional[int] = Field(
+        None,
+        description="The ID of the organization that owns the project",
+    )
 
 
 class ShareProjectRequest(BaseModel):
@@ -201,3 +209,28 @@ class TransferResponse(BaseModel):
     from_type: str  # "personal" or "organization"
     to_type: str  # "personal" or "organization"
     message: str
+
+
+class AdminResourceAccessGrant(BaseModel):
+    """Request model for admin granting resource access."""
+
+    resource_type: str = Field(
+        description="Type of resource (e.g., 'project', 'assistant')",
+        example="project",
+    )
+    resource_id: int = Field(
+        description="ID of the resource",
+        example=123,
+    )
+    role_id: int = Field(
+        description="Role ID to grant",
+        example=1,
+    )
+    grantee_type: str = Field(
+        description="Type of grantee ('user' or 'team')",
+        example="user",
+    )
+    grantee_id: str = Field(
+        description="ID of the grantee (user_id or team_id)",
+        example="abc123",
+    )

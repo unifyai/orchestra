@@ -41,11 +41,13 @@ class TemplateValidator:
         self,
         user_id: str,
         project_name: str,
+        organization_id: Optional[int] = None,
     ) -> ProjectValidationSchema:
         """Generate validation schema for a project."""
         project = self.project_dao.get_by_user_and_name(
             user_id=user_id,
             name=project_name,
+            organization_id=organization_id,
         )
         if not project:
             raise ValueError(f"Project {project_name} not found")

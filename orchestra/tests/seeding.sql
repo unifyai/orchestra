@@ -145,14 +145,19 @@ INSERT INTO datapoint VALUES (53, 10, 'output_cost_per_token', 0.02, NULL, NOW()
 INSERT INTO datapoint VALUES (54, 10, 'ttft', 450, NULL, NOW());
 INSERT INTO datapoint VALUES (55, 10, 'itl', 10, NULL, NOW());
 
--- RBAC: Permissions (project and org only)
+-- RBAC: Permissions (project, org, billing, and assistant)
 INSERT INTO permission (name, description, resource_type, action) VALUES
 ('project:read', 'View project details', 'project', 'read'),
 ('project:write', 'Edit project', 'project', 'write'),
 ('project:delete', 'Delete project', 'project', 'delete'),
 ('org:read', 'View organization details', 'organization', 'read'),
 ('org:write', 'Edit organization settings, billing, and members', 'organization', 'write'),
-('org:delete', 'Delete organization', 'organization', 'delete');
+('org:delete', 'Delete organization', 'organization', 'delete'),
+('billing:read', 'View billing information, credits, and invoices', 'billing', 'read'),
+('billing:write', 'Update billing settings, autorecharge, and business profile', 'billing', 'write'),
+('assistant:read', 'View assistant details', 'assistant', 'read'),
+('assistant:write', 'Create and edit assistants', 'assistant', 'write'),
+('assistant:delete', 'Delete assistants', 'assistant', 'delete');
 
 -- RBAC: System Roles
 INSERT INTO role (name, description, organization_id, is_system_role) VALUES
@@ -161,23 +166,25 @@ INSERT INTO role (name, description, organization_id, is_system_role) VALUES
 ('Member', 'Read and write projects, view organization details', NULL, true),
 ('Viewer', 'Read-only access to projects and organization', NULL, true);
 
--- RBAC: Owner role gets all permissions
+-- RBAC: Owner role gets all permissions (including billing)
 INSERT INTO role_permission (role_id, permission_id)
 SELECT (SELECT id FROM role WHERE name = 'Owner' AND is_system_role = true), id FROM permission;
 
--- RBAC: Admin role gets all except org:delete
+-- RBAC: Admin role gets all except org:delete (including billing:read and billing:write)
 INSERT INTO role_permission (role_id, permission_id)
 SELECT (SELECT id FROM role WHERE name = 'Admin' AND is_system_role = true), id
 FROM permission WHERE name != 'org:delete';
 
--- RBAC: Member role gets project read/write + org read
+-- RBAC: Member role gets project read/write + org read + billing read + assistant read/write
 INSERT INTO role_permission (role_id, permission_id)
 SELECT (SELECT id FROM role WHERE name = 'Member' AND is_system_role = true), id
 FROM permission
 WHERE (resource_type = 'project' AND action IN ('read', 'write'))
-   OR (resource_type = 'organization' AND action = 'read');
+   OR (resource_type = 'organization' AND action = 'read')
+   OR (resource_type = 'assistant' AND action IN ('read', 'write'))
+   OR name = 'billing:read';
 
--- RBAC: Viewer role gets read only
+-- RBAC: Viewer role gets read only (including billing:read)
 INSERT INTO role_permission (role_id, permission_id)
 SELECT (SELECT id FROM role WHERE name = 'Viewer' AND is_system_role = true), id
 FROM permission WHERE action = 'read';

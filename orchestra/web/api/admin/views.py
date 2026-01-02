@@ -15,6 +15,7 @@ from sqlalchemy import select
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
+from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
 from orchestra.db.dao.auth_user_dao import AuthUserDAO
 from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.context_dao import ContextDAO
@@ -55,6 +56,7 @@ from orchestra.db.models.orchestra_models import (
     Task,
     Users,
 )
+from orchestra.settings import settings
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
     BenchmarkRunModelResponse,
     Contact,
@@ -559,6 +561,7 @@ def admin_list_assistants(
     voice_dao = VoiceDAO(session)
     api_key_dao = ApiKeyDAO(session)
     auth_user_dao = AuthUserDAO(session)
+    secret_dao = AssistantSecretDAO(session)
     try:
         assistants = assistant_dao.list_all_assistants(
             phone=phone,
@@ -569,7 +572,26 @@ def admin_list_assistants(
             agent_id=agent_id,
         )
 
-        api_keys = [api_key_dao.filter(user_id=a.user_id)[0][0].key for a in assistants]
+        # Get API key based on assistant type (personal vs organizational)
+        def get_api_key_for_assistant(assistant):
+            if assistant.organization_id is None:
+                # Personal assistant - get user's personal API key
+                keys = api_key_dao.get_personal_keys(assistant.user_id)
+            else:
+                # Org assistant - get org API key
+                keys = api_key_dao.filter(organization_id=assistant.organization_id)
+            return keys[0][0].key if keys else None
+
+        # Get secrets for each assistant
+        def get_secrets_for_assistant(assistant):
+            secrets = secret_dao.list_secrets(
+                assistant.user_id,
+                assistant.agent_id,
+            )
+            return {s.secret_name: s.secret_value for s in secrets}
+
+        api_keys = [get_api_key_for_assistant(a) for a in assistants]
+        secrets_list = [get_secrets_for_assistant(a) for a in assistants]
         user_ids = [a.user_id for a in assistants]
         auth_users = [auth_user_dao.get_by_id(user_id)[0] for user_id in user_ids]
         return InfoResponse(
@@ -577,6 +599,7 @@ def admin_list_assistants(
                 AssistantRead(
                     agent_id=str(a.agent_id),
                     user_id=a.user_id,
+                    organization_id=a.organization_id,
                     first_name=a.first_name,
                     surname=a.surname,
                     age=a.age,
@@ -600,10 +623,12 @@ def admin_list_assistants(
                     voice_id=a.voice_id,
                     voice_provider=a.voice_provider,
                     voice_mode=a.voice_mode,
+                    timezone=a.timezone,
                     api_key=api_keys[i],
                     user_first_name=auth_users[i].name,
                     user_last_name=auth_users[i].last_name,
                     user_email=auth_users[i].email,
+                    secrets=secrets_list[i],
                 )
                 for i, a in enumerate(assistants)
             ],
@@ -669,6 +694,8 @@ def admin_update_assistant(
 
     # Find the assistant to update
     dao = AssistantDAO(session)
+    api_key_dao = ApiKeyDAO(session)
+    secret_dao = AssistantSecretDAO(session)
     assistants = dao.list_all_assistants(
         phone=phone,
         user_phone=user_phone,
@@ -698,11 +725,23 @@ def admin_update_assistant(
     )
     session.commit()
 
+    # Get API key based on assistant type (personal vs organizational)
+    if updated.organization_id is None:
+        keys = api_key_dao.get_personal_keys(updated.user_id)
+    else:
+        keys = api_key_dao.filter(organization_id=updated.organization_id)
+    api_key = keys[0][0].key if keys else None
+
+    # Get secrets for the assistant
+    secrets = secret_dao.list_secrets(updated.user_id, updated.agent_id)
+    secrets_dict = {s.secret_name: s.secret_value for s in secrets}
+
     # Return updated assistant
     return InfoResponse(
         info=AssistantRead(
             agent_id=str(updated.agent_id),
             user_id=updated.user_id,
+            organization_id=updated.organization_id,
             first_name=updated.first_name,
             surname=updated.surname,
             age=updated.age,
@@ -727,6 +766,9 @@ def admin_update_assistant(
             voice_id=updated.voice_id,
             voice_provider=updated.voice_provider,
             voice_mode=updated.voice_mode,
+            timezone=updated.timezone,
+            api_key=api_key,
+            secrets=secrets_dict,
         ),
     )
 
@@ -767,6 +809,8 @@ def admin_list_assistants_for_user(
     user_whatsapp_number = normalize_phone_parameter(user_whatsapp_number)
     assistant_whatsapp_number = normalize_phone_parameter(assistant_whatsapp_number)
     dao = AssistantDAO(session)
+    api_key_dao = ApiKeyDAO(session)
+    secret_dao = AssistantSecretDAO(session)
     try:
         assistants = dao.list_assistants_for_user(
             user_id=user_id,
@@ -776,11 +820,32 @@ def admin_list_assistants_for_user(
             user_whatsapp_number=user_whatsapp_number,
             assistant_whatsapp_number=assistant_whatsapp_number,
         )
+
+        # Get API key based on assistant type (personal vs organizational)
+        def get_api_key_for_assistant(assistant):
+            if assistant.organization_id is None:
+                keys = api_key_dao.get_personal_keys(assistant.user_id)
+            else:
+                keys = api_key_dao.filter(organization_id=assistant.organization_id)
+            return keys[0][0].key if keys else None
+
+        # Get secrets for each assistant
+        def get_secrets_for_assistant(assistant):
+            secrets = secret_dao.list_secrets(
+                assistant.user_id,
+                assistant.agent_id,
+            )
+            return {s.secret_name: s.secret_value for s in secrets}
+
+        api_keys = [get_api_key_for_assistant(a) for a in assistants]
+        secrets_list = [get_secrets_for_assistant(a) for a in assistants]
+
         return InfoResponse(
             info=[
                 AssistantRead(
                     agent_id=str(a.agent_id),
                     user_id=a.user_id,
+                    organization_id=a.organization_id,
                     first_name=a.first_name,
                     surname=a.surname,
                     age=a.age,
@@ -804,8 +869,11 @@ def admin_list_assistants_for_user(
                     voice_id=a.voice_id,
                     voice_provider=a.voice_provider,
                     voice_mode=a.voice_mode,
+                    timezone=a.timezone,
+                    api_key=api_keys[i],
+                    secrets=secrets_list[i],
                 )
-                for a in assistants
+                for i, a in enumerate(assistants)
             ],
         )
     except Exception as e:
@@ -870,17 +938,27 @@ def admin_list_contacts(
         return []
 
     # 6) Fetch log entries and assemble contacts per event
-    # Create a custom query to get log_event_id along with log data
-    query = (
-        select(Log, LogEventLog.log_event_id)
-        .join(LogEventLog, LogEventLog.log_id == Log.id)
-        .where(LogEventLog.log_event_id.in_(event_ids))
-    )
-    raw_entries = session.execute(query).all()
-
     grouped: Dict[int, Dict[str, Any]] = {}
-    for log_rec, eid in raw_entries:
-        grouped.setdefault(eid, {})[log_rec.key] = log_rec.value
+
+    if settings.use_jsonb_queries:
+        # JSONB mode: Query LogEvent.data directly
+        query = select(LogEvent.id, LogEvent.data).where(LogEvent.id.in_(event_ids))
+        rows = session.execute(query).all()
+
+        for event_id, data in rows:
+            # data is already a dict from JSONB column
+            grouped[event_id] = dict(data) if data else {}
+    else:
+        # EAV mode: Query Log and LogEventLog tables
+        query = (
+            select(Log, LogEventLog.log_event_id)
+            .join(LogEventLog, LogEventLog.log_id == Log.id)
+            .where(LogEventLog.log_event_id.in_(event_ids))
+        )
+        raw_entries = session.execute(query).all()
+
+        for log_rec, eid in raw_entries:
+            grouped.setdefault(eid, {})[log_rec.key] = log_rec.value
 
     # 7) Fetch user_id for each log_event via project
     rows = session.execute(
@@ -1645,7 +1723,8 @@ def write_files(
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    project = project_dao.get_by_user_and_name(
+    # Admin endpoint - use any context lookup
+    project = project_dao.get_by_user_and_name_any_context(
         user_id=request.user_id,
         name=request.project,
     )
@@ -1725,7 +1804,8 @@ def get_files(
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    project_obj = project_dao.get_by_user_and_name(
+    # Admin endpoint - use any context lookup
+    project_obj = project_dao.get_by_user_and_name_any_context(
         user_id=user_id,
         name=project,
     )
@@ -1815,7 +1895,8 @@ def get_file_contents(
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    project_obj = project_dao.get_by_user_and_name(
+    # Admin endpoint - use any context lookup
+    project_obj = project_dao.get_by_user_and_name_any_context(
         user_id=user_id,
         name=project,
     )
@@ -1902,7 +1983,8 @@ def delete_file_or_folder(
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    project_obj = project_dao.get_by_user_and_name(
+    # Admin endpoint - use any context lookup
+    project_obj = project_dao.get_by_user_and_name_any_context(
         user_id=user_id,
         name=project,
     )
@@ -1984,7 +2066,8 @@ def create_upload_url(
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    project = project_dao.get_by_user_and_name(
+    # Admin endpoint - use any context lookup
+    project = project_dao.get_by_user_and_name_any_context(
         user_id=request.user_id,
         name=request.project,
     )
@@ -2069,7 +2152,8 @@ def create_download_url(
     organization_member_dao = OrganizationMemberDAO(session)
     context_dao = ContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    project_obj = project_dao.get_by_user_and_name(
+    # Admin endpoint - use any context lookup
+    project_obj = project_dao.get_by_user_and_name_any_context(
         user_id=user_id,
         name=project,
     )

@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Union
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.context_dao import ContextDAO
@@ -28,21 +29,30 @@ class LogEventDAO:
         return_row_ids: bool = False,
         provided_unique_ids: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[List[int], tuple[List[int], List[Any]]]:
-        """Create multiple LogEvent instances in one operation."""
+        """Create multiple LogEvent instances in one operation.
+
+        Uses single INSERT with RETURNING clause to get all IDs in one database
+        roundtrip instead of N separate ORM operations.
+        """
         ts = datetime.now(timezone.utc)
-        log_events = [
-            LogEvent(
-                project_id=project_id,
-                created_at=ts,
-                updated_at=ts,
-            )
+
+        # Build list of row dictionaries for bulk INSERT
+        # Both created_at and updated_at are set to same timestamp on creation
+        # updated_at will be updated on subsequent modifications
+        rows_to_insert = [
+            {
+                "project_id": project_id,
+                "created_at": ts,
+                "updated_at": ts,
+                "data": {},  # Initialize empty JSONB
+            }
             for _ in range(count)
         ]
 
-        self.session.add_all(log_events)
-        self.session.flush()  # Flush to get IDs before committing
-
-        log_event_ids = [event.id for event in log_events]
+        # Execute single INSERT with RETURNING to get all IDs in one statement
+        stmt = pg_insert(LogEvent).values(rows_to_insert).returning(LogEvent.id)
+        result = self.session.execute(stmt)
+        log_event_ids = [row[0] for row in result.fetchall()]
         row_ids: List[Any] = [None] * count
 
         if context_id:
@@ -210,3 +220,28 @@ class LogEventDAO:
         )
         rows = self.session.execute(query).fetchone()
         return rows if rows is not None else (None, None)
+
+    def get_user_and_project_ids_batch(
+        self,
+        ids: List[int],
+    ) -> Dict[int, tuple]:
+        """
+        Batch fetch user_id and project_id for multiple log_event IDs.
+
+        Args:
+            ids: List of log_event IDs to fetch
+
+        Returns:
+            Dictionary mapping log_event_id -> (user_id, project_id)
+            Missing IDs are excluded from the result (caller checks for missing keys)
+        """
+        if not ids:
+            return {}
+
+        query = (
+            select(LogEvent.id, Project.user_id, Project.id)
+            .join(Project, Project.id == LogEvent.project_id)
+            .where(LogEvent.id.in_(ids))
+        )
+        rows = self.session.execute(query).fetchall()
+        return {row[0]: (row[1], row[2]) for row in rows}

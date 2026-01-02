@@ -30,6 +30,7 @@ class AuthUserDAO:
         bio: Optional[str] = None,
         image: Optional[str] = None,
         timezone: Optional[str] = None,
+        phone_number: Optional[str] = None,
         account_type: Optional[str] = None,
         business_name: Optional[str] = None,
         tax_id: Optional[str] = None,
@@ -44,6 +45,17 @@ class AuthUserDAO:
     ) -> None:
         if timezone is not None and timezone not in VALID_TIMEZONES:
             raise ValueError(f"'{timezone}' is not a valid IANA timezone.")
+
+        # Validate and format phone_number if provided
+        if phone_number is not None:
+            from orchestra.web.api.utils.phone_number_validator import (
+                validate_phone_number,
+            )
+
+            result = validate_phone_number(phone_number)
+            if not result["is_valid"]:
+                raise ValueError(f"Invalid phone number: {result['error']}")
+            phone_number = result["formatted_phone_number"]
 
         # Validate account_type if provided
         if account_type is not None and account_type not in ["individual", "business"]:
@@ -67,6 +79,7 @@ class AuthUserDAO:
                 bio=bio,
                 image=image,
                 timezone=timezone,
+                phone_number=phone_number,
                 account_type=account_type or "individual",
                 business_name=business_name,
                 tax_id=tax_id,
@@ -135,6 +148,7 @@ class AuthUserDAO:
         bio: Optional[str] = ...,
         image: Optional[str] = ...,
         timezone: Optional[str] = ...,
+        phone_number: Optional[str] = ...,
         tier: Optional[str] = ...,
         queries_enabled: Optional[bool] = ...,
         evaluations_enabled: Optional[bool] = ...,
@@ -160,6 +174,10 @@ class AuthUserDAO:
         raw = self.session.execute(query)
         entry = raw.scalars().first()
         if entry is not None:
+            # Track changes for contact sync
+            should_sync_timezone = False
+            should_sync_bio = False
+
             if name is not ...:
                 setattr(entry, "name", name)
             if last_name is not ...:
@@ -167,13 +185,30 @@ class AuthUserDAO:
             if job_title is not ...:
                 setattr(entry, "job_title", job_title)
             if bio is not ...:
+                old_bio = getattr(entry, "bio", None)
+                if bio != old_bio:
+                    should_sync_bio = True
                 setattr(entry, "bio", bio)
             if image is not ...:
                 setattr(entry, "image", image)
             if timezone is not ...:
                 if timezone is not None and timezone not in VALID_TIMEZONES:
                     raise ValueError(f"'{timezone}' is not a valid IANA timezone.")
+                old_timezone = getattr(entry, "timezone", None)
+                if timezone != old_timezone:
+                    should_sync_timezone = True
                 setattr(entry, "timezone", timezone)
+            if phone_number is not ...:
+                if phone_number is not None:
+                    from orchestra.web.api.utils.phone_number_validator import (
+                        validate_phone_number,
+                    )
+
+                    result = validate_phone_number(phone_number)
+                    if not result["is_valid"]:
+                        raise ValueError(f"Invalid phone number: {result['error']}")
+                    phone_number = result["formatted_phone_number"]
+                setattr(entry, "phone_number", phone_number)
             if tier is not ...:
                 setattr(entry, "tier", tier)
             if queries_enabled is not ...:
@@ -223,6 +258,25 @@ class AuthUserDAO:
                 setattr(entry, "tax_jurisdiction", tax_jurisdiction)
 
             self.session.commit()
+
+            # Sync timezone/bio changes to Contact logs in Assistants projects
+            if should_sync_timezone or should_sync_bio:
+                from orchestra.services.contact_sync_service import ContactSyncService
+
+                sync_service = ContactSyncService(self.session)
+                if should_sync_timezone:
+                    sync_service.sync_user_timezone(
+                        user_id=id,
+                        email=entry.email,
+                        new_timezone=entry.timezone,
+                    )
+                if should_sync_bio:
+                    sync_service.sync_user_bio(
+                        user_id=id,
+                        email=entry.email,
+                        new_bio=entry.bio,
+                    )
+                self.session.commit()
 
     def delete(self, id: str):
         try:

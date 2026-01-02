@@ -41,6 +41,7 @@ def main() -> None:
         port=settings.port,
         reload=settings.reload,
         log_level=settings.log_level.value.lower(),
+        timeout_keep_alive=settings.timeout_keep_alive,
         factory=True,
     )
 

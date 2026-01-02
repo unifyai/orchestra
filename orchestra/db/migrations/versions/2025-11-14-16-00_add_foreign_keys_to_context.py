@@ -17,7 +17,7 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Add foreign_keys column to context table with default empty array
+    # Add foreign_keys column to context table
     op.add_column(
         "context",
         sa.Column(

@@ -22,7 +22,7 @@ from sqlalchemy import (
     text,
 )
 from sqlalchemy.dialects.postgresql import JSON, JSONB
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import backref, relationship
 
 from orchestra.db.base import Base
 
@@ -228,7 +228,19 @@ class Recharge(Base):
         server_default=func.now(),
         default=datetime.utcnow,
     )
-    user_id = Column(String(), ForeignKey("users.id"), nullable=False)
+    # User ID - nullable for organization recharges
+    user_id = Column(
+        String(),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    # Organization ID - nullable for user recharges
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     quantity = Column(Numeric(), nullable=False)
     amount_usd = Column(Numeric(), nullable=False)
     type = Column(String())
@@ -241,14 +253,21 @@ class Recharge(Base):
     stripe_invoice_id = Column(String)
     invoice_group = Column(Date)
 
-    # ORM relationship (handy: recharge.user.billing_state)
+    # ORM relationships
     user = relationship("Users", back_populates="recharges")
+    organization = relationship("Organization", back_populates="recharges")
 
     __table_args__ = (
         Index("idx_recharge_pending", "status", "invoice_group"),
         sa.CheckConstraint(
             "status IN ('PENDING_INVOICE','PAID','FAILED','INVOICE_CREATED','DISPUTED')",
             name="ck_recharge_status",
+        ),
+        # Ensure exactly one of user_id or organization_id is set
+        sa.CheckConstraint(
+            "(user_id IS NOT NULL AND organization_id IS NULL) OR "
+            "(user_id IS NULL AND organization_id IS NOT NULL)",
+            name="ck_recharge_entity_xor",
         ),
     )
 
@@ -477,6 +496,7 @@ class AuthUser(Base):
     bio = Column(String, nullable=True)
     image = Column(String)
     timezone = Column(String, nullable=True)
+    phone_number = Column(String, nullable=True)
     # Account tier, developer, professional, enterprise
     tier = Column(String, nullable=False, server_default="developer")
     # Toggles managed by usage quotas
@@ -598,13 +618,76 @@ class Organization(Base):
         ForeignKey("auth_user.id", ondelete="CASCADE"),
         nullable=False,
     )
+    # Legacy delegated billing - nullable when org has its own billing
     billing_user_id = Column(
         String,
         ForeignKey("users.id", ondelete="CASCADE"),
-        nullable=False,
+        nullable=True,
     )
     name = Column(String, unique=True, nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
+
+    # === WALLET FIELDS (direct org billing) ===
+    credits = Column(
+        Numeric,
+        nullable=False,
+        default=0,
+        server_default="0",
+    )
+    stripe_customer_id = Column(
+        String,
+        nullable=True,
+        unique=True,
+        index=True,
+    )  # NULL = legacy billing
+    autorecharge = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    autorecharge_threshold = Column(
+        Numeric,
+        nullable=False,
+        default=10,
+        server_default="10",
+    )
+    autorecharge_qty = Column(
+        Numeric,
+        nullable=False,
+        default=100,
+        server_default="100",
+    )
+    account_status = Column(
+        String,
+        nullable=False,
+        default="ACTIVE",
+        server_default="'ACTIVE'",
+    )  # ACTIVE, SUSPENDED, PAST_DUE, CLOSED
+
+    # === BUSINESS PROFILE FIELDS ===
+    billing_email = Column(String, nullable=True)
+    business_name = Column(String(255), nullable=True)
+    tax_id = Column(String(100), nullable=True)
+    # JSONB for flexible international address support
+    # Structure: {
+    #   "country": "US",  # ISO 3166-1 alpha-2 code
+    #   "formatted": "123 Main St, City, State 12345, USA",  # Display string
+    #   "line1": "123 Main St",
+    #   "line2": "Suite 100",
+    #   "city": "San Francisco",
+    #   "state": "CA",  # or province/region
+    #   "postal_code": "94105",
+    #   "locality": "...",  # For countries that use locality
+    #   "district": "...",  # For countries like India
+    # }
+    billing_address = Column(JSONB, nullable=True, default=dict)
+    billing_setup_complete = Column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
 
     # Relationships
     interfaces = relationship(
@@ -618,6 +701,19 @@ class Organization(Base):
         back_populates="organization",
         cascade="all, delete-orphan",
         passive_deletes=True,
+    )
+    recharges = relationship(
+        "Recharge",
+        back_populates="organization",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
+
+    __table_args__ = (
+        sa.CheckConstraint(
+            "account_status IN ('ACTIVE', 'SUSPENDED', 'PAST_DUE', 'CLOSED')",
+            name="ck_organization_account_status",
+        ),
     )
 
 
@@ -635,15 +731,11 @@ class OrganizationMember(Base):
         ForeignKey("auth_user.id", ondelete="CASCADE"),
         nullable=False,
     )
-    level = Column(
-        String,
-        nullable=False,
-    )  # owner, admin, user -> owner is duplicated info? :/
     role_id = Column(
         Integer,
         ForeignKey("role.id", ondelete="RESTRICT"),
         nullable=False,
-    )  # RBAC role for this member (explicit, never NULL - defaults to "Member" system role)
+    )  # RBAC role for this member (Owner, Admin, Member, Viewer, or custom roles)
     created_at = Column(TIMESTAMP, server_default=func.now())
 
 
@@ -680,7 +772,6 @@ class OrganizationInvite(Base):
         ForeignKey("role.id", ondelete="RESTRICT"),
         nullable=False,
     )  # Role to assign when invite is accepted
-    level = Column(String, nullable=False, default="user")  # Level to assign on accept
     expires_at = Column(TIMESTAMP(timezone=True), nullable=False)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
@@ -821,13 +912,13 @@ class ResourceAccess(Base):
     created_at = Column(TIMESTAMP, server_default=func.now())
 
     __table_args__ = (
+        # Only one role per grantee per resource (single-role-per-resource)
         UniqueConstraint(
             "resource_type",
             "resource_id",
-            "role_id",
             "grantee_type",
             "grantee_id",
-            name="uq_resource_access",
+            name="uq_resource_access_grantee",
         ),
         Index("idx_resource_access_resource", "resource_type", "resource_id"),
         Index("idx_resource_access_grantee", "grantee_type", "grantee_id"),
@@ -1008,9 +1099,15 @@ class ContextVersion(Base):
 
     # Relationship to its ProjectVersion
     project_version = relationship("ProjectVersion", back_populates="context_versions")
-    # Relationship to its LogVersion snapshots
+    # Relationship to its LogVersion snapshots (EAV mode)
     log_versions = relationship(
         "LogVersion",
+        back_populates="context_version",
+        cascade="all, delete-orphan",
+    )
+    # Relationship to its LogEventVersion snapshots (JSONB mode)
+    log_event_versions = relationship(
+        "LogEventVersion",
         back_populates="context_version",
         cascade="all, delete-orphan",
     )
@@ -1026,6 +1123,10 @@ class LogEvent(Base):
         nullable=False,
         index=True,
     )
+    data = Column(JSONB, nullable=False, server_default=text("'{}'"))
+    # Stores original insertion order of nested dictionary keys
+    # Structure: {"_root": ["key1", "key2"], "key1.nested": ["a", "b"]}
+    key_order = Column(JSONB, nullable=True)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
     # Relationships
@@ -1060,7 +1161,11 @@ class LogEvent(Base):
         passive_deletes=True,
     )
 
-    __table_args__ = (Index("idx_log_event_project_id_id", "project_id", "id"),)
+    __table_args__ = (
+        Index("idx_log_event_project_id_id", "project_id", "id"),
+        # GIN index for JSON field filtering
+        Index("idx_log_event_data", "data", postgresql_using="gin"),
+    )
 
 
 class LogEventJSONLog(Base):
@@ -1174,6 +1279,38 @@ class LogVersion(Base):
 
     # Relationship back to the ContextVersion
     context_version = relationship("ContextVersion", back_populates="log_versions")
+
+
+class LogEventVersion(Base):
+    """Model class for storing JSONB snapshots of log events for versioning.
+
+    Stores complete JSONB document snapshots of log events for versioning.
+    """
+
+    __tablename__ = "log_event_version"
+
+    id = Column(Integer, primary_key=True)
+    context_version_id = Column(
+        Integer,
+        ForeignKey("context_version.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # Original log_event_id for reference (not a FK since original may be deleted)
+    log_event_id = Column(Integer, nullable=False, index=True)
+    # Snapshot of the JSONB data column
+    data = Column(JSONB, nullable=False)
+    # Snapshot of the key_order column for preserving dict ordering
+    key_order = Column(JSONB, nullable=True)
+    # Timestamps from the original LogEvent
+    created_at = Column(TIMESTAMP)
+    updated_at = Column(TIMESTAMP)
+
+    # Relationship back to ContextVersion
+    context_version = relationship(
+        "ContextVersion",
+        back_populates="log_event_versions",
+    )
 
 
 class ParamVersion(Base):
@@ -1315,6 +1452,8 @@ class ActiveDerivedLog(Base):
     referenced_logs = Column(JSONB, nullable=False)
     filter_expression = Column(JSONB, nullable=False)
     inferred_type = Column(String)
+    # Array of base field names this derived log depends on (e.g., ["score", "accuracy"])
+    referenced_keys = Column(JSONB, nullable=True)
     is_active = Column(Boolean, nullable=False, server_default="t")
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, onupdate=func.now())
@@ -1340,7 +1479,7 @@ class DashboardView(Base):
 class Interface(Base):
     __tablename__ = "interface"
 
-    id = Column(String, primary_key=True, default=uuid.uuid4)
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     # TODO: remove both <user_id> and <organization_id>
     user_id = Column(
         String,
@@ -1523,7 +1662,11 @@ class FavoriteProject(Base):
 
 
 class Assistant(Base):
-    """Model class for the assistants table."""
+    """Model class for the assistants table.
+
+    Assistants can be either personal (user_id set, organization_id NULL)
+    or organizational (organization_id set, user_id is the creator).
+    """
 
     __tablename__ = "assistants"
 
@@ -1532,6 +1675,12 @@ class Assistant(Base):
         String,
         ForeignKey("auth_user.id", ondelete="CASCADE"),
         nullable=False,
+        index=True,
+    )
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=True,
         index=True,
     )
     first_name = Column(String, nullable=True)
@@ -1573,11 +1722,19 @@ class Assistant(Base):
             ["voices.user_id", "voices.voice_id", "voices.provider"],
             name="fk_assistants_voices",
         ),
+        # Personal assistants: unique per user
         UniqueConstraint(
             "user_id",
             "first_name",
             "surname",
             name="uq_user_assistant_name",
+        ),
+        # Org assistants: unique per organization
+        UniqueConstraint(
+            "organization_id",
+            "first_name",
+            "surname",
+            name="uq_org_assistant_name",
         ),
         sa.CheckConstraint(
             "user_local_desktop IN ('ubuntu', 'windows', 'macos')",
@@ -1588,6 +1745,42 @@ class Assistant(Base):
             name="ck_assistant_voice_mode",
         ),
     )
+
+
+class AssistantSecret(Base):
+    """Model class for storing secrets associated with assistants.
+
+    Secrets are external service credentials (API keys, tokens, etc.) that
+    an assistant needs to access external services on behalf of the user.
+    """
+
+    __tablename__ = "assistant_secrets"
+
+    user_id = Column(
+        String,
+        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+        index=True,
+    )
+    agent_id = Column(
+        Integer,
+        ForeignKey("assistants.agent_id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+        index=True,
+    )
+    secret_name = Column(
+        String,
+        primary_key=True,
+        nullable=False,
+    )
+    secret_value = Column(String, nullable=False)
+    description = Column(String, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+    updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (sa.PrimaryKeyConstraint("user_id", "agent_id", "secret_name"),)
 
 
 class AssistantHiringOneTimeApprovalLink(Base):
@@ -1927,7 +2120,15 @@ class CallRecording(Base):
 
 
 class Embedding(Base):
-    """Model class for the embedding table that stores embeddings."""
+    """Model class for the embedding table that stores embeddings.
+
+    Supports soft-delete via the `is_deleted` column to avoid expensive HNSW index
+    surgery during deletions. When embeddings are "deleted", they are marked with
+    is_deleted=True rather than being physically removed.
+
+    The HNSW indexes include `AND is_deleted = false` to exclude soft-deleted rows,
+    ensuring they don't participate in vector similarity searches.
+    """
 
     __tablename__ = "embedding"
 
@@ -1941,6 +2142,8 @@ class Embedding(Base):
     key = Column(String, nullable=False)
     vector = Column(Vector(), nullable=False)  # Support variable dimensions
     created_at = Column(TIMESTAMP, server_default=func.now())
+    # Soft-delete flag for instant deletion without HNSW index surgery
+    is_deleted = Column(Boolean, nullable=False, server_default=sa.text("false"))
 
     __table_args__ = (
         UniqueConstraint("ref_id", "model", "key", name="uq_embedding"),
@@ -1950,6 +2153,10 @@ class Embedding(Base):
             "model",
             "key",
         ),
+        # B-tree index on is_deleted for efficient filtering
+        Index("idx_embedding_is_deleted", "is_deleted"),
+        # Composite index for deletion queries (filter by ref_id and is_deleted)
+        Index("idx_embedding_ref_id_is_deleted", "ref_id", "is_deleted"),
         # CHECK constraints to ensure dimension integrity per model
         # Prevents dimension mismatches from corrupting the HNSW indexes
         sa.CheckConstraint(
@@ -1963,6 +2170,7 @@ class Embedding(Base):
         # Model-specific HNSW expression indexes with dimension casts
         # The cast is critical - queries must also cast to use these indexes
         # Pattern: (vector::vector(N)) vector_cosine_ops for expression index + WHERE model = '...' for partial index
+        # HNSW indexes exclude soft-deleted embeddings for performance
         # OpenAI text-embedding-3-small (1536 dimensions) - Cosine similarity
         Index(
             "embedding_hnsw_cosine_openai_1536_idx",
@@ -1971,7 +2179,9 @@ class Embedding(Base):
             ),  # Include operator class in expression
             postgresql_using="hnsw",
             postgresql_with={"m": 16, "ef_construction": 64},
-            postgresql_where=sa.text("model = 'text-embedding-3-small'"),
+            postgresql_where=sa.text(
+                "model = 'text-embedding-3-small' AND is_deleted = false",
+            ),
         ),
         # Vertex AI multimodalembedding@001 (1408 dimensions) - Cosine similarity
         Index(
@@ -1981,6 +2191,100 @@ class Embedding(Base):
             ),  # Include operator class in expression
             postgresql_using="hnsw",
             postgresql_with={"m": 16, "ef_construction": 64},
-            postgresql_where=sa.text("model = 'multimodalembedding@001'"),
+            postgresql_where=sa.text(
+                "model = 'multimodalembedding@001' AND is_deleted = false",
+            ),
         ),
+    )
+
+
+class EmbeddingQueue(Base):
+    """Queue for async embedding generation.
+
+    Embeddings are queued during log creation and processed by background workers.
+    This decouples log creation from OpenAI API calls and HNSW index updates.
+    Status values:
+    - pending: Waiting to be processed
+    - processing: Currently being processed by a worker
+    - completed: Successfully processed (will be deleted from queue)
+    - failed: Failed after max retries (kept for debugging)
+    """
+
+    __tablename__ = "embedding_queue"
+
+    id = Column(Integer, primary_key=True)
+    ref_id = Column(
+        Integer,
+        ForeignKey("log_event.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    key = Column(String, nullable=False)
+    text = Column(String, nullable=False)  # Text to embed
+    model = Column(String, nullable=False)
+    dimensions = Column(Integer, nullable=True)
+    status = Column(String, nullable=False, server_default="pending")
+    retry_count = Column(Integer, nullable=False, server_default=sa.text("0"))
+    error_message = Column(String, nullable=True)
+    created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
+    # Timestamp when item was claimed for processing (used for stale detection)
+    processing_started_at = Column(TIMESTAMP, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("ref_id", "key", "model", name="uq_embedding_queue"),
+        sa.CheckConstraint(
+            "status IN ('pending', 'processing', 'completed', 'failed')",
+            name="chk_embedding_queue_status",
+        ),
+        Index("idx_embedding_queue_status_created", "status", "created_at"),
+        Index("idx_embedding_queue_ref_id", "ref_id"),
+        # Index for efficient stale processing detection
+        Index(
+            "idx_embedding_queue_processing_started",
+            "status",
+            "processing_started_at",
+        ),
+    )
+
+
+class Plot(Base):
+    """Model class for shareable plot configurations.
+
+    Plots are linked to projects and follow project-based access control.
+    When a project is deleted, all associated plots are cascade deleted.
+    """
+
+    __tablename__ = "plot"
+
+    id = Column(Integer, primary_key=True)
+    token = Column(String(12), unique=True, nullable=False, index=True)
+    project_id = Column(
+        Integer,
+        ForeignKey("project.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    user_id = Column(
+        String,
+        ForeignKey("auth_user.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    organization_id = Column(
+        Integer,
+        ForeignKey("organization.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    title = Column(String, nullable=True)
+    plot_config = Column(JSONB, nullable=False)
+    project_config = Column(JSONB, nullable=False)
+    created_at = Column(TIMESTAMP, server_default=func.now())
+
+    # Relationships - passive_deletes=True lets the DB handle CASCADE DELETE
+    project = relationship("Project", backref=backref("plots", passive_deletes=True))
+
+    __table_args__ = (
+        Index("idx_plot_project_id", "project_id"),
+        Index("idx_plot_user_id", "user_id"),
+        Index("idx_plot_organization_id", "organization_id"),
     )

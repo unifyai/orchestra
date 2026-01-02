@@ -1,6 +1,8 @@
 import pytest
 from httpx import AsyncClient
 
+from orchestra.conftest import assert_mode_specific
+
 from . import (
     HEADERS,
     _create_log,
@@ -13,7 +15,8 @@ from . import (
 
 
 @pytest.mark.anyio
-async def test_delete_logs(client: AsyncClient):
+async def test_delete_logs(client: AsyncClient, use_jsonb_mode):
+    """Test deleting logs."""
     project_name = "multi-log-project"
     _ = await _create_project(client, project_name)
 
@@ -58,7 +61,7 @@ async def test_delete_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_delete_field_for_all_logs(client: AsyncClient):
+async def test_delete_field_for_all_logs(client: AsyncClient, use_jsonb_mode):
     """Test deleting a specific field from all logs when log ID is None."""
     project_name = "delete-field-all-logs"
     _ = await _create_project(client, project_name)
@@ -148,7 +151,7 @@ async def test_delete_field_for_all_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_field_cascaded_delete(client: AsyncClient):
+async def test_field_cascaded_delete(client: AsyncClient, use_jsonb_mode):
     """Test that when a field is deleted from all logs, it is also removed from the field type table."""
     project_name = "field-cascaded-delete"
     _ = await _create_project(client, project_name)
@@ -217,7 +220,8 @@ async def test_field_cascaded_delete(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_delete_log_fields_from_logs(client: AsyncClient):
+async def test_delete_log_fields_from_logs(client: AsyncClient, use_jsonb_mode):
+    """Test deleting specific fields from specific logs."""
     project_name = "multi-log-project"
     _ = await _create_project(client, project_name)
 
@@ -282,7 +286,7 @@ async def test_delete_log_fields_from_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_delete_logs_from_specific_context(client: AsyncClient):
+async def test_delete_logs_from_specific_context(client: AsyncClient, use_jsonb_mode):
     """Test deleting logs from a specific context while preserving them in other contexts."""
     project_name = "context-specific-deletion"
     _ = await _create_project(client, project_name)
@@ -381,7 +385,7 @@ async def test_delete_logs_from_specific_context(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_delete_project_deletes_logs(client: AsyncClient):
+async def test_delete_project_deletes_logs(client: AsyncClient, use_jsonb_mode):
     url = "/v0/project/test-project"
     project_name = "test-project"
 
@@ -415,7 +419,7 @@ async def test_delete_project_deletes_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_delete_logs_by_value_filter(client: AsyncClient):
+async def test_delete_logs_by_value_filter(client: AsyncClient, use_jsonb_mode):
     """Test deleting logs by value filter instead of explicit IDs."""
     project_name = "filter-deletion-test"
     _ = await _create_project(client, project_name)
@@ -479,7 +483,7 @@ async def test_delete_logs_by_value_filter(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_delete_empty_fields_flag(client: AsyncClient):
+async def test_delete_empty_fields_flag(client: AsyncClient, use_jsonb_mode):
     """Test that the delete_empty_fields flag controls whether fields are removed when no logs use them."""
     project_name = "empty-fields-test"
     _ = await _create_project(client, project_name)
@@ -603,7 +607,10 @@ async def test_delete_empty_fields_flag(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_delete_all_logs_removes_all_fields_when_empty(client: AsyncClient):
+async def test_delete_all_logs_removes_all_fields_when_empty(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
     """Test that deleting all logs with delete_empty_fields=True removes all unused fields."""
     project_name = "delete-all-logs-fields-test"
     _ = await _create_project(client, project_name)
@@ -682,6 +689,7 @@ async def test_delete_all_logs_removes_all_fields_when_empty(client: AsyncClient
 @pytest.mark.anyio
 async def test_delete_some_logs_keeps_fields_used_by_remaining_logs(
     client: AsyncClient,
+    use_jsonb_mode,
 ):
     """Test that deleting some logs with delete_empty_fields=True keeps fields used by remaining logs but deletes unused fields."""
     project_name = "partial-log-deletion-field-test"
@@ -794,7 +802,10 @@ async def test_delete_some_logs_keeps_fields_used_by_remaining_logs(
 
 
 @pytest.mark.anyio
-async def test_delete_logs_keeps_fields_used_by_other_contexts(client: AsyncClient):
+async def test_delete_logs_keeps_fields_used_by_other_contexts(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
     """Test that deleting logs with delete_empty_fields=True keeps fields used by logs in other contexts."""
     project_name = "cross-context-field-deletion-test"
     _ = await _create_project(client, project_name)
@@ -963,7 +974,10 @@ async def test_delete_logs_keeps_fields_used_by_other_contexts(client: AsyncClie
 
 
 @pytest.mark.anyio
-async def test_assistants_3tier_delete_from_global_all_context(client: AsyncClient):
+async def test_assistants_3tier_delete_from_global_all_context(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
     """
     Test deleting logs from 'All/Transcripts' also removes from User/All and User/Assistant contexts.
 
@@ -1051,6 +1065,7 @@ async def test_assistants_3tier_delete_from_global_all_context(client: AsyncClie
 @pytest.mark.anyio
 async def test_assistants_3tier_delete_from_user_assistant_context(
     client: AsyncClient,
+    use_jsonb_mode,
 ):
     """
     Test deleting logs from 'User/Assistant/Transcripts' also removes from other tiers.
@@ -1136,7 +1151,10 @@ async def test_assistants_3tier_delete_from_user_assistant_context(
 
 
 @pytest.mark.anyio
-async def test_assistants_3tier_preserves_unrelated_context(client: AsyncClient):
+async def test_assistants_3tier_preserves_unrelated_context(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
     """
     Test that logs in an unrelated context are preserved when deleting from 3-tier contexts.
 
@@ -1231,7 +1249,10 @@ async def test_assistants_3tier_preserves_unrelated_context(client: AsyncClient)
 
 
 @pytest.mark.anyio
-async def test_assistants_3tier_partial_siblings_exist(client: AsyncClient):
+async def test_assistants_3tier_partial_siblings_exist(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
     """
     Test deletion when only some sibling contexts exist.
 
@@ -1290,7 +1311,10 @@ async def test_assistants_3tier_partial_siblings_exist(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_assistants_3tier_delete_from_user_all_context(client: AsyncClient):
+async def test_assistants_3tier_delete_from_user_all_context(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
     """
     Test deletion from User/All context cascades correctly.
 
@@ -1375,7 +1399,10 @@ async def test_assistants_3tier_delete_from_user_all_context(client: AsyncClient
 
 
 @pytest.mark.anyio
-async def test_non_assistants_project_normal_behavior(client: AsyncClient):
+async def test_non_assistants_project_normal_behavior(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
     """
     Test that non-Assistants projects don't have 3-tier context deletion.
 
@@ -1447,7 +1474,10 @@ async def test_non_assistants_project_normal_behavior(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_assistants_context_without_slash_normal_behavior(client: AsyncClient):
+async def test_assistants_context_without_slash_normal_behavior(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
     """
     Test that Assistants project contexts without '/' don't trigger 3-tier deletion.
 
@@ -1521,6 +1551,7 @@ async def test_assistants_context_without_slash_normal_behavior(client: AsyncCli
 @pytest.mark.anyio
 async def test_assistants_3tier_delete_fields_preserves_system_fields(
     client: AsyncClient,
+    use_jsonb_mode,
 ):
     """
     Test that deleting user fields from Assistants logs preserves _user and _assistant fields.
@@ -1602,7 +1633,10 @@ async def test_assistants_3tier_delete_fields_preserves_system_fields(
 
 
 @pytest.mark.anyio
-async def test_assistants_3tier_nested_subcontext(client: AsyncClient):
+async def test_assistants_3tier_nested_subcontext(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
     """
     Test 3-tier context deletion with nested subcontexts.
 
@@ -1677,7 +1711,10 @@ async def test_assistants_3tier_nested_subcontext(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_unitytests_3tier_delete_from_global_all_context(client: AsyncClient):
+async def test_unitytests_3tier_delete_from_global_all_context(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
     """
     Test that UnityTests project uses the same 3-tier context deletion as Assistants.
 
@@ -1760,3 +1797,223 @@ async def test_unitytests_3tier_delete_from_global_all_context(client: AsyncClie
         )
         assert response.status_code == 200, response.json()
         assert log_id not in [log["id"] for log in response.json()["logs"]]
+
+
+@pytest.mark.anyio
+async def test_assistants_3tier_with_prefix(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """
+    Test 3-tier context deletion with arbitrary prefix before the hierarchy.
+
+    This tests contexts like Unity's test isolation paths:
+    - Tier 1: tests/test_foo/All/Contacts (global aggregate with prefix)
+    - Tier 2: tests/test_foo/DefaultUser/All/Contacts (user aggregate with prefix)
+    - Tier 3: tests/test_foo/DefaultUser/Assistant/Contacts (user + assistant with prefix)
+
+    The prefix can have arbitrary depth. The 3-tier logic should detect the hierarchy
+    by finding the Tier 1 context (shortest context containing 'All') and parsing it
+    to extract prefix and SubContext dynamically.
+    """
+    project_name = "UnityTests-PrefixTest"
+    # Prefix simulates Unity's test isolation paths
+    prefix = "tests/test_contact_manager/test_foo"
+    global_all_context = f"{prefix}/All/Contacts"
+    user_all_context = f"{prefix}/DefaultUser/All/Contacts"
+    user_assistant_context = f"{prefix}/DefaultUser/Assistant/Contacts"
+
+    # Create project
+    response = await _create_project(client, project_name)
+    assert response.status_code == 200, response.json()
+
+    # Create all three contexts with prefix
+    for ctx in [global_all_context, user_all_context, user_assistant_context]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": ctx},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+
+    # Create a log with _user and _assistant fields
+    response = await _create_log(
+        client,
+        project_name,
+        entries={
+            "name": "John Doe",
+            "email": "john@example.com",
+            "_user": "DefaultUser",
+            "_assistant": "Assistant",
+        },
+        context=user_assistant_context,
+    )
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    # Add to other contexts (simulating Unity's _add_to_all behavior)
+    for ctx in [global_all_context, user_all_context]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts/add_logs",
+            json={"context_name": ctx, "log_ids": [log_id]},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+
+    # Verify log is in all three contexts
+    for ctx in [global_all_context, user_all_context, user_assistant_context]:
+        response = await client.get(
+            f"/v0/logs?project={project_name}",
+            params={"context": ctx},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+        assert log_id in [
+            log["id"] for log in response.json()["logs"]
+        ], f"Log should be in {ctx}"
+
+    # Delete from Tier 3 (user+assistant context) - should cascade to other tiers
+    ids_and_fields = [([log_id], None)]
+    response = await _delete_logs(
+        client,
+        ids_and_fields,
+        project_name=project_name,
+        context=user_assistant_context,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify log is removed from ALL three contexts
+    for ctx in [global_all_context, user_all_context, user_assistant_context]:
+        response = await client.get(
+            f"/v0/logs?project={project_name}",
+            params={"context": ctx},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+        assert log_id not in [
+            log["id"] for log in response.json()["logs"]
+        ], f"Log should be removed from {ctx}"
+
+
+@pytest.mark.anyio
+async def test_assistants_3tier_with_prefix_and_nested_subcontext(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """
+    Test 3-tier deletion with both prefix AND nested subcontext.
+
+    This is the most complex case:
+    - Tier 1: tests/test_foo/All/Functions/Compositional
+    - Tier 2: tests/test_foo/DefaultUser/All/Functions/Compositional
+    - Tier 3: tests/test_foo/DefaultUser/Assistant/Functions/Compositional
+
+    Both prefix and SubContext can have arbitrary depth.
+    """
+    project_name = "UnityTests-ComplexPath"
+    prefix = "tests/test_function_manager/test_bar"
+    sub_context = "Functions/Compositional"
+    global_all_context = f"{prefix}/All/{sub_context}"
+    user_all_context = f"{prefix}/DefaultUser/All/{sub_context}"
+    user_assistant_context = f"{prefix}/DefaultUser/Assistant/{sub_context}"
+
+    # Create project
+    response = await _create_project(client, project_name)
+    assert response.status_code == 200, response.json()
+
+    # Create all three contexts
+    for ctx in [global_all_context, user_all_context, user_assistant_context]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts",
+            json={"name": ctx},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+
+    # Create a log in Tier 1 context
+    response = await _create_log(
+        client,
+        project_name,
+        entries={
+            "function_name": "compose_greet",
+            "code": "def compose_greet(): pass",
+            "_user": "DefaultUser",
+            "_assistant": "Assistant",
+        },
+        context=global_all_context,
+    )
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    # Add to other contexts
+    for ctx in [user_all_context, user_assistant_context]:
+        response = await client.post(
+            f"/v0/project/{project_name}/contexts/add_logs",
+            json={"context_name": ctx, "log_ids": [log_id]},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+
+    # Delete from Tier 1 (global All context) - should cascade to other tiers
+    ids_and_fields = [([log_id], None)]
+    response = await _delete_logs(
+        client,
+        ids_and_fields,
+        project_name=project_name,
+        context=global_all_context,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify log is removed from ALL three contexts
+    for ctx in [global_all_context, user_all_context, user_assistant_context]:
+        response = await client.get(
+            f"/v0/logs?project={project_name}",
+            params={"context": ctx},
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+        assert log_id not in [
+            log["id"] for log in response.json()["logs"]
+        ], f"Log should be removed from {ctx}"
+
+
+# =============================================================================
+# JSONB Mode-Specific Tests
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_delete_logs_source_type_derived_rejected_in_jsonb(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """Test that source_type='derived' returns different errors in JSONB vs EAV mode.
+
+    Both modes reject source_type='derived' when deleting without specifying fields,
+    but the error messages differ:
+    - JSONB: "JSONB mode does not distinguish" (source_type not supported)
+    - EAV: "Cannot delete derived logs without specifying fields" (operation not allowed)
+    """
+    project_name = "source-type-derived-test"
+    _ = await _create_project(client, project_name)
+
+    response = await _create_log(client, project_name)
+    assert response.status_code == 200, response.json()
+    log_id = response.json()["log_event_ids"][0]
+
+    # Try to delete with source_type='derived' - both modes return 400 but with different errors
+    ids_and_fields = [([log_id], None)]
+    response = await _delete_logs(
+        client,
+        ids_and_fields,
+        project_name=project_name,
+        source_type="derived",
+    )
+
+    assert response.status_code == 400, response.json()
+    detail = response.json()["detail"]
+    assert_mode_specific(
+        eav_condition="Cannot delete derived logs without specifying fields" in detail,
+        jsonb_condition="JSONB mode does not distinguish" in detail,
+        message="source_type='derived' rejection messages differ by mode",
+    )

@@ -15,6 +15,7 @@ from orchestra.web.api.utils.production_traffic_middleware import (
     ProductionTrafficMiddleware,
 )
 from orchestra.web.api.utils.prometheus_middleware import PrometheusMiddleware, metrics
+from orchestra.web.api.utils.request_trace_middleware import RequestTraceMiddleware
 from orchestra.web.lifetime import register_shutdown_event, register_startup_event
 
 
@@ -65,6 +66,10 @@ def get_app() -> FastAPI:
     # Add Production Traffic middleware
     app.add_middleware(
         ProductionTrafficMiddleware,
+    )
+    # Add request tracing middleware (captures body/params for debugging)
+    app.add_middleware(
+        RequestTraceMiddleware,
     )
     # Register startup and shutdown events
     register_startup_event(app)

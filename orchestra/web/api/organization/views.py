@@ -10,19 +10,29 @@ from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.auth_user_dao import AuthUserDAO
+from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_invite_dao import OrganizationInviteDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
+from orchestra.db.dao.team_dao import TeamDAO
+from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dependencies import get_db_session
+from orchestra.services.contact_sync_service import ContactSyncService
 from orchestra.web.api.organization.schema import (
     AcceptInviteResponse,
     DeclineInviteResponse,
     InviteListResponse,
     InviteResponse,
     InviteUserRequest,
+    OrganizationBillingResponse,
+    OrganizationBillingUpdate,
+    OrganizationBusinessProfileResponse,
+    OrganizationBusinessProfileUpdate,
     OrganizationCreate,
+    OrganizationCreditsResponse,
     OrganizationMemberAdd,
     OrganizationMemberResponse,
     OrganizationMemberRoleUpdate,
@@ -86,7 +96,6 @@ async def create_organization(
         org_member_dao.create(
             organization_id=org.id,
             user_id=user_id,
-            level="owner",
             role_id=owner_role.id,
         )
 
@@ -134,6 +143,107 @@ async def list_organizations(
     return [OrganizationResponse.model_validate(org) for org in organizations]
 
 
+@router.get(
+    "/organizations/members",
+    response_model=List[OrganizationMemberResponse],
+)
+async def list_organization_members_by_api_key(
+    request_fastapi: Request,
+    session: Session = Depends(get_db_session),
+) -> List[OrganizationMemberResponse]:
+    """
+    List all members of the organization associated with the API key.
+
+    For org API key: Returns all members with their roles.
+    For personal API key: Returns empty list.
+    """
+    user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
+
+    # Personal API key - return empty list
+    if organization_id is None:
+        return []
+
+    org_dao = OrganizationDAO(session)
+    org_member_dao = OrganizationMemberDAO(session)
+    role_dao = RoleDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+    auth_user_dao = AuthUserDAO(session)
+
+    # Verify organization exists
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Organization with id {organization_id} not found",
+        )
+
+    # Check if user has org:read permission via org membership role
+    has_permission = resource_access_dao.check_org_member_permission(
+        user_id,
+        organization_id,
+        "org:read",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view members of this organization",
+        )
+
+    # Get all members
+    all_members_result = org_member_dao.filter(organization_id=organization_id)
+
+    # Build response with role names and user info
+    members_response = []
+    for member_row in all_members_result:
+        member = member_row[0]
+        role_name = None
+        if member.role_id:
+            role = role_dao.get(member.role_id)
+            role_name = role.name if role else None
+
+        # Fetch user info
+        user_info_row = auth_user_dao.get_by_id(member.user_id)
+        user_name = None
+        user_email = None
+        user_image = None
+        user_bio = None
+        user_timezone = None
+        user_phone_number = None
+        if user_info_row:
+            user_info = user_info_row[0]
+            name_parts = []
+            if user_info.name:
+                name_parts.append(user_info.name)
+            if user_info.last_name:
+                name_parts.append(user_info.last_name)
+            user_name = " ".join(name_parts) if name_parts else None
+            user_email = user_info.email
+            user_image = user_info.image
+            user_bio = user_info.bio
+            user_timezone = user_info.timezone
+            user_phone_number = user_info.phone_number
+
+        members_response.append(
+            OrganizationMemberResponse(
+                id=member.id,
+                user_id=member.user_id,
+                organization_id=member.organization_id,
+                role_id=member.role_id,
+                role_name=role_name,
+                created_at=member.created_at,
+                name=user_name,
+                email=user_email,
+                image=user_image,
+                bio=user_bio,
+                timezone=user_timezone,
+                phone_number=user_phone_number,
+            ),
+        )
+
+    return members_response
+
+
 @router.get("/organizations/{organization_id}", response_model=OrganizationResponse)
 async def get_organization(
     request_fastapi: Request,
@@ -153,11 +263,10 @@ async def get_organization(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user has org:read permission
+    # Check if user has org:read permission via org membership role
     resource_access_dao = ResourceAccessDAO(session)
-    has_permission = resource_access_dao.check_user_permission(
+    has_permission = resource_access_dao.check_org_member_permission(
         user_id,
-        "org",
         organization_id,
         "org:read",
     )
@@ -195,10 +304,9 @@ async def update_organization(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user has org:write permission
-    has_permission = resource_access_dao.check_user_permission(
+    # Check if user has org:write permission via org membership role
+    has_permission = resource_access_dao.check_org_member_permission(
         user_id,
-        "org",
         organization_id,
         "org:write",
     )
@@ -263,10 +371,9 @@ async def delete_organization(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user has org:delete permission
-    has_permission = resource_access_dao.check_user_permission(
+    # Check if user has org:delete permission via org membership role
+    has_permission = resource_access_dao.check_org_member_permission(
         user_id,
-        "org",
         organization_id,
         "org:delete",
     )
@@ -319,10 +426,9 @@ async def add_organization_member(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user has org:write permission
-    has_permission = resource_access_dao.check_user_permission(
+    # Check if user has org:write permission via org membership role
+    has_permission = resource_access_dao.check_org_member_permission(
         user_id,
-        "org",
         organization_id,
         "org:write",
     )
@@ -343,9 +449,19 @@ async def add_organization_member(
             detail="User is already a member of this organization",
         )
 
-    # Block Owner role assignment via add_member
-    if member_data.role_id:
-        requested_role = role_dao.get(member_data.role_id)
+    # Determine role_id - default to Member role if not provided
+    role_id = member_data.role_id
+    if role_id is None:
+        member_role = role_dao.get_by_name("Member", organization_id=None)
+        if not member_role:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Member system role not found",
+            )
+        role_id = member_role.id
+    else:
+        # Block Owner role assignment via add_member
+        requested_role = role_dao.get(role_id)
         if requested_role and requested_role.name == "Owner":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -355,12 +471,10 @@ async def add_organization_member(
 
     # Add member
     try:
-        # DAO will default to Member role if role_id is None
         org_member_dao.create(
             organization_id=organization_id,
             user_id=member_data.user_id,
-            level=member_data.level,
-            role_id=member_data.role_id,
+            role_id=role_id,
         )
 
         # Create organization API key for the new member
@@ -371,6 +485,25 @@ async def add_organization_member(
             user_id=member_data.user_id,
             organization_id=organization_id,
         )
+
+        # Grant Member access to Assistants project if it exists
+        context_dao = ContextDAO(session)
+        project_dao = ProjectDAO(session, org_member_dao, context_dao)
+        assistants_projects = project_dao.filter(
+            organization_id=organization_id,
+            name="Assistants",
+        )
+        if assistants_projects:
+            assistants_project = assistants_projects[0][0]
+            member_role = role_dao.get_by_name("Member", organization_id=None)
+            if member_role:
+                resource_access_dao.grant_access(
+                    resource_type="project",
+                    resource_id=assistants_project.id,
+                    role_id=member_role.id,
+                    grantee_type="user",
+                    grantee_id=member_data.user_id,
+                )
 
         session.commit()
 
@@ -400,7 +533,10 @@ async def remove_organization_member(
     """
     Remove a member from an organization.
 
-    Requires org:write permission.
+    Permission: self-removal OR org:write permission.
+    - Any member can remove themselves (leave the organization)
+    - Users with org:write permission can remove other members
+
     Automatically revokes all organization-specific API keys for the member.
     Personal API keys are NOT affected.
     """
@@ -418,14 +554,14 @@ async def remove_organization_member(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if requesting user has org:write permission
-    has_permission = resource_access_dao.check_user_permission(
+    # Permission check: self-removal OR org:write
+    is_self_removal = requesting_user_id == user_id
+    has_admin_permission = resource_access_dao.check_org_member_permission(
         requesting_user_id,
-        "org",
         organization_id,
         "org:write",
     )
-    if not has_permission:
+    if not (is_self_removal or has_admin_permission):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You do not have permission to remove members from this organization",
@@ -449,15 +585,45 @@ async def remove_organization_member(
             detail="User is not a member of this organization",
         )
 
-    # Remove member and revoke organization API keys
+    # Remove member and clean up all associated data
     try:
-        # Revoke organization API keys (personal keys are NOT affected)
-        revoked_count = api_key_dao.revoke_organization_keys(
+        team_dao = TeamDAO(session)
+        auth_user_dao = AuthUserDAO(session)
+        contact_sync_service = ContactSyncService(session)
+
+        # Get user info for Contact update
+        user_row = auth_user_dao.get_by_id(user_id)
+        departing_user = user_row[0] if user_row else None
+
+        # 1. Delete unshared resources created by this user
+        resource_access_dao.delete_unshared_resources_by_creator(
+            user_id,
+            organization_id,
+        )
+
+        # 2. Remove user from all org teams
+        team_dao.remove_user_from_all_org_teams(user_id, organization_id)
+
+        # 3. Revoke resource access grants (for shared resources user had access to)
+        resource_access_dao.revoke_user_access_for_organization(
+            user_id,
+            organization_id,
+        )
+
+        # 4. Mark user's Contact log as non-system (is_system=False)
+        if departing_user and departing_user.email:
+            contact_sync_service.mark_member_contact_as_non_system(
+                organization_id=organization_id,
+                email=departing_user.email,
+            )
+
+        # 5. Revoke organization API keys (personal keys are NOT affected)
+        api_key_dao.revoke_organization_keys(
             user_id=user_id,
             organization_id=organization_id,
         )
 
-        # Remove member from organization
+        # 6. Remove member from organization
         member = existing_member[0][0]
         org_member_dao.delete(member.id)
 
@@ -500,10 +666,9 @@ async def list_organization_members(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user has org:read permission
-    has_permission = resource_access_dao.check_user_permission(
+    # Check if user has org:read permission via org membership role
+    has_permission = resource_access_dao.check_org_member_permission(
         user_id,
-        "org",
         organization_id,
         "org:read",
     )
@@ -530,6 +695,9 @@ async def list_organization_members(
         user_name = None
         user_email = None
         user_image = None
+        user_bio = None
+        user_timezone = None
+        user_phone_number = None
         if user_info_row:
             # get_by_id returns a Row, extract the AuthUser model
             user_info = user_info_row[0]
@@ -542,19 +710,24 @@ async def list_organization_members(
             user_name = " ".join(name_parts) if name_parts else None
             user_email = user_info.email
             user_image = user_info.image
+            user_bio = user_info.bio
+            user_timezone = user_info.timezone
+            user_phone_number = user_info.phone_number
 
         members_response.append(
             OrganizationMemberResponse(
                 id=member.id,
                 user_id=member.user_id,
                 organization_id=member.organization_id,
-                level=member.level,
                 role_id=member.role_id,
                 role_name=role_name,
                 created_at=member.created_at,
                 name=user_name,
                 email=user_email,
                 image=user_image,
+                bio=user_bio,
+                timezone=user_timezone,
+                phone_number=user_phone_number,
             ),
         )
 
@@ -591,10 +764,9 @@ async def update_member_role(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user has org:write permission
-    has_permission = resource_access_dao.check_user_permission(
+    # Check if user has org:write permission via org membership role
+    has_permission = resource_access_dao.check_org_member_permission(
         user_id,
-        "org",
         organization_id,
         "org:write",
     )
@@ -649,16 +821,45 @@ async def update_member_role(
         )
         session.commit()
 
-        # Return updated member
+        # Return updated member with user info
         updated_member = org_member_dao.get_member(member_user_id, organization_id)
+
+        # Fetch user info
+        auth_user_dao = AuthUserDAO(session)
+        user_info_row = auth_user_dao.get_by_id(member_user_id)
+        user_name = None
+        user_email = None
+        user_image = None
+        user_bio = None
+        user_timezone = None
+        user_phone_number = None
+        if user_info_row:
+            user_info = user_info_row[0]
+            name_parts = []
+            if user_info.name:
+                name_parts.append(user_info.name)
+            if user_info.last_name:
+                name_parts.append(user_info.last_name)
+            user_name = " ".join(name_parts) if name_parts else None
+            user_email = user_info.email
+            user_image = user_info.image
+            user_bio = user_info.bio
+            user_timezone = user_info.timezone
+            user_phone_number = user_info.phone_number
+
         return OrganizationMemberResponse(
             id=updated_member.id,
             user_id=updated_member.user_id,
             organization_id=updated_member.organization_id,
-            level=updated_member.level,
             role_id=updated_member.role_id,
             role_name=role.name,
             created_at=updated_member.created_at,
+            name=user_name,
+            email=user_email,
+            image=user_image,
+            bio=user_bio,
+            timezone=user_timezone,
+            phone_number=user_phone_number,
         )
     except Exception as e:
         session.rollback()
@@ -754,20 +955,6 @@ async def transfer_organization_ownership(
             role_id=admin_role.id,
         )
 
-        # Update old owner's level to admin
-        old_owner_member = org_member_dao.get_member(user_id, organization_id)
-        if old_owner_member:
-            org_member_dao.update(
-                id=old_owner_member.id,
-                level="admin",
-            )
-
-        # Update new owner's level to owner
-        org_member_dao.update(
-            id=new_owner_member.id,
-            level="owner",
-        )
-
         session.commit()
 
         updated_org = org_dao.get(organization_id)
@@ -817,7 +1004,6 @@ def _build_invite_response(
         invited_by_name=invited_by_name,
         role_id=invite.role_id,
         role_name=role_name,
-        level=invite.level,
         expires_at=invite.expires_at,
         created_at=invite.created_at,
     )
@@ -856,10 +1042,9 @@ async def invite_user_to_organization(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user has org:write permission
-    has_permission = resource_access_dao.check_user_permission(
+    # Check if user has org:write permission via org membership role
+    has_permission = resource_access_dao.check_org_member_permission(
         user_id,
-        "org",
         organization_id,
         "org:write",
     )
@@ -927,7 +1112,6 @@ async def invite_user_to_organization(
             invitee_email=email,
             invited_by_user_id=user_id,
             role_id=role_id,
-            level=invite_request.level,
             expires_in_days=invite_request.expires_in_days,
             invitee_user_id=invitee_user_id,
         )
@@ -964,7 +1148,10 @@ async def _send_invite_email(
                 inviter_name += f" {inviter.last_name}"
 
     # Build invite link
-    frontend_url = os.getenv("UNIFY_CONSOLE_FRONTEND_URL", "https://console.unify.ai")
+    frontend_url = os.getenv(
+        "UNIFY_CONSOLE_FRONTEND_URL",
+        "https://console.unify.ai",
+    ).rstrip("/")
     invite_link = f"{frontend_url}/invite?token={invite.token}"
 
     email_subject = f"You've been invited to join {org.name}"
@@ -985,7 +1172,12 @@ async def _send_invite_email(
 
     try:
         email_task = asyncio.create_task(
-            send_email_async(invite.invitee_email, email_subject, email_body),
+            send_email_async(
+                invite.invitee_email,
+                email_subject,
+                email_body,
+                from_email="hello@unify.ai",
+            ),
         )
 
         def _log_email_result(task: asyncio.Task) -> None:
@@ -1032,10 +1224,9 @@ async def list_organization_invites(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check permission
-    has_permission = resource_access_dao.check_user_permission(
+    # Check permission via org membership role
+    has_permission = resource_access_dao.check_org_member_permission(
         user_id,
-        "org",
         organization_id,
         "org:read",
     )
@@ -1083,10 +1274,9 @@ async def cancel_organization_invite(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check permission
-    has_permission = resource_access_dao.check_user_permission(
+    # Check permission via org membership role
+    has_permission = resource_access_dao.check_org_member_permission(
         user_id,
-        "org",
         organization_id,
         "org:write",
     )
@@ -1228,7 +1418,6 @@ async def accept_invite(
         org_member_dao.create(
             organization_id=invite.organization_id,
             user_id=user_id,
-            level=invite.level,
             role_id=invite.role_id,
         )
 
@@ -1241,10 +1430,52 @@ async def accept_invite(
             organization_id=invite.organization_id,
         )
 
+        # Grant Member access to Assistants project if it exists
+        context_dao = ContextDAO(session)
+        project_dao = ProjectDAO(session, org_member_dao, context_dao)
+        role_dao = RoleDAO(session)
+        resource_access_dao = ResourceAccessDAO(session)
+        assistants_projects = project_dao.filter(
+            organization_id=invite.organization_id,
+            name="Assistants",
+        )
+        if assistants_projects:
+            assistants_project = assistants_projects[0][0]
+            member_role = role_dao.get_by_name("Member", organization_id=None)
+            if member_role:
+                resource_access_dao.grant_access(
+                    resource_type="project",
+                    resource_id=assistants_project.id,
+                    role_id=member_role.id,
+                    grantee_type="user",
+                    grantee_id=user_id,
+                )
+
         # Delete the invite (accepted)
         invite_dao.delete_invite(invite)
 
         session.commit()
+
+        # Trigger contact sync for all org assistants (non-blocking)
+        from orchestra.db.dao.assistant_dao import AssistantDAO
+        from orchestra.web.api.utils.assistant_infra import trigger_contact_sync
+
+        assistant_dao = AssistantDAO(session)
+        org_assistants = assistant_dao.list_all_org_assistants(
+            organization_id=invite.organization_id,
+        )
+
+        for assistant in org_assistants:
+            try:
+                trigger_contact_sync(assistant.agent_id)
+                logger.info(
+                    f"Triggered contact sync for assistant {assistant.agent_id}",
+                )
+            except Exception as e_sync:
+                logger.warning(
+                    f"Failed to trigger contact sync for assistant "
+                    f"{assistant.agent_id}: {e_sync}",
+                )
 
         return AcceptInviteResponse(
             message="Successfully joined organization",
@@ -1306,3 +1537,356 @@ async def decline_invite(
     session.commit()
 
     return DeclineInviteResponse(message="Invite declined")
+
+
+# ============== Organization Billing Endpoints ==============
+
+
+@router.get(
+    "/organizations/{organization_id}/billing",
+    tags=["organization-billing"],
+)
+async def get_organization_billing(
+    request_fastapi: Request,
+    organization_id: int,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """
+    Get billing information for an organization.
+
+    Returns billing mode (delegated or direct), credits, and billing settings.
+    Requires billing:read permission.
+    """
+    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
+
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    org_billing_dao = OrganizationBillingDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    # Get organization
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization not found",
+        )
+
+    # Check billing:read permission
+    has_permission = resource_access_dao.check_user_has_permission_in_org(
+        user_id,
+        organization_id,
+        "billing:read",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view billing for this organization",
+        )
+
+    # Determine billing mode
+    has_direct_billing = org_billing_dao.has_direct_billing(organization_id)
+    billing_mode = "direct" if has_direct_billing else "delegated"
+
+    # Get credits based on billing mode
+    if has_direct_billing:
+        credits = float(org_billing_dao.get_credits(organization_id))
+    else:
+        # For delegated billing, show 0 (credits are on the billing user's account)
+        credits = 0.0
+
+    return OrganizationBillingResponse(
+        organization_id=organization_id,
+        organization_name=org.name,
+        billing_mode=billing_mode,
+        credits=credits,
+        billing_user_id=org.billing_user_id if not has_direct_billing else None,
+        stripe_customer_id=org.stripe_customer_id if has_direct_billing else None,
+        autorecharge=org.autorecharge,
+        autorecharge_threshold=float(org.autorecharge_threshold),
+        autorecharge_qty=float(org.autorecharge_qty),
+        account_status=org.account_status,
+        billing_setup_complete=org.billing_setup_complete,
+    ).model_dump()
+
+
+@router.patch(
+    "/organizations/{organization_id}/billing",
+    tags=["organization-billing"],
+)
+async def update_organization_billing(
+    request_fastapi: Request,
+    organization_id: int,
+    billing_update: "OrganizationBillingUpdate",
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """
+    Update billing settings for an organization.
+
+    Requires billing:write permission.
+    Owners and Admins have this permission by default.
+    """
+    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
+
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    org_billing_dao = OrganizationBillingDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    # Get organization
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization not found",
+        )
+
+    # Check billing:write permission
+    has_permission = resource_access_dao.check_user_has_permission_in_org(
+        user_id,
+        organization_id,
+        "billing:write",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to update billing settings",
+        )
+
+    # Update settings
+    if billing_update.autorecharge is not None:
+        org_billing_dao.set_autorecharge(organization_id, billing_update.autorecharge)
+
+    if billing_update.autorecharge_threshold is not None:
+        org_billing_dao.set_autorecharge_threshold(
+            organization_id,
+            billing_update.autorecharge_threshold,
+        )
+
+    if billing_update.autorecharge_qty is not None:
+        org_billing_dao.set_autorecharge_qty(
+            organization_id,
+            billing_update.autorecharge_qty,
+        )
+
+    session.commit()
+
+    # Return updated billing info
+    has_direct_billing = org_billing_dao.has_direct_billing(organization_id)
+    billing_mode = "direct" if has_direct_billing else "delegated"
+    credits = (
+        float(org_billing_dao.get_credits(organization_id))
+        if has_direct_billing
+        else 0.0
+    )
+
+    # Refresh org to get updated values
+    session.refresh(org)
+
+    return OrganizationBillingResponse(
+        organization_id=organization_id,
+        organization_name=org.name,
+        billing_mode=billing_mode,
+        credits=credits,
+        billing_user_id=org.billing_user_id if not has_direct_billing else None,
+        stripe_customer_id=org.stripe_customer_id if has_direct_billing else None,
+        autorecharge=org.autorecharge,
+        autorecharge_threshold=float(org.autorecharge_threshold),
+        autorecharge_qty=float(org.autorecharge_qty),
+        account_status=org.account_status,
+        billing_setup_complete=org.billing_setup_complete,
+    ).model_dump()
+
+
+@router.get(
+    "/organizations/{organization_id}/billing/credits",
+    tags=["organization-billing"],
+)
+async def get_organization_credits(
+    request_fastapi: Request,
+    organization_id: int,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """
+    Get credit balance for an organization.
+
+    For direct billing orgs, returns the org's credit balance.
+    For delegated billing orgs, returns the billing user's credit balance.
+    Requires billing:read permission.
+    """
+    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
+
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    org_billing_dao = OrganizationBillingDAO(session)
+    users_dao = UsersDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    # Get organization
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization not found",
+        )
+
+    # Check billing:read permission
+    has_permission = resource_access_dao.check_user_has_permission_in_org(
+        user_id,
+        organization_id,
+        "billing:read",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view credits for this organization",
+        )
+
+    # Get credits based on billing mode
+    if org_billing_dao.has_direct_billing(organization_id):
+        credits = float(org_billing_dao.get_credits(organization_id))
+    else:
+        # Delegated billing - get from billing user
+        if org.billing_user_id:
+            billing_user = users_dao.get_user_with_id(org.billing_user_id)
+            credits = float(billing_user.credits)
+        else:
+            credits = 0.0
+
+    return OrganizationCreditsResponse(
+        organization_id=organization_id,
+        credits=credits,
+    ).model_dump()
+
+
+@router.get(
+    "/organizations/{organization_id}/billing/business-profile",
+    tags=["organization-billing"],
+)
+async def get_organization_business_profile(
+    request_fastapi: Request,
+    organization_id: int,
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """
+    Get business profile for an organization (invoicing information).
+
+    Requires billing:read permission.
+    """
+    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
+
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    org_billing_dao = OrganizationBillingDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    # Get organization
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization not found",
+        )
+
+    # Check billing:read permission
+    has_permission = resource_access_dao.check_user_has_permission_in_org(
+        user_id,
+        organization_id,
+        "billing:read",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view business profile",
+        )
+
+    profile = org_billing_dao.get_business_profile(organization_id)
+    return OrganizationBusinessProfileResponse(**profile).model_dump()
+
+
+@router.patch(
+    "/organizations/{organization_id}/billing/business-profile",
+    tags=["organization-billing"],
+)
+async def update_organization_business_profile(
+    request_fastapi: Request,
+    organization_id: int,
+    profile_update: "OrganizationBusinessProfileUpdate",
+    session: Session = Depends(get_db_session),
+) -> dict:
+    """
+    Update business profile for an organization.
+
+    Requires billing:write permission.
+    Owners and Admins have this permission by default.
+    """
+    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
+
+    user_id = request_fastapi.state.user_id
+    org_dao = OrganizationDAO(session)
+    org_billing_dao = OrganizationBillingDAO(session)
+    resource_access_dao = ResourceAccessDAO(session)
+
+    # Get organization
+    org = org_dao.get(organization_id)
+    if not org:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Organization not found",
+        )
+
+    # Check billing:write permission
+    has_permission = resource_access_dao.check_user_has_permission_in_org(
+        user_id,
+        organization_id,
+        "billing:write",
+    )
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to update business profile",
+        )
+
+    # Update profile
+    billing_address_dict = None
+    if profile_update.billing_address is not None:
+        billing_address_dict = profile_update.billing_address.model_dump(
+            exclude_none=True,
+        )
+
+    # Validate tax_id if provided along with country
+    if profile_update.tax_id is not None:
+        # Get country from billing_address (either new or existing)
+        country = None
+        if billing_address_dict and billing_address_dict.get("country"):
+            country = billing_address_dict["country"]
+        elif org.billing_address and org.billing_address.get("country"):
+            country = org.billing_address["country"]
+
+        if country:
+            from orchestra.web.api.utils.tax_id_validator import TaxIDValidator
+
+            is_valid, formatted_id, error = TaxIDValidator.validate_tax_id(
+                profile_update.tax_id,
+                country,
+            )
+            if not is_valid:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid tax ID for {country}: {error}",
+                )
+            # Use the formatted version if validation succeeded
+            profile_update.tax_id = formatted_id
+
+    org_billing_dao.update_business_profile(
+        organization_id,
+        billing_email=profile_update.billing_email,
+        business_name=profile_update.business_name,
+        tax_id=profile_update.tax_id,
+        billing_address=billing_address_dict,
+    )
+    session.commit()
+
+    # Return updated profile
+    profile = org_billing_dao.get_business_profile(organization_id)
+    return OrganizationBusinessProfileResponse(**profile).model_dump()

@@ -29,7 +29,6 @@ class OrganizationInviteDAO:
         invitee_email: str,
         invited_by_user_id: str,
         role_id: int,
-        level: str = "user",
         expires_in_days: int = 7,
         invitee_user_id: Optional[str] = None,
     ) -> OrganizationInvite:
@@ -40,7 +39,6 @@ class OrganizationInviteDAO:
         :param invitee_email: Email of the person being invited.
         :param invited_by_user_id: User ID of the person sending the invite.
         :param role_id: Role to assign when invite is accepted.
-        :param level: Level to assign (owner, admin, user).
         :param expires_in_days: Number of days until invite expires.
         :param invitee_user_id: User ID if invitee already exists in system.
         :return: The created OrganizationInvite object.
@@ -55,7 +53,6 @@ class OrganizationInviteDAO:
             invitee_user_id=invitee_user_id,
             invited_by_user_id=invited_by_user_id,
             role_id=role_id,
-            level=level,
             expires_at=expires_at,
         )
         self.session.add(invite)

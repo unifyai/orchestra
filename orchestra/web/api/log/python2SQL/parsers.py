@@ -90,9 +90,11 @@ def _tokenize(s):
         ("NUMBER", r"-?(\d+(\.\d*)?|\.\d+)|None"),
         # 2) String literals
         ("STRING", r'"(?:[^"\\]|\\.)*?"|\'(?:[^\'\\]|\\.)*?\''),
-        # 3) Booleans
+        # 3) Backtick-quoted identifiers (for field names with spaces/special chars)
+        ("BACKTICK_IDENTIFIER", r"`(?:[^`\\]|\\.)*?`"),
+        # 4) Booleans
         ("BOOLEAN", r"(?<!\w)(?:True|False)(?!\w)"),
-        # 4) Functions/Keywords (with word boundaries)
+        # 5) Functions/Keywords (with word boundaries)
         ("ROUND", r"(?<!\w)round(?!\w)"),
         ("ROUND_TIMESTAMP", r"(?<!\w)round_timestamp(?!\w)"),
         (
@@ -100,25 +102,25 @@ def _tokenize(s):
             r"(?<!\w)(?:len|exists|version|str(?=\()|isNone|time|date|now|max|min|sum|mean|median|mode|var|std|count)(?!\w)",
         ),
         ("BASEFUNC", r"(?<!\w)BASE(?!\w)"),
-        # 5) Operators. Note we catch 'not in', 'is not' first:
+        # 6) Operators. Note we catch 'not in', 'is not' first:
         (
             "OP",
             r"==|!=|<=|>=|<|>|(?<!\w)(?:not in|is not|in|not|and|or|is)(?!\w)|\*\*|//|\+|\-|\*|/|%",
         ),
-        # 6) Identifiers (allow dashes, underscores, slashes, digits, etc.)
+        # 7) Identifiers (allow dashes, underscores, slashes, digits, etc.)
         #    We allow them as a single "word" if no whitespace in between
         (
             "IDENTIFIER",
             r"[A-Za-z0-9_/]+(?:-[A-Za-z0-9_/]+)*",
         ),
-        # 7) Parentheses / Comma / Bracket
+        # 8) Parentheses / Comma / Bracket
         ("LPAREN", r"\("),
         ("RPAREN", r"\)"),
         ("COMMA", r","),
         ("BRACKET_OPEN", r"[\[\{]"),
-        # 8) Whitespace to skip
+        # 9) Whitespace to skip
         ("SKIP", r"[ \t]+"),
-        # 9) Any single character that doesn't match
+        # 10) Any single character that doesn't match
         ("MISMATCH", r"."),
     ]
     tok_regex = "|".join("(?P<%s>%s)" % pair for pair in token_specification)
@@ -172,6 +174,13 @@ def _tokenize(s):
                 except:
                     # If it's not a valid timestamp, just use the unquoted value
                     tokens.append(("STRING", unquoted_value))
+        elif kind == "BACKTICK_IDENTIFIER":
+            # Remove the surrounding backticks and unescape
+            field_name = value[1:-1]
+            # Handle escaped backticks inside the field name
+            field_name = field_name.replace(r"\`", "`")
+            # Treat backtick-quoted strings as identifiers
+            tokens.append(("IDENTIFIER", field_name))
         elif kind == "BOOLEAN":
             value = True if value == "True" else False
             tokens.append(("BOOLEAN", value))
@@ -610,6 +619,9 @@ def _transform_ast(node: ast.AST, preserve_string_literals: bool = False) -> dic
             "exists",
             "version",
             "str",
+            "int",
+            "float",
+            "bool",
             "isNone",
             "time",
             "date",
@@ -678,12 +690,29 @@ def _transform_ast(node: ast.AST, preserve_string_literals: bool = False) -> dic
             return {"lhs": type_expr, "operand": "==", "rhs": rhs_literal}
 
         # Handle embed function (multi-arg: text, optional model, optional dimensions)
+        # Also supports async_embeddings keyword argument for async/sync control
         elif func_name == "embed":
+            rhs = [_transform_ast(arg, preserve_string_literals) for arg in node.args]
+
+            # Extract async_embeddings keyword arg (defaults to False = sync)
+            async_embeddings = False
+            for kw in node.keywords:
+                if kw.arg == "async_embeddings":
+                    if isinstance(kw.value, ast.Constant) and isinstance(
+                        kw.value.value,
+                        bool,
+                    ):
+                        async_embeddings = kw.value.value
+                    else:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="async_embeddings must be a boolean literal",
+                        )
+
             return {
                 "operand": "embed",
-                "rhs": [
-                    _transform_ast(arg, preserve_string_literals) for arg in node.args
-                ],
+                "rhs": rhs,
+                "async_embeddings": async_embeddings,
             }
         # Handle embed_image function (single-arg: base64 image)
         elif func_name == "embed_image":
@@ -727,6 +756,7 @@ def _transform_ast(node: ast.AST, preserve_string_literals: bool = False) -> dic
             "match",
             "replace",
             "substring",
+            "split",
         ):
             attr = node.func.attr
             # Validate argument counts per method
@@ -764,6 +794,11 @@ def _transform_ast(node: ast.AST, preserve_string_literals: bool = False) -> dic
                 raise HTTPException(
                     status_code=400,
                     detail=f"str.substring() invalid args: expected 1-2, got {len(node.args)}",
+                )
+            elif attr == "split" and len(node.args) > 1:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"str.split() invalid args: expected 0-1, got {len(node.args)}",
                 )
 
             # For string methods that take literal string arguments, preserve them exactly
@@ -938,6 +973,63 @@ def _transform_ast(node: ast.AST, preserve_string_literals: bool = False) -> dic
     raise ValueError(f"Unsupported AST node type: {type(node)}")
 
 
+def _preprocess_backtick_fields(expr: str) -> tuple[str, dict[str, str]]:
+    """
+    Preprocess backtick-quoted field names in the expression.
+
+    Finds all backtick-quoted strings (e.g., `Business time`) and replaces them
+    with valid Python identifiers (placeholders). Returns the processed expression
+    and a mapping from placeholder to original field name.
+
+    This function respects string literal boundaries - backticks inside quoted
+    strings (e.g., "Hello `world`") are not treated as field delimiters.
+
+    Uses regex alternation with ordered groups (matching the deprecated tokenizer
+    approach) to ensure strings are matched before backticks:
+      1. Triple-quoted strings (triple " or triple ') - matched first due to length
+      2. Single/double quoted strings
+      3. Backtick-quoted field names (only these are replaced)
+
+    Args:
+        expr: The filter expression string
+
+    Returns:
+        A tuple of (processed_expression, placeholder_to_field_mapping)
+    """
+    backtick_fields: dict[str, str] = {}
+
+    # Pattern uses alternation with ordered groups:
+    # Group 1: Triple-quoted strings (must come first - longer match)
+    # Group 2: Single/double quoted strings (with escape handling)
+    # Group 3: Backtick-quoted field names (only these get replaced)
+    #
+    # The pattern mirrors the deprecated tokenizer's token specification order:
+    # STRING tokens are matched before BACKTICK_IDENTIFIER tokens.
+    pattern = re.compile(
+        r'("""[\s\S]*?"""|\'\'\'[\s\S]*?\'\'\')'  # Group 1: triple-quoted
+        r"|"  # OR
+        r'("(?:[^"\\]|\\.)*"|\'(?:[^\'\\]|\\.)*\')'  # Group 2: quoted strings
+        r"|"  # OR
+        r"(`(?:[^`\\]|\\.)*`)",  # Group 3: backtick fields
+    )
+
+    def replace_match(match: re.Match) -> str:
+        # If group 1 or 2 matched (string literal), return unchanged
+        if match.group(1) or match.group(2):
+            return match.group(0)
+
+        # Group 3 matched (backtick field) - extract and replace
+        backtick_match = match.group(3)
+        # Remove surrounding backticks and unescape internal backticks
+        field_name = backtick_match[1:-1].replace(r"\`", "`")
+        placeholder = f"__BACKTICK_FIELD_{len(backtick_fields)}__"
+        backtick_fields[placeholder] = field_name
+        return placeholder
+
+    processed_expr = pattern.sub(replace_match, expr)
+    return processed_expr, backtick_fields
+
+
 def str_filter_exp_to_dict_using_ast(expr: str, field_names=None) -> dict:
     """
     Converts a string filter expression to a filter dictionary using Python's AST.
@@ -952,10 +1044,15 @@ def str_filter_exp_to_dict_using_ast(expr: str, field_names=None) -> dict:
         HTTPException: If the expression is invalid or cannot be parsed
     """
     try:
-        # Handle problematic field names by creating placeholders
+        # Step 1: Handle backtick-quoted field names (e.g., `Business time`)
+        # This must happen first, before any other preprocessing
+        processed_expr = textwrap.dedent(expr).replace("\n", " ")
+        processed_expr, backtick_fields = _preprocess_backtick_fields(processed_expr)
+
+        # Step 2: Handle problematic field names by creating placeholders
+        # (for field names known via field_names parameter)
         special_fields = {}
         problematic_chars = {"-", "/", "+", "*", "&", "|", "^"}
-        processed_expr = textwrap.dedent(expr).replace("\n", " ")
 
         if field_names:
             # Replace problematic field names with placeholders
@@ -978,14 +1075,21 @@ def str_filter_exp_to_dict_using_ast(expr: str, field_names=None) -> dict:
         # Transform the AST into a filter dictionary
         filter_dict = _transform_ast(tree)
 
-        # Restore original field names if needed
+        # Build combined reverse mapping for restoration
+        reverse_mapping = {}
+        # Add backtick field mappings (placeholder -> original field name)
+        reverse_mapping.update(backtick_fields)
+        # Add special field mappings
         if special_fields:
-            # Create reverse mapping
-            reverse_mapping = {
-                placeholder: field_name
-                for field_name, placeholder in special_fields.items()
-            }
+            reverse_mapping.update(
+                {
+                    placeholder: field_name
+                    for field_name, placeholder in special_fields.items()
+                },
+            )
 
+        # Restore original field names if needed
+        if reverse_mapping:
             # Helper function to restore field names
             def restore_field_names(obj):
                 if isinstance(obj, dict):
@@ -1000,6 +1104,11 @@ def str_filter_exp_to_dict_using_ast(expr: str, field_names=None) -> dict:
                 elif isinstance(obj, list):
                     for i, item in enumerate(obj):
                         obj[i] = restore_field_names(item)
+                elif isinstance(obj, str):
+                    # Also restore placeholders in string values
+                    # This handles quoted field names in BASE() calls
+                    if obj in reverse_mapping:
+                        return reverse_mapping[obj]
                 return obj
 
             filter_dict = restore_field_names(filter_dict)
