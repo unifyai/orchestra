@@ -74,10 +74,13 @@ jobs:
       with:
         python-version: "3.10"
 
+    - name: Install Poetry
+      run: pip install poetry
+
     - name: Install deps
-      uses: knowsuchagency/poetry-install@v1
+      run: poetry install
       env:
-        POETRY_VIRTUALENVS_CREATE: false
+        POETRY_VIRTUALENVS_CREATE: "false"
 
     - name: Run pytest check
       run: poetry run pytest -p no:warnings -vv --cov="orchestra" -n 4 --shard-id=${{ matrix.shard }} --num-shards=4 . -m "not performance"
