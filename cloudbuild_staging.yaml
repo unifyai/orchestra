@@ -4,8 +4,16 @@ steps:
   args: ['-c', 'docker pull $_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$_FIXED_COMMIT_HASH || exit 0']
   id: Pull Docker Cache
 - name: gcr.io/cloud-builders/docker
-  args: ['build', '-t', '$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA', '--cache-from', '$_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$_FIXED_COMMIT_HASH', '.', '-f', 'deploy/Dockerfile', '--target', 'prod']
+  entrypoint: 'bash'
+  args:
+  - '-c'
+  - |
+    docker build -t $_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$COMMIT_SHA \
+      --cache-from $_AR_HOSTNAME/$PROJECT_ID/cloud-run-source-deploy/$REPO_NAME/$_SERVICE_NAME:$_FIXED_COMMIT_HASH \
+      --build-arg UNIFY_CLONE_TOKEN=$$UNIFY_CLONE_TOKEN \
+      -f deploy/Dockerfile --target prod .
   id: Build Orchestra
+  secretEnv: ['UNIFY_CLONE_TOKEN']
 - name: gcr.io/cloud-builders/docker
   args:
   - push
@@ -92,6 +100,10 @@ substitutions:
   _PLATFORM: managed
   _JOB_NAME: orchestra-staging-migrator
   _FIXED_COMMIT_HASH: 8f98f587e9081412d4570356c3e43441d0ff1705
+availableSecrets:
+  secretManager:
+  - versionName: projects/$PROJECT_ID/secrets/UNIFY_CLONE_TOKEN/versions/latest
+    env: 'UNIFY_CLONE_TOKEN'
 tags:
 - gcp-cloud-build-deploy-cloud-run
 - gcp-cloud-build-deploy-cloud-run-managed
