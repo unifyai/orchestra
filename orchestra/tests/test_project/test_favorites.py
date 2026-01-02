@@ -1,7 +1,8 @@
 import pytest
 from httpx import AsyncClient
 
-from .test_interface import _create_project
+from orchestra.tests.test_interface.test_interface import _create_project
+
 from .test_projects import HEADERS
 
 

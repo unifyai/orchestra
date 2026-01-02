@@ -5,7 +5,7 @@ import os
 import pytest
 from httpx import AsyncClient
 
-from .test_log import HEADERS, _create_log, _create_project
+from orchestra.tests.test_log import HEADERS, _create_log, _create_project
 
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
 

@@ -24,8 +24,13 @@ import pytest
 from httpx import AsyncClient
 
 from orchestra.conftest import requires_eav_mode
-
-from .test_log import HEADERS, _create_log, _delete_logs, _update_logs, fetch_logs
+from orchestra.tests.test_log import (
+    HEADERS,
+    _create_log,
+    _delete_logs,
+    _update_logs,
+    fetch_logs,
+)
 
 
 @pytest.mark.anyio

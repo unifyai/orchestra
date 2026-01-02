@@ -3,8 +3,7 @@ from fastapi import status
 from httpx import AsyncClient
 
 from orchestra.settings import settings
-
-from .utils import ADMIN_HEADERS, create_test_user, get_credits
+from orchestra.tests.utils import ADMIN_HEADERS, create_test_user, get_credits
 
 
 @pytest.mark.anyio

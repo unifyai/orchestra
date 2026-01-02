@@ -4,7 +4,7 @@ import uuid
 import pytest
 from httpx import AsyncClient
 
-from orchestra.tests.test_tile import _create_test_tile, _get_tile
+from orchestra.tests.test_interface.test_tile import _create_test_tile, _get_tile
 
 # Common headers and data
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
@@ -582,7 +582,7 @@ async def test_create_tab_checkpoint_with_tiles(client: AsyncClient):
     tab_id = tab_response.json()["id"]
 
     # Create a tile in the tab
-    from orchestra.tests.test_tile import _create_test_tile
+    from orchestra.tests.test_interface.test_tile import _create_test_tile
 
     tile_response = await _create_test_tile(client, tab_id, name="test-tile")
     assert tile_response.status_code == 201
@@ -609,7 +609,7 @@ async def test_create_tab_checkpoint_with_multiple_tiles(client: AsyncClient):
 
     # Create multiple tiles
     tile_names = ["tile1", "tile2", "tile3"]
-    from orchestra.tests.test_tile import _create_test_tile
+    from orchestra.tests.test_interface.test_tile import _create_test_tile
 
     for i, name in enumerate(tile_names):
         tile_response = await _create_test_tile(client, tab_id, name=name)
@@ -636,7 +636,7 @@ async def test_create_tab_checkpoint_with_invisible_tiles(client: AsyncClient):
     tab_id = tab_response.json()["id"]
 
     # Create a tile with visible=False
-    from orchestra.tests.test_tile import _create_test_tile
+    from orchestra.tests.test_interface.test_tile import _create_test_tile
 
     tile_response = await _create_test_tile(
         client,
@@ -666,7 +666,7 @@ async def test_create_tab_checkpoint_with_tile_updates(client: AsyncClient):
     tab_id = tab_response.json()["id"]
 
     # Create a tile
-    from orchestra.tests.test_tile import _create_test_tile
+    from orchestra.tests.test_interface.test_tile import _create_test_tile
 
     tile_response = await _create_test_tile(client, tab_id, name="test-tile")
     assert tile_response.status_code == 201
@@ -706,7 +706,7 @@ async def test_create_tab_checkpoint_with_deleted_tiles(client: AsyncClient):
     tab_id = tab_response.json()["id"]
 
     # Create a tile
-    from orchestra.tests.test_tile import _create_test_tile
+    from orchestra.tests.test_interface.test_tile import _create_test_tile
 
     tile_response = await _create_test_tile(client, tab_id, name="test-tile")
     assert tile_response.status_code == 201
@@ -747,7 +747,7 @@ async def test_create_tab_checkpoint_with_added_tiles(client: AsyncClient):
     assert len(first_checkpoint.json()["tiles"]) == 0
 
     # Add a tile
-    from orchestra.tests.test_tile import _create_test_tile
+    from orchestra.tests.test_interface.test_tile import _create_test_tile
 
     tile_response = await _create_test_tile(client, tab_id, name="new-tile")
     assert tile_response.status_code == 201
@@ -772,7 +772,7 @@ async def test_create_tab_checkpoint_with_renamed_tiles(client: AsyncClient):
     tab_id = tab_response.json()["id"]
 
     # Create a tile
-    from orchestra.tests.test_tile import _create_test_tile
+    from orchestra.tests.test_interface.test_tile import _create_test_tile
 
     tile_response = await _create_test_tile(client, tab_id)
     assert tile_response.status_code == 201
@@ -1028,7 +1028,7 @@ async def test_export_tab_template_with_valid_schema(client: AsyncClient):
     tab_id = tab_response.json()["id"]
 
     # Create various types of tiles
-    from orchestra.tests.test_tile import (
+    from orchestra.tests.test_interface.test_tile import (
         _create_test_editor_tile,
         _create_test_plot_tile,
         _create_test_table_tile,
@@ -1629,7 +1629,7 @@ async def test_export_import_tab_template_with_valid_schema_roundtrip(
     tab_id = tab_response.json()["id"]
 
     # Add various tiles
-    from orchestra.tests.test_tile import (
+    from orchestra.tests.test_interface.test_tile import (
         _create_test_plot_tile,
         _create_test_table_tile,
         _create_test_terminal_tile,
@@ -1789,7 +1789,7 @@ async def test_export_tab_template_with_valid_schema_tile_positioning(
     tab_id = tab_response.json()["id"]
 
     # Create tiles with specific positions
-    from orchestra.tests.test_tile import _create_test_tile
+    from orchestra.tests.test_interface.test_tile import _create_test_tile
 
     await _create_test_tile(
         client,

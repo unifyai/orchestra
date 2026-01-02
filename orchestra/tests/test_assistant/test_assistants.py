@@ -25,7 +25,9 @@ async def approve_default_user(client: AsyncClient):
 
 
 def _get_sample_wav_bytes() -> bytes:
-    sample_path = Path(__file__).parent / "sample_datasets" / "sample_recording.wav"
+    sample_path = (
+        Path(__file__).parent.parent / "sample_datasets" / "sample_recording.wav"
+    )
     return sample_path.read_bytes()
 
 
