@@ -1,6 +1,8 @@
 import base64
 import io
+import re
 from datetime import datetime, timezone
+from typing import Optional
 
 import imagehash
 import unify
@@ -35,17 +37,19 @@ from sqlalchemy.sql.selectable import ColumnClause, Subquery
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.models.orchestra_models import Log, LogEventLog
 from orchestra.services.bucket_service import BucketService
+from orchestra.settings import settings
 
-from . import alias_utils
+from . import alias_utils, jsonb_builder
 from .core import build_sql_query
 from .helpers import (
     _build_subquery_for_base_call,
     _build_subquery_for_identifier,
     _embeddable,
-    _ensure_vectors_exist,
     _get_embedding,
     _get_image_embedding_from_url,
     _get_parent_idx,
+    _is_jsonb_expression,
+    _queue_embeddings_for_generation,
     _select_value,
     cast_expr,
     count_tokens_per_utf_byte,
@@ -148,6 +152,8 @@ def _handle_functions(
     is_derived=False,
     local_scope=None,
     is_vector=False,
+    project_id: Optional[int] = None,
+    context_id: Optional[int] = None,
 ):
     """
     Handles function-based operations ('len', 'str', 'type', 'round', 'round_timestamp',
@@ -158,10 +164,30 @@ def _handle_functions(
         filter_dict (dict): The filter dictionary containing the function and its arguments.
         log_event_alias: Alias for LogEvent to correlate subqueries.
         session: SQLAlchemy session for executing subqueries.
+        project_id: The project ID, required for JSONB field type lookup.
+        context_id: The context ID, optional for JSONB field type lookup.
 
     Returns:
         SQLAlchemy condition or expression based on the provided function.
     """
+    # Route to appropriate handler based on feature flag
+    if settings.use_jsonb_queries:
+        # Extract project_id and context_id from session or log_event_alias if available
+        # These are needed for FieldType lookups in JSONB mode
+
+        # Comment 2: Use passed-in project_id/context_id instead of getattr
+        return jsonb_builder._handle_functions_jsonb(
+            filter_dict,
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+        )
+
     operand = filter_dict.get("operand")
     no_arg_functions = ["now"]
     two_arg_functions = ["BASE", "round", "round_timestamp", "embed"]
@@ -744,6 +770,37 @@ def _handle_functions(
 
         event_id_expr = rhs_expr[0]
         key_expr = rhs_expr[1]
+
+        # If key_expr is a BindParameter (literal string from quoted field name),
+        # we need to build the subquery ourselves using _build_subquery_for_identifier
+        if isinstance(key_expr, BindParameter):
+            key_name = key_expr.value
+
+            # Get the base_ids from event_id_expr to use as log_event_ids for the key subquery
+            if isinstance(event_id_expr, BindParameter):
+                base_ids = event_id_expr.value
+            elif isinstance(event_id_expr, list):
+                base_ids = event_id_expr
+            else:
+                # Execute to get the value
+                base_ids = session.execute(select(event_id_expr)).scalar()
+                if isinstance(base_ids, str):
+                    import json as json_module
+
+                    base_ids = json_module.loads(base_ids)
+                if not isinstance(base_ids, list):
+                    base_ids = [base_ids]
+
+            key_expr = _build_subquery_for_identifier(
+                key_name,
+                log_event_alias,
+                base_ids,  # Use base_ids instead of log_event_ids
+                alias=f"base_key_{re.sub(r'[^a-zA-Z0-9_]', '_', str(key_name))}",
+                session=session,
+                is_derived=is_derived,
+                is_vector=is_vector,
+            )
+
         return _build_subquery_for_base_call(
             event_id_expr,
             key_expr,
@@ -871,7 +928,9 @@ def _handle_functions(
     elif operand == "date":
         return _handle_date_function(rhs_expr, session)
     elif operand == "now":
-        if log_event_ids is None or log_event_ids == []:
+        if log_event_ids is None or (
+            isinstance(log_event_ids, list) and len(log_event_ids) == 0
+        ):
             return literal(datetime.now(timezone.utc).isoformat(), type_=TIMESTAMP)
 
         if isinstance(log_event_ids, list):
@@ -974,14 +1033,31 @@ def _handle_functions(
                 if isinstance(row.str_value, str)
             }
 
+            # Generate embeddings: async (queued) or sync (immediate)
+            # Controlled by async_embeddings kwarg in embed() call (defaults to False = sync)
             if id_to_text:
-                _ensure_vectors_exist(
-                    session=session,
-                    id_to_text=id_to_text,
-                    model=model,
-                    dimensions=dimensions,
-                    key=key,
-                )
+                async_embeddings = filter_dict.get("async_embeddings", False)
+
+                if async_embeddings:
+                    # Async: queue for background generation
+                    _queue_embeddings_for_generation(
+                        session=session,
+                        id_to_text=id_to_text,
+                        model=model,
+                        dimensions=dimensions,
+                        key=key,
+                    )
+                else:
+                    # Sync: generate embeddings immediately
+                    from .helpers import _ensure_vectors_exist
+
+                    _ensure_vectors_exist(
+                        session=session,
+                        id_to_text=id_to_text,
+                        model=model,
+                        dimensions=dimensions,
+                        key=key,
+                    )
 
             # Retrieve the vector column for the given key
             vector_subq = _build_subquery_for_identifier(
@@ -1363,7 +1439,13 @@ def _handle_dict_method(
     is_derived,
     local_scope=None,
     is_vector=False,
+    project_id=None,
+    context_id=None,
 ):
+    """
+    Handle dictionary method calls (.keys(), .values(), .items(), .get()).
+    Supports both direct expressions and pre-built subqueries.
+    """
     method = filter_dict[
         "method"
     ]  # e.g., "keys", "values", "items", "get", "setdefault"
@@ -1377,20 +1459,48 @@ def _handle_dict_method(
             local_scope,
             default_supplied=filter_dict.get("default_supplied", False),
             is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
         )
-    src = build_sql_query(
-        filter_dict["rhs"],
-        log_event_alias,
-        session,
-        log_event_ids,
-        is_derived=is_derived,
-        local_scope=local_scope,
-        is_vector=is_vector,
-    )
+
+    # Check for pre-built src subquery from JSONB wrapper
+    # This supports both wrapped JSONB expressions and existing EAV subqueries
+    if filter_dict.get("_jsonb_src_subq") is not None:
+        src = filter_dict["_jsonb_src_subq"]
+    else:
+        src = build_sql_query(
+            filter_dict["rhs"],
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived=is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+        )
+
+        # If src is a JSONB expression, wrap it as a subquery
+        if _is_jsonb_expression(src):
+            inferred_type = jsonb_builder._infer_expression_type(
+                src,
+                session,
+                project_id=project_id,
+                context_id=context_id,
+            )
+            src = jsonb_builder._wrap_expression_as_subquery(
+                src,
+                inferred_type,
+                log_event_alias,
+                session,
+                local_scope=local_scope,
+                prefix="dict_method_src_wrapped",
+            )
+
     if not isinstance(src, Subquery):
         raise HTTPException(
             status_code=400,
-            detail="dict.keys/values/items only valid on JSONB column",
+            detail="dict.keys/values/items requires a subquery (JSONB expressions are auto-wrapped by the caller)",
         )
     # Extract JSONB column and use lateral join
     val, _ = _select_value(src, session, is_collection=True)
@@ -1464,6 +1574,8 @@ def _handle_if_expr(
     is_derived,
     local_scope=None,
     is_vector=False,
+    project_id=None,
+    context_id=None,
 ):
     """
     Handle conditional expressions (ternary if-else) in filter queries.
@@ -1549,6 +1661,8 @@ def _handle_if_expr(
         is_derived,
         local_scope=local_scope,
         is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
     )
     raw_body = build_sql_query(
         filter_dict["body"],
@@ -1558,6 +1672,8 @@ def _handle_if_expr(
         is_derived,
         local_scope=local_scope,
         is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
     )
     raw_else = build_sql_query(
         filter_dict["orelse"],
@@ -1567,6 +1683,8 @@ def _handle_if_expr(
         is_derived,
         local_scope=local_scope,
         is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
     )
 
     id_selects = []
@@ -1771,6 +1889,8 @@ def _handle_list_comp(
     is_derived,
     local_scope=None,
     is_vector=False,
+    project_id=None,
+    context_id=None,
 ):
     """
     Handle list comprehension expressions in filter queries.
@@ -1779,26 +1899,59 @@ def _handle_list_comp(
     by exploding the source list into rows, then applying the transformation and
     filter to each element, and finally aggregating back into a list.
     """
-    iter_subq = build_sql_query(
-        filter_dict["iter"],
-        log_event_alias,
-        session,
-        log_event_ids,
-        is_derived,
-        local_scope=local_scope,
-        is_vector=is_vector,
-    )
+    # Check for pre-built iter subquery from JSONB wrapper
+    # This supports both wrapped JSONB expressions and existing EAV subqueries
+    if filter_dict.get("_jsonb_iter_subq") is not None:
+        iter_subq = filter_dict["_jsonb_iter_subq"]
+    else:
+        iter_subq = build_sql_query(
+            filter_dict["iter"],
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+        )
+
+        # If iter_subq is a JSONB expression, wrap it as a subquery
+        if _is_jsonb_expression(iter_subq):
+            inferred_type = jsonb_builder._infer_expression_type(
+                iter_subq,
+                session,
+                project_id=project_id,
+                context_id=context_id,
+            )
+            iter_subq = jsonb_builder._wrap_expression_as_subquery(
+                iter_subq,
+                inferred_type,
+                log_event_alias,
+                session,
+                local_scope=local_scope,
+                prefix="list_comp_iter_wrapped",
+            )
+
     if not isinstance(iter_subq, Subquery):
         raise HTTPException(
             status_code=400,
-            detail="list comprehension source must be a JSONB collection",
+            detail="list comprehension source must be a subquery (JSONB expressions are auto-wrapped by the caller)",
         )
 
     if not local_scope:
         local_scope = {"__comp_base__": {}}
 
-    val, _ = _select_value(iter_subq, session, is_collection=True)
-    is_array = session.execute(select(func.jsonb_typeof(val))).scalar() == "array"
+    val, val_type = _select_value(iter_subq, session, is_collection=True)
+    # Fix: Include the subquery in FROM clause when checking type
+    # This is necessary because val is a column reference (e.g., zipped.c.value)
+    # and we need the subquery in the FROM clause to execute the type check
+    is_array = (
+        session.execute(
+            select(func.jsonb_typeof(val)).select_from(iter_subq).limit(1),
+        ).scalar()
+        == "array"
+    )
     if is_array:
         elem_tbl = (
             func.jsonb_array_elements(val)
@@ -1840,15 +1993,19 @@ def _handle_list_comp(
         }
         for i, ident in enumerate(filter_dict["target"]):
             comp_col = func.coalesce(base.c.__comp_var__.op("->")(i), "null")
+            # Fix: Include base in FROM clause when executing type inference query
             comp_type = LogDAO.infer_type(
                 "",
-                session.execute(select(comp_col)).scalar(),
+                session.execute(select(comp_col).select_from(base).limit(1)).scalar(),
             )
             local_scope[ident["value"]] = (comp_col, comp_type)
     else:
+        # Fix: Include base in FROM clause when executing type inference query
         comp_type = LogDAO.infer_type(
             "",
-            session.execute(select(base.c.__comp_var__)).scalar(),
+            session.execute(
+                select(base.c.__comp_var__).select_from(base).limit(1),
+            ).scalar(),
         )
         local_scope = {
             filter_dict["target"]["value"]: (base.c.__comp_var__, comp_type),
@@ -1870,6 +2027,8 @@ def _handle_list_comp(
         is_derived,
         local_scope=local_scope,
         is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
     )
 
     def _value_column(expr):
@@ -1950,6 +2109,8 @@ def _handle_list_comp(
             is_derived,
             local_scope=local_scope,
             is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
         )
         if isinstance(cond_expr, Subquery):
             condition = (
@@ -2024,12 +2185,13 @@ def _handle_str_method(
     is_derived,
     local_scope=None,
     is_vector=False,
+    project_id=None,
+    context_id=None,
 ):
     """
     Handle string method calls in filter queries.
 
-    This function processes expressions like 'my_string.lower()' or 'my_string.startswith("prefix")'
-    by mapping Python string methods to their PostgreSQL equivalents.
+    Process string method calls by mapping Python methods to PostgreSQL equivalents.
     """
     method = filter_dict[
         "method"
@@ -2045,6 +2207,8 @@ def _handle_str_method(
         is_derived=is_derived,
         local_scope=local_scope,
         is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
     )
 
     # Get arguments if any
@@ -2059,6 +2223,8 @@ def _handle_str_method(
                 is_derived=is_derived,
                 local_scope=local_scope,
                 is_vector=is_vector,
+                project_id=project_id,
+                context_id=context_id,
             )
             for arg in filter_dict["args"]
         ]
@@ -2068,7 +2234,10 @@ def _handle_str_method(
         val, val_type = _select_value(src, session)
 
         # Ensure we're working with a string
-        str_val = func.replace(cast(val, String), '"', "")
+        # Use btrim to strip only SURROUNDING quotes (first/last char), not ALL quotes
+        # This preserves internal quotes for JSON arrays like [1, "a"]
+        # while still stripping the outer quotes from scalar strings like "TEST"
+        str_val = func.btrim(cast(val, String), literal('"'))
 
         # Apply the appropriate string operation
         if method == "lower":
@@ -2385,6 +2554,8 @@ def _handle_dict_comp(
     is_derived,
     local_scope=None,
     is_vector=False,
+    project_id=None,
+    context_id=None,
 ):
     """
     Handle dictionary comprehension expressions in filter queries.
@@ -2393,26 +2564,59 @@ def _handle_dict_comp(
     by exploding the source dictionary into rows, then applying the transformations and
     filter to each element, and finally aggregating back into a dictionary.
     """
-    iter_subq = build_sql_query(
-        filter_dict["iter"],
-        log_event_alias,
-        session,
-        log_event_ids,
-        is_derived,
-        local_scope=local_scope,
-        is_vector=is_vector,
-    )
+    # Check for pre-built iter subquery from JSONB wrapper
+    # This supports both wrapped JSONB expressions and existing EAV subqueries
+    if filter_dict.get("_jsonb_iter_subq") is not None:
+        iter_subq = filter_dict["_jsonb_iter_subq"]
+    else:
+        iter_subq = build_sql_query(
+            filter_dict["iter"],
+            log_event_alias,
+            session,
+            log_event_ids,
+            is_derived,
+            local_scope=local_scope,
+            is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
+        )
+
+        # If iter_subq is a JSONB expression, wrap it as a subquery
+        if _is_jsonb_expression(iter_subq):
+            inferred_type = jsonb_builder._infer_expression_type(
+                iter_subq,
+                session,
+                project_id=project_id,
+                context_id=context_id,
+            )
+            iter_subq = jsonb_builder._wrap_expression_as_subquery(
+                iter_subq,
+                inferred_type,
+                log_event_alias,
+                session,
+                local_scope=local_scope,
+                prefix="dict_comp_iter_wrapped",
+            )
+
     if not isinstance(iter_subq, Subquery):
         raise HTTPException(
             status_code=400,
-            detail="dict comprehension source must be JSONB list/dict",
+            detail="dict comprehension source must be a subquery (JSONB expressions are auto-wrapped by the caller)",
         )
 
     if not local_scope:
         local_scope = {"__comp_base__": {}}
 
-    val, _ = _select_value(iter_subq, session, is_collection=True)
-    is_array = session.execute(select(func.jsonb_typeof(val))).scalar() == "array"
+    val, val_type = _select_value(iter_subq, session, is_collection=True)
+    # Fix: Include the subquery in FROM clause when checking type
+    # This is necessary because val is a column reference (e.g., zipped.c.value)
+    # and we need the subquery in the FROM clause to execute the type check
+    is_array = (
+        session.execute(
+            select(func.jsonb_typeof(val)).select_from(iter_subq).limit(1),
+        ).scalar()
+        == "array"
+    )
     if is_array:
         elem_tbl = (
             func.jsonb_array_elements(val)
@@ -2446,13 +2650,18 @@ def _handle_dict_comp(
     )
     base = alias_utils.subquery_with_unique_alias(base_stmt, prefix="base_dict_comp")
 
+    # Fix: Include base in FROM clause when executing type inference queries
     comp_key_type = LogDAO.infer_type(
         "",
-        session.execute(select(base.c.__comp_key__)).scalar(),
+        session.execute(
+            select(base.c.__comp_key__).select_from(base).limit(1),
+        ).scalar(),
     )
     comp_val_type = LogDAO.infer_type(
         "",
-        session.execute(select(base.c.__comp_val__)).scalar(),
+        session.execute(
+            select(base.c.__comp_val__).select_from(base).limit(1),
+        ).scalar(),
     )
 
     local_scope = {
@@ -2492,6 +2701,8 @@ def _handle_dict_comp(
         is_derived,
         local_scope=local_scope,
         is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
     )
 
     val_expr = build_sql_query(
@@ -2502,6 +2713,8 @@ def _handle_dict_comp(
         is_derived,
         local_scope=local_scope,
         is_vector=is_vector,
+        project_id=project_id,
+        context_id=context_id,
     )
 
     key_col, key_subq, key_has_idx = _value_column(key_expr)
@@ -2691,6 +2904,8 @@ def _handle_dict_comp(
             is_derived,
             local_scope=local_scope,
             is_vector=is_vector,
+            project_id=project_id,
+            context_id=context_id,
         )
         if isinstance(cond_expr, Subquery):
             condition = (
@@ -2793,6 +3008,8 @@ def _handle_dict_get(
     local_scope=None,
     default_supplied=False,
     is_vector=False,
+    project_id=None,
+    context_id=None,
 ):
     """
     Handle dictionary get() method in filter queries.
@@ -2930,27 +3147,10 @@ def _handle_dict_get(
             )
             return value_expr, default_type
         else:
-            # No default - use the inferred type directly
-            try:
-                possible_types = [
-                    row[0] for row in session.execute(select(result_type)).fetchall()
-                ]
-                inferred_type = (
-                    unify_inferred_types(*possible_types) if possible_types else "str"
-                )
-            except Exception:
-                inferred_type = "str"
-
-            # For scalar types, we need to extract the value with ->>
-            if inferred_type in ("str", "int", "float", "bool"):
-                # For scalar types, we need to extract as text then cast
-                extracted_text = safe_val.op("->>")(key_text)
-                value_expr = cast_expr(extracted_text, "str", inferred_type)
-            else:
-                # For complex types (list, dict), keep as JSONB
-                value_expr = extracted_jsonb
-
-            return value_expr, inferred_type
+            # No default - return JSONB value with "jsonb" type
+            # This uses runtime type checking for truthiness evaluation,
+            # ensuring correct behavior for all JSON types.
+            return extracted_jsonb, "jsonb"
 
     # Handle subquery containers
     if isinstance(container_sql, Subquery):
@@ -2987,9 +3187,12 @@ def _handle_dict_get(
             select_cols.append(container_sql.c.__parent_idx__.label("__parent_idx__"))
 
         # Add the value and type columns
-        select_cols.extend(
-            [value_expr.label("value"), literal(result_type).label("inferred_type")],
-        )
+        # Note: result_type may be a CASE expression (dynamic type) or a string literal
+        if isinstance(result_type, str):
+            type_col = literal(result_type).label("inferred_type")
+        else:
+            type_col = result_type.label("inferred_type")
+        select_cols.extend([value_expr.label("value"), type_col])
 
         return alias_utils.subquery_with_unique_alias(
             select(*select_cols).select_from(container_sql),
@@ -3003,7 +3206,7 @@ def _handle_dict_get(
             value_expr, result_type = process_get(container_sql, key_sql)
 
         # For direct expressions, we need to wrap in a subquery if we have log_event_ids
-        if log_event_ids:
+        if log_event_ids is not None:
             if isinstance(log_event_ids, list):
                 ids_subq = alias_utils.subquery_with_unique_alias(
                     select(literal(id_).label("log_event_id") for id_ in log_event_ids),
@@ -3112,7 +3315,12 @@ def _handle_zip(
     select_cols = [
         base.c.log_event_id,
         func.coalesce(
-            func.jsonb_agg(func.jsonb_build_array(*value_columns)),
+            func.jsonb_agg(
+                aggregate_order_by(
+                    func.jsonb_build_array(*value_columns),
+                    base.c.ordinality,
+                ),
+            ),
             literal([], type_=JSONB),
         ).label("value"),
         literal("list").label("inferred_type"),

@@ -9,6 +9,20 @@ from yarl import URL
 
 TEMP_DIR = Path(gettempdir())
 
+# Runtime storage mode override for testing
+_use_jsonb_override: Optional[bool] = None
+
+
+def set_jsonb_mode(enabled: Optional[bool]) -> None:
+    """
+    Override storage mode at runtime.
+
+    Args:
+        enabled: Storage mode flag (None uses environment variable).
+    """
+    global _use_jsonb_override
+    _use_jsonb_override = enabled
+
 
 class LogLevel(str, enum.Enum):  # noqa: WPS600
     """Possible log levels."""
@@ -35,6 +49,8 @@ class Settings(BaseSettings):
     workers_count: int = 1
     # Enable uvicorn reloading
     reload: bool = False
+    # HTTP keep-alive timeout in seconds (how long to keep idle connections open)
+    timeout_keep_alive: int = 15
 
     # Current environment
     environment: str = "dev"
@@ -69,14 +85,19 @@ class Settings(BaseSettings):
     sentry_dsn: Optional[str] = None
     sentry_sample_rate: float = 1.0
 
-    # Grpc endpoint for opentelemetry.
-    # E.G. http://localhost:4317
-    opentelemetry_endpoint: Optional[str] = os.environ.get(
-        "ORCHESTRA_OPENTELEMETRY_ENDPOINT",
+    # OpenTelemetry master switch
+    # Set to "false" to disable all OTel tracing
+    otel_enabled: bool = os.environ.get("ORCHESTRA_OTEL", "true").lower() in (
+        "true",
+        "1",
     )
-    opentelemetry_secure: bool = (
-        os.environ.get("ORCHESTRA_OPENTELEMETRY_SECURE", "").lower() == "true"
-    )
+
+    # OTLP endpoint for OpenTelemetry export (e.g., http://localhost:4317)
+    # When set, traces are exported via OTLP to Tempo/Jaeger
+    otel_endpoint: Optional[str] = os.environ.get("ORCHESTRA_OTEL_ENDPOINT")
+
+    # Use secure (TLS) connection for OTLP export
+    otel_secure: bool = os.environ.get("ORCHESTRA_OTEL_SECURE", "").lower() == "true"
 
     # Observability Stack Configuration
     # Set these to None to disable the respective service
@@ -104,6 +125,29 @@ class Settings(BaseSettings):
     # Set to None to disable Grafana integration
     grafana_url: Optional[str] = os.environ.get(
         "ORCHESTRA_GRAFANA_URL",
+        None,
+    )
+
+    # Master logging switch (console + file if log_dir is set)
+    # Set to "false" to disable all logging
+    log_enabled: bool = os.environ.get("ORCHESTRA_LOG", "true").lower() in ("true", "1")
+
+    # Local file-based logging directory
+    # When set, traces are written to JSON files in this directory
+    # Example: /Users/user/unity/logs/orchestra/2025-01-01T12-00-00
+    log_dir: Optional[str] = os.environ.get(
+        "ORCHESTRA_LOG_DIR",
+        None,
+    )
+
+    # OTel span log directory (for file-based span export)
+    # When set, OTel spans are written to JSONL files in this directory.
+    # If not set, falls back to log_dir for backward compatibility.
+    # This enables writing spans to a shared directory with Unity for
+    # full-stack trace correlation across processes.
+    # Example: /Users/user/unity/logs/otel
+    otel_log_dir: Optional[str] = os.environ.get(
+        "ORCHESTRA_OTEL_LOG_DIR",
         None,
     )
 
@@ -137,6 +181,12 @@ class Settings(BaseSettings):
     chat_completions_project_name: str = "Usage"
     chat_completions_markup_rate: float = 1.2
     cors_allow_origins: list[str] = []
+
+    # Console URL for generating shareable plot links
+    console_url: str = os.environ.get(
+        "UNIFY_CONSOLE_FRONTEND_URL",
+        "https://console.unify.ai/",
+    ).rstrip("/")
 
     vertexai_service_acc_json: str = ""
     vertexai_project: str = (
@@ -201,6 +251,42 @@ class Settings(BaseSettings):
             password=self.db_pass,
             path=f"/{self.db_base}",
             query=self.db_path_query,
+        )
+
+    @property
+    def use_jsonb_queries(self) -> bool:
+        """
+        Enable JSONB-based query builder.
+
+        Checks runtime override, then environment variable.
+
+        :return: True if JSONB queries are enabled.
+        """
+        if _use_jsonb_override is not None:
+            return _use_jsonb_override
+        return os.environ.get("ORCHESTRA_USE_JSONB_QUERIES", "true").lower() == "true"
+
+    @use_jsonb_queries.setter
+    def use_jsonb_queries(self, value: bool) -> None:
+        """Set JSONB mode override (for testing)."""
+        set_jsonb_mode(value)
+
+    @property
+    def use_aggregation_cte_optimization(self) -> bool:
+        """
+        Enable CTE-based aggregation optimization.
+
+        Pre-compute aggregations in CTEs instead of correlated subqueries for improved
+        performance on large datasets.
+
+        :return: True if CTE optimization is enabled.
+        """
+        return (
+            os.environ.get(
+                "ORCHESTRA_USE_AGGREGATION_CTE_OPTIMIZATION",
+                "true",
+            ).lower()
+            == "true"
         )
 
     model_config = SettingsConfigDict(

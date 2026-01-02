@@ -5,10 +5,22 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from fastapi import Depends, HTTPException, Request
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import and_, asc, cast, desc, exists, func, select
+from sqlalchemy import (
+    Float,
+    Integer,
+    Text,
+    and_,
+    asc,
+    cast,
+    desc,
+    exists,
+    func,
+    select,
+    tuple_,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import aliased
-from sqlalchemy.sql.selectable import Subquery
+from sqlalchemy.sql.selectable import CTE, Subquery
 
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
@@ -22,6 +34,7 @@ from orchestra.db.models.orchestra_models import (
     LogEventDerivedLog,
     LogEventLog,
 )
+from orchestra.settings import settings
 
 from ..python2SQL import build_sql_query, str_filter_exp_to_dict
 from .logging_utils import (
@@ -36,15 +49,25 @@ from .metric_utils import AggregationMetric, _get_reduction_expr
 
 __all__ = [
     "_get_distinct_group_values",
+    "_get_distinct_group_values_jsonb",
     "_get_log_event_ids_for_group_value",
+    "_get_log_event_ids_for_group_value_jsonb",
     "_get_params_for_log_events",
     "_fetch_logs_for_event_ids",
     "_build_grouped_data",
+    "_build_grouped_data_jsonb",
     "_get_all_filtered_log_event_ids",
     "_handle_group_depth_level",
-    "_build_grouped_data",
+    "_handle_group_depth_level_jsonb",
     "parse_group_key",
     "apply_group_threshold",
+    "_fetch_leaf_logs_jsonb",
+    # GROUPING SETS optimization functions
+    "_build_grouping_sets_query",
+    "_reconstruct_nested_structure",
+    "_can_use_grouping_sets",
+    "_get_grouping_level",
+    "_build_grouped_data_with_grouping_sets",
 ]
 #####################
 # GroupBy Utils     #
@@ -78,18 +101,110 @@ class SortConfig(BaseModel):
 GROUP_THRESHOLD = 100
 
 
+#####################
+# JSONB Helpers     #
+#####################
+
+
+def _extract_jsonb_field(
+    field_key: str,
+    field_types: Dict[str, str],
+    cast_type: Optional[str] = None,
+) -> Any:
+    """
+    Build SQLAlchemy expression to extract and optionally cast a JSONB field.
+
+    Args:
+        field_key: The key to extract from LogEvent.data
+        field_types: Field type mapping from FieldTypeDAO
+        cast_type: Optional explicit cast type (float, int, text)
+
+    Returns:
+        SQLAlchemy ColumnElement for the extracted field
+
+    Example:
+        _extract_jsonb_field('score', field_types)
+        -> cast(LogEvent.data.op('->>')('score'), Float)
+    """
+    expr = LogEvent.data.op("->>")((field_key))
+
+    if cast_type:
+        type_map = {"float": Float, "int": Integer, "text": Text}
+        return cast(expr, type_map.get(cast_type, Text))
+
+    field_type = field_types.get(field_key, "str")
+    if field_type in ("float", "int"):
+        return cast(expr, Float if field_type == "float" else Integer)
+    return expr
+
+
+def _build_jsonb_containment_filter(
+    field_key: str,
+    field_value: Any,
+) -> Any:
+    """
+    Build JSONB containment filter for efficient group membership checks.
+
+    Uses GIN index via @> operator for O(1) lookups.
+
+    Args:
+        field_key: The key to filter on
+        field_value: The value to match
+
+    Returns:
+        SQLAlchemy BinaryExpression for data @> '{"key": "value"}'
+
+    Example:
+        _build_jsonb_containment_filter('status', 'fail')
+        -> LogEvent.data.op('@>')(cast('{"status": "fail"}', JSONB))
+    """
+    from sqlalchemy import literal
+
+    containment_obj = json.dumps({field_key: field_value})
+    return LogEvent.data.op("@>")(func.cast(literal(containment_obj), JSONB))
+
+
 def _get_distinct_group_values(
     log_event_ids: List[int],
     group_key: str,
     session,
     is_param: bool = False,
     sort_direction: Optional[str] = None,
+    field_types: Optional[Dict[str, str]] = None,
 ) -> List[Any]:
     """
     Get distinct values for a group key among provided log event IDs.
-    For non-parameter fields (is_param=False), includes both base logs and derived logs.
-    For parameters (is_param=True), only includes base logs.
+
+    In EAV mode (settings.use_jsonb_queries is False):
+        - For non-parameter fields (is_param=False), includes both base logs and derived logs.
+        - For parameters (is_param=True), only includes base logs with param_version.
+
+    In JSONB mode (settings.use_jsonb_queries is True):
+        - The `is_param` argument is IGNORED. Semantics are derived solely from the
+          `group_key` prefix via `parse_group_key()` (e.g., "entries/score" vs "params/temperature").
+        - Parameter versioning (params/ prefix) is NOT supported and will raise HTTPException.
+
+    Args:
+        log_event_ids: List of log event IDs to filter.
+        group_key: The field key to group by (may include prefix like "entries/" or "params/").
+        session: Database session.
+        is_param: Whether this is a parameter field. Only honored in EAV mode.
+        sort_direction: Optional 'ascending' or 'descending'.
+        field_types: Field type mapping from FieldTypeDAO.
+
+    Returns:
+        List of distinct values for the group key.
     """
+    # Route to appropriate implementation based on query mode
+    if settings.use_jsonb_queries:
+        return _get_distinct_group_values_jsonb(
+            log_event_ids=log_event_ids,
+            group_key=group_key,
+            session=session,
+            field_types=field_types or {},
+            sort_direction=sort_direction,
+        )
+
     if is_param:
         # For parameters, use only base logs with version
         value_col = Log.param_version
@@ -105,7 +220,7 @@ def _get_distinct_group_values(
                 .label("rn"),
             )
             .join(LogEventLog, LogEventLog.log_id == Log.id)
-            .filter(LogEventLog.log_event_id.in_(log_event_ids))
+            .filter(LogEventLog.log_event_id.in_(select(log_event_ids)))
             .filter(Log.key == group_key)
             .subquery()
         )
@@ -117,7 +232,7 @@ def _get_distinct_group_values(
                 LogEventLog.log_event_id.label("log_event_id"),
             )
             .join(LogEventLog, LogEventLog.log_id == Log.id)
-            .filter(LogEventLog.log_event_id.in_(log_event_ids))
+            .filter(LogEventLog.log_event_id.in_(select(log_event_ids)))
             .filter(Log.key == group_key)
         )
 
@@ -130,7 +245,7 @@ def _get_distinct_group_values(
                 LogEventDerivedLog,
                 LogEventDerivedLog.derived_log_id == DerivedLog.id,
             )
-            .filter(LogEventDerivedLog.log_event_id.in_(log_event_ids))
+            .filter(LogEventDerivedLog.log_event_id.in_(select(log_event_ids)))
             .filter(DerivedLog.key == group_key)
         )
 
@@ -167,24 +282,153 @@ def _get_distinct_group_values(
     return [row[0] for row in query.all()]
 
 
+def _get_distinct_group_values_jsonb(
+    log_event_ids: List[int],
+    group_key: str,
+    session,
+    field_types: Dict[str, str],
+    sort_direction: Optional[str] = None,
+) -> List[Any]:
+    """
+    Get distinct values for a group key using direct data column extraction.
+
+    Args:
+        log_event_ids: List of log event IDs to filter
+        group_key: The field key to group by (e.g., 'score', 'model')
+        session: Database session
+        field_types: Field type mapping from FieldTypeDAO
+        sort_direction: Optional 'ascending' or 'descending'
+
+    Returns:
+        List of distinct values for the group key
+    """
+    # Parse group key (remove 'entries/' or 'params/' prefix if present)
+    prefix, raw_key = parse_group_key(group_key)
+
+    # Parameter versioning not supported in current mode
+    if prefix == "params":
+        raise HTTPException(
+            status_code=400,
+            detail="Parameter versioning is not supported in JSONB mode. "
+            "Use entries/ prefix or omit prefix entirely.",
+        )
+
+    # Build base query: SELECT DISTINCT data->>'raw_key' FROM log_event
+    query = (
+        session.query(
+            func.distinct(LogEvent.data.op("->>")(raw_key)).label("value"),
+        )
+        .filter(LogEvent.id.in_(select(log_event_ids)))
+        .filter(LogEvent.data.op("?")(raw_key))  # Key exists check
+    )
+
+    # Apply sorting - for DISTINCT queries, ORDER BY must reference selected columns
+    field_type = field_types.get(raw_key, "str")
+    if field_type in ("float", "int"):
+        sort_expr = cast(LogEvent.data.op("->>")(raw_key), Float)
+    else:
+        sort_expr = LogEvent.data.op("->>")(raw_key)
+
+    if sort_direction == "ascending":
+        query = query.order_by(asc(sort_expr).nulls_last())
+    elif sort_direction == "descending":
+        query = query.order_by(desc(sort_expr).nulls_first())
+    else:
+        # Default: order by value for deterministic results (required for DISTINCT)
+        query = query.order_by(asc(sort_expr).nulls_last())
+
+    # Capture SQL for test analysis (if enabled)
+    try:
+        from sqlalchemy import text
+
+        from orchestra.tests.test_log.sql_capture import (
+            capture_sql,
+            is_capture_enabled,
+            set_test_context,
+        )
+
+        if is_capture_enabled():
+            from orchestra.settings import settings
+
+            mode = "jsonb" if settings.use_jsonb_queries else "eav"
+            # Compile SQL for capture
+            compiled_sql = query.statement.compile(
+                dialect=session.bind.dialect,
+                compile_kwargs={"literal_binds": True},
+            ).string
+            # Execute EXPLAIN ANALYZE
+            explain_sql = (
+                "EXPLAIN (ANALYZE, BUFFERS, TIMING, COSTS, VERBOSE, FORMAT JSON) "
+                + compiled_sql
+            )
+            explain_result = session.execute(text(explain_sql))
+            explain_output = explain_result.fetchone()[0]
+            # Set context and capture
+            set_test_context(
+                test_name="distinct_group_values",
+                filter_expr=f"distinct_groups({group_key})",
+                mode=mode,
+            )
+            capture_sql(
+                sql=compiled_sql,
+                explain_analyze=explain_output,
+                filter_expr_override=f"distinct_groups({group_key})",
+            )
+    except ImportError:
+        pass  # sql_capture module not available (production environment)
+    except Exception:
+        pass  # Silently ignore capture errors
+
+    return [row[0] for row in query.all()]
+
+
 def _get_log_event_ids_for_group_value(
     log_event_ids: List[int],
     group_key: str,
     group_value: Any,
     session,
     is_param: bool = False,
+    field_types: Optional[Dict[str, str]] = None,
 ) -> List[int]:
     """
     Get log event IDs that match a specific group value.
-    For non-parameter fields (is_param=False), searches both base logs and derived logs.
-    For parameters (is_param=True), only searches base logs.
+
+    In EAV mode (settings.use_jsonb_queries is False):
+        - For non-parameter fields (is_param=False), searches both base logs and derived logs.
+        - For parameters (is_param=True), only searches base logs with param_version.
+
+    In JSONB mode (settings.use_jsonb_queries is True):
+        - The `is_param` argument is IGNORED. Semantics are derived solely from the
+          `group_key` prefix via `parse_group_key()` (e.g., "entries/score" vs "params/temperature").
+        - Parameter versioning (params/ prefix) is NOT supported and will raise HTTPException.
+
+    Args:
+        log_event_ids: List of log event IDs to filter.
+        group_key: The field key to filter on (may include prefix like "entries/" or "params/").
+        group_value: The value to match.
+        session: Database session.
+        is_param: Whether this is a parameter field. Only honored in EAV mode.
+        field_types: Field type mapping from FieldTypeDAO.
+
+    Returns:
+        List of matching log event IDs.
     """
+    # Route to appropriate implementation based on query mode
+    if settings.use_jsonb_queries:
+        return _get_log_event_ids_for_group_value_jsonb(
+            log_event_ids=log_event_ids,
+            group_key=group_key,
+            group_value=group_value,
+            session=session,
+            field_types=field_types or {},
+        )
+
     if is_param:
         # For parameters, only search base logs
         query = (
             session.query(LogEventLog.log_event_id)
             .join(Log, Log.id == LogEventLog.log_id)
-            .filter(LogEventLog.log_event_id.in_(log_event_ids))
+            .filter(LogEventLog.log_event_id.in_(select(log_event_ids)))
             .filter(Log.key == group_key)
             .filter(Log.param_version == group_value)
         )
@@ -193,7 +437,7 @@ def _get_log_event_ids_for_group_value(
         query = (
             session.query(LogEventDerivedLog.log_event_id)
             .join(DerivedLog, DerivedLog.id == LogEventDerivedLog.derived_log_id)
-            .filter(LogEventDerivedLog.log_event_id.in_(log_event_ids))
+            .filter(LogEventDerivedLog.log_event_id.in_(select(log_event_ids)))
             .filter(DerivedLog.key == group_key)
             .filter(cast(DerivedLog.value, JSONB) == cast(group_value, JSONB))
         )
@@ -202,7 +446,7 @@ def _get_log_event_ids_for_group_value(
         base_query = (
             session.query(LogEventLog.log_event_id)
             .join(Log, Log.id == LogEventLog.log_id)
-            .filter(LogEventLog.log_event_id.in_(log_event_ids))
+            .filter(LogEventLog.log_event_id.in_(select(log_event_ids)))
             .filter(Log.key == group_key)
             .filter(cast(Log.value, JSONB) == cast(group_value, JSONB))
         )
@@ -210,13 +454,55 @@ def _get_log_event_ids_for_group_value(
         derived_query = (
             session.query(LogEventDerivedLog.log_event_id)
             .join(DerivedLog, DerivedLog.id == LogEventDerivedLog.derived_log_id)
-            .filter(LogEventDerivedLog.log_event_id.in_(log_event_ids))
+            .filter(LogEventDerivedLog.log_event_id.in_(select(log_event_ids)))
             .filter(DerivedLog.key == group_key)
             .filter(cast(DerivedLog.value, JSONB) == cast(group_value, JSONB))
         )
 
         # Combine results from both tables
         query = base_query.union_all(derived_query)
+
+    return [row[0] for row in query.all()]
+
+
+def _get_log_event_ids_for_group_value_jsonb(
+    log_event_ids: List[int],
+    group_key: str,
+    group_value: Any,
+    session,
+    field_types: Dict[str, str],
+) -> List[int]:
+    """
+    Get log event IDs matching a specific group value.
+
+    Args:
+        log_event_ids: List of log event IDs to filter
+        group_key: The field key to filter on
+        group_value: The value to match
+        session: Database session
+        field_types: Field type mapping
+
+    Returns:
+        List of matching log event IDs
+    """
+    # Parse group key
+    prefix, raw_key = parse_group_key(group_key)
+
+    # Reject param versioning
+    if prefix == "params":
+        raise HTTPException(
+            status_code=400,
+            detail="Parameter versioning is not supported in JSONB mode. "
+            "Use entries/ prefix or omit prefix.",
+        )
+
+    # Use text extraction for type-agnostic comparison
+    # This matches how _get_distinct_group_values_jsonb extracts values via ->>
+    query = (
+        session.query(LogEvent.id)
+        .filter(LogEvent.id.in_(select(log_event_ids)))
+        .filter(LogEvent.data.op("->>")(raw_key) == group_value)
+    )
 
     return [row[0] for row in query.all()]
 
@@ -342,10 +628,15 @@ def _get_all_filtered_log_event_ids(
         (event_ids, total_count)
     """
     user_id = request_fastapi.state.user_id
+    organization_id = getattr(request_fastapi.state, "organization_id", None)
 
     # Validate project
     try:
-        project_obj = project_dao.get_by_user_and_name(name=project, user_id=user_id)
+        project_obj = project_dao.get_by_user_and_name(
+            name=project,
+            user_id=user_id,
+            organization_id=organization_id,
+        )
         project_id = project_obj.id
     except (IndexError, AttributeError):
         raise HTTPException(status_code=404, detail=f"Project {project} not found.")
@@ -389,22 +680,37 @@ def _get_all_filtered_log_event_ids(
                 LogEvent,
                 session,
                 log_event_ids=event_ids_subq,
+                project_id=project_id,
+                context_id=context_id,
             )
             if isinstance(condition, Subquery):
-                # Subquery => we check existence
+                # Subquery => filter by log_event_id where the value is truthy
+                # Use proper truthiness evaluation, not just is_(True)
+                from orchestra.web.api.log.python2SQL.operators import (
+                    _create_truthiness_condition,
+                )
+
+                truthiness_clause = _create_truthiness_condition(condition, session)
                 log_event_query = log_event_query.filter(
-                    exists(
-                        select(1)
-                        .select_from(condition)
-                        .where(
-                            and_(
-                                condition.c.log_event_id == LogEvent.id,
-                                condition.c.value.is_(True),
-                            ),
-                        ),
+                    LogEvent.id.in_(
+                        select(condition.c.log_event_id).where(truthiness_clause),
                     ),
                 )
             else:
+                # Direct expression - ensure it's a boolean condition.
+                # JSONB expressions must be converted to boolean for PostgreSQL's
+                # WHERE clause. This handles patterns like `metadata.get('key')`
+                # used as standalone filter conditions.
+                from orchestra.web.api.log.python2SQL.jsonb_builder import (
+                    _create_truthiness_condition_jsonb,
+                )
+
+                condition = _create_truthiness_condition_jsonb(
+                    condition,
+                    session,
+                    project_id,
+                    context_id,
+                )
                 log_event_query = log_event_query.filter(condition)
 
     # Filter by "static context"
@@ -697,6 +1003,18 @@ def _handle_group_depth_level(
     group_offset,
     level,
 ):
+    # JSONB MODE ROUTING
+    if settings.use_jsonb_queries:
+        return _handle_group_depth_level_jsonb(
+            session=session,
+            log_event_ids=log_event_ids,
+            field_types=field_types,
+            group_by=group_by,
+            group_sorting=group_sorting,
+            group_limit=group_limit,
+            group_offset=group_offset,
+            level=level,
+        )
 
     current_group_key = group_by[level]
     prefix, raw_key = parse_group_key(current_group_key)
@@ -797,9 +1115,24 @@ def _handle_group_depth_level(
                 ).group_by(sub_subq.c.group_key_value)
 
                 # Apply the appropriate aggregation function to the aggregator field
+                # Use .get() with default "float" for numeric aggregation metrics
+                # (mean, sum, var, std) since they expect numeric types
+                # Also convert "Any" type to "float" for numeric aggregations
+                agg_field_type = field_types.get(agg_field_raw_key, "float")
+                if agg_field_type == "Any" and group_sort_config.metric in (
+                    AggregationMetric.MEAN,
+                    AggregationMetric.SUM,
+                    AggregationMetric.VAR,
+                    AggregationMetric.STD,
+                    AggregationMetric.MIN,
+                    AggregationMetric.MAX,
+                    AggregationMetric.MEDIAN,
+                    AggregationMetric.MODE,
+                ):
+                    agg_field_type = "float"
                 agg_expr = _get_reduction_expr(
                     group_sort_config.metric,
-                    field_types[agg_field_raw_key],
+                    agg_field_type,
                     sub_subq.c.agg_val,
                     label="agg",
                 )
@@ -813,20 +1146,34 @@ def _handle_group_depth_level(
                     base_q = base_q.order_by(desc("agg").nulls_last())
             else:
                 # If sorting on the same field we're grouping by
+                # Use .get() with default "float" for numeric aggregation metrics
+                # Also convert "Any" type to "float" for numeric aggregations
+                raw_key_type = field_types.get(raw_key, "float")
+                if raw_key_type == "Any" and group_sort_config.metric in (
+                    AggregationMetric.MEAN,
+                    AggregationMetric.SUM,
+                    AggregationMetric.VAR,
+                    AggregationMetric.STD,
+                    AggregationMetric.MIN,
+                    AggregationMetric.MAX,
+                    AggregationMetric.MEDIAN,
+                    AggregationMetric.MODE,
+                ):
+                    raw_key_type = "float"
                 agg_expr = _get_reduction_expr(
                     group_sort_config.metric,
-                    field_types[raw_key],
+                    raw_key_type,
                     unified.c.value,
                     label="agg",
                 )
                 # Add the aggregation expression to the query
                 base_q = base_q.add_columns(agg_expr)
 
-            # Apply sorting direction with null handling
-            if group_sort_config.direction == SortDirection.ASCENDING:
-                base_q = base_q.order_by(asc("agg").nulls_last())
-            else:
-                base_q = base_q.order_by(desc("agg").nulls_last())
+                # Apply sorting direction with null handling
+                if group_sort_config.direction == SortDirection.ASCENDING:
+                    base_q = base_q.order_by(asc("agg").nulls_last())
+                else:
+                    base_q = base_q.order_by(desc("agg").nulls_last())
     else:
         # Default sorting on log event id
         base_q = base_q.order_by(desc("log_event_id").nulls_last())
@@ -881,6 +1228,936 @@ def _handle_group_depth_level(
     return out_dict
 
 
+def _build_grouping_sets_query(
+    session,
+    event_ids_cte: Union[CTE, Subquery],
+    group_by: List[str],
+    group_depth: int,
+    field_types: Optional[Dict[str, str]] = None,
+    group_sorting: Optional[str] = None,
+    group_limit: Optional[int] = None,
+    group_offset: int = 0,
+):
+    """
+    Build a single SQL query using GROUPING SETS to get all group counts.
+
+    This eliminates the N+1 recursive query pattern by computing all group
+    levels in a single query using PostgreSQL's GROUPING SETS feature.
+
+    Args:
+        session: Database session
+        event_ids_cte: CTE/subquery containing filtered event IDs
+        group_by: List of group keys (e.g., ["entries/_/status", "entries/_/priority"])
+        group_depth: Maximum depth to group (0-indexed, e.g., 1 means 2 levels)
+        field_types: Field type mapping for casting. Used for type-aware aggregation
+            (e.g., casting numeric fields for sorting by mean/sum).
+        group_sorting: Optional JSON string with per-level sorting configuration.
+            Format: {"entries/status": {"field": "score", "metric": "mean", "direction": "descending"}}
+        group_limit: Optional pagination limit for groups
+        group_offset: Pagination offset for groups (default 0)
+
+    Returns:
+        SQLAlchemy Query object that returns flat rows with:
+        - level_0, level_1, ..., level_N: Group values at each level
+        - grouping_id: Bitmask identifying which level (0=deepest, higher=subtotals)
+        - count: Event count for this group
+        - agg_0, agg_1, ... (if sorting): Aggregate values for sorting
+        - rn (if pagination): Row number within each grouping level
+
+    Example output for group_by=["status", "priority"], group_depth=1:
+        level_0  | level_1 | grouping_id | count
+        ---------+---------+-------------+-------
+        Open     | NULL    | 1           | 1000   -- Level 0: total for "Open"
+        Open     | High    | 0           | 600    -- Level 1: "Open" → "High"
+        Closed   | NULL    | 1           | 500
+
+    Example SQL generated with sorting:
+        SELECT data->>'status' AS level_0,
+               data->>'priority' AS level_1,
+               GROUPING(data->>'status', data->>'priority') AS grouping_id,
+               COUNT(*) AS count,
+               AVG((data->>'score')::float) AS agg_0
+        FROM log_event
+        WHERE id IN (SELECT id FROM event_ids_cte)
+        GROUP BY GROUPING SETS (
+            (data->>'status'),
+            (data->>'status', data->>'priority')
+        )
+        ORDER BY grouping_id DESC, agg_0 DESC NULLS LAST, level_0 NULLS LAST
+    """
+    field_types = field_types or {}
+
+    # Determine how many keys to include (up to group_depth + 1)
+    num_keys = min(len(group_by), group_depth + 1)
+
+    # Parse group keys and build JSONB extraction expressions
+    # We build two lists:
+    # - group_exprs_labeled: labeled expressions for SELECT (level_0, level_1, ...)
+    # - group_exprs_raw: unlabeled expressions for GROUPING() and GROUPING SETS
+    group_exprs_labeled = []
+    group_exprs_raw = []
+    raw_keys = []  # Store raw keys for field_types lookup
+    for i in range(num_keys):
+        current_group_key = group_by[i]
+        prefix, raw_key = parse_group_key(current_group_key)
+        raw_keys.append(raw_key)
+
+        # Reject param versioning in JSONB mode
+        if prefix == "params":
+            raise HTTPException(
+                status_code=400,
+                detail="Parameter versioning is not supported in JSONB mode. "
+                "Use entries/ prefix or omit prefix.",
+            )
+
+        # Build JSONB extraction expression: data->>'field_name'
+        raw_expr = LogEvent.data.op("->>")(raw_key)
+        group_exprs_raw.append(raw_expr)
+        group_exprs_labeled.append(raw_expr.label(f"level_{i}"))
+
+    # Build GROUPING SETS tuples using raw (unlabeled) expressions
+    # For group_depth=1 with keys [status, priority]:
+    # GROUPING SETS ((data->>'status'), (data->>'status', data->>'priority'))
+    # Use SQLAlchemy's tuple_() to properly construct each grouping set
+    grouping_sets_tuples = []
+    for depth in range(num_keys):
+        # Each tuple contains expressions from level 0 to current depth
+        exprs_for_level = group_exprs_raw[: depth + 1]
+        # Use tuple_() to wrap expressions as a proper SQL tuple
+        grouping_sets_tuples.append(tuple_(*exprs_for_level))
+
+    # Build the SELECT columns
+    select_columns = list(group_exprs_labeled)  # level_0, level_1, ...
+
+    # Add GROUPING() function to identify which level each row belongs to
+    # GROUPING(expr1, expr2, ...) returns a bitmask where:
+    # - bit is 1 if the column is aggregated (NULL in result)
+    # - bit is 0 if the column is part of the current grouping
+    # Reuse the raw expressions instead of rebuilding them
+    select_columns.append(func.grouping(*group_exprs_raw).label("grouping_id"))
+
+    # Add COUNT for aggregation
+    select_columns.append(func.count().label("count"))
+
+    # Parse sorting configuration and build aggregate columns
+    sort_configs_by_level: Dict[int, SortConfig] = {}
+    if group_sorting:
+        try:
+            parsed_sorting = json.loads(group_sorting)
+            for i, group_key in enumerate(group_by[:num_keys]):
+                if group_key in parsed_sorting:
+                    sort_configs_by_level[i] = SortConfig(**parsed_sorting[group_key])
+        except (JSONDecodeError, ValidationError):
+            pass
+
+    # Build aggregate columns for sorting
+    agg_columns = []
+    for level_idx in range(num_keys):
+        sort_config = sort_configs_by_level.get(level_idx)
+        if sort_config and sort_config.sort_type == SortType.SORT_GROUPS:
+            if not sort_config.metric:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"metric required for sort_groups: {group_by[level_idx]}",
+                )
+
+            # Get the field to aggregate for sorting
+            _, agg_field_key = parse_group_key(sort_config.field)
+
+            # Extract aggregation field
+            agg_expr_raw = LogEvent.data.op("->>")(agg_field_key)
+
+            # Cast based on field type - for mean/sum/min/max, always cast to Float
+            # since these operations require numeric types
+            field_type = field_types.get(agg_field_key, "str")
+            needs_numeric = sort_config.metric in ("mean", "sum", "min", "max")
+            if needs_numeric or field_type in ("float", "int"):
+                agg_expr_cast = cast(agg_expr_raw, Float)
+            else:
+                agg_expr_cast = agg_expr_raw
+
+            # Apply aggregation function
+            if sort_config.metric == "mean":
+                agg_col = func.avg(agg_expr_cast).label(f"agg_{level_idx}")
+            elif sort_config.metric == "sum":
+                agg_col = func.sum(agg_expr_cast).label(f"agg_{level_idx}")
+            elif sort_config.metric == "min":
+                agg_col = func.min(agg_expr_cast).label(f"agg_{level_idx}")
+            elif sort_config.metric == "max":
+                agg_col = func.max(agg_expr_cast).label(f"agg_{level_idx}")
+            else:
+                agg_col = func.count(agg_expr_cast).label(f"agg_{level_idx}")
+
+            select_columns.append(agg_col)
+            agg_columns.append((level_idx, sort_config))
+
+    # Build the base query
+    query = (
+        session.query(*select_columns)
+        .filter(LogEvent.id.in_(select(event_ids_cte.c.id)))
+        .group_by(func.grouping_sets(*grouping_sets_tuples))
+    )
+
+    # Build ORDER BY clause
+    order_by_exprs = []
+
+    # If sorting is configured, order by aggregates
+    if agg_columns:
+        # First, order by grouping_id DESC (subtotals first, then details)
+        order_by_exprs.append(desc("grouping_id"))
+
+        # Then order by aggregate columns
+        for level_idx, sort_config in agg_columns:
+            if sort_config.direction == SortDirection.ASCENDING:
+                order_by_exprs.append(asc(f"agg_{level_idx}").nulls_last())
+            else:
+                order_by_exprs.append(desc(f"agg_{level_idx}").nulls_last())
+
+        # Finally, order by level columns for deterministic ordering
+        for i in range(num_keys):
+            order_by_exprs.append(asc(f"level_{i}").nulls_last())
+    else:
+        # Default: order by level columns for stable ordering
+        for i in range(num_keys):
+            order_by_exprs.append(asc(f"level_{i}").nulls_last())
+
+    query = query.order_by(*order_by_exprs)
+
+    # Note: Null handling (events missing the grouping key) is handled at the
+    # reconstruction level, not via UNION ALL, to maintain compatibility with
+    # the recursive path and avoid doubling query complexity. The main GROUPING
+    # SETS query naturally returns NULL for missing keys within the grouped data.
+    # Events completely missing the key are handled separately in the wrapper.
+
+    # Apply pagination using ROW_NUMBER() window function
+    if group_limit is not None:
+        # Wrap query in CTE and add row numbering
+        base_cte = query.cte("base_query")
+
+        # Build window ORDER BY (same as query ORDER BY minus grouping_id)
+        window_order_exprs = []
+        if agg_columns:
+            for level_idx, sort_config in agg_columns:
+                if sort_config.direction == SortDirection.ASCENDING:
+                    window_order_exprs.append(
+                        asc(base_cte.c[f"agg_{level_idx}"]).nulls_last(),
+                    )
+                else:
+                    window_order_exprs.append(
+                        desc(base_cte.c[f"agg_{level_idx}"]).nulls_last(),
+                    )
+        for i in range(num_keys):
+            window_order_exprs.append(asc(base_cte.c[f"level_{i}"]).nulls_last())
+
+        # Build ROW_NUMBER() partitioned by grouping_id
+        row_num = (
+            func.row_number()
+            .over(
+                partition_by=base_cte.c.grouping_id,
+                order_by=window_order_exprs,
+            )
+            .label("rn")
+        )
+
+        # Build all columns from the CTE
+        cte_columns = [base_cte.c[col.key] for col in base_cte.c]
+        cte_columns.append(row_num)
+
+        # Build ranked query
+        ranked_subq = session.query(*cte_columns).subquery("ranked")
+
+        # Select all columns except rn, with pagination filter
+        final_columns = [
+            ranked_subq.c[col.key] for col in ranked_subq.c if col.key != "rn"
+        ]
+        query = (
+            session.query(*final_columns)
+            .filter(ranked_subq.c.rn > group_offset)
+            .filter(ranked_subq.c.rn <= group_offset + group_limit)
+        )
+
+        # Re-apply ordering on final query
+        final_order_exprs = []
+        if agg_columns:
+            final_order_exprs.append(desc(ranked_subq.c.grouping_id))
+            for level_idx, sort_config in agg_columns:
+                if sort_config.direction == SortDirection.ASCENDING:
+                    final_order_exprs.append(
+                        asc(ranked_subq.c[f"agg_{level_idx}"]).nulls_last(),
+                    )
+                else:
+                    final_order_exprs.append(
+                        desc(ranked_subq.c[f"agg_{level_idx}"]).nulls_last(),
+                    )
+        for i in range(num_keys):
+            final_order_exprs.append(asc(ranked_subq.c[f"level_{i}"]).nulls_last())
+
+        query = query.order_by(*final_order_exprs)
+
+    return query
+
+
+def _get_grouping_level(grouping_id: int, num_keys: int) -> int:
+    """
+    Compute the effective grouping level from a GROUPING() bitmask.
+
+    PostgreSQL's GROUPING(col0, col1, ..., colN) returns a bitmask where:
+    - Bit i (from the right, 0-indexed) corresponds to col(N-i)
+    - A bit is 1 if that column is being aggregated (not in current grouping)
+    - A bit is 0 if that column is part of the current grouping
+
+    For GROUPING SETS ((col0), (col0, col1)):
+    - Grouping by (col0) only: col1 is aggregated → GROUPING(col0, col1) = 1 (binary 01)
+    - Grouping by (col0, col1): neither aggregated → GROUPING(col0, col1) = 0 (binary 00)
+
+    The effective level (0 = top/parent, higher = deeper/detail) is:
+        level = num_keys - 1 - popcount(grouping_id)
+
+    Where popcount counts the number of 1 bits (aggregated columns).
+
+    Args:
+        grouping_id: The bitmask from GROUPING() function
+        num_keys: Number of grouping columns
+
+    Returns:
+        Effective level (0 = top level, num_keys-1 = deepest detail level)
+
+    Examples for num_keys=2:
+        grouping_id=0 (binary 00) → popcount=0 → level = 2-1-0 = 1 (details)
+        grouping_id=1 (binary 01) → popcount=1 → level = 2-1-1 = 0 (subtotals)
+    """
+    popcount = bin(grouping_id).count("1")
+    return num_keys - 1 - popcount
+
+
+def _reconstruct_nested_structure(
+    rows: List[Any],
+    group_by: List[str],
+    group_depth: int,
+    has_sorting: bool = False,
+    total_group_count: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Reconstruct nested JSON structure from flat GROUPING SETS results.
+
+    Converts flat rows from GROUPING SETS query into the nested dictionary
+    structure expected by the API. Supports arbitrary nesting depth using
+    iterative tree construction from leaves up to root.
+
+    Args:
+        rows: Flat rows from GROUPING SETS query with level_0, level_1, ...,
+              grouping_id, count attributes. May also have agg_0, agg_1, ... for sorting.
+        group_by: Original group_by list (e.g., ["entries/_/status", "entries/_/priority"])
+        group_depth: Maximum depth (0-indexed)
+        has_sorting: If True, rows contain aggregate columns for sorting.
+              Rows are already sorted by SQL ORDER BY, so preserve that order.
+        total_group_count: If provided, use this as the total group count
+              (for pagination scenarios where len(rows) < total_group_count).
+
+    Returns:
+        Nested dict matching existing API format:
+        {
+          "entries/_/status": {
+            "group": [
+              {"key": "Open", "value": 1000},  # If depth=0, value is count
+              {"key": "Open", "value": {...}}  # If depth>0, nested structure
+            ],
+            "group_count": 3,
+            "count": 1500
+          }
+        }
+
+    Algorithm (iterative tree construction):
+        1. Decode grouping_id bitmask to determine each row's effective level
+        2. Separate rows by level using the decoded bitmask
+        3. Process levels from deepest (leaves) to shallowest (root)
+        4. At each level, build nested structure and attach children from deeper level
+        5. Preserve SQL order when has_sorting=True (don't re-sort in Python)
+
+    GROUPING() Bitmask Interpretation:
+        PostgreSQL's GROUPING(col0, col1, col2) returns a bitmask:
+        - 0 (binary 000): all columns grouped → deepest detail row
+        - 1 (binary 001): col2 aggregated → level 1
+        - 3 (binary 011): col1,col2 aggregated → level 0 (top)
+        The effective level = num_keys - 1 - popcount(grouping_id)
+    """
+    from collections import defaultdict
+
+    # Determine how many keys we're working with
+    num_keys = min(len(group_by), group_depth + 1)
+
+    if not rows:
+        # Return empty structure
+        top_key = group_by[0]
+        return {top_key: {"group": [], "group_count": 0, "count": 0}}
+
+    # Separate rows by their effective level (decoded from grouping_id bitmask)
+    rows_by_level: Dict[int, List[Any]] = defaultdict(list)
+
+    for row in rows:
+        grouping_id = row.grouping_id
+        effective_level = _get_grouping_level(grouping_id, num_keys)
+        rows_by_level[effective_level].append(row)
+
+    # Single level grouping (depth=0 or only 1 key)
+    if group_depth == 0 or num_keys == 1:
+        top_key = group_by[0]
+        group_list = []
+        total_count = 0
+
+        for row in rows:
+            key_value = row.level_0
+            key_str = "null" if key_value is None else str(key_value)
+            count = row.count
+
+            group_list.append({"key": key_str, "value": count})
+            total_count += count
+
+        final_group_count = (
+            total_group_count if total_group_count is not None else len(group_list)
+        )
+
+        return {
+            top_key: {
+                "group": group_list,
+                "group_count": final_group_count,
+                "count": total_count,
+            },
+        }
+
+    # Multi-level grouping: iterative tree construction from leaves to root
+    # Structure: children_at_level[level][parent_key] = list of {"key": ..., "value": ...}
+    # Also track counts: counts_at_level[level][parent_key] = total count
+    children_at_level: Dict[int, Dict[Tuple, List[Dict[str, Any]]]] = defaultdict(
+        lambda: defaultdict(list),
+    )
+    counts_at_level: Dict[int, Dict[Tuple, int]] = defaultdict(
+        lambda: defaultdict(int),
+    )
+
+    # Process levels from deepest to shallowest
+    # Level num_keys-1 is deepest (all columns grouped, detail rows)
+    # Level 0 is shallowest (only first column grouped, top-level subtotals)
+    deepest_level = num_keys - 1
+
+    for current_level in range(deepest_level, -1, -1):
+        level_rows = rows_by_level.get(current_level, [])
+
+        for row in level_rows:
+            # Extract key values up to current level
+            level_values = []
+            for i in range(current_level + 1):
+                val = getattr(row, f"level_{i}", None)
+                level_values.append(val)
+
+            # This row's key (at current level)
+            this_key = level_values[-1] if level_values else None
+            this_key_str = "null" if this_key is None else str(this_key)
+
+            # Parent key is all values except the last (empty tuple for level 0)
+            parent_key = tuple(level_values[:-1]) if len(level_values) > 1 else ()
+
+            # The key tuple for this node (used to lookup children at next level)
+            this_key_tuple = tuple(level_values)
+
+            # Count from this row
+            row_count = row.count
+
+            if current_level == deepest_level:
+                # Leaf level: value is just the count
+                children_at_level[current_level][parent_key].append(
+                    {
+                        "key": this_key_str,
+                        "value": row_count,
+                    },
+                )
+                counts_at_level[current_level][parent_key] += row_count
+            else:
+                # Intermediate level: value is nested structure with children
+                next_level = current_level + 1
+                next_level_key = (
+                    group_by[next_level] if next_level < len(group_by) else None
+                )
+
+                # Get children from the next (deeper) level
+                children = children_at_level[next_level].get(this_key_tuple, [])
+                child_count = counts_at_level[next_level].get(this_key_tuple, 0)
+
+                if next_level_key and children:
+                    # Match recursive path structure: nested values are NEVER wrapped with key
+                    # Only the final top-level return wraps with the first key
+                    nested_value = {
+                        "group": children,
+                        "group_count": len(children),
+                        "count": child_count,
+                    }
+                    children_at_level[current_level][parent_key].append(
+                        {
+                            "key": this_key_str,
+                            "value": nested_value,
+                        },
+                    )
+                else:
+                    # No children found - use row count directly
+                    children_at_level[current_level][parent_key].append(
+                        {
+                            "key": this_key_str,
+                            "value": row_count,
+                        },
+                    )
+
+                counts_at_level[current_level][parent_key] += row_count
+
+    # Handle case where we have detail rows but no subtotal rows at some levels
+    # Build missing intermediate levels from detail data
+    for current_level in range(deepest_level - 1, -1, -1):
+        if current_level not in rows_by_level or not rows_by_level[current_level]:
+            # No subtotal rows at this level - derive from deeper level
+            next_level = current_level + 1
+            next_level_key = (
+                group_by[next_level] if next_level < len(group_by) else None
+            )
+
+            # Group children by their parent at current level
+            seen_parents: Dict[Tuple, bool] = {}
+            for parent_key, children in children_at_level[next_level].items():
+                if not parent_key:
+                    continue
+
+                # Parent key for current level is all but last element of next level's parent
+                current_parent = parent_key[:-1] if len(parent_key) > 1 else ()
+                this_key = parent_key[-1] if parent_key else None
+                this_key_str = "null" if this_key is None else str(this_key)
+
+                # Avoid duplicates
+                if parent_key in seen_parents:
+                    continue
+                seen_parents[parent_key] = True
+
+                child_count = counts_at_level[next_level].get(parent_key, 0)
+
+                if next_level_key and children:
+                    # Match recursive path structure: nested values are NEVER wrapped with key
+                    nested_value = {
+                        "group": children,
+                        "group_count": len(children),
+                        "count": child_count,
+                    }
+                    children_at_level[current_level][current_parent].append(
+                        {
+                            "key": this_key_str,
+                            "value": nested_value,
+                        },
+                    )
+                else:
+                    children_at_level[current_level][current_parent].append(
+                        {
+                            "key": this_key_str,
+                            "value": child_count,
+                        },
+                    )
+
+                counts_at_level[current_level][current_parent] += child_count
+
+    # Build final result from level 0 (top level)
+    top_key = group_by[0]
+    group_list = children_at_level[0].get((), [])
+    total_count = counts_at_level[0].get((), 0)
+
+    # If no groups at level 0, try to get from the data we have
+    if not group_list and rows_by_level:
+        # Fallback: sum up all counts from whatever level we have
+        for level_rows in rows_by_level.values():
+            for row in level_rows:
+                total_count += row.count
+
+    final_group_count = (
+        total_group_count if total_group_count is not None else len(group_list)
+    )
+
+    return {
+        top_key: {
+            "group": group_list,
+            "group_count": final_group_count,
+            "count": total_count,
+        },
+    }
+
+
+def _can_use_grouping_sets(
+    group_sorting: Optional[str],
+    group_by: List[str],
+    group_depth: Optional[int],
+    groups_only: bool,
+    level: int = 0,
+    group_limit: Optional[int] = None,
+    group_offset: int = 0,
+) -> bool:
+    """
+    Determine if GROUPING SETS optimization can be used.
+
+    GROUPING SETS optimization is applicable when:
+    - We need count-only results (group_depth is set, not None)
+    - We don't need actual event IDs (groups_only=False)
+    - We're at the top level (level=0, not mid-recursion)
+    - Sorting is for groups (SORT_GROUPS), not within groups (WITHIN_GROUPS)
+    - Group-level sorting via aggregates is supported
+    - Pagination via ROW_NUMBER() is supported
+
+    Args:
+        group_sorting: Optional sorting config JSON
+        group_by: List of group keys
+        group_depth: Maximum depth to group (None means full recursion)
+        groups_only: If True, need actual IDs not just counts
+        level: Current recursion level (0 = top level)
+        group_limit: Pagination limit for groups
+        group_offset: Pagination offset for groups
+
+    Returns:
+        True if GROUPING SETS can be used, False otherwise
+
+    Limitations:
+        - WITHIN_GROUPS sorting not supported (falls back to recursive)
+    """
+    # Must have group_depth specified (unlimited recursion not supported)
+    if group_depth is None:
+        return False
+
+    # GROUPING SETS provides counts, not IDs - can't use for groups_only=True
+    if groups_only:
+        return False
+
+    # Only optimize from top level (level=0)
+    # Mid-recursion optimization would require passing partial state
+    if level != 0:
+        return False
+
+    # Check if sorting is compatible with GROUPING SETS
+    # SORT_GROUPS is supported (sorting by aggregates)
+    # WITHIN_GROUPS is NOT supported (requires actual log rows)
+    if group_sorting:
+        try:
+            parsed_sorting = json.loads(group_sorting)
+            for level_key, sort_config in parsed_sorting.items():
+                # Check if sort_type is WITHIN_GROUPS (not supported in GROUPING SETS)
+                if sort_config.get("sort_type") == SortType.WITHIN_GROUPS.value:
+                    return False
+        except (JSONDecodeError, ValidationError):
+            # Invalid sorting config - fall back to recursive to be safe
+            return False
+
+    # Must have at least one grouping key
+    if len(group_by) < 1:
+        return False
+
+    # Supports arbitrary depth via iterative tree construction
+    # All conditions passed - can use GROUPING SETS optimization
+    return True
+
+
+def _build_grouped_data_with_grouping_sets(
+    session,
+    event_ids_cte: Union[CTE, Subquery],
+    group_by: List[str],
+    group_depth: int,
+    field_types: Dict[str, str],
+    group_sorting: Optional[str] = None,
+    group_limit: Optional[int] = None,
+    group_offset: int = 0,
+) -> Dict[str, Any]:
+    """
+    Build grouped data using GROUPING SETS optimization.
+
+    This function orchestrates the optimized path for count-only grouping scenarios.
+    It uses a single SQL query with GROUPING SETS to compute all group counts
+    across multiple levels, then reconstructs the nested JSON structure.
+
+    Supports group-level sorting via aggregates (SORT_GROUPS) and pagination
+    via ROW_NUMBER() window function.
+
+    Args:
+        session: Database session
+        event_ids_cte: CTE/subquery containing filtered event IDs
+        group_by: List of group keys (e.g., ["entries/_/status", "entries/_/priority"])
+        group_depth: Maximum depth to group (0-indexed, e.g., 1 means 2 levels)
+        field_types: Field type mapping for casting
+        group_sorting: Optional JSON string with per-level sorting configuration
+        group_limit: Optional pagination limit for groups
+        group_offset: Pagination offset for groups (default 0)
+
+    Returns:
+        Nested dict matching the API format:
+        {
+          "entries/_/status": {
+            "group": [
+              {"key": "Open", "value": 1000},  # If depth=0
+              {"key": "Open", "value": {...}}  # If depth>0, nested structure
+            ],
+            "group_count": 3,
+            "count": 1500
+          }
+        }
+
+    Performance:
+        This approach executes a single SQL query instead of N+1 recursive queries,
+        providing 10-50x speedup for typical scenarios (e.g., ~100ms vs ~4s for 41k events).
+    """
+    # Determine if sorting is configured
+    has_sorting = group_sorting is not None
+
+    # First, get total group count if pagination is enabled
+    # This is needed because the paginated query returns fewer rows than total groups
+    total_group_count = None
+    if group_limit is not None:
+        # Build a separate count query to get total distinct groups at level 0
+        _, raw_key = parse_group_key(group_by[0])
+        count_query = session.query(
+            func.count(func.distinct(LogEvent.data.op("->>")(raw_key))),
+        ).filter(LogEvent.id.in_(select(event_ids_cte.c.id)))
+        total_group_count = count_query.scalar() or 0
+
+    # Build the GROUPING SETS query
+    query = _build_grouping_sets_query(
+        session=session,
+        event_ids_cte=event_ids_cte,
+        group_by=group_by,
+        group_depth=group_depth,
+        field_types=field_types,
+        group_sorting=group_sorting,
+        group_limit=group_limit,
+        group_offset=group_offset,
+    )
+
+    # Optional: Capture SQL for performance testing
+    try:
+        from sqlalchemy import text
+
+        from orchestra.tests.test_log.sql_capture import capture_sql, is_capture_enabled
+
+        if is_capture_enabled():
+            pass
+
+            mode = "jsonb_grouping_sets"
+            # Compile SQL for capture
+            compiled_sql = query.statement.compile(
+                dialect=session.bind.dialect,
+                compile_kwargs={"literal_binds": True},
+            ).string
+            # Execute EXPLAIN ANALYZE
+            explain_sql = (
+                "EXPLAIN (ANALYZE, BUFFERS, TIMING, COSTS, VERBOSE, FORMAT JSON) "
+                + compiled_sql
+            )
+            explain_result = session.execute(text(explain_sql))
+            explain_output = explain_result.fetchone()[0]
+            capture_sql(
+                test_name="grouping_sets_optimization",
+                mode=mode,
+                operation="grouping_sets_query",
+                sql=compiled_sql,
+                explain_output=explain_output,
+            )
+    except (ImportError, Exception):
+        # SQL capture not available or failed - continue without it
+        pass
+
+    # Execute the query
+    rows = query.all()
+
+    # Reconstruct the nested structure from flat results
+    result = _reconstruct_nested_structure(
+        rows=rows,
+        group_by=group_by,
+        group_depth=group_depth,
+        has_sorting=has_sorting,
+        total_group_count=total_group_count,
+    )
+
+    return result
+
+
+def _handle_group_depth_level_jsonb(
+    session,
+    log_event_ids: Union[List[int], Subquery],
+    field_types: Dict[str, str],
+    group_by: List[str],
+    group_sorting: Optional[str],
+    group_limit: Optional[int],
+    group_offset: int,
+    level: int,
+) -> Dict[str, Any]:
+    """
+    JSONB implementation of group depth level handling.
+
+    Returns group counts without recursing further (leaf level for group_depth).
+
+    Args:
+        session: Database session
+        log_event_ids: List of IDs or subquery
+        field_types: Field type mapping
+        group_by: List of group keys
+        group_sorting: Optional sorting config JSON
+        group_limit: Max groups to return
+        group_offset: Offset for pagination
+        level: Current grouping level
+
+    Returns:
+        Dict with group structure containing counts only
+
+    Performance:
+        - EAV: UNION + row_number() window
+        - JSONB: Single GROUP BY on data->>'field'
+    """
+    current_group_key = group_by[level]
+    prefix, raw_key = parse_group_key(current_group_key)
+
+    # Reject param versioning in JSONB mode
+    if prefix == "params":
+        raise HTTPException(
+            status_code=400,
+            detail="Parameter versioning is not supported in JSONB mode. "
+            "Use entries/ prefix or omit prefix.",
+        )
+
+    # Convert to CTE if needed
+    if isinstance(log_event_ids, list):
+        event_ids_cte = (
+            session.query(LogEvent.id.label("id"))
+            .filter(LogEvent.id.in_(log_event_ids))
+            .cte("event_ids_cte")
+        )
+    else:
+        event_ids_cte = log_event_ids
+
+    # Build GROUP BY query using JSONB extraction
+    # SELECT data->>'raw_key' AS group_value, COUNT(DISTINCT id) AS log_count
+    # FROM log_event WHERE id IN (...) AND data ? 'raw_key'
+    # GROUP BY data->>'raw_key'
+    group_value_expr = LogEvent.data.op("->>")(raw_key)
+
+    base_q = (
+        session.query(
+            group_value_expr.label("group_value"),
+            func.count(func.distinct(LogEvent.id)).label("log_count"),
+        )
+        .filter(LogEvent.id.in_(select(event_ids_cte.c.id)))
+        .filter(LogEvent.data.op("?")(raw_key))  # Key exists
+        .group_by(group_value_expr)
+        .order_by(desc(func.max(LogEvent.id)).nulls_last())
+    )
+
+    # Handle aggregator sorting if configured
+    group_sort_config = None
+    if group_sorting:
+        try:
+            parsed_sorting = json.loads(group_sorting)
+            group_sort_config = SortConfig(**parsed_sorting[current_group_key])
+        except (JSONDecodeError, ValidationError, KeyError):
+            pass
+
+        # Apply sorting based on aggregation metric
+        if group_sort_config and group_sort_config.sort_type == SortType.SORT_GROUPS:
+            if not group_sort_config.metric:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"metric required for sort_groups: {current_group_key}",
+                )
+
+            if group_sort_config.field != current_group_key:
+                # Sorting by a different field's aggregation
+                _, agg_field_key = parse_group_key(group_sort_config.field)
+
+                # Extract aggregation field
+                agg_expr_raw = LogEvent.data.op("->>")(agg_field_key)
+
+                # Cast based on field type
+                field_type = field_types.get(agg_field_key, "str")
+                if field_type in ("float", "int"):
+                    agg_expr_cast = cast(agg_expr_raw, Float)
+                else:
+                    agg_expr_cast = agg_expr_raw
+
+                # Apply aggregation function
+                if group_sort_config.metric == "mean":
+                    agg_col = func.avg(agg_expr_cast).label("agg")
+                elif group_sort_config.metric == "sum":
+                    agg_col = func.sum(agg_expr_cast).label("agg")
+                elif group_sort_config.metric == "min":
+                    agg_col = func.min(agg_expr_cast).label("agg")
+                elif group_sort_config.metric == "max":
+                    agg_col = func.max(agg_expr_cast).label("agg")
+                else:
+                    agg_col = func.count(agg_expr_cast).label("agg")
+
+                base_q = base_q.add_columns(agg_col)
+
+                # Apply sort direction
+                if group_sort_config.direction == SortDirection.ASCENDING:
+                    base_q = base_q.order_by(asc("agg").nulls_last())
+                else:
+                    base_q = base_q.order_by(desc("agg").nulls_last())
+            else:
+                # Sorting by the same field we're grouping on
+                field_type = field_types.get(raw_key, "str")
+                if field_type in ("float", "int"):
+                    agg_expr = cast(group_value_expr, Float)
+                else:
+                    agg_expr = group_value_expr
+
+                if group_sort_config.metric == "mean":
+                    agg_col = func.avg(agg_expr).label("agg")
+                elif group_sort_config.metric == "sum":
+                    agg_col = func.sum(agg_expr).label("agg")
+                else:
+                    agg_col = func.count(agg_expr).label("agg")
+
+                base_q = base_q.add_columns(agg_col)
+
+                if group_sort_config.direction == SortDirection.ASCENDING:
+                    base_q = base_q.order_by(asc("agg").nulls_last())
+                else:
+                    base_q = base_q.order_by(desc("agg").nulls_last())
+
+    # Add total count using window function to avoid extra query
+    base_q = base_q.add_columns(func.count().over().label("total_count"))
+
+    # Apply pagination
+    if group_limit is not None:
+        base_q = base_q.offset(group_offset).limit(group_limit)
+
+    group_rows = base_q.all()
+
+    # Extract total count from first row
+    total_distinct_groups = group_rows[0].total_count if group_rows else 0
+
+    # Build result
+    group_list = []
+    for row in group_rows:
+        group_list.append({"key": str(row.group_value), "value": row.log_count})
+
+    # Handle missing IDs (logs without this key) - single SQL EXCEPT query
+    present_ids_q = (
+        session.query(LogEvent.id)
+        .filter(LogEvent.id.in_(select(event_ids_cte.c.id)))
+        .filter(LogEvent.data.op("?")(raw_key))
+    ).subquery()
+    missing_ids_q = select(event_ids_cte.c.id).except_(select(present_ids_q.c.id))
+    missing_ids = [r[0] for r in session.execute(missing_ids_q).fetchall()]
+
+    if missing_ids:
+        group_list.append({"key": "null", "value": len(missing_ids)})
+
+    out_dict = {
+        "group": group_list,
+        "group_count": total_distinct_groups,
+        "count": sum(item["value"] for item in group_list),
+    }
+
+    if level == 0:
+        return {current_group_key: out_dict}
+    return out_dict
+
+
 def _build_grouped_data(
     request_fastapi: Request,
     project_id: int,
@@ -915,6 +2192,36 @@ def _build_grouped_data(
     At the leaf level, final logs are fetched.
     Performance is improved by minimizing in-memory processing.
     """
+    # JSONB MODE ROUTING
+    if settings.use_jsonb_queries:
+        return _build_grouped_data_jsonb(
+            request_fastapi=request_fastapi,
+            project_id=project_id,
+            log_event_ids=log_event_ids,
+            field_order_map=field_order_map,
+            field_types=field_types,
+            group_by=group_by,
+            group_depth=group_depth,
+            group_limit=group_limit,
+            group_offset=group_offset,
+            group_sorting=group_sorting,
+            level=level,
+            limit=limit,
+            offset=offset,
+            column_context=column_context,
+            context=context,
+            from_fields=from_fields,
+            exclude_fields=exclude_fields,
+            sorting=sorting,
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
+            session=session,
+            value_limit=value_limit,
+            groups_only=groups_only,
+            return_timestamps=return_timestamps,
+            parent_group_key=parent_group_key,
+        )
 
     def _fetch_leaf_logs(ids: Subquery) -> Any:
         rows, ctx_len, leaf_count = _fetch_logs_for_event_ids(
@@ -1078,9 +2385,23 @@ def _build_grouped_data(
                 func.count(func.distinct(sub_subq.c.log_event_id)).label("group_count"),
             ).group_by(sub_subq.c.group_key_value)
 
+            # Use .get() with default "float" for numeric aggregation metrics
+            # Also convert "Any" type to "float" for numeric aggregations
+            agg_field_type = field_types.get(agg_field_raw_key, "float")
+            if agg_field_type == "Any" and group_sort_config.metric in (
+                AggregationMetric.MEAN,
+                AggregationMetric.SUM,
+                AggregationMetric.VAR,
+                AggregationMetric.STD,
+                AggregationMetric.MIN,
+                AggregationMetric.MAX,
+                AggregationMetric.MEDIAN,
+                AggregationMetric.MODE,
+            ):
+                agg_field_type = "float"
             agg_expr = _get_reduction_expr(
                 group_sort_config.metric,
-                field_types[agg_field_raw_key],
+                agg_field_type,
                 sub_subq.c.agg_val,
                 label="agg",
             )
@@ -1094,9 +2415,23 @@ def _build_grouped_data(
                 base_q = base_q.order_by(desc("agg").nulls_last())
         else:
             # If sorting on the same field we're grouping by
+            # Use .get() with default "float" for numeric aggregation metrics
+            # Also convert "Any" type to "float" for numeric aggregations
+            raw_key_type = field_types.get(raw_key, "float")
+            if raw_key_type == "Any" and group_sort_config.metric in (
+                AggregationMetric.MEAN,
+                AggregationMetric.SUM,
+                AggregationMetric.VAR,
+                AggregationMetric.STD,
+                AggregationMetric.MIN,
+                AggregationMetric.MAX,
+                AggregationMetric.MEDIAN,
+                AggregationMetric.MODE,
+            ):
+                raw_key_type = "float"
             agg_expr = _get_reduction_expr(
                 group_sort_config.metric,
-                field_types[raw_key],
+                raw_key_type,
                 unified.c.value,
                 label="agg",
             )
@@ -1256,3 +2591,513 @@ def _build_grouped_data(
     result_dict["count"] = sub_total
     # For the top level, include the prefix in the result key
     return {current_group_key: result_dict}
+
+
+def _build_grouped_data_jsonb(
+    request_fastapi: Request,
+    project_id: int,
+    log_event_ids: Union[List[int], Subquery],
+    field_order_map: Dict[str, int],
+    field_types: Dict[str, str],
+    group_by: List[str],
+    group_depth: Optional[int],
+    group_limit: Optional[int],
+    group_offset: int,
+    group_sorting: Optional[str],
+    level: int,
+    limit: Optional[int],
+    offset: int,
+    column_context: Optional[str],
+    context: Optional[str],
+    from_fields: Optional[str],
+    exclude_fields: Optional[str],
+    sorting: Optional[str],
+    project_dao: ProjectDAO,
+    field_type_dao: FieldTypeDAO,
+    context_dao: ContextDAO,
+    session,
+    value_limit: Optional[int] = None,
+    groups_only: bool = False,
+    return_timestamps: bool = False,
+    parent_group_key: Optional[str] = "",
+) -> Dict[str, Any]:
+    """
+    SQL-first multi-level grouping using JSONB operators.
+
+    Uses array_agg(DISTINCT LogEvent.id) to fetch all group memberships in a single query, eliminating N+1 patterns.
+    """
+
+    # Convert list to subquery if needed
+    if isinstance(log_event_ids, list):
+        if not log_event_ids:
+            return {}
+        event_ids_cte = (
+            session.query(LogEvent.id.label("id"))
+            .filter(LogEvent.id.in_(log_event_ids))
+            .cte("event_ids_cte")
+        )
+    else:
+        event_ids_cte = log_event_ids
+        # Check if subquery has results
+        if not session.query(event_ids_cte.c.id).limit(1).first():
+            return {}
+
+    # GROUPING SETS optimization: use single query for count-only scenarios
+    # This provides 10-50x speedup over the recursive approach
+    if _can_use_grouping_sets(
+        group_sorting=group_sorting,
+        group_by=group_by,
+        group_depth=group_depth,
+        groups_only=groups_only,
+        level=level,
+        group_limit=group_limit,
+        group_offset=group_offset,
+    ):
+        return _build_grouped_data_with_grouping_sets(
+            session=session,
+            event_ids_cte=event_ids_cte,
+            group_by=group_by,
+            group_depth=group_depth,
+            field_types=field_types,
+            group_sorting=group_sorting,
+            group_limit=group_limit,
+            group_offset=group_offset,
+        )
+
+    # Base case: reached end of group_by list
+    if level >= len(group_by):
+        if groups_only:
+            if return_timestamps:
+                rows = (
+                    session.query(LogEvent.id, LogEvent.created_at)
+                    .filter(LogEvent.id.in_(select(event_ids_cte.c.id)))
+                    .all()
+                )
+                return {
+                    row[0]: row[1].isoformat() for row in rows if row[1] is not None
+                }
+            else:
+                if isinstance(log_event_ids, list):
+                    return log_event_ids
+                else:
+                    all_ids = session.query(event_ids_cte.c.id).all()
+                    return [r[0] for r in all_ids]
+
+        # Fetch leaf logs using JSONB query
+        return _fetch_leaf_logs_jsonb(
+            request_fastapi=request_fastapi,
+            event_ids=event_ids_cte,
+            project_id=project_id,
+            column_context=column_context,
+            context=context,
+            from_fields=from_fields,
+            exclude_fields=exclude_fields,
+            sorting=sorting,
+            limit=limit,
+            offset=offset,
+            parent_fields=parent_group_key,
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
+            session=session,
+            value_limit=value_limit,
+            field_order_map=field_order_map,
+            field_types=field_types,
+        )
+
+    # Handle group_depth limit
+    if group_depth is not None and level == group_depth:
+        return _handle_group_depth_level_jsonb(
+            session=session,
+            log_event_ids=event_ids_cte,
+            field_types=field_types,
+            group_by=group_by,
+            group_sorting=group_sorting,
+            group_limit=group_limit,
+            group_offset=group_offset,
+            level=level,
+        )
+
+    # Parse current group key
+    current_group_key = group_by[level]
+    prefix, raw_key = parse_group_key(current_group_key)
+
+    # Reject param versioning
+    if prefix == "params":
+        raise HTTPException(
+            status_code=400,
+            detail="Parameter versioning is not supported in JSONB mode. "
+            "Use entries/ prefix or omit prefix.",
+        )
+
+    # Build GROUP BY query using JSONB extraction
+    group_value_expr = LogEvent.data.op("->>")(raw_key)
+
+    base_q = (
+        session.query(
+            group_value_expr.label("group_value"),
+            func.count(func.distinct(LogEvent.id)).label("group_count"),
+            func.array_agg(func.distinct(LogEvent.id)).label("event_ids"),
+        )
+        .filter(LogEvent.id.in_(select(event_ids_cte.c.id)))
+        .filter(LogEvent.data.op("?")(raw_key))  # Key exists
+        .group_by(group_value_expr)
+    )
+
+    # Apply group sorting if configured
+    group_sort_config = None
+    if group_sorting:
+        try:
+            parsed_sorting = json.loads(group_sorting)
+            group_sort_config = SortConfig(**parsed_sorting[current_group_key])
+        except (JSONDecodeError, ValidationError, KeyError):
+            pass
+
+    if group_sort_config and group_sort_config.sort_type == SortType.SORT_GROUPS:
+        if not group_sort_config.metric:
+            raise HTTPException(
+                status_code=400,
+                detail=f"metric required for sort_groups: {current_group_key}",
+            )
+
+        # Apply aggregation-based sorting
+        if group_sort_config.field != current_group_key:
+            # Sorting by a different field's aggregation
+            _, agg_field_key = parse_group_key(group_sort_config.field)
+
+            # Extract aggregation field
+            agg_expr_raw = LogEvent.data.op("->>")(agg_field_key)
+
+            # Cast based on field type - for mean/sum/min/max, always cast to Float
+            # since these operations require numeric types
+            field_type = field_types.get(agg_field_key, "str")
+            needs_numeric = group_sort_config.metric in ("mean", "sum", "min", "max")
+            if needs_numeric or field_type in ("float", "int"):
+                agg_expr_cast = cast(agg_expr_raw, Float)
+            else:
+                agg_expr_cast = agg_expr_raw
+
+            # Apply aggregation function
+            if group_sort_config.metric == "mean":
+                agg_col = func.avg(agg_expr_cast).label("agg")
+            elif group_sort_config.metric == "sum":
+                agg_col = func.sum(agg_expr_cast).label("agg")
+            elif group_sort_config.metric == "min":
+                agg_col = func.min(agg_expr_cast).label("agg")
+            elif group_sort_config.metric == "max":
+                agg_col = func.max(agg_expr_cast).label("agg")
+            else:
+                agg_col = func.count(agg_expr_cast).label("agg")
+
+            base_q = base_q.add_columns(agg_col)
+
+            # Apply sort direction
+            if group_sort_config.direction == SortDirection.ASCENDING:
+                base_q = base_q.order_by(asc("agg").nulls_last())
+            else:
+                base_q = base_q.order_by(desc("agg").nulls_last())
+        else:
+            # Sorting by the same field we're grouping on
+            field_type = field_types.get(raw_key, "str")
+            needs_numeric = group_sort_config.metric in ("mean", "sum", "min", "max")
+            if needs_numeric or field_type in ("float", "int"):
+                agg_expr = cast(group_value_expr, Float)
+            else:
+                agg_expr = group_value_expr
+
+            if group_sort_config.metric == "mean":
+                agg_col = func.avg(agg_expr).label("agg")
+            elif group_sort_config.metric == "sum":
+                agg_col = func.sum(agg_expr).label("agg")
+            elif group_sort_config.metric == "min":
+                agg_col = func.min(agg_expr).label("agg")
+            elif group_sort_config.metric == "max":
+                agg_col = func.max(agg_expr).label("agg")
+            else:
+                agg_col = func.count(agg_expr).label("agg")
+
+            base_q = base_q.add_columns(agg_col)
+
+            if group_sort_config.direction == SortDirection.ASCENDING:
+                base_q = base_q.order_by(asc("agg").nulls_last())
+            else:
+                base_q = base_q.order_by(desc("agg").nulls_last())
+    else:
+        # Default: sort by most recent log_event_id
+        base_q = base_q.order_by(desc(func.max(LogEvent.id)).nulls_last())
+
+    # Add total count using window function to avoid extra query
+    # This computes the count once during the main query execution
+    # Window function is computed BEFORE LIMIT/OFFSET is applied
+    base_q = base_q.add_columns(func.count().over().label("total_count"))
+
+    # Apply pagination
+    if group_limit is not None:
+        base_q = base_q.offset(group_offset).limit(group_limit)
+
+    # Capture SQL for test analysis (if enabled)
+    try:
+        from sqlalchemy import text
+
+        from orchestra.tests.test_log.sql_capture import (
+            capture_sql,
+            is_capture_enabled,
+            set_test_context,
+        )
+
+        if is_capture_enabled():
+            from orchestra.settings import settings
+
+            mode = "jsonb" if settings.use_jsonb_queries else "eav"
+            # Compile SQL for capture
+            compiled_sql = base_q.statement.compile(
+                dialect=session.bind.dialect,
+                compile_kwargs={"literal_binds": True},
+            ).string
+            # Execute EXPLAIN ANALYZE
+            explain_sql = (
+                "EXPLAIN (ANALYZE, BUFFERS, TIMING, COSTS, VERBOSE, FORMAT JSON) "
+                + compiled_sql
+            )
+            explain_result = session.execute(text(explain_sql))
+            explain_output = explain_result.fetchone()[0]
+            # Set context and capture
+            test_name = (
+                request_fastapi.headers.get("X-Test-Name", "unknown")
+                if request_fastapi
+                else "group_query"
+            )
+            set_test_context(
+                test_name=test_name,
+                filter_expr=f"group_by({current_group_key})",
+                mode=mode,
+            )
+            capture_sql(
+                sql=compiled_sql,
+                explain_analyze=explain_output,
+                filter_expr_override=f"group_by({current_group_key})",
+            )
+    except ImportError:
+        pass  # sql_capture module not available (production environment)
+    except Exception:
+        pass  # Silently ignore capture errors
+
+    # Execute query
+    group_rows = base_q.all()
+
+    # Extract total count from first row (all rows have same total_count due to window function)
+    total_distinct_groups = group_rows[0].total_count if group_rows else 0
+
+    # Build result structure
+    result_dict = {}
+    group_list = []
+
+    for row in group_rows:
+        group_val = row.group_value
+
+        # Use pre-fetched event IDs from array_agg (eliminates N+1 queries)
+        # event_ids is always present since we always include array_agg in the query.
+        # A None value would indicate a query construction bug.
+        if row.event_ids is None:
+            raise RuntimeError(
+                f"event_ids is None for group '{group_val}' - this indicates a bug in "
+                "query construction. array_agg should always be included.",
+            )
+        subset_ids = list(row.event_ids)
+
+        # Recursively build substructure
+        substructure = _build_grouped_data_jsonb(
+            request_fastapi=request_fastapi,
+            project_id=project_id,
+            log_event_ids=subset_ids,
+            field_order_map=field_order_map,
+            field_types=field_types,
+            group_by=group_by,
+            group_depth=group_depth,
+            group_limit=group_limit,
+            group_offset=group_offset,
+            group_sorting=group_sorting,
+            level=level + 1,
+            limit=limit,
+            offset=offset,
+            column_context=column_context,
+            context=context,
+            from_fields=from_fields,
+            exclude_fields=exclude_fields,
+            sorting=sorting,
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
+            session=session,
+            value_limit=value_limit,
+            groups_only=groups_only,
+            return_timestamps=return_timestamps,
+            parent_group_key=(
+                "&".join([parent_group_key, raw_key]) if parent_group_key else raw_key
+            ),
+        )
+
+        group_list.append({"key": str(group_val), "value": substructure})
+
+    # Handle missing IDs (logs without this key) - single SQL EXCEPT query
+    present_ids_q = (
+        session.query(LogEvent.id)
+        .filter(LogEvent.id.in_(select(event_ids_cte.c.id)))
+        .filter(LogEvent.data.op("?")(raw_key))
+    ).subquery()
+    missing_ids_q = select(event_ids_cte.c.id).except_(select(present_ids_q.c.id))
+    missing_ids = [r[0] for r in session.execute(missing_ids_q).fetchall()]
+
+    if missing_ids:
+        null_sub = _build_grouped_data_jsonb(
+            request_fastapi=request_fastapi,
+            project_id=project_id,
+            log_event_ids=missing_ids,
+            field_order_map=field_order_map,
+            field_types=field_types,
+            group_by=group_by,
+            group_depth=group_depth,
+            group_limit=group_limit,
+            group_offset=group_offset,
+            group_sorting=group_sorting,
+            level=level + 1,
+            limit=limit,
+            offset=offset,
+            column_context=column_context,
+            context=context,
+            from_fields=from_fields,
+            exclude_fields=exclude_fields,
+            sorting=sorting,
+            project_dao=project_dao,
+            field_type_dao=field_type_dao,
+            context_dao=context_dao,
+            session=session,
+            value_limit=value_limit,
+            groups_only=groups_only,
+            return_timestamps=return_timestamps,
+            parent_group_key=(
+                "&".join([parent_group_key, raw_key]) if parent_group_key else raw_key
+            ),
+        )
+        group_list.append({"key": "null", "value": null_sub})
+
+    # Add metadata
+    result_dict["group"] = group_list
+    result_dict["group_count"] = total_distinct_groups
+
+    # Calculate total count
+    def _get_count_from_substructure(sub_val: Union[List, Dict, int]) -> int:
+        if isinstance(sub_val, int):
+            return sub_val
+        elif isinstance(sub_val, list):
+            return len(sub_val)
+        elif isinstance(sub_val, dict):
+            if "count" in sub_val:
+                return sub_val["count"]
+            total = 0
+            # Handle nested grouping structure: {"entries/field": {"group": [...], "count": N}}
+            for key, val in sub_val.items():
+                if isinstance(val, dict):
+                    if "count" in val:
+                        total += val["count"]
+                    elif "group" in val and isinstance(val["group"], list):
+                        for item in val["group"]:
+                            if isinstance(item, dict) and "value" in item:
+                                total += _get_count_from_substructure(item["value"])
+            if total > 0:
+                return total
+            # Fallback: check for direct "group" key
+            if "group" in sub_val and isinstance(sub_val["group"], list):
+                for item in sub_val["group"]:
+                    if isinstance(item, dict) and "value" in item:
+                        total += _get_count_from_substructure(item["value"])
+            return total
+        return 0
+
+    result_dict["count"] = sum(
+        _get_count_from_substructure(item["value"]) for item in group_list
+    )
+
+    return {current_group_key: result_dict}
+
+
+def _fetch_leaf_logs_jsonb(
+    request_fastapi: Request,
+    event_ids: Subquery,
+    project_id: int,
+    column_context: Optional[str],
+    context: Optional[str],
+    from_fields: Optional[str],
+    exclude_fields: Optional[str],
+    sorting: Optional[str],
+    limit: Optional[int],
+    offset: int,
+    parent_fields: Optional[str],
+    project_dao: ProjectDAO,
+    field_type_dao: FieldTypeDAO,
+    context_dao: ContextDAO,
+    session,
+    value_limit: Optional[int],
+    field_order_map: Dict[str, int],
+    field_types: Dict[str, str],
+) -> List[Dict[str, Any]]:
+    """
+    JSONB implementation: Fetch leaf logs for grouped data.
+
+    Uses direct JSONB queries instead of EAV joins.
+    """
+    from .logging_utils import _format_jsonb_logs
+
+    # Build query for LogEvent with JSONB data
+    query = session.query(LogEvent.id, LogEvent.data, LogEvent.created_at).filter(
+        LogEvent.id.in_(select(event_ids.c.id)),
+    )
+
+    # Apply sorting if specified
+    if sorting:
+        sort_dict = json.loads(sorting)
+        for sort_key, mode in sort_dict.items():
+            if mode not in ("ascending", "descending"):
+                continue
+            # Use '->' operator instead of '->>' to preserve JSONB type for comparison
+            # This allows PostgreSQL to compare numbers as numbers, strings as strings, etc.
+            # (using '->>' returns TEXT which sorts lexicographically: "-5" < "0")
+            sort_expr = LogEvent.data.op("->")(sort_key)
+            field_type = field_types.get(sort_key, "")
+            # If we know the type explicitly, cast for efficiency
+            if field_type in ("float", "int"):
+                sort_expr = cast(LogEvent.data.op("->>")(sort_key), Float)
+            direction = asc if mode == "ascending" else desc
+            query = query.order_by(direction(sort_expr).nulls_last())
+
+    # Apply default ordering
+    query = query.order_by(desc(LogEvent.id))
+
+    # Apply pagination
+    if limit:
+        query = query.limit(limit)
+    if offset:
+        query = query.offset(offset)
+
+    rows = query.all()
+
+    # Get field types with full metadata
+    context_name = "" if not context else context
+    context_obj = context_dao.filter(name=context_name, project_id=project_id)
+    context_id = context_obj[0][0].id if context_obj else None
+    field_types_full = field_type_dao.get_field_types(
+        project_id,
+        context_id=context_id,
+        return_mutable=True,
+    )
+
+    # Format using JSONB formatter
+    logs_out, _ = _format_jsonb_logs(
+        rows=rows,
+        field_types=field_types_full,
+        value_limit=value_limit,
+        column_context=column_context,
+        field_order_map=field_order_map,
+    )
+
+    return logs_out

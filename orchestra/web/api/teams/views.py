@@ -22,6 +22,8 @@ from orchestra.web.api.teams.schema import (
     TeamResponse,
     TeamUpdate,
     TeamWithMembersResponse,
+    UserResourceAccessEntry,
+    UserResourceAccessResponse,
 )
 
 router = APIRouter()
@@ -62,10 +64,9 @@ async def create_team(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user has org:write permission (Owner and Admin roles have this)
-    has_permission = resource_access_dao.check_user_permission(
+    # Check if user has org:write permission via org membership role
+    has_permission = resource_access_dao.check_org_member_permission(
         user_id,
-        "org",
         organization_id,
         "org:write",
     )
@@ -263,10 +264,9 @@ async def update_team(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user has org:write permission (Owner and Admin roles have this)
-    has_permission = resource_access_dao.check_user_permission(
+    # Check if user has org:write permission via org membership role
+    has_permission = resource_access_dao.check_org_member_permission(
         user_id,
-        "org",
         organization_id,
         "org:write",
     )
@@ -353,10 +353,9 @@ async def delete_team(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user has org:write permission (Owner and Admin roles have this)
-    has_permission = resource_access_dao.check_user_permission(
+    # Check if user has org:write permission via org membership role
+    has_permission = resource_access_dao.check_org_member_permission(
         user_id,
-        "org",
         organization_id,
         "org:write",
     )
@@ -425,10 +424,9 @@ async def add_team_members(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user has org:write permission (Owner and Admin roles have this)
-    has_permission = resource_access_dao.check_user_permission(
+    # Check if user has org:write permission via org membership role
+    has_permission = resource_access_dao.check_org_member_permission(
         user_id,
-        "org",
         organization_id,
         "org:write",
     )
@@ -533,10 +531,9 @@ async def remove_team_member(
             detail=f"Organization with id {organization_id} not found",
         )
 
-    # Check if user has org:write permission (Owner and Admin roles have this)
-    has_permission = resource_access_dao.check_user_permission(
+    # Check if user has org:write permission via org membership role
+    has_permission = resource_access_dao.check_org_member_permission(
         user_id,
-        "org",
         organization_id,
         "org:write",
     )
@@ -589,23 +586,26 @@ async def grant_resource_access(
     session: Session = Depends(get_db_session),
 ) -> ResourceAccessResponse:
     """
-    Grant access to a resource (project or org).
+    Grant access to a resource (project).
 
     Only works for organizational resources. Personal resources cannot be shared.
     User must have appropriate permissions on the resource.
 
+    Note: For org-level permissions, use OrganizationMember roles instead.
+
     :param request_fastapi: FastAPI request object.
-    :param resource_type: Type of resource ("project" or "org").
+    :param resource_type: Type of resource ("project").
     :param resource_id: Resource ID.
     :param access_data: Access grant data.
     :param session: Database session.
     :return: Created access entry.
     """
-    # Validate resource type
-    if resource_type not in ("project", "org"):
+    # Validate resource type - only "project" is supported for ResourceAccess
+    if resource_type != "project":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid resource type: {resource_type}. Only 'project' and 'org' are supported.",
+            detail=f"Invalid resource type: {resource_type}. Only 'project' is supported. "
+            "For org-level permissions, manage OrganizationMember roles instead.",
         )
 
     user_id = request_fastapi.state.user_id
@@ -681,21 +681,24 @@ async def revoke_resource_access(
     session: Session = Depends(get_db_session),
 ) -> None:
     """
-    Revoke access to a resource (project or org).
+    Revoke access to a resource (project).
 
     User must have appropriate permissions on the resource.
 
+    Note: For org-level permissions, use OrganizationMember roles instead.
+
     :param request_fastapi: FastAPI request object.
-    :param resource_type: Type of resource ("project" or "org").
+    :param resource_type: Type of resource ("project").
     :param resource_id: Resource ID.
     :param access_data: Access revoke data.
     :param session: Database session.
     """
-    # Validate resource type
-    if resource_type not in ("project", "org"):
+    # Validate resource type - only "project" is supported for ResourceAccess
+    if resource_type != "project":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid resource type: {resource_type}. Only 'project' and 'org' are supported.",
+            detail=f"Invalid resource type: {resource_type}. Only 'project' is supported. "
+            "For org-level permissions, manage OrganizationMember roles instead.",
         )
 
     user_id = request_fastapi.state.user_id
@@ -754,19 +757,22 @@ async def update_resource_access(
 
     User must have write permission on the resource.
 
+    Note: For org-level permissions, use OrganizationMember roles instead.
+
     :param request_fastapi: FastAPI request object.
-    :param resource_type: Type of resource ("project" or "org").
+    :param resource_type: Type of resource ("project").
     :param resource_id: Resource ID.
     :param access_id: ResourceAccess ID to update.
     :param update_data: Update data containing new role_id.
     :param session: Database session.
     :return: Updated access entry.
     """
-    # Validate resource type
-    if resource_type not in ("project", "org"):
+    # Validate resource type - only "project" is supported for ResourceAccess
+    if resource_type != "project":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid resource type: {resource_type}. Only 'project' and 'org' are supported.",
+            detail=f"Invalid resource type: {resource_type}. Only 'project' is supported. "
+            "For org-level permissions, manage OrganizationMember roles instead.",
         )
 
     user_id = request_fastapi.state.user_id
@@ -857,21 +863,24 @@ async def list_resource_access(
     session: Session = Depends(get_db_session),
 ) -> ResourceAccessListResponse:
     """
-    List all access entries for a resource (project or org).
+    List all access entries for a resource (project).
 
     User must have read permission on the resource.
 
+    Note: For org-level permissions, use the /organizations/{id}/members endpoint instead.
+
     :param request_fastapi: FastAPI request object.
-    :param resource_type: Type of resource ("project" or "org").
+    :param resource_type: Type of resource ("project").
     :param resource_id: Resource ID.
     :param session: Database session.
     :return: List of access entries.
     """
-    # Validate resource type
-    if resource_type not in ("project", "org"):
+    # Validate resource type - only "project" is supported for ResourceAccess
+    if resource_type != "project":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid resource type: {resource_type}. Only 'project' and 'org' are supported.",
+            detail=f"Invalid resource type: {resource_type}. Only 'project' is supported. "
+            "For org-level permissions, use the /organizations/{id}/members endpoint.",
         )
 
     user_id = request_fastapi.state.user_id
@@ -931,4 +940,118 @@ async def list_resource_access(
         resource_type=resource_type,
         resource_id=resource_id,
         access_entries=response_entries,
+    )
+
+
+@router.get(
+    "/resources/{resource_type}/{resource_id}/access/user/{user_id}",
+    response_model=UserResourceAccessResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def get_user_resource_access(
+    request_fastapi: Request,
+    resource_type: str,
+    resource_id: int,
+    user_id: str,
+    session: Session = Depends(get_db_session),
+) -> UserResourceAccessResponse:
+    """
+    Get a specific user's access entries for a resource.
+
+    Returns all access entries (direct user grants + team-based grants)
+    and the effective role (highest permission level).
+
+    :param request_fastapi: FastAPI request object.
+    :param resource_type: Type of resource ("project").
+    :param resource_id: Resource ID.
+    :param user_id: User ID to check access for.
+    :param session: Database session.
+    :return: User's access entries and effective role.
+    """
+    # Validate resource type - only "project" is supported
+    if resource_type != "project":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid resource type: {resource_type}. Only 'project' is supported.",
+        )
+
+    requesting_user_id = request_fastapi.state.user_id
+    resource_access_dao = ResourceAccessDAO(session)
+    role_dao = RoleDAO(session)
+    team_dao = TeamDAO(session)
+
+    # Check if requesting user has read permission on the resource
+    has_permission = resource_access_dao.check_user_permission(
+        requesting_user_id,
+        resource_type,
+        resource_id,
+        f"{resource_type}:read",
+    )
+
+    if not has_permission:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to view access for this resource",
+        )
+
+    # Get user's access entries (direct + team-based)
+    access_entries = resource_access_dao.get_user_access(
+        user_id=user_id,
+        resource_type=resource_type,
+        resource_id=resource_id,
+    )
+
+    # Build response entries
+    response_entries = []
+    role_priority = {"Owner": 4, "Admin": 3, "Member": 2, "Viewer": 1}
+    highest_role = None
+    highest_priority = 0
+
+    for entry in access_entries:
+        role = role_dao.get(entry.role_id)
+        role_name = role.name if role else "Unknown"
+
+        # Get permissions for this role
+        role_permissions = role_dao.get_role_permissions(entry.role_id)
+        permission_names = [p.name for p in role_permissions]
+
+        # Determine if this is a direct grant or team-based
+        is_team_grant = entry.grantee_type == "team"
+        team_id = None
+        team_name = None
+
+        if is_team_grant:
+            try:
+                team_id = int(entry.grantee_id)
+                team = team_dao.get(team_id)
+                team_name = team.name if team else None
+            except ValueError:
+                pass
+
+        response_entries.append(
+            UserResourceAccessEntry(
+                id=entry.id,
+                role_id=entry.role_id,
+                role_name=role_name,
+                permissions=permission_names,
+                grantee_type=entry.grantee_type,
+                source="team" if is_team_grant else "direct",
+                team_id=team_id,
+                team_name=team_name,
+                created_at=entry.created_at,
+            ),
+        )
+
+        # Track highest permission
+        priority = role_priority.get(role_name, 0)
+        if priority > highest_priority:
+            highest_priority = priority
+            highest_role = role_name
+
+    return UserResourceAccessResponse(
+        user_id=user_id,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        access_entries=response_entries,
+        effective_role=highest_role,
     )

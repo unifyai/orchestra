@@ -43,7 +43,6 @@ class OrganizationMemberAdd(BaseModel):
     """Schema for adding a member to an organization."""
 
     user_id: str
-    level: str = "user"  # owner, admin, user
     role_id: Optional[int] = None  # RBAC role (defaults to Member role if not provided)
 
 
@@ -65,14 +64,16 @@ class OrganizationMemberResponse(BaseModel):
     id: int
     user_id: str
     organization_id: int
-    level: str
-    role_id: Optional[int]
+    role_id: int
     role_name: Optional[str] = None
     created_at: datetime
     # User info fields (populated from AuthUser)
     name: Optional[str] = None
     email: Optional[str] = None
     image: Optional[str] = None
+    bio: Optional[str] = None
+    timezone: Optional[str] = None
+    phone_number: Optional[str] = None
 
     model_config = {"from_attributes": True}
 
@@ -85,7 +86,6 @@ class InviteUserRequest(BaseModel):
 
     email: str
     role_id: Optional[int] = None  # Defaults to Member role if not provided
-    level: str = "user"  # owner, admin, user
     expires_in_days: int = 7  # Default 7 days
 
 
@@ -104,7 +104,6 @@ class InviteResponse(BaseModel):
     invited_by_name: Optional[str] = None
     role_id: int
     role_name: Optional[str] = None
-    level: str
     expires_at: datetime
     created_at: datetime
 
@@ -130,3 +129,95 @@ class DeclineInviteResponse(BaseModel):
     """Schema for declining an invite."""
 
     message: str
+
+
+# ============== Organization Billing Schemas ==============
+
+
+class OrganizationBillingResponse(BaseModel):
+    """Schema for organization billing information."""
+
+    organization_id: int
+    organization_name: str
+    billing_mode: str  # "delegated" or "direct"
+    credits: float
+    billing_user_id: Optional[str] = None  # Only for delegated billing
+    stripe_customer_id: Optional[str] = None  # Only for direct billing
+    autorecharge: bool
+    autorecharge_threshold: float
+    autorecharge_qty: float
+    account_status: str
+    billing_setup_complete: bool
+
+    model_config = {"from_attributes": True}
+
+
+class OrganizationBillingUpdate(BaseModel):
+    """Schema for updating organization billing settings."""
+
+    autorecharge: Optional[bool] = None
+    autorecharge_threshold: Optional[float] = None
+    autorecharge_qty: Optional[float] = None
+
+
+class BillingAddress(BaseModel):
+    """
+    Flexible international billing address.
+
+    Supports various address formats worldwide.
+    The `country` field is required for tax calculations.
+    Other fields are optional to accommodate different country formats.
+    """
+
+    country: str  # Required: ISO 3166-1 alpha-2 (e.g., "US", "IN", "GB")
+    formatted: Optional[str] = None  # Full formatted address for display
+    line1: Optional[str] = None  # Primary street address
+    line2: Optional[str] = None  # Secondary address (apt, suite, etc.)
+    city: Optional[str] = None
+    state: Optional[str] = None  # State, province, or region
+    postal_code: Optional[str] = None  # ZIP code, PIN code, postcode
+    locality: Optional[str] = None  # For countries that use locality
+    district: Optional[str] = None  # For countries like India
+    sublocality: Optional[str] = None  # Neighborhood, ward, etc.
+
+    model_config = {"extra": "allow"}  # Allow additional country-specific fields
+
+
+class OrganizationBusinessProfileUpdate(BaseModel):
+    """Schema for updating organization business profile."""
+
+    billing_email: Optional[str] = None
+    business_name: Optional[str] = None
+    tax_id: Optional[str] = None
+    billing_address: Optional[BillingAddress] = None
+
+
+class OrganizationBusinessProfileResponse(BaseModel):
+    """Schema for organization business profile."""
+
+    billing_email: Optional[str] = None
+    business_name: Optional[str] = None
+    tax_id: Optional[str] = None
+    billing_address: Optional[dict] = None  # Flexible dict for any address format
+
+
+class OrganizationCreditsResponse(BaseModel):
+    """Schema for organization credits balance."""
+
+    organization_id: int
+    credits: float
+
+
+class OrganizationCheckoutRequest(BaseModel):
+    """Schema for creating a checkout session."""
+
+    amount: int  # Amount in credits (1 credit = $1)
+    success_url: str
+    cancel_url: str
+
+
+class OrganizationCheckoutResponse(BaseModel):
+    """Schema for checkout session response."""
+
+    checkout_url: str
+    session_id: str

@@ -22,18 +22,31 @@ DELEGATED_USER_EMAIL = (
 SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 
 
-async def send_email_async(to_email: str, email_subject: str, email_body: str) -> bool:
+async def send_email_async(
+    to_email: str,
+    email_subject: str,
+    email_body: str,
+    from_email: str | None = None,
+) -> bool:
     """
     Sends an email using Gmail API with OAuth 2.0 (Service Account with Domain-Wide Delegation).
+
+    Args:
+        to_email: Recipient email address.
+        email_subject: Email subject line.
+        email_body: HTML email body.
+        from_email: Sender email address. Defaults to ONBOARDING_EMAIL env var if not specified.
     """
     if not SERVICE_ACCOUNT_FILE:
         logger.error(
             "Google Service Account Key Path not configured. Cannot send email via OAuth.",
         )
         return False
-    if not DELEGATED_USER_EMAIL:
+
+    sender_email = from_email or DELEGATED_USER_EMAIL
+    if not sender_email:
         logger.error(
-            "Delegated user email (sender email) not configured. Cannot send email via OAuth.",
+            "No sender email configured. Set ONBOARDING_EMAIL env var or pass from_email.",
         )
         return False
 
@@ -42,7 +55,7 @@ async def send_email_async(to_email: str, email_subject: str, email_body: str) -
         creds = Credentials.from_service_account_file(
             SERVICE_ACCOUNT_FILE,
             scopes=SCOPES,
-            subject=DELEGATED_USER_EMAIL,  # Impersonate this user
+            subject=sender_email,  # Impersonate this user
         )
 
         # Build the Gmail service
@@ -56,7 +69,7 @@ async def send_email_async(to_email: str, email_subject: str, email_body: str) -
         # Create the email message
         message = MIMEText(email_body, "html")
         message["to"] = to_email
-        message["from"] = DELEGATED_USER_EMAIL
+        message["from"] = sender_email
         message["subject"] = email_subject
 
         # Encode the message in base64url format
@@ -72,7 +85,7 @@ async def send_email_async(to_email: str, email_subject: str, email_body: str) -
             .execute()
         )
         logger.info(
-            f"Email successfully sent to {to_email} via Gmail API. Message ID: {send_message.get('id')}",
+            f"Email successfully sent from {sender_email} to {to_email} via Gmail API. Message ID: {send_message.get('id')}",
         )
         return True
 

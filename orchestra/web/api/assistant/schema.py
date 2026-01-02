@@ -222,8 +222,13 @@ class AssistantRead(AssistantCreate):
     )
     user_id: str = Field(
         ...,
-        description="ID of the user to associate the assistant with",
+        description="ID of the user who created/owns the assistant",
         example="123",
+    )
+    organization_id: Optional[int] = Field(
+        None,
+        description="Organization ID if this is an organizational assistant, None for personal assistants",
+        example=None,
     )
     created_at: datetime = Field(
         ...,
@@ -247,7 +252,7 @@ class AssistantRead(AssistantCreate):
     )
     api_key: Optional[str] = Field(
         None,
-        description="API key of the assistant",
+        description="API key associated with this assistant (personal or org key)",
         example="1234567890",
     )
     user_first_name: Optional[str] = Field(
@@ -264,6 +269,11 @@ class AssistantRead(AssistantCreate):
         None,
         description="Email of the user",
         example="ada.lovelace@unify.ai",
+    )
+    secrets: Optional[Dict[str, str]] = Field(
+        None,
+        description="Dictionary of secret names to values. Only returned via admin endpoints.",
+        example={"openai_api_key": "sk-..."},
     )
 
     class Config:
@@ -293,12 +303,14 @@ class AssistantRead(AssistantCreate):
                 "voice_mode": "tts",
                 "agent_id": "12345",
                 "user_id": "123",
+                "organization_id": None,
                 "created_at": "2025-04-25T10:30:00Z",
                 "updated_at": "2025-04-26T14:15:00Z",
                 "api_key": "1234567890",
                 "user_first_name": "Ada",
                 "user_last_name": "Lovelace",
                 "user_email": "ada.lovelace@unify.ai",
+                "secrets": {"openai_api_key": "sk-..."},
             },
         }
 
@@ -983,4 +995,262 @@ class AssistantContactRemoval(BaseModel):
         ...,
         description="The type of contact information to remove.",
         example="email",
+    )
+
+
+class AssistantTransferToOrgRequest(BaseModel):
+    """
+    Schema for transferring an assistant from personal to organizational workspace.
+    """
+
+    organization_id: int = Field(
+        ...,
+        description="Target organization ID to transfer the assistant to.",
+        example=123,
+    )
+    transfer_logs: bool = Field(
+        True,
+        description="Whether to transfer existing logs from personal 'Assistants' project to org 'Assistants' project.",
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "organization_id": 123,
+                "transfer_logs": True,
+            },
+        }
+
+
+class AssistantTransferToPersonalRequest(BaseModel):
+    """
+    Schema for transferring an assistant from organizational to personal workspace.
+    """
+
+    delete_logs: bool = Field(
+        True,
+        description="Whether to delete related logs from the org 'Assistants' project.",
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "delete_logs": True,
+            },
+        }
+
+
+class AssistantTransferResponse(BaseModel):
+    """
+    Response schema for assistant transfer operations.
+    """
+
+    message: str = Field(
+        ...,
+        description="Success message describing the transfer result.",
+    )
+    agent_id: int = Field(
+        ...,
+        description="ID of the transferred assistant.",
+    )
+    transferred_from: str = Field(
+        ...,
+        description="Source workspace type ('personal' or 'organization').",
+    )
+    transferred_to: str = Field(
+        ...,
+        description="Target workspace type ('personal' or 'organization').",
+    )
+    logs_transferred: Optional[bool] = Field(
+        None,
+        description="Whether logs were transferred (only for personal->org transfers).",
+    )
+    logs_deleted: Optional[bool] = Field(
+        None,
+        description="Whether logs were deleted (only for org->personal transfers).",
+    )
+
+
+# Assistant Secrets
+
+
+class SecretCreate(BaseModel):
+    """
+    Schema for creating or updating an assistant secret.
+    """
+
+    secret_name: str = Field(
+        ...,
+        description="Unique name/key for the secret (e.g., 'openai_api_key', 'github_token').",
+        example="openai_api_key",
+        min_length=1,
+        max_length=255,
+    )
+    secret_value: str = Field(
+        ...,
+        description="The secret value (API key, token, etc.).",
+        example="sk-...",
+        min_length=1,
+    )
+    description: Optional[str] = Field(
+        None,
+        description="Optional description of what this secret is used for.",
+        example="OpenAI API key for GPT-4 access",
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "secret_name": "openai_api_key",
+                "secret_value": "sk-...",
+                "description": "OpenAI API key for GPT-4 access",
+            },
+        }
+
+
+class SecretUpdate(BaseModel):
+    """
+    Schema for updating an existing secret.
+    """
+
+    secret_value: Optional[str] = Field(
+        None,
+        description="New secret value.",
+        example="sk-new-...",
+        min_length=1,
+    )
+    description: Optional[str] = Field(
+        None,
+        description="New description for the secret.",
+        example="Updated OpenAI API key",
+    )
+
+    class Config:
+        schema_extra = {
+            "example": {
+                "secret_value": "sk-new-...",
+                "description": "Updated OpenAI API key",
+            },
+        }
+
+
+class SecretRead(BaseModel):
+    """
+    Schema for reading secret metadata (value is masked).
+    """
+
+    secret_name: str = Field(
+        ...,
+        description="The name/key of the secret.",
+        example="openai_api_key",
+    )
+    description: Optional[str] = Field(
+        None,
+        description="Description of what this secret is used for.",
+        example="OpenAI API key for GPT-4 access",
+    )
+    created_at: Optional[datetime] = Field(
+        None,
+        description="When the secret was created.",
+    )
+    updated_at: Optional[datetime] = Field(
+        None,
+        description="When the secret was last updated.",
+    )
+
+    class Config:
+        orm_mode = True
+        schema_extra = {
+            "example": {
+                "secret_name": "openai_api_key",
+                "description": "OpenAI API key for GPT-4 access",
+                "created_at": "2025-01-15T10:30:00Z",
+                "updated_at": "2025-01-15T10:30:00Z",
+            },
+        }
+
+
+# Admin schemas
+
+
+class AdminUpdateUserByAssistant(BaseModel):
+    """
+    Admin schema for updating a user's profile via assistant lookup.
+
+    For personal assistants: updates the owner's profile.
+    For org assistants: finds the member by email and updates their profile.
+    """
+
+    assistant_id: int = Field(
+        ...,
+        description="The ID of the assistant to use for user lookup.",
+    )
+    target_user_email: str = Field(
+        ...,
+        description="Email of the target user to update. Must match the assistant owner (personal) or an org member (organizational).",
+    )
+    timezone: Optional[str] = Field(
+        None,
+        description="Timezone to set for the user in IANA format.",
+        example="America/New_York",
+    )
+    bio: Optional[str] = Field(
+        None,
+        description="Bio/description to set for the user.",
+        example="Software engineer focused on AI systems.",
+    )
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in VALID_TIMEZONES:
+            raise ValueError(f"'{v}' is not a valid IANA timezone.")
+        return v
+
+
+class AdminUpdateUserByAssistantResponse(BaseModel):
+    """Response schema for admin update user by assistant."""
+
+    info: str = Field(..., description="Success message.")
+    user_id: str = Field(..., description="ID of the updated user.")
+    email: str = Field(..., description="Email of the updated user.")
+    assistant_type: str = Field(
+        ...,
+        description="Type of assistant ('personal' or 'organization').",
+    )
+
+
+class AdminUpdateAssistant(BaseModel):
+    """
+    Admin schema for updating assistant details directly.
+    Bypasses permission checks for admin operations.
+    """
+
+    timezone: Optional[str] = Field(
+        None,
+        description="Timezone to set for the assistant in IANA format.",
+        example="Europe/London",
+    )
+    about: Optional[str] = Field(
+        None,
+        description="About/description to set for the assistant.",
+        example="AI assistant specializing in customer support.",
+    )
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in VALID_TIMEZONES:
+            raise ValueError(f"'{v}' is not a valid IANA timezone.")
+        return v
+
+
+class AdminUpdateAssistantResponse(BaseModel):
+    """Response schema for admin update assistant."""
+
+    info: str = Field(..., description="Success message.")
+    assistant_id: int = Field(..., description="ID of the updated assistant.")
+    updated_fields: List[str] = Field(
+        ...,
+        description="List of fields that were updated.",
     )
