@@ -496,17 +496,12 @@ def _get_log_event_ids_for_group_value_jsonb(
             "Use entries/ prefix or omit prefix.",
         )
 
-    # Build containment filter for GIN index usage
-    # data @> '{"raw_key": group_value}'
-    containment_obj = json.dumps({raw_key: group_value})
-
-    # Use func.cast with literal for proper JSONB casting
-    from sqlalchemy import literal
-
+    # Use text extraction for type-agnostic comparison
+    # This matches how _get_distinct_group_values_jsonb extracts values via ->>
     query = (
         session.query(LogEvent.id)
         .filter(LogEvent.id.in_(select(log_event_ids)))
-        .filter(LogEvent.data.op("@>")(func.cast(literal(containment_obj), JSONB)))
+        .filter(LogEvent.data.op("->>")(raw_key) == group_value)
     )
 
     return [row[0] for row in query.all()]
