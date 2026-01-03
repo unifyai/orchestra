@@ -160,13 +160,23 @@ jobs:
         PASSED="${{ steps.pytest.outputs.passed }}"
         SKIPPED="${{ steps.pytest.outputs.skipped }}"
 
+        # Count trace files
+        TRACE_COUNT=0
+        if [ -d "$LOGS_DIR/orchestra/requests" ]; then
+          TRACE_COUNT=$(find "$LOGS_DIR/orchestra/requests" -name "*.json" -type f 2>/dev/null | wc -l | tr -d ' ')
+        fi
+
         echo "## ✅ Shard ${{ matrix.shard }}: All Tests Passed" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         if [ "$SKIPPED" -gt 0 ]; then
-          echo "**${PASSED}** passed, **${SKIPPED}** skipped — [view logs]($ARTIFACTS_URL)" >> $GITHUB_STEP_SUMMARY
+          echo "**${PASSED}** passed, **${SKIPPED}** skipped" >> $GITHUB_STEP_SUMMARY
         else
-          echo "**${PASSED}** passed — [view logs]($ARTIFACTS_URL)" >> $GITHUB_STEP_SUMMARY
+          echo "**${PASSED}** passed" >> $GITHUB_STEP_SUMMARY
         fi
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📦 Artifacts" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**${TRACE_COUNT}** request traces captured → [**Download logs-shard-${{ matrix.shard }}**]($ARTIFACTS_URL)" >> $GITHUB_STEP_SUMMARY
 
     - name: Generate failure summary
       if: failure()
@@ -176,13 +186,23 @@ jobs:
         FAILED="${{ steps.pytest.outputs.failed }}"
         SKIPPED="${{ steps.pytest.outputs.skipped }}"
 
+        # Count trace files
+        TRACE_COUNT=0
+        if [ -d "$LOGS_DIR/orchestra/requests" ]; then
+          TRACE_COUNT=$(find "$LOGS_DIR/orchestra/requests" -name "*.json" -type f 2>/dev/null | wc -l | tr -d ' ')
+        fi
+
         echo "## ❌ Shard ${{ matrix.shard }}: Tests Failed" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         if [ "$SKIPPED" -gt 0 ]; then
-          echo "**${PASSED}** passed, **${FAILED}** failed, **${SKIPPED}** skipped — [view logs]($ARTIFACTS_URL)" >> $GITHUB_STEP_SUMMARY
+          echo "**${PASSED}** passed, **${FAILED}** failed, **${SKIPPED}** skipped" >> $GITHUB_STEP_SUMMARY
         else
-          echo "**${PASSED}** passed, **${FAILED}** failed — [view logs]($ARTIFACTS_URL)" >> $GITHUB_STEP_SUMMARY
+          echo "**${PASSED}** passed, **${FAILED}** failed" >> $GITHUB_STEP_SUMMARY
         fi
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📦 Artifacts" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**${TRACE_COUNT}** request traces captured → [**Download logs-shard-${{ matrix.shard }}**]($ARTIFACTS_URL)" >> $GITHUB_STEP_SUMMARY
 
     - name: Prepare logs for upload
       if: always()
@@ -201,14 +221,21 @@ jobs:
             fi
           done < <(find "$LOGS_DIR/orchestra" -type f -name '*:*' -print0 2>/dev/null || true)
 
-          file_count=$(find "$LOGS_DIR/orchestra" -type f 2>/dev/null | wc -l | tr -d ' ')
+          # Count files by type
+          total_files=$(find "$LOGS_DIR/orchestra" -type f 2>/dev/null | wc -l | tr -d ' ')
+          trace_files=0
+          if [ -d "$LOGS_DIR/orchestra/requests" ]; then
+            trace_files=$(find "$LOGS_DIR/orchestra/requests" -name "*.json" -type f 2>/dev/null | wc -l | tr -d ' ')
+          fi
+
+          echo "✓ orchestra logs: $total_files files total"
+          echo "  - $trace_files request traces (JSON)"
           if [ "$sanitized" -gt 0 ]; then
-            echo "✓ orchestra logs: $file_count files ($sanitized filenames sanitized)"
-          else
-            echo "✓ orchestra logs: $file_count files"
+            echo "  - $sanitized filenames sanitized (colons → underscores)"
           fi
         else
           echo "○ orchestra logs: directory not found"
+          echo "  (No traces captured - check ORCHESTRA_LOG_DIR env var)"
         fi
 
         echo "=== Log preparation complete ==="
