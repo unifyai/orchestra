@@ -64,7 +64,7 @@ jobs:
         - 5432:5432
     steps:
 
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
     - name: Auth into Google Cloud
       uses: 'google-github-actions/auth@v2'
       # This service account also needs pub/sub
@@ -79,6 +79,14 @@ jobs:
     - name: Install Poetry
       run: pip install poetry
 
+    - name: Cache poetry dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pypoetry
+        key: poetry-${{ runner.os }}-${{ hashFiles('poetry.lock') }}
+        restore-keys: |
+          poetry-${{ runner.os }}-
+
     - name: Install deps
       run: poetry install
       env:
@@ -90,7 +98,29 @@ jobs:
         echo "Created logging directory: $LOGS_DIR/orchestra/"
 
     - name: Run pytest check
-      run: poetry run pytest -p no:warnings -vv --cov="orchestra" -n 8 --shard-id=${{ matrix.shard }} --num-shards=8 . -m "not performance"
+      id: pytest
+      run: |
+        set +e
+        poetry run pytest -p no:warnings -vv --cov="orchestra" -n 8 --shard-id=${{ matrix.shard }} --num-shards=8 . -m "not performance" 2>&1 | tee pytest_output.txt
+        exit_code=${PIPESTATUS[0]}
+        echo "exit_code=$exit_code" >> $GITHUB_OUTPUT
+
+        # Extract pass/fail counts from pytest summary line
+        summary_line=$(grep -E "^=+ .*(passed|failed).* in [0-9]+\.[0-9]+s =+$" pytest_output.txt | tail -1)
+        if [ -n "$summary_line" ]; then
+          passed=$(echo "$summary_line" | grep -oE "[0-9]+ passed" | grep -oE "[0-9]+" || echo "0")
+          failed=$(echo "$summary_line" | grep -oE "[0-9]+ failed" | grep -oE "[0-9]+" || echo "0")
+          skipped=$(echo "$summary_line" | grep -oE "[0-9]+ skipped" | grep -oE "[0-9]+" || echo "0")
+          echo "passed=${passed:-0}" >> $GITHUB_OUTPUT
+          echo "failed=${failed:-0}" >> $GITHUB_OUTPUT
+          echo "skipped=${skipped:-0}" >> $GITHUB_OUTPUT
+        else
+          echo "passed=0" >> $GITHUB_OUTPUT
+          echo "failed=0" >> $GITHUB_OUTPUT
+          echo "skipped=0" >> $GITHUB_OUTPUT
+        fi
+
+        exit $exit_code
       env:
         ORCHESTRA_HOST: "0.0.0.0"
         ORCHESTRA_DB_HOST: localhost
@@ -122,6 +152,37 @@ jobs:
         AUTH_ACCOUNT_USER_ID: ${{ secrets.AUTH_ACCOUNT_USER_ID }}
         AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
         AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+
+    - name: Generate success summary
+      if: success()
+      run: |
+        ARTIFACTS_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts"
+        PASSED="${{ steps.pytest.outputs.passed }}"
+        SKIPPED="${{ steps.pytest.outputs.skipped }}"
+
+        echo "## ✅ Shard ${{ matrix.shard }}: All Tests Passed" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        if [ "$SKIPPED" -gt 0 ]; then
+          echo "**${PASSED}** passed, **${SKIPPED}** skipped — [view logs]($ARTIFACTS_URL)" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "**${PASSED}** passed — [view logs]($ARTIFACTS_URL)" >> $GITHUB_STEP_SUMMARY
+        fi
+
+    - name: Generate failure summary
+      if: failure()
+      run: |
+        ARTIFACTS_URL="https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts"
+        PASSED="${{ steps.pytest.outputs.passed }}"
+        FAILED="${{ steps.pytest.outputs.failed }}"
+        SKIPPED="${{ steps.pytest.outputs.skipped }}"
+
+        echo "## ❌ Shard ${{ matrix.shard }}: Tests Failed" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        if [ "$SKIPPED" -gt 0 ]; then
+          echo "**${PASSED}** passed, **${FAILED}** failed, **${SKIPPED}** skipped — [view logs]($ARTIFACTS_URL)" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "**${PASSED}** passed, **${FAILED}** failed — [view logs]($ARTIFACTS_URL)" >> $GITHUB_STEP_SUMMARY
+        fi
 
     - name: Prepare logs for upload
       if: always()
