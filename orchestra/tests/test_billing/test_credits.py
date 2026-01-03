@@ -62,6 +62,141 @@ def test_negative_recharge(dbsession, worker_id) -> None:
 
 
 @pytest.mark.anyio
+async def test_deduct_credits_success(
+    client: AsyncClient,
+    fastapi_app: FastAPI,
+    dbsession,
+) -> None:
+    """Test successful credit deduction."""
+    # Get initial credits for the authenticated user
+    credits_response = await client.get("/v0/credits", headers=HEADERS)
+    assert credits_response.status_code == status.HTTP_200_OK
+    initial_credits = credits_response.json()["credits"]
+
+    # Deduct some credits
+    deduct_amount = 0.5
+    response = await client.post(
+        "/v0/credits/deduct",
+        headers=HEADERS,
+        json={"amount": deduct_amount},
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    response_data = response.json()
+
+    assert response_data["previous_credits"] == initial_credits
+    assert response_data["deducted"] == deduct_amount
+    assert math.isclose(
+        response_data["current_credits"],
+        initial_credits - deduct_amount,
+    )
+
+    # Verify via GET /credits endpoint
+    updated_response = await client.get("/v0/credits", headers=HEADERS)
+    assert math.isclose(
+        updated_response.json()["credits"],
+        initial_credits - deduct_amount,
+    )
+
+
+@pytest.mark.anyio
+async def test_deduct_credits_insufficient_funds(
+    client: AsyncClient,
+    fastapi_app: FastAPI,
+) -> None:
+    """Test deduction fails when user has insufficient credits."""
+    # Get current credits for the authenticated user
+    credits_response = await client.get("/v0/credits", headers=HEADERS)
+    assert credits_response.status_code == status.HTTP_200_OK
+    current_credits = credits_response.json()["credits"]
+
+    # Try to deduct more than available
+    response = await client.post(
+        "/v0/credits/deduct",
+        headers=HEADERS,
+        json={"amount": current_credits + 1000000},
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "Insufficient credits" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_deduct_credits_zero_amount(
+    client: AsyncClient,
+    fastapi_app: FastAPI,
+) -> None:
+    """Test deduction fails with zero amount."""
+    response = await client.post(
+        "/v0/credits/deduct",
+        headers=HEADERS,
+        json={"amount": 0},
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+@pytest.mark.anyio
+async def test_deduct_credits_negative_amount(
+    client: AsyncClient,
+    fastapi_app: FastAPI,
+) -> None:
+    """Test deduction fails with negative amount (cannot add credits)."""
+    response = await client.post(
+        "/v0/credits/deduct",
+        headers=HEADERS,
+        json={"amount": -5.0},
+    )
+
+    assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
+
+
+@pytest.mark.anyio
+async def test_deduct_credits_exact_balance(
+    client: AsyncClient,
+    fastapi_app: FastAPI,
+) -> None:
+    """Test deducting exactly the available balance succeeds."""
+    # Get current credits for the authenticated user
+    credits_response = await client.get("/v0/credits", headers=HEADERS)
+    assert credits_response.status_code == status.HTTP_200_OK
+    exact_balance = credits_response.json()["credits"]
+
+    # Deduct exact balance
+    response = await client.post(
+        "/v0/credits/deduct",
+        headers=HEADERS,
+        json={"amount": exact_balance},
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    response_data = response.json()
+    assert response_data["current_credits"] == 0.0
+
+    # Verify balance is actually 0
+    updated_response = await client.get("/v0/credits", headers=HEADERS)
+    assert updated_response.json()["credits"] == 0.0
+
+
+@pytest.mark.anyio
+async def test_deduct_credits_fractional_amount(
+    client: AsyncClient,
+    fastapi_app: FastAPI,
+) -> None:
+    """Test deducting fractional credit amounts."""
+    # Deduct a fractional amount
+    response = await client.post(
+        "/v0/credits/deduct",
+        headers=HEADERS,
+        json={"amount": 0.123},
+    )
+
+    assert response.status_code == status.HTTP_200_OK
+    response_data = response.json()
+    assert response_data["deducted"] == 0.123
+
+
+@pytest.mark.anyio
 async def test_get_credits(  # noqa: WPS218, E501
     client: AsyncClient,
     fastapi_app: FastAPI,
