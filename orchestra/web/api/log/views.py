@@ -1007,6 +1007,9 @@ def create_from_logs(
                 log_event_ids=log_event_ids_subq,
             )
 
+            if not computed_values:
+                return {"info": "No values computed. Nothing to create."}
+
             # Create a new derived log entry for each computed value
             new_derived_logs = []
             derived_log_associations = []  # Track (log_event_id, derived_log_index)
