@@ -1123,7 +1123,7 @@ def delete_assistant(
 
         # Suspend any jobs that might be currently running with that assistant
         try:
-            response = stop_jobs(assistant_id)
+            response = stop_jobs(assistant_id, session)
             print(f"JOB STOPPED: {response['job_names']}")
         except Exception as e:
             logging.error(f"Failed to stop job: {str(e)}")
@@ -4068,12 +4068,13 @@ async def admin_list_assistant_emails(
 def admin_get_assistant_status(
     assistant_id: str,
     request: Request,
+    session: Session = Depends(get_db_session),
 ) -> InfoResponse[AssistantStatus]:
     """
     Get the live status of an assistant's dedicated service.
     """
     try:
-        job_names = get_running_jobs(assistant_id)
+        job_names = get_running_jobs(assistant_id, session)
         if len(job_names) > 0:
             return InfoResponse(
                 info=AssistantStatus(running=True, job_name=job_names[0]),
