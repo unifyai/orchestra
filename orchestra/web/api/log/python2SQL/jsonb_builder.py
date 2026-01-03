@@ -52,7 +52,7 @@ from .helpers import (
     cast_expr,
     unify_inferred_types,
 )
-from .image_utils import get_phash_from_node
+from .image_utils import fetch_media_with_retry, get_phash_from_node
 from .operators import _arithmetic_expr, _null_safe_eq, _null_safe_ne
 from .subquery_utils import build_result_subquery, build_result_subquery_with_join
 from .temporal_utils import (
@@ -4370,8 +4370,9 @@ def _handle_phash_jsonb(
                         b64_string = image_url.split(",", 1)[1]
                         image_data = base64.b64decode(b64_string)
                     else:
-                        # GCS URL - fetch from bucket service
-                        base64_image = bucket_svc.get_media(image_url.split("/")[-1])
+                        # GCS URL - fetch with retry to handle eventual consistency
+                        filename = image_url.split("/")[-1]
+                        base64_image = fetch_media_with_retry(bucket_svc, filename)
                         if not base64_image:
                             error_msg = (
                                 f"Failed to fetch image for log_event_id={log_event_id}"

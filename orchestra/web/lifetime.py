@@ -17,7 +17,7 @@ from opentelemetry.sdk.resources import (
 )
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
-from opentelemetry.trace import set_tracer_provider
+from opentelemetry.trace import get_tracer_provider, set_tracer_provider
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -29,6 +29,11 @@ logger = logging.getLogger(__name__)
 
 # Global variable to store the engine instance
 _engine = None
+
+# Track if OTel TracerProvider has been initialized (for idempotent setup)
+# This allows setup_opentelemetry to be called multiple times (e.g., in tests)
+# without recreating the TracerProvider each time
+_otel_tracer_provider_initialized = False
 
 
 def _setup_db(app: FastAPI) -> None:  # pragma: no cover
@@ -116,26 +121,13 @@ def get_engine():
     return _engine
 
 
-def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
+def _create_tracer_provider() -> TracerProvider:
     """
-    Enables opentelemetry instrumentation.
+    Create and configure a TracerProvider with all exporters.
 
-    :param app: current application.
+    This is separated from setup_opentelemetry to allow the TracerProvider
+    to be created once and reused across multiple app instances (e.g., in tests).
     """
-    # Check master switch first
-    if not settings.otel_enabled:
-        return
-
-    # Enable tracing if any backend is configured (OTLP, Tempo, or local file)
-    if (
-        not settings.otel_endpoint
-        and not settings.tempo_url
-        and not settings.log_dir
-        and not settings.otel_log_dir
-    ):
-        return
-
-    # Create resource with service information
     resource = Resource.create(
         {
             SERVICE_NAME: "orchestra",
@@ -154,7 +146,7 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
                     OTLPSpanExporter(
                         endpoint=settings.otel_endpoint,
                         insecure=not settings.otel_secure,
-                        timeout=5,  # Add timeout to prevent hanging
+                        timeout=5,
                     ),
                 ),
             )
@@ -167,54 +159,46 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
     # Add Tempo exporter if configured
     if settings.tempo_url:
         try:
-            # Determine if we're using HTTP or gRPC based on the port
             if ":4318" in settings.tempo_url:
-                # Use HTTP exporter for port 4318
                 from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
                     OTLPSpanExporter as HTTPSpanExporter,
                 )
 
-                # For HTTP, use the /v1/traces endpoint
                 tempo_endpoint = f"{settings.tempo_url}/v1/traces"
                 tempo_exporter = HTTPSpanExporter(
                     endpoint=tempo_endpoint,
-                    timeout=5,  # Add timeout to prevent hanging
+                    timeout=5,
                 )
                 logger.info(f"Configured Tempo HTTP exporter at {tempo_endpoint}")
             elif ":4317" in settings.tempo_url:
-                # Use gRPC exporter for port 4317
                 tempo_exporter = OTLPSpanExporter(
                     endpoint=settings.tempo_url,
-                    insecure=True,  # Most Tempo deployments don't use TLS internally
-                    timeout=5,  # Add timeout to prevent hanging
+                    insecure=True,
+                    timeout=5,
                 )
                 logger.info(f"Configured Tempo gRPC exporter at {settings.tempo_url}")
             else:
-                # Default to HTTP if port not specified
                 from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
                     OTLPSpanExporter as HTTPSpanExporter,
                 )
 
-                # For HTTP, use the /v1/traces endpoint
                 tempo_endpoint = f"{settings.tempo_url}/v1/traces"
                 tempo_exporter = HTTPSpanExporter(
                     endpoint=tempo_endpoint,
-                    timeout=5,  # Add timeout to prevent hanging
+                    timeout=5,
                 )
                 logger.info(f"Configured Tempo HTTP exporter at {tempo_endpoint}")
 
-            # Add the exporter to the tracer provider
             tracer_provider.add_span_processor(BatchSpanProcessor(tempo_exporter))
 
         except Exception as e:
             logger.warning(f"Failed to configure Tempo exporter: {e}")
             logger.warning(
-                "Continuing without Tempo tracing. Make sure Tempo is running at the configured URL.",
+                "Continuing without Tempo tracing. "
+                "Make sure Tempo is running at the configured URL.",
             )
-            # Continue without Tempo tracing
 
     # Add JSONL exporter for unified traces with Unity (ORCHESTRA_OTEL_LOG_DIR)
-    # This writes {trace_id}.jsonl files matching Unity's format
     if settings.log_enabled and settings.otel_log_dir:
         try:
             from orchestra.web.api.utils.file_trace_exporter import JsonlSpanExporter
@@ -231,7 +215,6 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
             logger.warning(f"Failed to configure JSONL span exporter: {e}")
 
     # Add per-request JSON exporter for Orchestra-centric debugging (ORCHESTRA_LOG_DIR)
-    # This writes detailed per-request JSON files to requests/ subdirectory
     if settings.log_enabled and settings.log_dir:
         try:
             from orchestra.web.api.utils.file_trace_exporter import FileSpanExporter
@@ -244,6 +227,57 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
         except Exception as e:
             logger.warning(f"Failed to configure per-request JSON exporter: {e}")
 
+    return tracer_provider
+
+
+def setup_opentelemetry(app: FastAPI) -> None:
+    """
+    Enables opentelemetry instrumentation.
+
+    This function is idempotent: the TracerProvider and global library instrumentation
+    (OpenAI, httpx) are set up once, while per-app instrumentation (FastAPI, SQLAlchemy)
+    happens on each call. This supports both production (single app) and tests (multiple
+    app instances sharing the same TracerProvider).
+
+    :param app: current application.
+    """
+    global _otel_tracer_provider_initialized
+
+    # Check master switch first
+    if not settings.otel_enabled:
+        return
+
+    # Enable tracing if any backend is configured (OTLP, Tempo, or local file)
+    if (
+        not settings.otel_endpoint
+        and not settings.tempo_url
+        and not settings.log_dir
+        and not settings.otel_log_dir
+    ):
+        return
+
+    # Create TracerProvider once and set as global (idempotent)
+    if not _otel_tracer_provider_initialized:
+        tracer_provider = _create_tracer_provider()
+        set_tracer_provider(tracer_provider=tracer_provider)
+
+        # Instrument global libraries once
+        OpenAIInstrumentor().instrument(tracer_provider=tracer_provider)
+        logger.info("Instrumented OpenAI client for tracing")
+
+        HTTPXClientInstrumentor().instrument(tracer_provider=tracer_provider)
+        logger.info("Instrumented httpx client for HTTP-level tracing")
+
+        _otel_tracer_provider_initialized = True
+        logger.info("OTel TracerProvider initialized")
+    else:
+        logger.debug("OTel TracerProvider already initialized, reusing")
+
+    # Get the current tracer provider (either just created or existing)
+    tracer_provider = get_tracer_provider()
+
+    # Instrument per-app components (FastAPI and SQLAlchemy)
+    # These are safe to call multiple times for different app/engine instances
     excluded_endpoints = [
         app.url_path_for("health_check"),
         app.url_path_for("openapi"),
@@ -258,34 +292,52 @@ def setup_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
         tracer_provider=tracer_provider,
         excluded_urls=",".join(excluded_endpoints),
     )
-    SQLAlchemyInstrumentor().instrument(
-        tracer_provider=tracer_provider,
-        engine=app.state.db_engine,
-    )
-    OpenAIInstrumentor().instrument(tracer_provider=tracer_provider)
-    logger.info("Instrumented OpenAI client for tracing")
 
-    # Instrument httpx to capture actual HTTP request timing for OpenAI SDK calls
-    # This provides visibility into individual HTTP requests, retries, and rate limiting
-    HTTPXClientInstrumentor().instrument(tracer_provider=tracer_provider)
-    logger.info("Instrumented httpx client for HTTP-level tracing")
-
-    set_tracer_provider(tracer_provider=tracer_provider)
+    if hasattr(app.state, "db_engine") and app.state.db_engine is not None:
+        SQLAlchemyInstrumentor().instrument(
+            tracer_provider=tracer_provider,
+            engine=app.state.db_engine,
+        )
 
 
-def stop_opentelemetry(app: FastAPI) -> None:  # pragma: no cover
+def flush_opentelemetry(timeout_millis: int = 5000) -> None:
     """
-    Disables opentelemetry instrumentation.
+    Flush all pending traces to ensure they are written to exporters.
+
+    Call this before process exit or test teardown to ensure all traces are captured.
+
+    :param timeout_millis: Maximum time to wait for flush to complete.
+    """
+    if not settings.otel_enabled or not _otel_tracer_provider_initialized:
+        return
+
+    tracer_provider = get_tracer_provider()
+    if hasattr(tracer_provider, "force_flush"):
+        try:
+            tracer_provider.force_flush(timeout_millis=timeout_millis)
+            logger.debug("Flushed OTel traces")
+        except Exception as e:
+            logger.warning(f"Failed to flush OTel traces: {e}")
+
+
+def stop_opentelemetry(app: FastAPI) -> None:
+    """
+    Disables opentelemetry instrumentation for a specific app.
 
     :param app: current application.
     """
     if not settings.otel_enabled:
         return
 
-    FastAPIInstrumentor().uninstrument_app(app)
-    SQLAlchemyInstrumentor().uninstrument()
-    OpenAIInstrumentor().uninstrument()
-    HTTPXClientInstrumentor().uninstrument()
+    try:
+        FastAPIInstrumentor().uninstrument_app(app)
+    except Exception as e:
+        logger.debug(f"Failed to uninstrument FastAPI app: {e}")
+
+    try:
+        SQLAlchemyInstrumentor().uninstrument()
+    except Exception as e:
+        logger.debug(f"Failed to uninstrument SQLAlchemy: {e}")
 
 
 def setup_observability(app: FastAPI) -> None:  # pragma: no cover

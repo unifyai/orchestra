@@ -1,7 +1,6 @@
 import base64
 import json
 import os
-import time
 from datetime import datetime, timezone
 
 import cv2
@@ -322,7 +321,6 @@ async def _create_image_log(
         entries=entries,
         context=context_name,
     )
-    time.sleep(2)  # wait for GCS to upload the image
     return result
 
 

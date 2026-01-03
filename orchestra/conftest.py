@@ -42,6 +42,7 @@ from orchestra.db.dependencies import get_db_session
 from orchestra.db.utils import create_database, drop_database
 from orchestra.settings import settings
 from orchestra.web.application import get_app
+from orchestra.web.lifetime import flush_opentelemetry, setup_opentelemetry
 
 
 @pytest.fixture(scope="session")
@@ -220,15 +221,28 @@ def dbsession(
 @pytest.fixture
 def fastapi_app(
     dbsession: Session,
+    _engine: Engine,
 ) -> FastAPI:
     """
-    Fixture for creating FastAPI app.
+    Fixture for creating FastAPI app with OTel tracing enabled.
 
-    :return: fastapi app with mocked dependencies.
+    Sets up db_engine on app state and configures OpenTelemetry instrumentation.
+    When ORCHESTRA_LOG_DIR is set (e.g., in CI), traces are written to files.
+
+    :return: fastapi app with mocked dependencies and OTel instrumentation.
     """
     application = get_app()
     application.dependency_overrides[get_db_session] = lambda: dbsession
-    return application  # noqa: WPS331
+
+    # Set up db_engine on app state (normally done in _setup_db during startup)
+    # Required for SQLAlchemy instrumentation in setup_opentelemetry
+    application.state.db_engine = _engine
+
+    # Set up OTel tracing (idempotent - TracerProvider created once per process)
+    # This enables trace capture during tests when ORCHESTRA_LOG_DIR is set
+    setup_opentelemetry(application)
+
+    return application
 
 
 class TestAwareAsyncClient(AsyncClient):
@@ -1381,6 +1395,21 @@ def cleanup_test_bucket():
             blob.delete()
     except Exception as e:
         print(f"Warning: Failed to cleanup test bucket: {str(e)}")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def flush_otel_traces():
+    """
+    Flush OTel traces at session end to ensure all spans are written to exporters.
+
+    When ORCHESTRA_LOG_DIR is set (e.g., in CI), this ensures all trace files
+    are written before the test process exits. Without this, traces in the
+    BatchSpanProcessor buffer might be lost.
+    """
+    yield  # Allow tests to run
+
+    # Flush any buffered traces to ensure they're written to files
+    flush_opentelemetry(timeout_millis=10000)
 
 
 def pytest_sessionfinish(session, exitstatus):
