@@ -7,10 +7,13 @@ inlined in jsonb_builder.py's pHash distance handler.
 
 import base64
 import io
+import logging
+import time
 from typing import Any, Optional
 
 __all__ = [
     "compute_phash_from_base64",
+    "fetch_media_with_retry",
     "get_phash_from_node",
     "is_phash_hex",
 ]
@@ -98,3 +101,63 @@ def is_phash_hex(value: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def fetch_media_with_retry(
+    bucket_service,
+    filename: str,
+    max_retries: int = 3,
+    base_delay: float = 0.5,
+) -> Optional[str]:
+    """
+    Fetch media from GCS with exponential backoff retry.
+
+    Handles GCS eventual consistency by retrying failed fetches with
+    exponential backoff. This ensures newly uploaded objects are
+    retrievable even if they haven't fully propagated yet.
+
+    Args:
+        bucket_service: BucketService instance for fetching media
+        filename: The filename to fetch from GCS
+        max_retries: Maximum number of retry attempts (default: 3)
+        base_delay: Initial delay in seconds between retries (default: 0.5)
+
+    Returns:
+        Base64 encoded media string, or None if all retries fail
+    """
+    last_error = None
+
+    for attempt in range(max_retries + 1):
+        try:
+            result = bucket_service.get_media(filename)
+            if result is not None:
+                return result
+
+            # get_media returned None - object not found, might be eventual consistency
+            if attempt < max_retries:
+                delay = base_delay * (2**attempt)
+                logging.debug(
+                    f"GCS object '{filename}' not found, retrying in {delay}s "
+                    f"(attempt {attempt + 1}/{max_retries + 1})",
+                )
+                time.sleep(delay)
+        except Exception as e:
+            last_error = e
+            if attempt < max_retries:
+                delay = base_delay * (2**attempt)
+                logging.debug(
+                    f"Error fetching '{filename}' from GCS: {e}, retrying in {delay}s "
+                    f"(attempt {attempt + 1}/{max_retries + 1})",
+                )
+                time.sleep(delay)
+
+    if last_error:
+        logging.warning(
+            f"Failed to fetch '{filename}' from GCS after {max_retries + 1} attempts: {last_error}",
+        )
+    else:
+        logging.warning(
+            f"GCS object '{filename}' not found after {max_retries + 1} attempts",
+        )
+
+    return None

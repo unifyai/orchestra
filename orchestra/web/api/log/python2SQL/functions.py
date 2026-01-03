@@ -55,6 +55,7 @@ from .helpers import (
     count_tokens_per_utf_byte,
     unify_inferred_types,
 )
+from .image_utils import fetch_media_with_retry
 
 __all__ = [
     "_handle_functions",
@@ -1253,15 +1254,13 @@ def _handle_functions(
                 error_msg = None
                 if image_url and isinstance(image_url, str):
                     try:
-                        # The get_media function returns a base64 string, so we need to decode it
-                        base64_image = bucket_svc.get_media(
-                            image_url.split("/")[-1],
-                        )
+                        # Fetch with retry to handle GCS eventual consistency
+                        filename = image_url.split("/")[-1]
+                        base64_image = fetch_media_with_retry(bucket_svc, filename)
                         if base64_image:
                             image_data = base64.b64decode(base64_image)
                             image = Image.open(io.BytesIO(image_data))
                             hash_value = imagehash.phash(image)
-                            # Compute the perceptual hash and convert to an integer
                             phash_hex = format(int(str(hash_value), 16), "016x")
                         else:
                             error_msg = f"Failed to fetch image from GCS for log_event_id={log_event_id}, image_url={image_url}"
