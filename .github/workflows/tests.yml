@@ -101,11 +101,13 @@ jobs:
       id: pytest
       run: |
         set +e
-        poetry run pytest -p no:warnings -vv --cov="orchestra" -n 8 --shard-id=${{ matrix.shard }} --num-shards=8 . -m "not performance" 2>&1 | tee pytest_output.txt
+        # --color=no ensures no ANSI codes in output (required for summary line parsing)
+        poetry run pytest -p no:warnings -vv --color=no --cov="orchestra" -n 8 --shard-id=${{ matrix.shard }} --num-shards=8 . -m "not performance" 2>&1 | tee pytest_output.txt
         exit_code=${PIPESTATUS[0]}
         echo "exit_code=$exit_code" >> $GITHUB_OUTPUT
 
         # Extract pass/fail counts from pytest summary line
+        # Format: "====== X passed, Y failed, Z skipped in N.NNs ======"
         summary_line=$(grep -E "^=+ .*(passed|failed).* in [0-9]+\.[0-9]+s =+$" pytest_output.txt | tail -1)
         if [ -n "$summary_line" ]; then
           passed=$(echo "$summary_line" | grep -oE "[0-9]+ passed" | grep -oE "[0-9]+" || echo "0")
