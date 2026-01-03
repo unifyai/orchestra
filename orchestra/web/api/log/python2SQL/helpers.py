@@ -57,6 +57,7 @@ from orchestra.db.models.orchestra_models import (
 )
 
 from . import alias_utils
+from .image_utils import fetch_media_with_retry
 
 __all__ = [
     "unify_inferred_types",
@@ -397,9 +398,9 @@ def _get_image_embedding_from_url(
 
                     bucket_service = BucketService()
 
-                # Extract filename from URL (last part after /)
+                # Extract filename from URL and fetch with retry for GCS eventual consistency
                 filename = image_url.split("/")[-1]
-                base64_image = bucket_service.get_media(filename)
+                base64_image = fetch_media_with_retry(bucket_service, filename)
 
                 if not base64_image:
                     logging.warning(f"Failed to fetch image from GCS: {filename}")

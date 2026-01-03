@@ -106,9 +106,12 @@ jobs:
         exit_code=${PIPESTATUS[0]}
         echo "exit_code=$exit_code" >> $GITHUB_OUTPUT
 
+        # Strip any remaining ANSI codes (from coverage or other plugins) before parsing
+        sed -i 's/\x1b\[[0-9;]*m//g' pytest_output.txt
+
         # Extract pass/fail counts from pytest summary line
         # Format: "====== X passed, Y failed, Z skipped in N.NNs ======"
-        summary_line=$(grep -E "^=+ .*(passed|failed).* in [0-9]+\.[0-9]+s =+$" pytest_output.txt | tail -1)
+        summary_line=$(grep -E "^=+ .*(passed|failed).* in [0-9]+(\.[0-9]+)?s =+$" pytest_output.txt | tail -1)
         if [ -n "$summary_line" ]; then
           passed=$(echo "$summary_line" | grep -oE "[0-9]+ passed" | grep -oE "[0-9]+" || echo "0")
           failed=$(echo "$summary_line" | grep -oE "[0-9]+ failed" | grep -oE "[0-9]+" || echo "0")
@@ -117,6 +120,10 @@ jobs:
           echo "failed=${failed:-0}" >> $GITHUB_OUTPUT
           echo "skipped=${skipped:-0}" >> $GITHUB_OUTPUT
         else
+          # Debug: show last 5 lines to help diagnose parsing issues
+          echo "Warning: Could not parse pytest summary line" >&2
+          echo "Last 5 lines of output:" >&2
+          tail -5 pytest_output.txt >&2
           echo "passed=0" >> $GITHUB_OUTPUT
           echo "failed=0" >> $GITHUB_OUTPUT
           echo "skipped=0" >> $GITHUB_OUTPUT

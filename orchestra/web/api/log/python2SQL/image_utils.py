@@ -106,8 +106,8 @@ def is_phash_hex(value: str) -> bool:
 def fetch_media_with_retry(
     bucket_service,
     filename: str,
-    max_retries: int = 3,
-    base_delay: float = 0.5,
+    max_retries: int = 5,
+    base_delay: float = 1.0,
 ) -> Optional[str]:
     """
     Fetch media from GCS with exponential backoff retry.
@@ -116,11 +116,15 @@ def fetch_media_with_retry(
     exponential backoff. This ensures newly uploaded objects are
     retrievable even if they haven't fully propagated yet.
 
+    With defaults of max_retries=5 and base_delay=1.0, this provides
+    up to 1+2+4+8+16 = 31 seconds of retry time, which handles GCS
+    propagation delays in CI environments.
+
     Args:
         bucket_service: BucketService instance for fetching media
         filename: The filename to fetch from GCS
-        max_retries: Maximum number of retry attempts (default: 3)
-        base_delay: Initial delay in seconds between retries (default: 0.5)
+        max_retries: Maximum number of retry attempts (default: 5)
+        base_delay: Initial delay in seconds between retries (default: 1.0)
 
     Returns:
         Base64 encoded media string, or None if all retries fail
