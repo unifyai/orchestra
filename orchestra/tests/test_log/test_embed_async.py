@@ -270,10 +270,9 @@ async def test_embed_sync_with_model_and_dimensions(
     log_id = response.json()["log_event_ids"][0]
 
     # Create derived entry with all args
+    # Note: text-embedding-3-small requires 1536 dimensions per database constraint
     key = "text_embed"
-    equation = (
-        'embed({log:text_field}, "text-embedding-3-small", 512, async_embeddings=False)'
-    )
+    equation = 'embed({log:text_field}, "text-embedding-3-small", 1536, async_embeddings=False)'
     referenced_logs = {"log": [log_id]}
     response = await _create_derived_entry(
         client,

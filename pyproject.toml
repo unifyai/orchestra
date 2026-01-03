@@ -11,7 +11,7 @@ maintainers = [
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.9"
+python = "^3.12"
 fastapi = "^0.100.0"
 uvicorn = { version = "^0.22.0", extras = ["standard"] }
 pydantic = "^2"
@@ -54,8 +54,6 @@ pytest-xdist = {extras = ["psutils"], version = "^3.6.1"}
 redis = "^5.0.7"
 litellm = "^1.80.11"
 shortuuid = "^1.0.13"
-unifyai = { git = "https://github.com/unifyai/unify.git", branch = "main"}
-clickhouse-connect = "^0.8.9"
 opencv-python = "^4.10.0.84"
 imagehash = "^4.3.1"
 Pillow = "^10.0.0"
@@ -90,6 +88,11 @@ anyio = "^3.6.2"
 pytest-env = "^0.8.1"
 httpx = "^0.24.0"
 hypothesis = "^6.130.3"
+
+[tool.black]
+extend-exclude = '''
+^/scripts/
+'''
 
 [tool.isort]
 profile = "black"
