@@ -110,8 +110,8 @@ jobs:
         sed -i 's/\x1b\[[0-9;]*m//g' pytest_output.txt
 
         # Extract pass/fail counts from pytest summary line
-        # Format: "====== X passed, Y failed, Z skipped in N.NNs ======"
-        summary_line=$(grep -E "^=+ .*(passed|failed).* in [0-9]+(\.[0-9]+)?s =+$" pytest_output.txt | tail -1)
+        # Format: "====== X passed, Y failed, Z skipped in N.NNs (H:MM:SS) ======"
+        summary_line=$(grep -E "^=+ .*(passed|failed).* in [0-9]+(\.[0-9]+)?s" pytest_output.txt | tail -1)
         if [ -n "$summary_line" ]; then
           passed=$(echo "$summary_line" | grep -oE "[0-9]+ passed" | grep -oE "[0-9]+" || echo "0")
           failed=$(echo "$summary_line" | grep -oE "[0-9]+ failed" | grep -oE "[0-9]+" || echo "0")
