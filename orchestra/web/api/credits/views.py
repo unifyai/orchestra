@@ -11,7 +11,11 @@ from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Users
 from orchestra.lib.time import month_end_utc
-from orchestra.web.api.credits.schema import CreditsResponse
+from orchestra.web.api.credits.schema import (
+    CreditsResponse,
+    DeductCreditsRequest,
+    DeductCreditsResponse,
+)
 from orchestra.web.api.utils.http_responses import not_found
 from orchestra.web.api.utils.on_prem import handle_on_prem
 
@@ -55,6 +59,76 @@ def get_credits(
     if len(user) == 0:
         logging.debug(f"##ANCHOR## bot: {request_fastapi.state.user_id}")
     return user[0]
+
+
+@router.post(
+    "/credits/deduct",
+    response_model=DeductCreditsResponse,
+    responses={
+        200: {
+            "description": "Credits deducted successfully",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "previous_credits": 10.0,
+                        "deducted": 2.5,
+                        "current_credits": 7.5,
+                    },
+                },
+            },
+        },
+        400: {
+            "description": "Invalid request or insufficient credits",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": "Insufficient credits. Available: 5.0, requested: 10.0",
+                    },
+                },
+            },
+        },
+    },
+)
+@handle_on_prem(endpoint="/credits/deduct", method="none")
+def deduct_credits(
+    request_fastapi: Request,
+    request: DeductCreditsRequest,
+    session=Depends(get_db_session),
+) -> DeductCreditsResponse:
+    """
+    Deducts credits from the user's account.
+
+    The amount must be positive and cannot exceed the user's available credits.
+    This endpoint can only deduct credits, not add them.
+    \f
+    :param request_fastapi: FastAPI request object.
+    :param request: Request body containing the amount to deduct.
+    :param session: Database session.
+    :return: Response with previous, deducted, and current credit amounts.
+    """
+    users_dao = UsersDAO(session)
+    user = users_dao.filter(id=request_fastapi.state.user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    current_credits = float(user[0].credits)
+
+    if request.amount > current_credits:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Insufficient credits. Available: {current_credits}, requested: {request.amount}",
+        )
+
+    users_dao.recharge_credit(request_fastapi.state.user_id, -request.amount)
+    session.commit()
+
+    new_credits = current_credits - request.amount
+
+    return DeductCreditsResponse(
+        previous_credits=current_credits,
+        deducted=request.amount,
+        current_credits=new_credits,
+    )
 
 
 @router.post(
