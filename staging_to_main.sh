@@ -13,7 +13,7 @@ if ! command -v gh &> /dev/null; then
 fi
 
 # Check if a PR already exists
-existing_pr=$(gh pr list --base main --head staging --state open --json number,url --jq '.[0] | "\(.number) \(.url)"')
+existing_pr=$(gh pr list --base main --head staging --state open --json number,url --jq 'if length > 0 then .[0] | "\(.number) \(.url)" else "" end')
 
 if [ -n "$existing_pr" ]; then
   pr_number=$(echo "$existing_pr" | cut -d' ' -f1)
