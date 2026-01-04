@@ -383,11 +383,15 @@ class FileSpanExporter(SpanExporter):
         method = summary.get("method", "").upper() or "UNKNOWN"
         route = summary.get("route", "") or "unknown"
 
-        # Sanitize route: /v0/contacts/{id} -> contacts-id
+        # Sanitize route for cross-platform filename compatibility
+        # Windows NTFS forbids: " : < > | * ? \r \n
+        # Also replace / and remove {} from path params
         route_clean = route.strip("/")
         if route_clean.startswith("v0/"):
             route_clean = route_clean[3:]
         route_safe = route_clean.replace("/", "-").replace("{", "").replace("}", "")
+        # Remove any remaining characters invalid on Windows NTFS
+        route_safe = "".join(c if c not in ':"<>|*?\r\n' else "_" for c in route_safe)
         route_safe = route_safe[:40]
 
         # Duration: PENDING for in-progress, Xms for complete
