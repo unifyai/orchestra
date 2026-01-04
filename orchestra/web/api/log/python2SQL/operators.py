@@ -2044,11 +2044,6 @@ def _handle_phash_distance(
         select_cols.extend(
             [expr.label("value"), literal("int").label("inferred_type")],
         )
-        subq = alias_utils.subquery_with_unique_alias(
-            select(*select_cols).select_from(lhs),
-            prefix="phash_distance",
-        )
-        print(session.execute(select(subq)).fetchall())
         return alias_utils.subquery_with_unique_alias(
             select(*select_cols).select_from(lhs),
             prefix="phash_distance",
