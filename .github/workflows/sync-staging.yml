@@ -30,7 +30,7 @@ jobs:
           echo "needed=true" >> $GITHUB_OUTPUT
         fi
 
-    - name: Create sync PR with auto-merge
+    - name: Create sync PR
       if: steps.check.outputs.needed == 'true'
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -39,18 +39,16 @@ jobs:
         existing_pr=$(gh pr list --base staging --head main --state open --json number --jq '.[0].number // empty')
 
         if [ -n "$existing_pr" ]; then
-          echo "Sync PR #$existing_pr already exists, enabling auto-merge"
-          gh pr merge "$existing_pr" --auto --merge || true
+          echo "Sync PR #$existing_pr already exists"
           exit 0
         fi
 
-        # Create the PR and enable auto-merge
+        # Create the PR (auto-merge will be enabled by tests.yml after checks pass)
         gh pr create \
           --base staging \
           --head main \
           --title "Sync: merge main into staging" \
           --body "Automated PR to keep staging in sync with main. Merges merge-commits from main back into staging to prevent branch divergence."
 
-        gh pr merge --auto --merge
-
-        echo "Created sync PR from main -> staging with auto-merge enabled"
+        echo "Created sync PR from main -> staging"
+        echo "Auto-merge will be enabled by tests.yml after all checks pass"
