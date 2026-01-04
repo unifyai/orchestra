@@ -2084,16 +2084,33 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient, use_jsonb_mode):
     )
     assert response.status_code == 200
 
-    # 3. Get the pHash of the 'cat_v2' image to use as our query hash
+    # 3. Verify all animal images have valid pHashes before querying
+    # This guards against GCS eventual consistency issues where pHash computation fails
     response = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}&filter_expr=name == 'cat_v2'",
+        f"/v0/logs?project={project_name}&context={context_name}&filter_expr=type == 'animal'",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
-    cat_v2_log = response.json()["logs"][0]
+    animal_logs = response.json()["logs"]
+    assert len(animal_logs) == 3, f"Expected 3 animal logs, got {len(animal_logs)}"
+
+    # Verify each animal image has a valid pHash (16 hex chars)
+    for log in animal_logs:
+        name = log["entries"]["name"]
+        phash = log.get("derived_entries", {}).get("image_phash")
+        assert phash is not None, (
+            f"pHash for '{name}' is None - likely GCS eventual consistency failure. "
+            "The image may not have been available when pHash was computed."
+        )
+        assert len(phash) == 16 and all(
+            c in "0123456789abcdef" for c in phash
+        ), f"pHash for '{name}' is invalid: {phash!r}. Expected 16 hex characters."
+
+    # 4. Get the pHash of the 'cat_v2' image to use as our query hash
+    cat_v2_log = next(log for log in animal_logs if log["entries"]["name"] == "cat_v2")
     cat_v2_phash = cat_v2_log["derived_entries"]["image_phash"]
 
-    # 4. Query for the most visually similar image within the 'animal' type
+    # 5. Query for the most visually similar image within the 'animal' type
     sorting_expression = f"phash_distance(image_phash, '{cat_v2_phash}')"
 
     response = await client.get(
@@ -2108,7 +2125,7 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient, use_jsonb_mode):
     )
     assert response.status_code == 200, f"Failed to query with sorting: {response.text}"
 
-    # 5. Verify the results
+    # 6. Verify the results
     all_logs = response.json()["logs"]
     assert len(all_logs) == 3, "Expected to find exactly three logs"
     # The top result should be 'cat_v2' itself, as its distance is 0.
