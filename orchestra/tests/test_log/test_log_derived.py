@@ -2071,69 +2071,110 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient, use_jsonb_mode):
         assert response.status_code == 200, response.json()
         log_ids_map[name] = response.json()["log_event_ids"][0]
 
-    # 2. Create pHash derived logs with retry for GCS eventual consistency
-    # The pHash computation fetches images from GCS which may not be immediately available
-    # after upload due to eventual consistency. We retry the entire pHash creation if some
-    # images fail to compute their pHash.
-    phash_key = "image_phash"
-    max_phash_retries = 3
-    phash_retry_delay = 5  # seconds between retries
+    # 2. Pre-flight check: Wait for all images to be available in GCS
+    # GCS has eventual consistency, so images may not be immediately readable after upload.
+    # We verify each image is fetchable before proceeding to pHash computation.
+    import asyncio
+    import logging
 
-    for attempt in range(max_phash_retries):
-        response = await _create_derived_entry(
-            client,
-            project_name,
-            key=phash_key,
-            equation=f"phash({{log:img}})",
-            referenced_logs={"log": list(log_ids_map.values())},
-            context=context_name,
-            user=user_id,
-        )
-        assert response.status_code == 200
+    from orchestra.services.bucket_service import BucketService
 
-        # 3. Verify all animal images have valid pHashes
-        response = await client.get(
-            f"/v0/logs?project={project_name}&context={context_name}"
-            f"&filter_expr=type == 'animal'",
-            headers=HEADERS,
-        )
-        assert response.status_code == 200, response.json()
-        animal_logs = response.json()["logs"]
-        assert len(animal_logs) == 3, f"Expected 3 animal logs, got {len(animal_logs)}"
+    bucket_service = BucketService()
 
-        # Check if all pHashes are valid (16 hex chars)
-        missing_phashes = []
-        for log in animal_logs:
-            log_name = log["entries"]["name"]
-            phash = log.get("derived_entries", {}).get("image_phash")
-            if phash is None or len(phash) != 16:
-                missing_phashes.append(log_name)
+    # Get the image URLs from the logs
+    response = await client.get(
+        f"/v0/logs?project={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    all_logs = response.json()["logs"]
 
-        if not missing_phashes:
-            break  # All pHashes computed successfully
+    # Extract image URLs and verify each is available in GCS
+    max_availability_retries = 10
+    availability_retry_delay = 3  # seconds between retries
 
-        if attempt < max_phash_retries - 1:
-            # Delete the derived entries and retry after a delay
-            import asyncio
+    for attempt in range(max_availability_retries):
+        unavailable_images = []
+        for log in all_logs:
+            image_value = log["entries"].get("img")
+            if image_value:
+                # Check if this is a GCS URL or inline Base64 data
+                # GCS URLs start with "gs://" or contain "storage.googleapis.com"
+                if (
+                    image_value.startswith("gs://")
+                    or "storage.googleapis.com" in image_value
+                ):
+                    # Extract filename from URL
+                    filename = image_value.split("/")[-1]
+                    try:
+                        result = bucket_service.get_media(filename)
+                        if result is None:
+                            unavailable_images.append(log["entries"]["name"])
+                    except Exception:
+                        unavailable_images.append(log["entries"]["name"])
+                # else: it's inline Base64 data, no GCS fetch needed
 
-            await asyncio.sleep(phash_retry_delay)
-            # Delete existing derived entries so we can recreate them
-            await client.delete(
-                f"/v0/logs/derived?project={project_name}&key={phash_key}",
-                headers=HEADERS,
+        if not unavailable_images:
+            logging.info(
+                f"All {len(all_logs)} images available in GCS after {attempt + 1} attempts",
             )
+            break
+
+        if attempt < max_availability_retries - 1:
+            logging.warning(
+                f"GCS pre-flight check: {len(unavailable_images)} images not yet available "
+                f"({unavailable_images}), retrying in {availability_retry_delay}s "
+                f"(attempt {attempt + 1}/{max_availability_retries})",
+            )
+            await asyncio.sleep(availability_retry_delay)
         else:
             pytest.fail(
-                f"pHash computation failed for {missing_phashes} after {max_phash_retries} "
-                f"attempts. This is likely due to GCS eventual consistency - images may not "
-                f"have been available when pHash was computed.",
+                f"GCS pre-flight check failed: Images {unavailable_images} not available "
+                f"after {max_availability_retries} attempts "
+                f"({max_availability_retries * availability_retry_delay}s total wait time). "
+                f"This indicates severe GCS eventual consistency issues.",
             )
 
-    # 4. Get the pHash of the 'cat_v2' image to use as our query hash
+    # 3. Create pHash derived logs (images are now confirmed available)
+    phash_key = "image_phash"
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key=phash_key,
+        equation=f"phash({{log:img}})",
+        referenced_logs={"log": list(log_ids_map.values())},
+        context=context_name,
+        user=user_id,
+    )
+    assert response.status_code == 200
+
+    # 4. Verify all animal images have valid pHashes
+    response = await client.get(
+        f"/v0/logs?project={project_name}&context={context_name}"
+        f"&filter_expr=type == 'animal'",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    animal_logs = response.json()["logs"]
+    assert len(animal_logs) == 3, f"Expected 3 animal logs, got {len(animal_logs)}"
+
+    # Verify each animal image has a valid pHash (16 hex chars)
+    for log in animal_logs:
+        log_name = log["entries"]["name"]
+        phash = log.get("derived_entries", {}).get("image_phash")
+        assert phash is not None, (
+            f"pHash for '{log_name}' is None despite pre-flight check passing. "
+            f"This should not happen - please investigate."
+        )
+        assert len(phash) == 16 and all(
+            c in "0123456789abcdef" for c in phash
+        ), f"pHash for '{log_name}' is invalid: {phash!r}. Expected 16 hex characters."
+
+    # 5. Get the pHash of the 'cat_v2' image to use as our query hash
     cat_v2_log = next(log for log in animal_logs if log["entries"]["name"] == "cat_v2")
     cat_v2_phash = cat_v2_log["derived_entries"]["image_phash"]
 
-    # 5. Query for the most visually similar image within the 'animal' type
+    # 6. Query for the most visually similar image within the 'animal' type
     sorting_expression = f"phash_distance(image_phash, '{cat_v2_phash}')"
 
     response = await client.get(
@@ -2148,7 +2189,7 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient, use_jsonb_mode):
     )
     assert response.status_code == 200, f"Failed to query with sorting: {response.text}"
 
-    # 6. Verify the results
+    # 7. Verify the results
     all_logs = response.json()["logs"]
     assert len(all_logs) == 3, "Expected to find exactly three logs"
     # The top result should be 'cat_v2' itself, as its distance is 0.
