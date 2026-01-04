@@ -41,4 +41,3 @@ echo "Enabling auto-merge..."
 gh pr merge "$pr_number" --auto --merge
 
 echo "Done. PR will be merged when all checks pass."
-# Test comment
