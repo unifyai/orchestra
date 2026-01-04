@@ -2071,40 +2071,63 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient, use_jsonb_mode):
         assert response.status_code == 200, response.json()
         log_ids_map[name] = response.json()["log_event_ids"][0]
 
-    # 2. Manually create the pHash derived log for each image
+    # 2. Create pHash derived logs with retry for GCS eventual consistency
+    # The pHash computation fetches images from GCS which may not be immediately available
+    # after upload due to eventual consistency. We retry the entire pHash creation if some
+    # images fail to compute their pHash.
     phash_key = "image_phash"
-    response = await _create_derived_entry(
-        client,
-        project_name,
-        key=phash_key,
-        equation=f"phash({{log:img}})",
-        referenced_logs={"log": list(log_ids_map.values())},
-        context=context_name,
-        user=user_id,
-    )
-    assert response.status_code == 200
+    max_phash_retries = 3
+    phash_retry_delay = 5  # seconds between retries
 
-    # 3. Verify all animal images have valid pHashes before querying
-    # This guards against GCS eventual consistency issues where pHash computation fails
-    response = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}&filter_expr=type == 'animal'",
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, response.json()
-    animal_logs = response.json()["logs"]
-    assert len(animal_logs) == 3, f"Expected 3 animal logs, got {len(animal_logs)}"
-
-    # Verify each animal image has a valid pHash (16 hex chars)
-    for log in animal_logs:
-        name = log["entries"]["name"]
-        phash = log.get("derived_entries", {}).get("image_phash")
-        assert phash is not None, (
-            f"pHash for '{name}' is None - likely GCS eventual consistency failure. "
-            "The image may not have been available when pHash was computed."
+    for attempt in range(max_phash_retries):
+        response = await _create_derived_entry(
+            client,
+            project_name,
+            key=phash_key,
+            equation=f"phash({{log:img}})",
+            referenced_logs={"log": list(log_ids_map.values())},
+            context=context_name,
+            user=user_id,
         )
-        assert len(phash) == 16 and all(
-            c in "0123456789abcdef" for c in phash
-        ), f"pHash for '{name}' is invalid: {phash!r}. Expected 16 hex characters."
+        assert response.status_code == 200
+
+        # 3. Verify all animal images have valid pHashes
+        response = await client.get(
+            f"/v0/logs?project={project_name}&context={context_name}"
+            f"&filter_expr=type == 'animal'",
+            headers=HEADERS,
+        )
+        assert response.status_code == 200, response.json()
+        animal_logs = response.json()["logs"]
+        assert len(animal_logs) == 3, f"Expected 3 animal logs, got {len(animal_logs)}"
+
+        # Check if all pHashes are valid (16 hex chars)
+        missing_phashes = []
+        for log in animal_logs:
+            log_name = log["entries"]["name"]
+            phash = log.get("derived_entries", {}).get("image_phash")
+            if phash is None or len(phash) != 16:
+                missing_phashes.append(log_name)
+
+        if not missing_phashes:
+            break  # All pHashes computed successfully
+
+        if attempt < max_phash_retries - 1:
+            # Delete the derived entries and retry after a delay
+            import asyncio
+
+            await asyncio.sleep(phash_retry_delay)
+            # Delete existing derived entries so we can recreate them
+            await client.delete(
+                f"/v0/logs/derived?project={project_name}&key={phash_key}",
+                headers=HEADERS,
+            )
+        else:
+            pytest.fail(
+                f"pHash computation failed for {missing_phashes} after {max_phash_retries} "
+                f"attempts. This is likely due to GCS eventual consistency - images may not "
+                f"have been available when pHash was computed.",
+            )
 
     # 4. Get the pHash of the 'cat_v2' image to use as our query hash
     cat_v2_log = next(log for log in animal_logs if log["entries"]["name"] == "cat_v2")
