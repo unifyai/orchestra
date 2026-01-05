@@ -167,20 +167,20 @@ async def get_user(
                     "name": org_result.name,
                     "role_id": member.role_id,
                     "role_name": member_role_name,
-                    "apiKey": org_api_key,
+                    "api_key": org_api_key,
                 },
             )
 
     return {
         "id": user_instance.id,
         "name": user_instance.name,
-        "lastName": user_instance.last_name,
-        "jobTitle": user_instance.job_title,
+        "last_name": user_instance.last_name,
+        "job_title": user_instance.job_title,
         "bio": user_instance.bio,
         "image": user_instance.image,
         "email": user_instance.email,
-        "createdAt": user_instance.created_at,
-        "apiKey": api_key_instance.key,
+        "created_at": user_instance.created_at,
+        "api_key": api_key_instance.key,
         "organization": {
             "name": org_name,
             "role_id": org_role_id,
@@ -245,20 +245,20 @@ async def get_user_by_email(
                     "name": org_result.name,
                     "role_id": member.role_id,
                     "role_name": member_role_name,
-                    "apiKey": org_api_key,
+                    "api_key": org_api_key,
                 },
             )
 
     return {
         "id": user_instance.id,
         "name": user_instance.name,
-        "lastName": user_instance.last_name,
-        "jobTitle": user_instance.job_title,
+        "last_name": user_instance.last_name,
+        "job_title": user_instance.job_title,
         "bio": user_instance.bio,
         "image": user_instance.image,
         "email": user_instance.email,
-        "createdAt": user_instance.created_at,
-        "apiKey": api_key_instance.key,
+        "created_at": user_instance.created_at,
+        "api_key": api_key_instance.key,
         "organization": {
             "name": org_name,
             "role_id": org_role_id,
@@ -312,13 +312,13 @@ async def get_user_by_account(
     return {
         "id": user_instance.id,
         "name": user_instance.name,
-        "lastName": user_instance.last_name,
-        "jobTitle": user_instance.job_title,
+        "last_name": user_instance.last_name,
+        "job_title": user_instance.job_title,
         "bio": user_instance.bio,
         "image": user_instance.image,
         "email": user_instance.email,
-        "createdAt": user_instance.created_at,
-        "apiKey": api_key_instance.key,
+        "created_at": user_instance.created_at,
+        "api_key": api_key_instance.key,
         "organization": {
             "name": org_name,
             "role_id": org_role_id,
@@ -391,10 +391,10 @@ async def link_account(
 ):
     account_dao = AccountDAO(session)
     account_dao.create(
-        user_id=account.userId,
+        user_id=account.user_id,
         provider=account.provider,
         provider_type="oauth",  # TODO: This can most likely be removed look into it
-        provider_account_id=account.providerAccountId,
+        provider_account_id=account.provider_account_id,
         access_token=account.access_token,
         expires_at=datetime.datetime.fromtimestamp(account.expires_at),
     )
@@ -404,7 +404,9 @@ async def link_account(
 @admin_router.delete("/account")
 async def unlink_account(account: AccountRequest):  # TODO, when would this be used?
     # Unlink an account from the user
-    return {"message": f"Account {account.provider} unlinked for user {account.userId}"}
+    return {
+        "message": f"Account {account.provider} unlinked for user {account.user_id}",
+    }
 
 
 ### Not related to next-auth
