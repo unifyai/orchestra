@@ -216,10 +216,10 @@ async def test_link_account(client: AsyncClient):
 
     url = "/v0/admin/account"
     params = {
-        "userId": user_id,
+        "user_id": user_id,
         "type": "oauth",
         "provider": "google",
-        "providerAccountId": "12345",
+        "provider_account_id": "12345",
         "access_token": "test_access_token",
         "expires_at": 1234567890,
         "scope": "oauth",
@@ -326,7 +326,7 @@ async def test_reset_api_key(client: AsyncClient):
     url = f"/v0/admin/auth-user/by-email?email=testuser@api_key.com"
     response = await client.get(url, headers=HEADERS)
     user_id = response.json()["id"]
-    old_api_key = response.json()["apiKey"]
+    old_api_key = response.json()["api_key"]
 
     url = f"/v0/admin/api_key/reset"
     response = await client.post(url, params={"user_id": user_id}, headers=HEADERS)
@@ -334,7 +334,7 @@ async def test_reset_api_key(client: AsyncClient):
 
     url = f"/v0/admin/auth-user/by-email?email=testuser@api_key.com"
     response = await client.get(url, headers=HEADERS)
-    new_api_key_in_db = response.json()["apiKey"]
+    new_api_key_in_db = response.json()["api_key"]
 
     assert new_api_key_in_response == new_api_key_in_db
     assert new_api_key_in_db != old_api_key
@@ -494,7 +494,7 @@ async def test_default_unity_resources_on_user_creation(client: AsyncClient):
     assert response.status_code == 200, response.json()
 
     # get the api key from the response
-    api_key = response.json()["apiKey"]
+    api_key = response.json()["api_key"]
 
     # Create user-specific headers with the API key
     user_headers = {"accept": "application/json", "Authorization": f"Bearer {api_key}"}
@@ -574,7 +574,7 @@ async def test_onboarding_status_workflow(client: AsyncClient):
         headers=HEADERS,
     )
     assert user_info_response.status_code == 200, user_info_response.json()
-    api_key = user_info_response.json()["apiKey"]
+    api_key = user_info_response.json()["api_key"]
     user_headers = {"Authorization": f"Bearer {api_key}"}
 
     # 2. Get initial onboarding status
@@ -664,7 +664,7 @@ async def test_basic_info_includes_phone_number(client: AsyncClient):
     url = f"/v0/admin/auth-user/by-user-id?user_id={user_id}"
     response = await client.get(url, headers=HEADERS)
     assert response.status_code == 200, response.json()
-    api_key = response.json()["apiKey"]
+    api_key = response.json()["api_key"]
 
     # call basic-info with user's API key
     user_headers = {"Authorization": f"Bearer {api_key}"}

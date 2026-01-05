@@ -2299,7 +2299,7 @@ async def test_transfer_grants_member_to_second_user_on_existing_project(
     user2_org_api_key = None
     for org in user2_info.get("organizations", []):
         if org.get("id") == org_id:
-            user2_org_api_key = org.get("apiKey")
+            user2_org_api_key = org.get("api_key")
             break
 
     # User2 transfers assistant to org (project already exists from user1)
