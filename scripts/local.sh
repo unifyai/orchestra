@@ -55,6 +55,7 @@ ORCHESTRA_DB_PORT="${ORCHESTRA_DB_PORT:-5432}"
 ORCHESTRA_DB_CONTAINER="${ORCHESTRA_PREFIX}-local-db"
 ORCHESTRA_SERVER_PIDFILE="/tmp/${ORCHESTRA_PREFIX}-local-server.pid"
 ORCHESTRA_SERVER_LOGFILE="/tmp/${ORCHESTRA_PREFIX}-local-server.log"
+ORCHESTRA_SERVER_CONFIGFILE="/tmp/${ORCHESTRA_PREFIX}-local-server.config"
 
 # URLs
 LOCAL_ORCHESTRA_URL="http://127.0.0.1:${ORCHESTRA_PORT}/v0"
@@ -510,6 +511,12 @@ start_orchestra_server() {
   disown $pid 2>/dev/null || true
   echo "$pid" > "$ORCHESTRA_SERVER_PIDFILE"
 
+  # Write config file with logging directories for external tools to check
+  {
+    echo "ORCHESTRA_LOG_DIR=${ORCHESTRA_LOG_DIR:-}"
+    echo "ORCHESTRA_OTEL_LOG_DIR=${ORCHESTRA_OTEL_LOG_DIR:-}"
+  } > "$ORCHESTRA_SERVER_CONFIGFILE"
+
   log_info "Orchestra server started with PID $pid"
 
   if wait_for_server; then
@@ -559,6 +566,7 @@ stop_orchestra_server() {
     fi
 
     rm -f "$ORCHESTRA_SERVER_PIDFILE"
+    rm -f "$ORCHESTRA_SERVER_CONFIGFILE"
   fi
 
   pkill -9 -f -- "-m orchestra" 2>/dev/null || true
