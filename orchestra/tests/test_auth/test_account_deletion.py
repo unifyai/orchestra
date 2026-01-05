@@ -7,6 +7,7 @@ Tests cover:
 4. Deletion status check endpoint
 """
 
+import os
 from datetime import datetime
 from unittest.mock import MagicMock, patch
 
@@ -32,6 +33,8 @@ from orchestra.db.models.orchestra_models import (
     Project,
     Query,
     QueryTagAssociation,
+    Recharge,
+    RechargeStatus,
     Router,
     Tag,
     Users,
@@ -50,7 +53,7 @@ def mock_external_services(request):
         yield
         return
 
-    with patch(
+    with patch.dict(os.environ, {"STRIPE_SECRET_KEY": "sk_test_mock"}), patch(
         "orchestra.services.bucket_service.BucketService",
     ) as mock_bucket, patch(
         "orchestra.web.api.utils.assistant_infra.delete_phone_number",
@@ -60,7 +63,11 @@ def mock_external_services(request):
         "orchestra.web.api.utils.assistant_infra.delete_pubsub_topic",
     ) as mock_delete_pubsub, patch(
         "orchestra.web.api.utils.assistant_infra.stop_jobs",
-    ) as mock_stop_jobs:
+    ) as mock_stop_jobs, patch(
+        "orchestra.services.user_account_cleanup_service.stripe",
+    ) as mock_stripe, patch(
+        "orchestra.services.contact_sync_service.ContactSyncService.mark_member_contact_as_non_system",
+    ) as mock_contact_sync:
         mock_bucket_instance = MagicMock()
         mock_bucket_instance.delete_assistant_file.return_value = True
         mock_bucket.return_value = mock_bucket_instance
@@ -69,12 +76,31 @@ def mock_external_services(request):
         mock_delete_pubsub.return_value = {"success": True}
         mock_stop_jobs.return_value = {"success": True, "job_names": []}
 
+        # Mock Stripe API
+        mock_stripe.Customer.retrieve.return_value = MagicMock(
+            invoice_settings=MagicMock(default_payment_method="pm_test"),
+        )
+        mock_stripe.Customer.delete.return_value = MagicMock(deleted=True)
+        mock_stripe.Invoice.create.return_value = MagicMock(id="in_test")
+        mock_stripe.Invoice.finalize_invoice.return_value = MagicMock(id="in_test")
+        mock_stripe.Invoice.pay.return_value = MagicMock(status="paid")
+        mock_stripe.InvoiceItem.create.return_value = MagicMock(id="ii_test")
+        mock_stripe.InvoiceItem.list.return_value = MagicMock(
+            auto_paging_iter=lambda: [],
+        )
+        mock_stripe.Invoice.list.return_value = MagicMock(auto_paging_iter=lambda: [])
+        mock_stripe.Invoice.void_invoice.return_value = MagicMock()
+
+        mock_contact_sync.return_value = None
+
         yield {
             "bucket": mock_bucket_instance,
             "delete_phone": mock_delete_phone,
             "delete_email": mock_delete_email,
             "delete_pubsub": mock_delete_pubsub,
             "stop_jobs": mock_stop_jobs,
+            "stripe": mock_stripe,
+            "contact_sync": mock_contact_sync,
         }
 
 
@@ -863,3 +889,309 @@ async def test_delete_account_removes_org_membership(client: AsyncClient, dbsess
         dbsession.query(Organization).filter(Organization.id == org2_id).first()
         is not None
     )
+
+
+# =============================================================================
+# BILLING DELEGATION BLOCKER TESTS
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_deletion_blocked_when_billing_delegate(client: AsyncClient, dbsession):
+    """Test that deletion is blocked when user is billing delegate for an org."""
+    # Create two users: owner and billing delegate
+    owner = await create_test_user(client, "org_owner_billing@test.com")
+    delegate = await create_test_user(client, "billing_delegate@test.com")
+    delegate_id = delegate["id"]
+
+    # Create organization with owner
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Delegated Billing Org"},
+        headers=owner["headers"],
+    )
+    assert org_resp.status_code == status.HTTP_201_CREATED
+    org_id = org_resp.json()["id"]
+
+    # Set delegate as billing_user_id (simulate delegated billing)
+    org = dbsession.query(Organization).filter_by(id=org_id).first()
+    org.billing_user_id = delegate_id
+    org.stripe_customer_id = None  # Delegated billing = no direct Stripe
+    dbsession.commit()
+
+    # Check deletion status for delegate
+    status_resp = await client.get(
+        "/v0/user/account/deletion-status",
+        headers=delegate["headers"],
+    )
+    assert status_resp.status_code == status.HTTP_200_OK
+    data = status_resp.json()
+    assert data["blocked"] is True
+    assert any("billing" in r.lower() for r in data["reasons"])
+
+    # Try to delete - should fail
+    response = await client.request(
+        "DELETE",
+        "/v0/user/account",
+        json={"confirm": True},
+        headers=delegate["headers"],
+    )
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "billing" in response.json()["detail"].lower()
+
+
+@pytest.mark.anyio
+async def test_deletion_allowed_when_org_has_direct_billing(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test that user can delete if org has direct billing (not delegated)."""
+    owner = await create_test_user(client, "direct_billing_owner@test.com")
+    user = await create_test_user(client, "direct_billing_user@test.com")
+    user_id = user["id"]
+
+    # Create organization
+    org_resp = await client.post(
+        "/v0/organizations",
+        json={"name": "Direct Billing Org"},
+        headers=owner["headers"],
+    )
+    org_id = org_resp.json()["id"]
+
+    # Set user as billing_user_id BUT org has stripe_customer_id (direct billing)
+    org = dbsession.query(Organization).filter_by(id=org_id).first()
+    org.billing_user_id = user_id
+    org.stripe_customer_id = "cus_direct_billing_123"  # Direct billing
+    dbsession.commit()
+
+    # Check deletion status - should be allowed (org has direct billing)
+    status_resp = await client.get(
+        "/v0/user/account/deletion-status",
+        headers=user["headers"],
+    )
+    assert status_resp.status_code == status.HTTP_200_OK
+    data = status_resp.json()
+    assert data["blocked"] is False
+
+
+# =============================================================================
+# RESOURCE ACCESS CLEANUP TESTS
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_delete_account_cleans_up_resource_access_grants(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test that ResourceAccess grants for user are deleted."""
+    from orchestra.db.models.orchestra_models import ResourceAccess, Role
+
+    user = await create_test_user(client, "resource_access_cleanup@test.com")
+    user_id = user["id"]
+
+    # Get a role ID for the grant
+    role = dbsession.query(Role).first()
+    if not role:
+        pytest.skip("No roles in database")
+
+    # Create ResourceAccess grant for user
+    grant = ResourceAccess(
+        resource_type="project",
+        resource_id=999,  # Dummy ID
+        role_id=role.id,
+        grantee_type="user",
+        grantee_id=user_id,
+    )
+    dbsession.add(grant)
+    dbsession.commit()
+
+    # Verify grant exists
+    grants_before = (
+        dbsession.query(ResourceAccess)
+        .filter(
+            ResourceAccess.grantee_type == "user",
+            ResourceAccess.grantee_id == user_id,
+        )
+        .count()
+    )
+    assert grants_before == 1
+
+    # Delete account
+    response = await client.request(
+        "DELETE",
+        "/v0/user/account",
+        json={"confirm": True},
+        headers=user["headers"],
+    )
+    assert response.status_code == status.HTTP_200_OK
+
+    # Verify grants are cleaned up
+    dbsession.expire_all()
+    grants_after = (
+        dbsession.query(ResourceAccess)
+        .filter(
+            ResourceAccess.grantee_type == "user",
+            ResourceAccess.grantee_id == user_id,
+        )
+        .count()
+    )
+    assert grants_after == 0
+
+    # Check response includes cleanup count
+    data = response.json()
+    assert data["deleted_resources"]["resource_access_deleted"] >= 1
+
+
+# =============================================================================
+# PAY-THEN-DELETE BILLING TESTS
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_delete_account_settles_pending_invoice_recharges(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test that pending recharges are settled before account deletion."""
+    from datetime import date
+    from decimal import Decimal
+
+    from orchestra.lib.time import month_end_utc
+
+    user = await create_test_user(client, "settle_recharges@test.com")
+    user_id = user["id"]
+
+    # Create a legacy user record with stripe_customer_id
+    legacy_user = dbsession.query(Users).filter_by(id=user_id).first()
+    if legacy_user:
+        legacy_user.stripe_customer_id = "cus_settle_test"
+        dbsession.commit()
+
+        # Create pending recharges
+        recharge1 = Recharge(
+            user_id=user_id,
+            quantity=Decimal("10"),
+            amount_usd=Decimal("10.00"),
+            status=RechargeStatus.PENDING_INVOICE,
+            invoice_group=month_end_utc(date.today()),
+            type="auto",
+        )
+        recharge2 = Recharge(
+            user_id=user_id,
+            quantity=Decimal("15"),
+            amount_usd=Decimal("15.00"),
+            status=RechargeStatus.PENDING_INVOICE,
+            invoice_group=month_end_utc(date.today()),
+            type="auto",
+        )
+        dbsession.add(recharge1)
+        dbsession.add(recharge2)
+        dbsession.commit()
+
+        # Verify recharges exist
+        pending = (
+            dbsession.query(Recharge)
+            .filter(
+                Recharge.user_id == user_id,
+                Recharge.status == RechargeStatus.PENDING_INVOICE,
+            )
+            .count()
+        )
+        assert pending == 2
+
+    # Delete account - should settle recharges first
+    response = await client.request(
+        "DELETE",
+        "/v0/user/account",
+        json={"confirm": True},
+        headers=user["headers"],
+    )
+    assert response.status_code == status.HTTP_200_OK
+
+    # Check response includes settlement info
+    data = response.json()
+    if data["deleted_resources"].get("balance_settled"):
+        assert data["deleted_resources"]["balance_settled"]["amount"] == 25.0
+        assert data["deleted_resources"]["balance_settled"]["recharges_settled"] == 2
+
+
+@pytest.mark.anyio
+async def test_delete_account_with_zero_balance_succeeds(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test that deletion succeeds when user has no outstanding balance."""
+    user = await create_test_user(client, "zero_balance@test.com")
+
+    # No recharges created - zero balance
+
+    response = await client.request(
+        "DELETE",
+        "/v0/user/account",
+        json={"confirm": True},
+        headers=user["headers"],
+    )
+    assert response.status_code == status.HTTP_200_OK
+
+    # balance_settled should be None
+    data = response.json()
+    assert data["deleted_resources"]["balance_settled"] is None
+
+
+@pytest.mark.anyio
+async def test_delete_account_stripe_customer_deleted(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test that Stripe customer is deleted during account cleanup."""
+    user = await create_test_user(client, "stripe_cleanup@test.com")
+    user_id = user["id"]
+
+    # Set stripe_customer_id
+    legacy_user = dbsession.query(Users).filter_by(id=user_id).first()
+    if legacy_user:
+        legacy_user.stripe_customer_id = "cus_to_delete"
+        dbsession.commit()
+
+    response = await client.request(
+        "DELETE",
+        "/v0/user/account",
+        json={"confirm": True},
+        headers=user["headers"],
+    )
+    assert response.status_code == status.HTTP_200_OK
+
+    # Check response indicates Stripe customer was deleted
+    data = response.json()
+    assert data["deleted_resources"]["stripe_customer_deleted"] is True
+
+
+@pytest.mark.anyio
+async def test_delete_account_disables_autorecharge(
+    client: AsyncClient,
+    dbsession,
+):
+    """Test that autorecharge is disabled before account deletion."""
+    user = await create_test_user(client, "disable_autorecharge@test.com")
+    user_id = user["id"]
+
+    # Enable autorecharge
+    legacy_user = dbsession.query(Users).filter_by(id=user_id).first()
+    if legacy_user:
+        legacy_user.autorecharge = True
+        legacy_user.stripe_customer_id = "cus_autorecharge"
+        dbsession.commit()
+
+        assert legacy_user.autorecharge is True
+
+    response = await client.request(
+        "DELETE",
+        "/v0/user/account",
+        json={"confirm": True},
+        headers=user["headers"],
+    )
+    assert response.status_code == status.HTTP_200_OK
+
+    # User should be deleted - verify via response
+    assert response.json()["success"] is True

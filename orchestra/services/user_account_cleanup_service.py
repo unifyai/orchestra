@@ -1,15 +1,21 @@
 """Service for cleaning up all resources when a user account is deleted.
 
 Handles cleanup of:
+- Outstanding billing (pay-then-delete)
+- Stripe customer and payment methods
 - External resources (GCS storage, Twilio phones, Gmail, PubSub topics)
 - Cloned voices
+- Organization memberships and resource access
 - Database records in tables without CASCADE delete
 """
 
 import logging
+import os
 from dataclasses import dataclass, field
-from typing import List
+from decimal import Decimal
+from typing import List, Optional
 
+import stripe
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import (
@@ -22,9 +28,14 @@ from orchestra.db.models.orchestra_models import (
     LocalEndpoint,
     LogEvent,
     LogEventLog,
+    Organization,
+    OrganizationMember,
     Project,
     Query,
     QueryTagAssociation,
+    Recharge,
+    RechargeStatus,
+    ResourceAccess,
     Router,
     Tag,
     Users,
@@ -34,9 +45,27 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class SettlementResult:
+    """Result of billing settlement before account deletion."""
+
+    amount_settled: Decimal = Decimal("0")
+    invoice_id: Optional[str] = None
+    recharges_settled: int = 0
+
+
+@dataclass
 class CleanupResult:
     """Result of cleanup operation with counts and errors."""
 
+    # Billing cleanup
+    balance_settled: Optional[SettlementResult] = None
+    stripe_customer_deleted: bool = False
+
+    # Org membership cleanup
+    org_memberships_cleaned: int = 0
+    resource_access_deleted: int = 0
+
+    # Existing cleanup
     assistants_cleaned: int = 0
     projects_cleaned: int = 0
     voices_deleted: int = 0
@@ -46,6 +75,16 @@ class CleanupResult:
 
     def to_dict(self) -> dict:
         return {
+            "balance_settled": {
+                "amount": float(self.balance_settled.amount_settled),
+                "invoice_id": self.balance_settled.invoice_id,
+                "recharges_settled": self.balance_settled.recharges_settled,
+            }
+            if self.balance_settled
+            else None,
+            "stripe_customer_deleted": self.stripe_customer_deleted,
+            "org_memberships_cleaned": self.org_memberships_cleaned,
+            "resource_access_deleted": self.resource_access_deleted,
             "assistants_cleaned": self.assistants_cleaned,
             "projects_cleaned": self.projects_cleaned,
             "voices_deleted": self.voices_deleted,
@@ -73,25 +112,301 @@ class UserAccountCleanupService:
 
         Returns:
             CleanupResult with counts of deleted resources and any errors.
+
+        Raises:
+            ValueError: If outstanding balance cannot be settled.
         """
         result = CleanupResult()
 
-        # 1. Clean up all user's assistants (external resources)
+        # 1. Settle outstanding balance (pay-then-delete)
+        self._settle_outstanding_balance(user_id, result)
+
+        # 2. Clean up Stripe billing (autorecharge, customer)
+        self._cleanup_stripe_billing(user_id, result)
+
+        # 3. Clean up organization memberships
+        self._cleanup_org_memberships(user_id, result)
+
+        # 4. Clean up orphan resource access grants
+        self._cleanup_resource_access_grants(user_id, result)
+
+        # 5. Clean up all user's assistants (external resources)
         self._cleanup_user_assistants(user_id, result)
 
-        # 2. Clean up cloned voices
+        # 6. Clean up cloned voices
         self._cleanup_user_voices(user_id, result)
 
-        # 3. Soft-delete embeddings for all user's projects
+        # 7. Soft-delete embeddings for all user's projects
         self._soft_delete_user_embeddings(user_id, result)
 
-        # 4. Clean up GCS media from user's project logs
+        # 8. Clean up GCS media from user's project logs
         self._cleanup_project_gcs_media(user_id, result)
 
-        # 5. Delete legacy users table dependencies (no CASCADE)
+        # 9. Delete legacy users table dependencies (no CASCADE)
         self._delete_legacy_user_records(user_id, result)
 
         return result
+
+    def _settle_outstanding_balance(
+        self,
+        user_id: str,
+        result: CleanupResult,
+    ) -> None:
+        """
+        Settle any outstanding balance before account deletion (pay-then-delete).
+
+        Collects payment for all unpaid recharges (PENDING_INVOICE, INVOICE_CREATED).
+        If payment fails, raises an exception to block deletion.
+
+        Args:
+            user_id: The user ID.
+            result: CleanupResult to update.
+
+        Raises:
+            ValueError: If payment fails or no payment method available.
+        """
+        # Get all unpaid recharges for this user
+        unpaid_statuses = [
+            RechargeStatus.PENDING_INVOICE,
+            RechargeStatus.INVOICE_CREATED,
+            RechargeStatus.FAILED,
+        ]
+
+        unpaid_recharges = (
+            self.session.query(Recharge)
+            .filter(
+                Recharge.user_id == user_id,
+                Recharge.status.in_(unpaid_statuses),
+            )
+            .all()
+        )
+
+        if not unpaid_recharges:
+            # No outstanding balance
+            return
+
+        # Calculate total owed
+        total_owed = sum(Decimal(str(r.amount_usd)) for r in unpaid_recharges)
+
+        if total_owed <= 0:
+            return
+
+        # Get user's Stripe customer ID
+        user = self.session.query(Users).filter_by(id=user_id).first()
+        if not user or not user.stripe_customer_id:
+            raise ValueError(
+                f"Cannot settle outstanding balance of ${total_owed:.2f}. "
+                "No payment method on file.",
+            )
+
+        # Configure Stripe
+        stripe_key = os.environ.get("STRIPE_SECRET_KEY")
+        if not stripe_key:
+            raise ValueError(
+                "Payment processing unavailable. Contact support to settle "
+                f"outstanding balance of ${total_owed:.2f}.",
+            )
+
+        stripe.api_key = stripe_key
+
+        # Check for valid payment method
+        customer = stripe.Customer.retrieve(user.stripe_customer_id)
+        if not customer.invoice_settings.default_payment_method:
+            raise ValueError(
+                f"Outstanding balance of ${total_owed:.2f} requires payment. "
+                "Please add a payment method before deleting your account.",
+            )
+
+        # Create and pay final invoice
+        try:
+            invoice = stripe.Invoice.create(
+                customer=user.stripe_customer_id,
+                auto_advance=False,
+                description="Final settlement - account closure",
+                metadata={
+                    "user_id": user_id,
+                    "type": "account_closure",
+                },
+            )
+
+            stripe.InvoiceItem.create(
+                customer=user.stripe_customer_id,
+                amount=int(total_owed * 100),  # cents
+                currency="usd",
+                description=f"Outstanding balance - {len(unpaid_recharges)} recharge(s)",
+                invoice=invoice.id,
+            )
+
+            finalized = stripe.Invoice.finalize_invoice(invoice.id)
+            paid = stripe.Invoice.pay(invoice.id)
+
+            if paid.status != "paid":
+                raise ValueError(
+                    f"Payment of ${total_owed:.2f} failed. "
+                    "Please update your payment method or contact support.",
+                )
+
+            # Update all recharges to PAID
+            for recharge in unpaid_recharges:
+                recharge.status = RechargeStatus.PAID
+                recharge.stripe_invoice_id = finalized.id
+
+            self.session.flush()
+
+            result.balance_settled = SettlementResult(
+                amount_settled=total_owed,
+                invoice_id=finalized.id,
+                recharges_settled=len(unpaid_recharges),
+            )
+
+            logger.info(
+                f"Settled ${total_owed:.2f} for user {user_id} before account deletion",
+            )
+
+        except stripe.error.StripeError as e:
+            raise ValueError(
+                f"Payment of ${total_owed:.2f} failed: {str(e)}. "
+                "Please update your payment method or contact support.",
+            )
+
+    def _cleanup_stripe_billing(self, user_id: str, result: CleanupResult) -> None:
+        """
+        Clean up Stripe billing: disable autorecharge, delete pending items, delete customer.
+        """
+        user = self.session.query(Users).filter_by(id=user_id).first()
+        if not user:
+            return
+
+        # Disable autorecharge in DB
+        user.autorecharge = False
+        self.session.flush()
+
+        if not user.stripe_customer_id:
+            return
+
+        stripe_key = os.environ.get("STRIPE_SECRET_KEY")
+        if not stripe_key:
+            result.errors.append("Stripe cleanup skipped: no API key")
+            return
+
+        stripe.api_key = stripe_key
+
+        try:
+            # Delete any pending invoice items not attached to an invoice
+            pending_items = stripe.InvoiceItem.list(
+                customer=user.stripe_customer_id,
+                pending=True,
+            )
+            for item in pending_items.auto_paging_iter():
+                try:
+                    stripe.InvoiceItem.delete(item.id)
+                except stripe.error.StripeError:
+                    pass  # Item may already be attached to invoice
+
+            # Void any draft invoices
+            draft_invoices = stripe.Invoice.list(
+                customer=user.stripe_customer_id,
+                status="draft",
+            )
+            for inv in draft_invoices.auto_paging_iter():
+                try:
+                    stripe.Invoice.void_invoice(inv.id)
+                except stripe.error.StripeError:
+                    pass  # May not be voidable
+
+            # Delete the Stripe customer
+            stripe.Customer.delete(user.stripe_customer_id)
+            result.stripe_customer_deleted = True
+
+            logger.info(f"Deleted Stripe customer {user.stripe_customer_id}")
+
+        except stripe.error.StripeError as e:
+            result.errors.append(f"Stripe cleanup error: {str(e)}")
+
+    def _cleanup_org_memberships(self, user_id: str, result: CleanupResult) -> None:
+        """
+        Clean up organization membership resources before CASCADE delete.
+
+        For each org where user is a member (not owner):
+        - Delete unshared resources created by user
+        - Revoke resource access grants
+        - Mark Contact as non-system
+        """
+        from orchestra.db.dao.auth_user_dao import AuthUserDAO
+        from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
+        from orchestra.services.contact_sync_service import ContactSyncService
+
+        # Get user email for Contact cleanup
+        auth_user_dao = AuthUserDAO(self.session)
+        user_row = auth_user_dao.get_by_id(user_id)
+        user_email = user_row[0].email if user_row else None
+
+        # Get all org memberships (excluding owned orgs - those block deletion)
+        memberships = (
+            self.session.query(OrganizationMember)
+            .join(Organization, Organization.id == OrganizationMember.organization_id)
+            .filter(
+                OrganizationMember.user_id == user_id,
+                Organization.owner_id != user_id,  # Not owner
+            )
+            .all()
+        )
+
+        resource_access_dao = ResourceAccessDAO(self.session)
+        contact_sync_service = ContactSyncService(self.session)
+
+        for membership in memberships:
+            org_id = membership.organization_id
+
+            try:
+                # Delete unshared resources created by this user
+                resource_access_dao.delete_unshared_resources_by_creator(
+                    user_id,
+                    org_id,
+                )
+
+                # Revoke resource access grants
+                resource_access_dao.revoke_user_access_for_organization(user_id, org_id)
+
+                # Mark Contact as non-system
+                if user_email:
+                    try:
+                        contact_sync_service.mark_member_contact_as_non_system(
+                            organization_id=org_id,
+                            email=user_email,
+                        )
+                    except Exception:
+                        pass  # Contact may not exist
+
+                result.org_memberships_cleaned += 1
+
+            except Exception as e:
+                result.errors.append(
+                    f"Failed to clean org membership for org {org_id}: {e}",
+                )
+
+    def _cleanup_resource_access_grants(
+        self,
+        user_id: str,
+        result: CleanupResult,
+    ) -> None:
+        """
+        Delete orphan ResourceAccess records where user is the grantee.
+
+        ResourceAccess.grantee_id has no FK to auth_user, so these would remain
+        as orphans after user deletion.
+        """
+        deleted = (
+            self.session.query(ResourceAccess)
+            .filter(
+                ResourceAccess.grantee_type == "user",
+                ResourceAccess.grantee_id == user_id,
+            )
+            .delete(synchronize_session="fetch")
+        )
+
+        result.resource_access_deleted = deleted
+        self.session.flush()
 
     def _cleanup_user_assistants(self, user_id: str, result: CleanupResult) -> None:
         """Clean up external resources for all user's assistants."""
@@ -395,8 +710,6 @@ class UserAccountCleanupService:
         Returns:
             List of blocking reasons. Empty list means deletion is allowed.
         """
-        from orchestra.db.models.orchestra_models import Organization
-
         blockers = []
 
         # Check if user is the owner of any organization
@@ -411,6 +724,24 @@ class UserAccountCleanupService:
             blockers.append(
                 f"User owns {len(owned_orgs)} organization(s): {', '.join(org_names)}. "
                 "Transfer ownership or delete these organizations first.",
+            )
+
+        # Check if user is the billing delegate for any org with delegated billing
+        delegated_billing_orgs = (
+            self.session.query(Organization)
+            .filter(
+                Organization.billing_user_id == user_id,
+                Organization.stripe_customer_id.is_(None),  # Delegated billing
+            )
+            .all()
+        )
+
+        if delegated_billing_orgs:
+            org_names = [org.name for org in delegated_billing_orgs]
+            blockers.append(
+                f"User is the billing delegate for {len(delegated_billing_orgs)} "
+                f"organization(s): {', '.join(org_names)}. "
+                "Transfer billing responsibility first.",
             )
 
         return blockers
