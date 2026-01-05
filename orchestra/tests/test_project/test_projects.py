@@ -481,7 +481,7 @@ async def test_share_project(client: AsyncClient):
     # After sharing, project belongs to an org, so we need the org API key
     assert "organizations" in data, "User should have organization memberships"
     assert len(data["organizations"]) > 0, "User should be member of at least one org"
-    org_api_key = data["organizations"][0]["apiKey"]
+    org_api_key = data["organizations"][0]["api_key"]
     assert org_api_key is not None, "User should have org API key"
     new_headers = {
         "accept": "application/json",
@@ -786,7 +786,7 @@ async def test_duplicate_project(client: AsyncClient):
         headers=admin_headers,
     )
     data = response.json()
-    target_user_api_key = data["apiKey"]
+    target_user_api_key = data["api_key"]
     target_headers = {
         "accept": "application/json",
         "Authorization": f"Bearer {target_user_api_key}",
