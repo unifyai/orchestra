@@ -287,6 +287,55 @@ class AuthUserDAO:
             self.session.rollback()
             raise ValueError
 
+    def delete_account_full(self, user_id: str) -> dict:
+        """
+        Fully delete a user account and all associated data.
+
+        Handles:
+        1. Checking for blocking conditions (e.g., org ownership)
+        2. Cleaning up external resources (GCS, Twilio, Gmail, PubSub, voices)
+        3. Soft-deleting embeddings
+        4. Deleting legacy users table dependencies
+        5. Deleting the auth_user record (CASCADE handles most relationships)
+
+        :param user_id: The user ID to delete.
+        :return: Dictionary with deletion summary.
+        :raises ValueError: If user not found or deletion is blocked.
+        """
+        from orchestra.services.user_account_cleanup_service import (
+            UserAccountCleanupService,
+        )
+
+        # Verify user exists
+        user_row = self.get_by_id(user_id)
+        if not user_row:
+            raise ValueError(f"User with id {user_id} not found")
+
+        cleanup_service = UserAccountCleanupService(self.session)
+
+        # Check for blocking conditions
+        blockers = cleanup_service.check_deletion_blockers(user_id)
+        if blockers:
+            raise ValueError(
+                f"Account deletion blocked: {'; '.join(blockers)}",
+            )
+
+        # Clean up all external resources and legacy table records
+        cleanup_result = cleanup_service.cleanup_all_user_resources(user_id)
+
+        # Delete auth_user record (CASCADE handles related tables)
+        try:
+            auth_user = self.session.query(AuthUser).filter_by(id=user_id).one()
+            self.session.delete(auth_user)
+            self.session.flush()
+        except Exception as e:
+            raise ValueError(f"Failed to delete auth_user record: {e}")
+
+        return {
+            "user_id": user_id,
+            "cleanup_result": cleanup_result.to_dict(),
+        }
+
     # -- Handle assistant hiring approval --
     def set_assistant_hiring_approval(
         self,

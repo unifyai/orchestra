@@ -215,3 +215,37 @@ class UserBusinessStatusResponse(BaseModel):
     tax_exempt: bool
     tax_jurisdiction: Optional[str] = None
     business_address: Optional[BusinessAddress] = None
+
+
+# -- Account Deletion --
+
+
+class DeleteAccountRequest(BaseModel):
+    """Request to delete user account."""
+
+    confirm: bool  # User must explicitly confirm deletion
+    reason: Optional[str] = None  # Optional feedback on why deleting
+
+    @field_validator("confirm")
+    @classmethod
+    def validate_confirm(cls, v: bool) -> bool:
+        """Ensure user explicitly confirms deletion."""
+        if not v:
+            raise ValueError("You must set confirm=true to delete your account")
+        return v
+
+
+class DeleteAccountResponse(BaseModel):
+    """Response after account deletion."""
+
+    success: bool
+    message: str
+    deleted_resources: Optional[dict] = None
+
+
+class DeleteAccountBlockedResponse(BaseModel):
+    """Response when account deletion is blocked."""
+
+    blocked: bool = True
+    reasons: list[str]
+    message: str = "Account deletion is blocked due to the following reasons"

@@ -37,6 +37,9 @@ from orchestra.web.api.users.schema import (
     AssistantHiringOneTimeLinkResponse,
     BusinessAddress,
     BusinessVerificationRequest,
+    DeleteAccountBlockedResponse,
+    DeleteAccountRequest,
+    DeleteAccountResponse,
     FreezeAccountByStripeIdRequest,
     FreezeAccountRequest,
     OnboardingStatusResponse,
@@ -1552,3 +1555,129 @@ async def update_onboarding_status(
     session.commit()
 
     return {"message": "Onboarding status updated successfully"}
+
+
+# -- Account Deletion --
+
+
+@router.get("/user/account/deletion-status")
+async def check_account_deletion_status(
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Check if the authenticated user's account can be deleted.
+
+    Returns blocking reasons if deletion is not allowed, or confirms deletion is possible.
+    """
+    from orchestra.services.user_account_cleanup_service import (
+        UserAccountCleanupService,
+    )
+
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    auth_user_dao = AuthUserDAO(session)
+    user_row = auth_user_dao.get_by_id(user_id)
+    if not user_row:
+        raise not_found("User")
+
+    cleanup_service = UserAccountCleanupService(session)
+    blockers = cleanup_service.check_deletion_blockers(user_id)
+
+    if blockers:
+        return DeleteAccountBlockedResponse(
+            blocked=True,
+            reasons=blockers,
+            message="Account deletion is blocked due to the following reasons",
+        )
+
+    return {
+        "blocked": False,
+        "message": "Account can be deleted",
+    }
+
+
+@router.delete("/user/account", response_model=DeleteAccountResponse)
+async def delete_user_account(
+    request: Request,
+    body: DeleteAccountRequest,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Permanently delete the authenticated user's account and all associated data.
+
+    This action is irreversible. The following will be deleted:
+    - All personal projects and their logs, contexts, interfaces
+    - All personal assistants (including external resources: phone, email, pubsub)
+    - All API keys
+    - All cloned voices
+    - Query history and tags
+    - Billing records and credit card fingerprints
+
+    Organization-owned resources will NOT be deleted. If the user owns any organizations,
+    they must transfer ownership or delete those organizations first.
+
+    Args:
+        body: Must include `confirm: true` to proceed with deletion.
+
+    Returns:
+        Summary of deleted resources.
+    """
+    user_id = getattr(request.state, "user_id", None)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    auth_user_dao = AuthUserDAO(session)
+    user_row = auth_user_dao.get_by_id(user_id)
+    if not user_row:
+        raise not_found("User")
+
+    user = user_row[0]
+
+    # Log deletion reason if provided
+    if body.reason:
+        logger.info(
+            {
+                "message": "User account deletion requested",
+                "user_id": user_id,
+                "email": user.email,
+                "reason": body.reason,
+            },
+        )
+
+    try:
+        result = auth_user_dao.delete_account_full(user_id)
+        session.commit()
+
+        logger.info(
+            {
+                "message": "User account deleted successfully",
+                "user_id": user_id,
+                "cleanup_result": result.get("cleanup_result"),
+            },
+        )
+
+        return DeleteAccountResponse(
+            success=True,
+            message="Account deleted successfully",
+            deleted_resources=result.get("cleanup_result"),
+        )
+
+    except ValueError as e:
+        session.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        session.rollback()
+        logger.error(
+            {
+                "message": "Failed to delete user account",
+                "user_id": user_id,
+                "error": str(e),
+            },
+        )
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete account: {str(e)}",
+        )
