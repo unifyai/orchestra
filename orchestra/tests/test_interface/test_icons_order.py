@@ -22,7 +22,7 @@ async def _create_interface(
     order: int | None = None,
     icon: str | None = None,
 ):
-    payload = {"name": name, "project": project}
+    payload = {"name": name, "project_name": project}
     if order is not None:
         payload["order"] = order
     if icon:

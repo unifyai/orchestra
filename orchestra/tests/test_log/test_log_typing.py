@@ -68,7 +68,7 @@ async def test_create_log_type_mismatch(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "score": {"type": "int", "mutable": True},
                 "response": {"type": "str", "mutable": True},
@@ -82,7 +82,7 @@ async def test_create_log_type_mismatch(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "params": {"a/b/param1": "test"},
             "entries": {
                 "score": 10,
@@ -98,7 +98,7 @@ async def test_create_log_type_mismatch(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {"score": None},
         },
         headers=HEADERS,
@@ -120,7 +120,7 @@ async def test_create_log_type_mismatch(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "params": {"a/b/param1": True},  # bool, but expects str
             "entries": {
                 "score": "not_an_int",  # str, but expects int
@@ -184,7 +184,7 @@ async def test_nonetype_is_weak_type(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "none_field": {"type": "NoneType", "mutable": True},
                 "int_field": {"type": "int", "mutable": True},
@@ -199,7 +199,7 @@ async def test_nonetype_is_weak_type(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "none_field": None,
             },
@@ -212,7 +212,7 @@ async def test_nonetype_is_weak_type(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "none_field": 42,
             },
@@ -225,7 +225,7 @@ async def test_nonetype_is_weak_type(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "int_field": None,
             },
@@ -238,7 +238,7 @@ async def test_nonetype_is_weak_type(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "int_field": 42,
             },
@@ -251,7 +251,7 @@ async def test_nonetype_is_weak_type(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "any_field": None,
             },
@@ -264,7 +264,7 @@ async def test_nonetype_is_weak_type(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "any_field": 42,
             },
@@ -304,7 +304,7 @@ async def test_update_logs_previously_none(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "strict_field": {
                     "type": "str",
@@ -320,7 +320,7 @@ async def test_update_logs_previously_none(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "strict_field": 42,  # int, but field expects str
             },
@@ -446,7 +446,7 @@ async def test_update_logs_type_mismatch(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "a/b/c/numeric_input": {"type": "int", "mutable": True},
             },
@@ -491,7 +491,7 @@ async def test_create_log_with_mutable_fields(client: AsyncClient, use_jsonb_mod
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "mutable_field": {"type": "str", "mutable": True},
                 "immutable_field": {"type": "str", "mutable": False},
@@ -505,7 +505,7 @@ async def test_create_log_with_mutable_fields(client: AsyncClient, use_jsonb_mod
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "mutable_field": "initial value",
                 "immutable_field": "fixed value",
@@ -538,7 +538,7 @@ async def test_create_log_default_immutable(client: AsyncClient, use_jsonb_mode)
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "default_field": "initial value",
             },
@@ -586,7 +586,7 @@ async def test_update_mutable_and_immutable_fields(client: AsyncClient, use_json
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "mutable_field": {"type": "str", "mutable": True},
                 "immutable_field": {"type": "str", "mutable": False},
@@ -600,7 +600,7 @@ async def test_update_mutable_and_immutable_fields(client: AsyncClient, use_json
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "mutable_field": "initial value",
                 "immutable_field": "fixed value",
@@ -661,7 +661,7 @@ async def test_update_field_mutability_only(client: AsyncClient, use_jsonb_mode)
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "mutable_field": {"type": "str", "mutable": True},
             },
@@ -674,7 +674,7 @@ async def test_update_field_mutability_only(client: AsyncClient, use_jsonb_mode)
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "mutable_field": "test value",
             },
@@ -753,7 +753,7 @@ async def test_create_log_closed_enum(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "color": {
                     "type": "enum",
@@ -812,7 +812,7 @@ async def test_update_log_enum_auto_expand(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "status": {
                     "type": "enum",
@@ -880,7 +880,7 @@ async def test_create_open_enum_without_values(client: AsyncClient, use_jsonb_mo
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "category": {
                     "type": "enum",
@@ -958,7 +958,7 @@ async def test_closed_enum_without_values(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "priority": {
                     "type": "enum",
@@ -1029,7 +1029,7 @@ async def test_filter_logs_by_enum(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "status": {
                     "type": "enum",
@@ -1107,7 +1107,7 @@ async def test_nested_explicit_type_case_insensitive(
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": fields_dict,
         },
         headers=HEADERS,
@@ -1154,7 +1154,7 @@ async def test_explicit_type_with_params(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "config": {"type": "Dict[str, float]", "mutable": True},
                 "result": {"type": "List[float]", "mutable": True},
@@ -1169,7 +1169,7 @@ async def test_explicit_type_with_params(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "params": {
                 "model": "gpt-4",  # Implicit param with type "Any"
             },
@@ -1210,7 +1210,7 @@ async def test_nested_type_persists_across_logs(client: AsyncClient, use_jsonb_m
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "data": {"type": "List[int]", "mutable": True},
             },

@@ -73,7 +73,7 @@ async def test_get_log_groups_by_context(client: AsyncClient, use_jsonb_mode):
     resp_a = await client.get(
         "/v0/logs/groups",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "key": "system_prompt",
             "context": ctx_a,
         },
@@ -87,7 +87,7 @@ async def test_get_log_groups_by_context(client: AsyncClient, use_jsonb_mode):
     resp_b = await client.get(
         "/v0/logs/groups",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "key": "system_prompt",
             "context": ctx_b,
         },
@@ -408,7 +408,7 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient, use_jsonb_mo
         response = await client.post(
             "/v0/logs",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "entries": item["entries"],
             },
             headers=HEADERS,
@@ -781,7 +781,7 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient, use_jsonb_mo
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/_/state"],
             "group_sorting": json.dumps(
                 {
@@ -890,7 +890,7 @@ async def test_sorting_with_grouping(client: AsyncClient, use_jsonb_mode):
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/student"],
             "sorting": json.dumps({"score": "descending"}),
         },
@@ -938,7 +938,7 @@ async def test_sorting_with_grouping(client: AsyncClient, use_jsonb_mode):
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/student"],
             "group_sorting": json.dumps(
                 {
@@ -1011,7 +1011,7 @@ async def test_sorting_edge_cases(client: AsyncClient, use_jsonb_mode):
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/student"],
             "group_sorting": json.dumps(
                 {
@@ -1058,7 +1058,7 @@ async def test_sorting_edge_cases(client: AsyncClient, use_jsonb_mode):
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/student"],
             "sorting": json.dumps({"score": "descending"}),
         },
@@ -1117,7 +1117,7 @@ async def test_nested_group_sorting_with_separate_metrics(
         r = await client.post(
             "/v0/logs",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "entries": {
                     "country": country,
                     "student": student,
@@ -1152,7 +1152,7 @@ async def test_nested_group_sorting_with_separate_metrics(
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/country", "entries/student"],
             "group_sorting": json.dumps(group_sorting),
         },
@@ -1254,7 +1254,7 @@ async def test_nested_group_sorting_leaf_only(client: AsyncClient, use_jsonb_mod
         r = await client.post(
             "/v0/logs",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "entries": {
                     "country": country,
                     "student": student,
@@ -1284,7 +1284,7 @@ async def test_nested_group_sorting_leaf_only(client: AsyncClient, use_jsonb_mod
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/country", "entries/student"],
             "group_sorting": json.dumps(group_sorting),
         },
@@ -1363,7 +1363,7 @@ async def test_sort_within_and_across_groups_together(
         resp = await client.post(
             "/v0/logs",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "entries": {
                     "student": stud,
                     "test": subj,
@@ -1390,7 +1390,7 @@ async def test_sort_within_and_across_groups_together(
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/student"],
             "group_sorting": json.dumps(group_sorting),
             "sorting": json.dumps(sorting_within),
@@ -1508,7 +1508,7 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient, use_json
         response = await client.post(
             "/v0/logs",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "entries": item["entries"],
             },
             headers=HEADERS,
@@ -1521,7 +1521,7 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient, use_json
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/_/state"],
             "from_fields": "_/description&_/state",
         },
@@ -1567,7 +1567,7 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient, use_json
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/_/state"],
             "exclude_fields": "_/description",
         },
@@ -1600,7 +1600,7 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient, use_json
     # First, get some log IDs to work with
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "return_ids_only": True},
+        params={"project_name": project_name, "return_ids_only": True},
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1612,7 +1612,7 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient, use_json
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/_/state"],
             "from_ids": from_ids_str,
         },
@@ -1650,7 +1650,7 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient, use_json
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/_/state"],
             "filter_expr": "_/temperature > 0",  # Only logs 1, 3 should match
         },
@@ -1710,7 +1710,7 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient, use_json
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/_/state"],
             "sorting": json.dumps(
                 {"_/description": "descending"},
@@ -1745,7 +1745,7 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient, use_json
     # response = await client.get(
     #     "/v0/logs",
     #     params={
-    #         "project": project_name,
+    #         "project_name": project_name,
     #         "group_by": ["entries/_/state"],
     #         "sorting": json.dumps({"_/state": "ascending"}),
     #     },
@@ -1772,7 +1772,7 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient, use_json
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["derived_entries/derived_temp"],
         },
         headers=HEADERS,
@@ -1801,7 +1801,7 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient, use_json
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["derived_entries/state_len"],
         },
         headers=HEADERS,
@@ -1833,7 +1833,7 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient, use_json
         response = await client.get(
             "/v0/logs",
             params={
-                "project": project_name,
+                "project_name": project_name,
                 "group_by": [
                     "derived_entries/derived_temp",
                     "derived_entries/state_len",
@@ -1879,7 +1879,7 @@ async def test_get_logs_multi_level_nested_and_flat(client: AsyncClient):
     for i in [0, 1]:
         for j in [0, 1, 2, 3]:
             payload = {
-                "project": project_name,
+                "project_name": project_name,
                 "entries": {"sys_msg": "hello", "i": i, "j": j},
             }
             response = await client.post("/v0/logs", json=payload, headers=HEADERS)
@@ -1887,7 +1887,7 @@ async def test_get_logs_multi_level_nested_and_flat(client: AsyncClient):
 
     # Test nested grouping (nested_groups=True)
     params_nested = {
-        "project": project_name,
+        "project_name": project_name,
         "group_by": ["entries/sys_msg", "entries/i", "entries/j"],
         "nested_groups": True,
     }
@@ -1925,7 +1925,7 @@ async def test_get_logs_multi_level_nested_and_flat(client: AsyncClient):
 
     # Test flat grouping (nested_groups=False)
     params_flat = {
-        "project": project_name,
+        "project_name": project_name,
         "group_by": ["entries/sys_msg", "entries/i", "entries/j"],
         "nested_groups": False,
     }
@@ -1961,7 +1961,7 @@ async def test_get_logs_groups_only_and_return_timestamps(client: AsyncClient):
     for i in [0, 1]:
         for j in [0, 1, 2, 3]:
             payload = {
-                "project": project_name,
+                "project_name": project_name,
                 "entries": {"sys_msg": "hello", "i": i, "j": j},
             }
             response = await client.post("/v0/logs", json=payload, headers=HEADERS)
@@ -1969,7 +1969,7 @@ async def test_get_logs_groups_only_and_return_timestamps(client: AsyncClient):
 
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name},
+        params={"project_name": project_name},
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1978,7 +1978,7 @@ async def test_get_logs_groups_only_and_return_timestamps(client: AsyncClient):
     assert len(result["logs"]) == 8
 
     params_nested = {
-        "project": project_name,
+        "project_name": project_name,
         "group_by": ["entries/sys_msg", "entries/i"],
         "nested_groups": True,
         "groups_only": True,
@@ -2018,7 +2018,7 @@ async def test_get_logs_groups_only_and_return_timestamps(client: AsyncClient):
             assert isinstance(log_id, int), f"Expected int log_id, got {type(log_id)}"
 
     params_nested_ts = {
-        "project": project_name,
+        "project_name": project_name,
         "group_by": ["entries/sys_msg", "entries/i"],
         "nested_groups": True,
         "groups_only": True,
@@ -2058,7 +2058,7 @@ async def test_get_logs_groups_only_and_return_timestamps(client: AsyncClient):
             ), f"Expected a timestamp string, got {type(timestamp)}"
 
     params_flat = {
-        "project": project_name,
+        "project_name": project_name,
         "group_by": ["entries/sys_msg", "entries/i"],
         "nested_groups": False,
         "groups_only": True,
@@ -2115,7 +2115,7 @@ async def test_jsonb_param_versioning_rejection(client: AsyncClient, enable_json
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["params/temperature"],
         },
         headers=HEADERS,
@@ -2158,7 +2158,7 @@ async def test_groups_only_both_modes(client: AsyncClient, use_jsonb_mode):
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/category"],
             "groups_only": "true",
         },
@@ -2213,7 +2213,7 @@ async def test_return_timestamps_jsonb_mode(client: AsyncClient, enable_jsonb_mo
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/category"],
             "groups_only": "true",
             "return_timestamps": "true",
@@ -2272,7 +2272,7 @@ async def test_log_structure_preserved_both_modes(client: AsyncClient, use_jsonb
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/category"],
         },
         headers=HEADERS,
@@ -2336,7 +2336,7 @@ async def test_grouping_sets_integration_depth_0(client: AsyncClient, use_jsonb_
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/status"],
             "group_depth": 0,
         },
@@ -2388,7 +2388,7 @@ async def test_grouping_sets_integration_depth_1(client: AsyncClient, use_jsonb_
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/status", "entries/priority"],
             "group_depth": 1,
         },
@@ -2449,7 +2449,7 @@ async def test_grouping_sets_fallback_for_groups_only(
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/status"],
             "group_depth": 0,
             "groups_only": True,
@@ -2490,7 +2490,7 @@ async def test_grouping_sets_with_sorting(client: AsyncClient, use_jsonb_mode):
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/status"],
             "group_depth": 0,
             "group_sorting": json.dumps(
@@ -2543,7 +2543,7 @@ async def test_grouping_sets_with_pagination(
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/status"],
             "group_depth": 0,
             "group_limit": 2,
@@ -2599,7 +2599,7 @@ async def test_grouping_sets_matches_recursive_baseline_depth_0(
     response_optimized = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/status"],
             "group_depth": 0,
         },
@@ -2621,7 +2621,7 @@ async def test_grouping_sets_matches_recursive_baseline_depth_0(
     response_baseline = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/status"],
             "group_depth": 0,
         },
@@ -2715,7 +2715,7 @@ async def test_grouping_sets_matches_recursive_baseline_depth_1(
     response_optimized = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/status", "entries/priority"],
             "group_depth": 1,
         },
@@ -2736,7 +2736,7 @@ async def test_grouping_sets_matches_recursive_baseline_depth_1(
     response_baseline = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/status", "entries/priority"],
             "group_depth": 1,
         },
@@ -2875,7 +2875,7 @@ async def test_grouping_sets_sorting_single_level(client: AsyncClient, use_jsonb
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/category"],
             "group_depth": 0,
             "group_sorting": json.dumps(
@@ -2938,7 +2938,7 @@ async def test_grouping_sets_sorting_multi_level(client: AsyncClient, use_jsonb_
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/country", "entries/student"],
             "group_depth": 1,
             "group_sorting": json.dumps(
@@ -2990,7 +2990,7 @@ async def test_grouping_sets_pagination_multi_page(client: AsyncClient, use_json
     response1 = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/category"],
             "group_depth": 0,
             "group_limit": 5,
@@ -3011,7 +3011,7 @@ async def test_grouping_sets_pagination_multi_page(client: AsyncClient, use_json
     response2 = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/category"],
             "group_depth": 0,
             "group_limit": 5,
@@ -3064,7 +3064,7 @@ async def test_grouping_sets_sorting_with_pagination(
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/category"],
             "group_depth": 0,
             "group_limit": 3,
@@ -3122,7 +3122,7 @@ async def test_grouping_sets_fallback_within_groups_sorting(
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/category"],
             "group_depth": 0,
             "group_sorting": json.dumps(
@@ -3182,7 +3182,7 @@ async def test_grouping_sets_depth_two(client: AsyncClient, use_jsonb_mode):
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/country", "entries/city", "entries/district"],
             "group_depth": 2,
         },
@@ -3277,7 +3277,7 @@ async def test_grouping_sets_sorting_vs_recursive_baseline(
     response_optimized = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/status"],
             "group_depth": 0,
             "group_sorting": sort_params,
@@ -3299,7 +3299,7 @@ async def test_grouping_sets_sorting_vs_recursive_baseline(
     response_baseline = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "group_by": ["entries/status"],
             "group_depth": 0,
             "group_sorting": sort_params,

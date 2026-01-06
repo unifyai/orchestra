@@ -276,13 +276,13 @@ def get_project_commits(
                     "example": [
                         {
                             "id": 1,
-                            "project": "my-project",
+                            "project_name": "my-project",
                             "icon": "star",
                             "position": 0,
                         },
                         {
                             "id": 2,
-                            "project": "another-project",
+                            "project_name": "another-project",
                             "icon": "folder",
                             "position": 1,
                         },
@@ -342,7 +342,7 @@ def get_favorites(
                 "application/json": {
                     "example": {
                         "id": 1,
-                        "project": "my-project",
+                        "project_name": "my-project",
                         "icon": "star",
                         "position": 0,
                     },
@@ -439,7 +439,7 @@ def create_favorite(
                 "application/json": {
                     "example": {
                         "id": 1,
-                        "project": "my-project",
+                        "project_name": "my-project",
                         "icon": "star",
                         "position": 0,
                     },
@@ -504,7 +504,7 @@ def get_favorite(
                 "application/json": {
                     "example": {
                         "id": 1,
-                        "project": "my-project",
+                        "project_name": "my-project",
                         "icon": "updated-icon",
                         "position": 2,
                     },

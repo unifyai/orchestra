@@ -266,7 +266,7 @@ def _create_log(
     return client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "params": params,
             "entries": entries,
             "context": context,
@@ -337,7 +337,7 @@ def _create_derived_entry(
     return client.post(
         "/v0/logs/derived",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "key": key,
             "equation": equation,
             "referenced_logs": referenced_logs,
@@ -349,7 +349,7 @@ def _create_derived_entry(
 
 async def fetch_logs(client, project_name, **query_params):
     default_params = {
-        "project": project_name,
+        "project_name": project_name,
         "sorting": json.dumps({"id": "ascending"}),
     }
     default_params.update(query_params)
@@ -440,7 +440,7 @@ def _delete_log_fields_from_logs(
         str(client.base_url) + f"/v0/logs",
         json={
             "ids_and_fields": fields,
-            "project": project_name,
+            "project_name": project_name,
             "delete_empty_logs": delete_empty_logs,
             "delete_empty_fields": delete_empty_fields,
         },

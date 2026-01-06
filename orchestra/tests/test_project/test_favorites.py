@@ -24,7 +24,7 @@ async def test_create_favorite(client: AsyncClient):
     project_name = "proj1"
     await _create_project(client, project_name)
 
-    payload = {"project": project_name, "position": 1}
+    payload = {"project_name": project_name, "position": 1}
     resp = await client.post("/v0/project/favorites", json=payload, headers=HEADERS)
     assert resp.status_code == 201, resp.text
     data = resp.json()
@@ -40,7 +40,7 @@ async def test_get_favorite_by_id(client: AsyncClient):
     """
     project_name = "proj2"
     await _create_project(client, project_name)
-    payload = {"project": project_name, "position": 2}
+    payload = {"project_name": project_name, "position": 2}
     post_resp = await client.post(
         "/v0/project/favorites",
         json=payload,
@@ -73,7 +73,7 @@ async def test_update_favorite_icon_and_position(client: AsyncClient):
     """
     project_name = "proj3"
     await _create_project(client, project_name)
-    payload = {"project": project_name, "position": 3}
+    payload = {"project_name": project_name, "position": 3}
     post_resp = await client.post(
         "/v0/project/favorites",
         json=payload,
@@ -120,7 +120,7 @@ async def test_delete_favorite(client: AsyncClient):
     """
     project_name = "proj4"
     await _create_project(client, project_name)
-    payload = {"project": project_name, "position": 5}
+    payload = {"project_name": project_name, "position": 5}
     post_resp = await client.post(
         "/v0/project/favorites",
         json=payload,
@@ -154,7 +154,7 @@ async def test_nonexistent_project_on_create(client: AsyncClient):
     """
     Posting a favorite for a non-existent project should return 404.
     """
-    payload = {"project": "no_proj", "position": 2}
+    payload = {"project_name": "no_proj", "position": 2}
     resp = await client.post("/v0/project/favorites", json=payload, headers=HEADERS)
     assert resp.status_code == 404
     assert "Project 'no_proj' not found" in resp.json().get("detail", "")

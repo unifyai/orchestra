@@ -17,7 +17,7 @@ HEADERS = {
 
 async def _get_logs(client: AsyncClient, project_name: str, context: str = None):
     """Helper to get logs from a project/context."""
-    params = {"project": project_name}
+    params = {"project_name": project_name}
     if context:
         params["context"] = context
     return await client.get("/v0/logs", params=params, headers=HEADERS)
@@ -397,7 +397,7 @@ async def test_foreign_key_batch_validation(client: AsyncClient, use_jsonb_mode)
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "entries": [
                 {"name": "Engineering"},
@@ -431,7 +431,7 @@ async def test_foreign_key_batch_validation(client: AsyncClient, use_jsonb_mode)
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Employees",
             "entries": [
                 {"name": "Alice", "department_id": dept_ids[0]},  # Valid
@@ -478,7 +478,7 @@ async def test_cascade_delete_removes_referencing_rows(
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "entries": {"name": "Engineering"},
         },
@@ -510,7 +510,7 @@ async def test_cascade_delete_removes_referencing_rows(
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Employees",
             "entries": [
                 {"name": "Alice", "department_id": dept_id},
@@ -531,7 +531,7 @@ async def test_cascade_delete_removes_referencing_rows(
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "ids_and_fields": [[dept_log_id, []]],
             "source_type": "all",
@@ -575,7 +575,7 @@ async def test_cascade_update_propagates_changes(client: AsyncClient, use_jsonb_
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "entries": {"id": 1, "name": "Engineering"},
         },
@@ -606,7 +606,7 @@ async def test_cascade_update_propagates_changes(client: AsyncClient, use_jsonb_
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Employees",
             "entries": [
                 {"name": "Alice", "department_id": 1},
@@ -621,7 +621,7 @@ async def test_cascade_update_propagates_changes(client: AsyncClient, use_jsonb_
     response = await client.put(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "logs": [dept_log_id],
             "entries": {"id": 100},  # Change id from 1 to 100
@@ -665,7 +665,7 @@ async def test_set_null_on_delete(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "entries": {"name": "Engineering"},
         },
@@ -697,7 +697,7 @@ async def test_set_null_on_delete(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Employees",
             "entries": [
                 {"name": "Alice", "department_id": dept_id},
@@ -713,7 +713,7 @@ async def test_set_null_on_delete(client: AsyncClient, use_jsonb_mode):
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "ids_and_fields": [[dept_log_id, []]],
             "source_type": "all",
@@ -757,7 +757,7 @@ async def test_cascade_delete_multi_level(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "entries": {"name": "Engineering"},
         },
@@ -791,7 +791,7 @@ async def test_cascade_delete_multi_level(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Employees",
             "entries": {"name": "Alice", "department_id": dept_id},
         },
@@ -822,7 +822,7 @@ async def test_cascade_delete_multi_level(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Tasks",
             "entries": [
                 {"title": "Task 1", "employee_id": emp_id},
@@ -846,7 +846,7 @@ async def test_cascade_delete_multi_level(client: AsyncClient, use_jsonb_mode):
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "ids_and_fields": [[dept_log_id, []]],
             "source_type": "all",
@@ -889,7 +889,7 @@ async def test_mixed_actions_on_delete(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "entries": [{"name": "Engineering"}, {"name": "Sales"}],
         },
@@ -959,7 +959,7 @@ async def test_mixed_actions_on_delete(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Employees",
             "entries": {"name": "Alice", "department_id": dept_ids[0]},
         },
@@ -971,7 +971,7 @@ async def test_mixed_actions_on_delete(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Contractors",
             "entries": {"name": "Bob", "department_id": dept_ids[0]},
         },
@@ -983,7 +983,7 @@ async def test_mixed_actions_on_delete(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Projects",
             "entries": {"title": "Project X", "department_id": dept_ids[1]},
         },
@@ -996,7 +996,7 @@ async def test_mixed_actions_on_delete(client: AsyncClient, use_jsonb_mode):
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "ids_and_fields": [[dept_log_ids[0], []]],
             "source_type": "all",
@@ -1019,7 +1019,7 @@ async def test_mixed_actions_on_delete(client: AsyncClient, use_jsonb_mode):
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "ids_and_fields": [[dept_log_ids[1], []]],
             "source_type": "all",
@@ -1060,7 +1060,7 @@ async def test_mixed_actions_on_update_vs_delete(client: AsyncClient, use_jsonb_
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "entries": [{"id": 1, "name": "Engineering"}, {"id": 2, "name": "Sales"}],
         },
@@ -1095,7 +1095,7 @@ async def test_mixed_actions_on_update_vs_delete(client: AsyncClient, use_jsonb_
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Employees",
             "entries": [
                 {"name": "Alice", "department_id": 1},
@@ -1110,7 +1110,7 @@ async def test_mixed_actions_on_update_vs_delete(client: AsyncClient, use_jsonb_
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Employees",
             "entries": {"name": "Charlie", "department_id": 2},
         },
@@ -1127,7 +1127,7 @@ async def test_mixed_actions_on_update_vs_delete(client: AsyncClient, use_jsonb_
     response = await client.put(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "logs": [dept_log_ids[0]],
             "entries": {"id": 999},
@@ -1159,7 +1159,7 @@ async def test_mixed_actions_on_update_vs_delete(client: AsyncClient, use_jsonb_
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "ids_and_fields": [[dept_log_ids[1], []]],
             "source_type": "all",
@@ -1203,7 +1203,7 @@ async def test_null_fk_values_not_affected(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "entries": {"name": "Engineering"},
         },
@@ -1235,7 +1235,7 @@ async def test_null_fk_values_not_affected(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Employees",
             "entries": [
                 {"name": "Alice", "department_id": dept_id},  # Has department
@@ -1256,7 +1256,7 @@ async def test_null_fk_values_not_affected(client: AsyncClient, use_jsonb_mode):
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "ids_and_fields": [[dept_log_id, []]],
             "source_type": "all",
@@ -1298,7 +1298,7 @@ async def test_cascade_with_no_referencing_rows(client: AsyncClient, use_jsonb_m
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "entries": {"name": "Engineering"},
         },
@@ -1332,7 +1332,7 @@ async def test_cascade_with_no_referencing_rows(client: AsyncClient, use_jsonb_m
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "ids_and_fields": [[dept_log_id, []]],
             "source_type": "all",
@@ -1389,7 +1389,7 @@ async def test_set_null_on_delete_v2(client: AsyncClient, use_jsonb_mode):
     dept_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "entries": {"name": "Engineering"},
         },
@@ -1403,7 +1403,7 @@ async def test_set_null_on_delete_v2(client: AsyncClient, use_jsonb_mode):
     emp_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Employees",
             "entries": {"name": "Alice", "department_id": dept_id},
         },
@@ -1423,7 +1423,7 @@ async def test_set_null_on_delete_v2(client: AsyncClient, use_jsonb_mode):
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "ids_and_fields": [[dept_log_id, ["id"]]],
         },
@@ -1478,7 +1478,7 @@ async def test_set_null_on_update(client: AsyncClient, use_jsonb_mode):
     dept_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "entries": {"id": 1, "name": "Engineering"},
         },
@@ -1491,7 +1491,7 @@ async def test_set_null_on_update(client: AsyncClient, use_jsonb_mode):
     emp_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Employees",
             "entries": {"name": "Alice", "department_id": 1},
         },
@@ -1503,7 +1503,7 @@ async def test_set_null_on_update(client: AsyncClient, use_jsonb_mode):
     update_response = await client.put(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "logs": [dept_log_id],
             "entries": {"id": 2},
@@ -1561,7 +1561,7 @@ async def test_set_null_multiple_rows(client: AsyncClient, use_jsonb_mode):
     dept_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "entries": {"name": "Engineering"},
         },
@@ -1576,7 +1576,7 @@ async def test_set_null_multiple_rows(client: AsyncClient, use_jsonb_mode):
         emp_response = await client.post(
             "/v0/logs",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "context": "Employees",
                 "entries": {"name": name, "department_id": dept_id},
             },
@@ -1596,7 +1596,7 @@ async def test_set_null_multiple_rows(client: AsyncClient, use_jsonb_mode):
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "ids_and_fields": [[dept_log_id, ["id"]]],
         },
@@ -1652,7 +1652,7 @@ async def test_set_null_no_effect_on_null_values(client: AsyncClient, use_jsonb_
     dept_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "entries": {"name": "Engineering"},
         },
@@ -1666,7 +1666,7 @@ async def test_set_null_no_effect_on_null_values(client: AsyncClient, use_jsonb_
     emp1_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Employees",
             "entries": {"name": "Alice", "department_id": dept_id},
         },
@@ -1678,7 +1678,7 @@ async def test_set_null_no_effect_on_null_values(client: AsyncClient, use_jsonb_
     emp2_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Employees",
             "entries": {"name": "Bob"},
         },
@@ -1691,7 +1691,7 @@ async def test_set_null_no_effect_on_null_values(client: AsyncClient, use_jsonb_
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "ids_and_fields": [[dept_log_id, ["id"]]],
         },
@@ -1747,7 +1747,7 @@ async def test_set_null_preserves_other_columns(client: AsyncClient, use_jsonb_m
     dept_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "entries": {"name": "Engineering"},
         },
@@ -1761,7 +1761,7 @@ async def test_set_null_preserves_other_columns(client: AsyncClient, use_jsonb_m
     emp_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Employees",
             "entries": {
                 "name": "Alice",
@@ -1780,7 +1780,7 @@ async def test_set_null_preserves_other_columns(client: AsyncClient, use_jsonb_m
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "ids_and_fields": [[dept_log_id, ["id"]]],
         },
@@ -1859,7 +1859,7 @@ async def test_set_null_with_multiple_fks(client: AsyncClient, use_jsonb_mode):
     dept_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "entries": {"name": "Engineering"},
         },
@@ -1872,7 +1872,7 @@ async def test_set_null_with_multiple_fks(client: AsyncClient, use_jsonb_mode):
     loc_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Locations",
             "entries": {"name": "New York"},
         },
@@ -1886,7 +1886,7 @@ async def test_set_null_with_multiple_fks(client: AsyncClient, use_jsonb_mode):
     emp_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Employees",
             "entries": {
                 "name": "Alice",
@@ -1903,7 +1903,7 @@ async def test_set_null_with_multiple_fks(client: AsyncClient, use_jsonb_mode):
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "ids_and_fields": [[dept_log_id, ["id"]]],
         },
@@ -1924,7 +1924,7 @@ async def test_set_null_with_multiple_fks(client: AsyncClient, use_jsonb_mode):
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Locations",
             "ids_and_fields": [[loc_log_id, ["id"]]],
         },
@@ -1999,7 +1999,7 @@ async def test_set_null_and_cascade_combined(client: AsyncClient, use_jsonb_mode
     dept_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "entries": {"name": "Engineering"},
         },
@@ -2013,7 +2013,7 @@ async def test_set_null_and_cascade_combined(client: AsyncClient, use_jsonb_mode
     emp_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Employees",
             "entries": {"name": "Alice", "department_id": dept_id},
         },
@@ -2024,7 +2024,7 @@ async def test_set_null_and_cascade_combined(client: AsyncClient, use_jsonb_mode
     contractor_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Contractors",
             "entries": {"name": "Bob", "department_id": dept_id},
         },
@@ -2037,7 +2037,7 @@ async def test_set_null_and_cascade_combined(client: AsyncClient, use_jsonb_mode
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "ids_and_fields": [[dept_log_id, ["id"]]],
         },
@@ -2098,7 +2098,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
     dept1_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "entries": {"name": "Engineering"},
         },
@@ -2111,7 +2111,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
     dept2_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "entries": {"name": "Sales"},
         },
@@ -2124,7 +2124,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
     emp_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Employees",
             "entries": {"name": "Alice", "department_id": dept1_id},
         },
@@ -2137,7 +2137,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "ids_and_fields": [[dept1_log_id, ["id"]]],
         },
@@ -2157,7 +2157,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "ids_and_fields": [[dept2_log_id, ["id"]]],
         },
@@ -2200,7 +2200,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "entries": {"name": "Engineering"},
 #         },
@@ -2232,7 +2232,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Employees",
 #             "entries": {"name": "Alice", "department_id": dept_id},
 #         },
@@ -2245,7 +2245,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #         "DELETE",
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "ids_and_fields": [[dept_log_id, ["id"]]],  # Try to delete the id field
 #             "source_type": "base",
@@ -2283,7 +2283,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "entries": [{"name": "Engineering"}, {"name": "Sales"}],
 #         },
@@ -2315,7 +2315,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Employees",
 #             "entries": {"name": "Alice", "department_id": dept_ids[0]},
 #         },
@@ -2328,7 +2328,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #         "DELETE",
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "ids_and_fields": [[dept_log_ids[1], []]],  # Delete entire log event
 #             "source_type": "all",
@@ -2364,7 +2364,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "entries": {"name": "Engineering"},
 #         },
@@ -2396,7 +2396,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Employees",
 #             "entries": {"name": "Alice", "department_id": dept_id},
 #         },
@@ -2408,7 +2408,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.put(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "logs": [dept_log_id],
 #             "entries": {"id": 999},  # Try to change the id
@@ -2447,7 +2447,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "entries": {"name": "Engineering"},
 #         },
@@ -2479,7 +2479,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Employees",
 #             "entries": {"name": "Alice", "department_id": dept_id},
 #         },
@@ -2491,7 +2491,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.put(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "logs": [dept_log_id],
 #             "entries": {"name": "Engineering Team"},  # Update name, not id
@@ -2528,7 +2528,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "entries": {"name": "Engineering"},
 #         },
@@ -2560,7 +2560,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Employees",
 #             "entries": {"name": "Alice", "department_id": dept_id},
 #         },
@@ -2574,7 +2574,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #         "DELETE",
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "ids_and_fields": [[dept_log_id, []]],
 #             "source_type": "all",
@@ -2610,7 +2610,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "entries": {"name": "Engineering"},
 #         },
@@ -2641,7 +2641,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Employees",
 #             "entries": {"name": "Bob"},  # No department_id
 #         },
@@ -2654,7 +2654,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #         "DELETE",
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "ids_and_fields": [[dept_log_id, []]],
 #             "source_type": "all",
@@ -2690,7 +2690,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "entries": [{"name": "Engineering"}, {"name": "Sales"}],
 #         },
@@ -2738,7 +2738,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Employees",
 #             "entries": {"name": "Alice", "department_id": dept_ids[0]},
 #         },
@@ -2749,7 +2749,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Projects",
 #             "entries": {"title": "Project X", "owner_dept": dept_ids[0]},
 #         },
@@ -2763,7 +2763,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #         "DELETE",
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "ids_and_fields": [[None, ["id"]]],  # Global delete of id field
 #             "source_type": "base",
@@ -2804,7 +2804,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "entries": {"name": "Engineering"},
 #         },
@@ -2836,7 +2836,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Employees",
 #             "entries": {"name": "Alice", "department_id": dept_id},
 #         },
@@ -2849,7 +2849,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #         "DELETE",
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "ids_and_fields": [[dept_log_id, ["id"]]],
 #         },
@@ -2901,7 +2901,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "entries": {"name": "Engineering"},
 #         },
@@ -2915,7 +2915,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #         "DELETE",
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "ids_and_fields": [
 #                 [dept_log_id, []],
@@ -2952,7 +2952,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "entries": {"id": 1, "name": "Engineering"},
 #         },
@@ -2983,7 +2983,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Employees",
 #             "entries": {"name": "Alice", "department_id": 1},
 #         },
@@ -2995,7 +2995,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.put(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "logs": [dept_log_id],
 #             "entries": {"id": 2},
@@ -3031,7 +3031,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "entries": {"id": 1, "name": "Engineering"},
 #         },
@@ -3062,7 +3062,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Employees",
 #             "entries": {"name": "Alice", "department_id": 1},
 #         },
@@ -3074,7 +3074,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.put(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "logs": [dept_log_id],
 #             "entries": {"name": "Engineering Department"},
@@ -3131,7 +3131,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "entries": {"id": 1, "name": "Engineering"},
 #         },
@@ -3144,7 +3144,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.put(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "logs": [dept_log_id],
 #             "entries": {"id": 2},
@@ -3184,7 +3184,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "entries": {"name": "Engineering"},
 #         },
@@ -3234,7 +3234,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Employees",
 #             "entries": {"name": "Alice", "department_id": dept_id},
 #         },
@@ -3245,7 +3245,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Projects",
 #             "entries": {"title": "Project X", "department_id": dept_id},
 #         },
@@ -3258,7 +3258,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #         "DELETE",
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "ids_and_fields": [[dept_log_id, ["id"]]],
 #         },
@@ -3310,7 +3310,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "entries": {"name": "Engineering"},
 #         },
@@ -3323,7 +3323,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Employees",
 #             "entries": {"name": "Alice"},  # No department_id
 #         },
@@ -3336,7 +3336,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #         "DELETE",
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "ids_and_fields": [[dept_log_id, ["id"]]],
 #         },
@@ -3372,7 +3372,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     dept1_response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "entries": {"name": "Engineering"},
 #         },
@@ -3385,7 +3385,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     dept2_response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "entries": {"name": "Sales"},
 #         },
@@ -3435,7 +3435,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Employees",
 #             "entries": {"name": "Alice", "department_id": dept1_id},
 #         },
@@ -3447,7 +3447,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Contractors",
 #             "entries": {"name": "Bob", "department_id": dept2_id},
 #         },
@@ -3460,7 +3460,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #         "DELETE",
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "ids_and_fields": [[dept1_log_id, ["id"]]],
 #         },
@@ -3474,7 +3474,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #         "DELETE",
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "ids_and_fields": [[dept2_log_id, ["id"]]],
 #         },
@@ -3538,7 +3538,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     dept_response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "entries": {"name": "Engineering"},
 #         },
@@ -3551,7 +3551,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     emp_response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Employees",
 #             "entries": {"name": "Alice", "department_id": 0},
 #         },
@@ -3572,7 +3572,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #         "DELETE",
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "ids_and_fields": [[dept_log_id, ["id"]]],
 #         },
@@ -3628,7 +3628,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     dept_response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "entries": {"id": 1, "name": "Engineering"},
 #         },
@@ -3641,7 +3641,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     emp_response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Employees",
 #             "entries": {"name": "Alice", "department_id": 1},
 #         },
@@ -3653,7 +3653,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     update_response = await client.put(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "logs": [dept_log_id],
 #             "entries": {"id": 2},
@@ -3880,7 +3880,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     dept_response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "entries": {"name": "Engineering"},
 #         },
@@ -3892,7 +3892,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     emp_response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Employees",
 #             "entries": {"name": "Alice", "department_id": 0},
 #         },
@@ -3905,7 +3905,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #         "DELETE",
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "ids_and_fields": [[dept_log_id, ["id"]]],
 #         },
@@ -3961,7 +3961,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     dept1_response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "entries": {"name": "Engineering"},
 #         },
@@ -3973,7 +3973,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     dept2_response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "entries": {"name": "Sales"},
 #         },
@@ -3985,7 +3985,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     emp_response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Employees",
 #             "entries": {"name": "Alice", "department_id": 1},
 #         },
@@ -3999,7 +3999,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #         "DELETE",
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "ids_and_fields": [[dept2_log_id, ["id"]]],
 #         },
@@ -4074,7 +4074,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     dept_response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "entries": {"name": "Engineering"},
 #         },
@@ -4086,7 +4086,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     loc_response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Locations",
 #             "entries": {"name": "HQ"},
 #         },
@@ -4099,7 +4099,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #     emp_response = await client.post(
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Employees",
 #             "entries": {"name": "Alice", "department_id": 0, "location_id": 0},
 #         },
@@ -4112,7 +4112,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #         "DELETE",
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Departments",
 #             "ids_and_fields": [[dept_log_id, ["id"]]],
 #         },
@@ -4122,7 +4122,7 @@ async def test_set_null_idempotent(client: AsyncClient, use_jsonb_mode):
 #         "DELETE",
 #         "/v0/logs",
 #         json={
-#             "project": project_name,
+#             "project_name": project_name,
 #             "context": "Locations",
 #             "ids_and_fields": [[loc_log_id, ["id"]]],
 #         },
@@ -4182,7 +4182,7 @@ async def test_batch_fk_validation_all_valid(client: AsyncClient, use_jsonb_mode
         response = await client.post(
             "/v0/logs",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "context": "Departments",
                 "entries": {"name": f"Dept{i}"},
             },
@@ -4194,7 +4194,7 @@ async def test_batch_fk_validation_all_valid(client: AsyncClient, use_jsonb_mode
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Employees",
             "entries": [
                 {"name": "Alice", "department_id": 0},
@@ -4253,7 +4253,7 @@ async def test_batch_fk_validation_some_invalid(client: AsyncClient, use_jsonb_m
         response = await client.post(
             "/v0/logs",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "context": "Departments",
                 "entries": {"name": f"Dept{i}"},
             },
@@ -4265,7 +4265,7 @@ async def test_batch_fk_validation_some_invalid(client: AsyncClient, use_jsonb_m
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Employees",
             "entries": [
                 {"name": "Alice", "department_id": 0},  # Valid
@@ -4322,7 +4322,7 @@ async def test_batch_fk_validation_with_nulls(client: AsyncClient, use_jsonb_mod
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "entries": {"name": "Engineering"},
         },
@@ -4334,7 +4334,7 @@ async def test_batch_fk_validation_with_nulls(client: AsyncClient, use_jsonb_mod
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Employees",
             "entries": [
                 {"name": "Alice", "department_id": 0},  # Valid
@@ -4390,7 +4390,7 @@ async def test_batch_cascade_update(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "entries": {"id": 1, "name": "Engineering"},
         },
@@ -4404,7 +4404,7 @@ async def test_batch_cascade_update(client: AsyncClient, use_jsonb_mode):
         response = await client.post(
             "/v0/logs",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "context": "Employees",
                 "entries": {"name": f"Employee{i}", "department_id": 1},
             },
@@ -4416,7 +4416,7 @@ async def test_batch_cascade_update(client: AsyncClient, use_jsonb_mode):
     response = await client.put(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "logs": [dept_log_id],
             "entries": {"id": 999},
@@ -4430,7 +4430,7 @@ async def test_batch_cascade_update(client: AsyncClient, use_jsonb_mode):
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Employees",
         },
         headers=HEADERS,
@@ -4483,7 +4483,7 @@ async def test_batch_set_null(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "entries": {"id": 1, "name": "Engineering"},
         },
@@ -4497,7 +4497,7 @@ async def test_batch_set_null(client: AsyncClient, use_jsonb_mode):
         response = await client.post(
             "/v0/logs",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "context": "Employees",
                 "entries": {"name": f"Employee{i}", "department_id": 1},
             },
@@ -4510,7 +4510,7 @@ async def test_batch_set_null(client: AsyncClient, use_jsonb_mode):
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Departments",
             "ids_and_fields": [[dept_log_id, []]],
             "source_type": "all",
@@ -4523,7 +4523,7 @@ async def test_batch_set_null(client: AsyncClient, use_jsonb_mode):
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Employees",
         },
         headers=HEADERS,
@@ -4577,7 +4577,7 @@ async def test_batch_operations_performance(client: AsyncClient, use_jsonb_mode)
         response = await client.post(
             "/v0/logs",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "context": "Departments",
                 "entries": {"name": f"Dept{i}"},
             },
@@ -4599,7 +4599,7 @@ async def test_batch_operations_performance(client: AsyncClient, use_jsonb_mode)
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Employees",
             "entries": entries_list,
         },
@@ -4614,7 +4614,7 @@ async def test_batch_operations_performance(client: AsyncClient, use_jsonb_mode)
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Employees",
         },
         headers=HEADERS,
@@ -4673,7 +4673,7 @@ async def test_batch_multiple_fk_fields(client: AsyncClient, use_jsonb_mode):
         await client.post(
             "/v0/logs",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "context": "Departments",
                 "entries": {"name": f"Dept{i}"},
             },
@@ -4682,7 +4682,7 @@ async def test_batch_multiple_fk_fields(client: AsyncClient, use_jsonb_mode):
         await client.post(
             "/v0/logs",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "context": "Managers",
                 "entries": {"name": f"Manager{i}"},
             },
@@ -4693,7 +4693,7 @@ async def test_batch_multiple_fk_fields(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Employees",
             "entries": [
                 {"name": "Alice", "department_id": 0, "manager_id": 0},  # Valid

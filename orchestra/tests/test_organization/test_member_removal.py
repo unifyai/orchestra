@@ -839,7 +839,7 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
     log_resp = await client.post(
         "/v0/logs",
         json={
-            "project": "Assistants",
+            "project_name": "Assistants",
             "context": tier3_context,
             "entries": [
                 {
@@ -1020,7 +1020,7 @@ async def test_member_removal_preserves_other_assistant_logs(
     log_resp_a = await client.post(
         "/v0/logs",
         json={
-            "project": "Assistants",
+            "project_name": "Assistants",
             "context": tier3_a,
             "entries": [
                 {
@@ -1040,7 +1040,7 @@ async def test_member_removal_preserves_other_assistant_logs(
     log_resp_b = await client.post(
         "/v0/logs",
         json={
-            "project": "Assistants",
+            "project_name": "Assistants",
             "context": tier3_b,
             "entries": [
                 {
@@ -1161,7 +1161,7 @@ async def test_member_removal_sets_contact_is_system_false(
     await client.post(
         "/v0/logs",
         json={
-            "project": "Assistants",
+            "project_name": "Assistants",
             "context": "All/Contacts",
             "entries": [
                 {

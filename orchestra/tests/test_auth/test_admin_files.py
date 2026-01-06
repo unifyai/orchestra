@@ -40,7 +40,7 @@ async def test_admin_file_endpoints_end_to_end(client):
         "/v0/admin/file",
         json={
             "user_id": user_id,
-            "project": project_name,
+            "project_name": project_name,
             "files": files_payload,
             "staging": True,
         },
@@ -140,7 +140,7 @@ async def test_admin_file_signed_url_endpoints(client):
     # 1) Create upload URL (resumable)
     req = {
         "user_id": user_id,
-        "project": project_name,
+        "project_name": project_name,
         "path": "signed/file.bin",
         "content_type": "application/octet-stream",
         "staging": True,
@@ -196,7 +196,7 @@ async def test_admin_file_signed_url_endpoints(client):
     # 4) Invalid path should 400
     bad_req = {
         "user_id": user_id,
-        "project": project_name,
+        "project_name": project_name,
         "path": "../escape.bin",
         "staging": True,
     }
@@ -216,7 +216,7 @@ async def test_admin_file_signed_url_endpoints(client):
     # 5) Unknown project should 404
     no_proj_req = {
         "user_id": user_id,
-        "project": "does-not-exist",
+        "project_name": "does-not-exist",
         "path": "file.bin",
     }
     no_proj_resp = await client.post(
@@ -262,7 +262,7 @@ async def test_admin_file_download_url_prefix(client):
         "/v0/admin/file",
         json={
             "user_id": user_id,
-            "project": project_name,
+            "project_name": project_name,
             "files": files_payload,
             "staging": True,
         },

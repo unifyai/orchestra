@@ -234,7 +234,7 @@ def update_interface(
                     "example": [
                         {
                             "name": "tab1",
-                            "project": "my_project",
+                            "project_name": "my_project",
                             "items": [
                                 {
                                     "i": "n0",
@@ -347,7 +347,7 @@ def get_interfaces(
         return [
             {
                 "name": name,
-                "project": project_name,
+                "project_name": project_name,
                 "items": items,
                 "new_counter": new_counter,
                 "context": None,

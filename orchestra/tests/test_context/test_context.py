@@ -400,7 +400,7 @@ async def test_add_log_to_context(client: AsyncClient):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "params": {"a/b/param1": "test"},
             "entries": {
                 "metric": 0.95,
@@ -436,7 +436,7 @@ async def test_implicit_context_creation(client: AsyncClient):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "params": {"param1": "test"},
             "entries": {
                 "metric": 0.95,
@@ -487,7 +487,7 @@ async def test_get_logs_by_context(client: AsyncClient):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "params": {"a/b/param1": "test"},
             "entries": {
                 "metric": 0.95,
@@ -501,7 +501,7 @@ async def test_get_logs_by_context(client: AsyncClient):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "params": {"a/b/param1": "test"},
             "entries": {
                 "metric": 1.5,
@@ -552,7 +552,7 @@ async def test_context_as_string(client: AsyncClient):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "params": {"param1": "test"},
             "entries": {
                 "metric": 0.95,
@@ -596,7 +596,7 @@ async def test_get_logs_no_context(client: AsyncClient):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "params": {"a/b/param1": "test"},
             "entries": {
                 "metric": 0.95,
@@ -641,7 +641,7 @@ async def test_get_fields_no_context(client: AsyncClient):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "params": {"a/b/param1": "test"},
             "entries": {
                 "metric": 0.95,
@@ -698,7 +698,7 @@ async def test_add_log_to_multiple_contexts(client: AsyncClient):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "params": {"a/b/param1": "test"},
             "entries": {
                 "metric": 0.95,
@@ -1084,7 +1084,7 @@ async def test_context_allow_duplicates(client: AsyncClient):
 
     # Create a log with specific entries in the no-duplicates context
     log_data = {
-        "project": project_name,
+        "project_name": project_name,
         "params": {"model": "gpt-4", "temperature": 0.7},
         "entries": {
             "accuracy": 0.95,
@@ -1191,7 +1191,7 @@ async def test_context_duplicate_updates(client: AsyncClient):
 
     # Create two logs with different values in the no-duplicates context
     log_data_1 = {
-        "project": project_name,
+        "project_name": project_name,
         "params": {"model": "gpt-4", "temperature": 0.7},
         "entries": {
             "accuracy": 0.95,
@@ -1202,7 +1202,7 @@ async def test_context_duplicate_updates(client: AsyncClient):
     }
 
     log_data_2 = {
-        "project": project_name,
+        "project_name": project_name,
         "params": {"model": "gpt-4", "temperature": 0.7},
         "entries": {
             "accuracy": 0.85,
@@ -1247,7 +1247,7 @@ async def test_context_duplicate_updates(client: AsyncClient):
 
     # Create two logs with different values in the default context
     log_data_3 = {
-        "project": project_name,
+        "project_name": project_name,
         "params": {"model": "gpt-3.5", "temperature": 0.5},
         "entries": {
             "accuracy": 0.90,
@@ -1258,7 +1258,7 @@ async def test_context_duplicate_updates(client: AsyncClient):
     }
 
     log_data_4 = {
-        "project": project_name,
+        "project_name": project_name,
         "params": {"model": "gpt-3.5", "temperature": 0.5},
         "entries": {
             "accuracy": 0.80,
@@ -1324,7 +1324,7 @@ async def test_add_logs_with_copy_false(client: AsyncClient):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "params": {"model": "test-model"},
             "entries": {
                 "metric": 0.95,
@@ -1382,7 +1382,7 @@ async def test_add_logs_with_copy_true(client: AsyncClient):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "metric": 0.95,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -1452,7 +1452,7 @@ async def test_add_logs_via_arguments(client: AsyncClient):
         response = await client.post(
             "/v0/logs",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "params": {"model": "test-model"},
                 "entries": {
                     "metric": metric_value,
@@ -1511,7 +1511,7 @@ async def test_add_logs_via_arguments_with_copy(client: AsyncClient):
         response = await client.post(
             "/v0/logs",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "params": {"model": "test-model"},
                 "entries": {
                     "metric": metric_value,
@@ -1858,7 +1858,7 @@ async def test_nested_ids_batch_creation(client: AsyncClient):
     log_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": context_name,
             # Create a batch of 5 logs, each with some data and parent ID
             "entries": [{"data": f"step_{i}", "run_id": 0} for i in range(batch_size)],
