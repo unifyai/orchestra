@@ -215,3 +215,33 @@ class UserBusinessStatusResponse(BaseModel):
     tax_exempt: bool
     tax_jurisdiction: Optional[str] = None
     business_address: Optional[BusinessAddress] = None
+
+
+# -- Account Deletion --
+
+
+class AccountDeletionConfirmation(BaseModel):
+    """Confirmation required for account deletion."""
+
+    confirm_email: str
+
+
+class DeletionBlockerResponse(BaseModel):
+    """Details about why account deletion is blocked."""
+
+    reason: Literal["pending_bills", "organization_owner", "user_not_found"]
+    details: dict
+
+
+class CanDeleteAccountResponse(BaseModel):
+    """Response for pre-flight deletion check."""
+
+    can_delete: bool
+    blockers: list[DeletionBlockerResponse]
+
+
+class AccountDeletionResponse(BaseModel):
+    """Response after account deletion attempt."""
+
+    success: bool
+    message: str
