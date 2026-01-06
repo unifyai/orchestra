@@ -1120,7 +1120,7 @@ async def test_transfer_personal_to_org_with_logs_transfer(
     # Use the exact naming convention the transfer code expects
     context_name = assistant_name  # Just the assistant name, not with /Transcripts
     log_payload = {
-        "project": project_name,
+        "project_name": project_name,
         "context": context_name,
         "entries": [{"message": "Test log entry", "_assistant": assistant_name}],
     }
@@ -1221,7 +1221,7 @@ async def test_transfer_personal_to_org_3tier_context_transfer(
     log_resp = await client.post(
         "/v0/logs",
         json={
-            "project": "Assistants",
+            "project_name": "Assistants",
             "context": tier3_context,
             "entries": [
                 {
@@ -1339,7 +1339,7 @@ async def test_transfer_org_to_personal_with_logs_deletion(
     # Use exact context name pattern the transfer code expects
     context_name = assistant_name  # Just the assistant name
     log_payload = {
-        "project": project_name,
+        "project_name": project_name,
         "context": context_name,
         "entries": [{"message": "Org log entry", "_assistant": assistant_name}],
     }
@@ -1418,7 +1418,7 @@ async def test_delete_org_assistant_deletes_logs(client: AsyncClient, dbsession)
     # Create logs for this assistant using exact context name pattern
     context_name = assistant_name  # Just the assistant name
     log_payload = {
-        "project": project_name,
+        "project_name": project_name,
         "context": context_name,
         "entries": [{"message": "Log to be deleted", "_assistant": assistant_name}],
     }
@@ -1509,7 +1509,7 @@ async def test_delete_org_assistant_cleans_3tier_contexts(
 
     # Create log in tier3 context with _user and _assistant fields
     log_payload = {
-        "project": project_name,
+        "project_name": project_name,
         "context": tier3_context,
         "entries": [
             {
@@ -2471,7 +2471,7 @@ async def test_transfer_shared_all_context_logs(
 
     # Create logs in assistant-specific context (AssistantName)
     specific_log_payload = {
-        "project": "Assistants",
+        "project_name": "Assistants",
         "context": assistant_name,
         "entries": [
             {
@@ -2489,7 +2489,7 @@ async def test_transfer_shared_all_context_logs(
 
     # Create logs in shared "All/Contact" context with _assistant_id
     shared_log_payload = {
-        "project": "Assistants",
+        "project_name": "Assistants",
         "context": "All/Contact",
         "entries": [
             {
@@ -2611,7 +2611,7 @@ async def test_transfer_shared_context_to_existing_org_context(
 
     # Create a log in org's "All/Contact" to establish the context
     existing_log_payload = {
-        "project": "Assistants",
+        "project_name": "Assistants",
         "context": "All/Contact",
         "entries": [{"message": "Pre-existing org log", "_assistant_id": 999}],
     }
@@ -2633,7 +2633,7 @@ async def test_transfer_shared_context_to_existing_org_context(
 
     # Create logs in personal "All/Contact" for this assistant
     personal_shared_log = {
-        "project": "Assistants",
+        "project_name": "Assistants",
         "context": "All/Contact",
         "entries": [
             {
@@ -2736,7 +2736,7 @@ async def test_transfer_org_to_personal_deletes_shared_context_logs(
 
     # Create log in Tier 3 (assistant-specific) context with _user and _assistant fields
     tier3_log_payload = {
-        "project": "Assistants",
+        "project_name": "Assistants",
         "context": tier3_context,
         "entries": [
             {
@@ -2863,7 +2863,7 @@ async def test_transfer_org_to_personal_preserves_other_assistant_logs(
     log_resp_a = await client.post(
         "/v0/logs",
         json={
-            "project": "Assistants",
+            "project_name": "Assistants",
             "context": tier3_a,
             "entries": [
                 {
@@ -2883,7 +2883,7 @@ async def test_transfer_org_to_personal_preserves_other_assistant_logs(
     log_resp_b = await client.post(
         "/v0/logs",
         json={
-            "project": "Assistants",
+            "project_name": "Assistants",
             "context": tier3_b,
             "entries": [
                 {

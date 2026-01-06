@@ -613,7 +613,7 @@ async def test_get_logs_field_ordering(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "field1": "first",
                 "field2": "second",
@@ -628,7 +628,7 @@ async def test_get_logs_field_ordering(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "field2": "second again",
                 "field3": "third again",
@@ -690,7 +690,7 @@ async def test_get_logs_with_value_limit(client: AsyncClient, use_jsonb_mode):
     # Create log with test data
     response = await client.post(
         "/v0/logs",
-        json={"project": project_name, "entries": test_data["entries"]},
+        json={"project_name": project_name, "entries": test_data["entries"]},
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -932,7 +932,7 @@ async def test_get_logs_nested_dict_ordering(client: AsyncClient, use_jsonb_mode
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": nested_data,
         },
         headers=HEADERS,
@@ -999,7 +999,7 @@ async def test_get_logs_randomized_pagination_and_reproducibility(
     # Page 1 with randomize
     resp1 = await client.get(
         "/v0/logs",
-        params={"project": project, "randomize": True, "limit": 3},
+        params={"project_name": project, "randomize": True, "limit": 3},
         headers=HEADERS,
     )
     assert resp1.status_code == 200
@@ -1008,7 +1008,7 @@ async def test_get_logs_randomized_pagination_and_reproducibility(
     # Repeated call returns same IDs
     resp2 = await client.get(
         "/v0/logs",
-        params={"project": project, "randomize": True, "limit": 3},
+        params={"project_name": project, "randomize": True, "limit": 3},
         headers=HEADERS,
     )
     assert [log["id"] for log in resp2.json()["logs"]] == ids_page1
@@ -1016,7 +1016,7 @@ async def test_get_logs_randomized_pagination_and_reproducibility(
     # Page 2 has no overlap
     resp3 = await client.get(
         "/v0/logs",
-        params={"project": project, "randomize": True, "limit": 3, "offset": 3},
+        params={"project_name": project, "randomize": True, "limit": 3, "offset": 3},
         headers=HEADERS,
     )
     ids_page2 = [log["id"] for log in resp3.json()["logs"]]

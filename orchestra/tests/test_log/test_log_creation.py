@@ -22,7 +22,7 @@ async def test_batch_create_partial_success_with_failed_logs(
     resp_ft = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "age": {"type": "int", "mutable": True},
                 "name": {"type": "str", "mutable": True},
@@ -34,7 +34,7 @@ async def test_batch_create_partial_success_with_failed_logs(
 
     # Batch with one invalid log (age is wrong type)
     payload = {
-        "project": project_name,
+        "project_name": project_name,
         "entries": [
             {"name": "ok-1", "age": 30},  # valid
             {"name": "bad", "age": "thirty"},  # invalid
@@ -89,7 +89,7 @@ async def test_create_logs(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "params": batch_params,
             "entries": batch_entries,
         },
@@ -118,7 +118,7 @@ async def test_batch_create_partial_success(client: AsyncClient, use_jsonb_mode)
     resp_ft = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "age": {"type": "int", "mutable": True},
                 "name": {"type": "str", "mutable": True},
@@ -139,7 +139,7 @@ async def test_batch_create_partial_success(client: AsyncClient, use_jsonb_mode)
     res = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": batch_entries,
         },
         headers=HEADERS,
@@ -327,7 +327,7 @@ async def test_create_logs_autoincrement_version(client: AsyncClient, use_jsonb_
     # This should work fine
     response = await client.post(
         "/v0/logs",
-        json={"project": project_name, "params": {"p1": "test"}},
+        json={"project_name": project_name, "params": {"p1": "test"}},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -335,7 +335,7 @@ async def test_create_logs_autoincrement_version(client: AsyncClient, use_jsonb_
     # same version and value
     response = await client.post(
         "/v0/logs",
-        json={"project": project_name, "params": {"p1": "test"}},
+        json={"project_name": project_name, "params": {"p1": "test"}},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -343,7 +343,7 @@ async def test_create_logs_autoincrement_version(client: AsyncClient, use_jsonb_
     # same version and different value -> autoincrement
     response = await client.post(
         "/v0/logs",
-        json={"project": project_name, "params": {"p1": "test_v1"}},
+        json={"project_name": project_name, "params": {"p1": "test_v1"}},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -440,7 +440,7 @@ async def test_create_logs_with_batch_auto_counting(
     res = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": context_name,
             "entries": batch_entries,
         },
@@ -487,7 +487,7 @@ async def test_create_logs_with_independent_auto_counting_columns(
         res = await client.post(
             "/v0/logs",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "context": context_name,
                 "entries": {"value": f"log_{i}"},
             },
@@ -532,7 +532,7 @@ async def test_create_logs_with_hierarchical_auto_counting(
     res = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": context_name,
             "entries": {"action": "first_session_user_0"},
         },
@@ -550,7 +550,7 @@ async def test_create_logs_with_hierarchical_auto_counting(
         res = await client.post(
             "/v0/logs",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "context": context_name,
                 "entries": {
                     "user_id": user_0_id,
@@ -570,7 +570,7 @@ async def test_create_logs_with_hierarchical_auto_counting(
     res = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": context_name,
             "entries": {"action": "first_session_user_1"},
         },
@@ -587,7 +587,7 @@ async def test_create_logs_with_hierarchical_auto_counting(
     res = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": context_name,
             "entries": {"user_id": user_1_id, "action": "session_1_user_1"},
         },
@@ -625,7 +625,7 @@ async def test_create_logs_with_mixed_unique_and_auto_counting(
         res = await client.post(
             "/v0/logs",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "context": context_name,
                 "entries": {"status": f"status_{i}"},
             },
@@ -669,7 +669,7 @@ async def test_create_logs_with_user_provided_auto_counting_values(
     res1 = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": context_name,
             "entries": {"record_id": 10, "data": "custom_10"},
         },
@@ -683,7 +683,7 @@ async def test_create_logs_with_user_provided_auto_counting_values(
     res2 = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": context_name,
             "entries": {"record_id": 20, "data": "custom_20"},
         },
@@ -721,7 +721,7 @@ async def test_create_logs_with_composite_unique_keys(
         res = await client.post(
             "/v0/logs",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "context": context_name,
                 "entries": {"dept_id": 100, "name": f"emp_{emp_num}"},
             },
@@ -782,7 +782,7 @@ async def test_comprehensive_auto_counting_with_hierarchy_and_independent_counte
     res = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": context_name,
             "entries": {"action": "initialize_counters"},
         },
@@ -810,7 +810,7 @@ async def test_comprehensive_auto_counting_with_hierarchy_and_independent_counte
     res = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": context_name,
             "entries": {
                 "dept_id": dept_0,
@@ -833,7 +833,7 @@ async def test_comprehensive_auto_counting_with_hierarchy_and_independent_counte
     res = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": context_name,
             "entries": {
                 "dept_id": dept_0,
@@ -853,7 +853,7 @@ async def test_comprehensive_auto_counting_with_hierarchy_and_independent_counte
     res = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": context_name,
             "entries": {"dept_id": dept_0, "action": "create_team_1_emp_0"},
         },
@@ -874,7 +874,7 @@ async def test_comprehensive_auto_counting_with_hierarchy_and_independent_counte
     res = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": context_name,
             "entries": {
                 "dept_id": dept_0,
@@ -894,7 +894,7 @@ async def test_comprehensive_auto_counting_with_hierarchy_and_independent_counte
     res = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": context_name,
             "entries": {
                 "dept_id": dept_0,
@@ -914,7 +914,7 @@ async def test_comprehensive_auto_counting_with_hierarchy_and_independent_counte
     res = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": context_name,
             "entries": {"action": "create_dept_1_team_0_emp_0"},
         },
@@ -936,7 +936,7 @@ async def test_comprehensive_auto_counting_with_hierarchy_and_independent_counte
     res = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": context_name,
             "entries": {
                 "dept_id": dept_1,
@@ -958,7 +958,7 @@ async def test_comprehensive_auto_counting_with_hierarchy_and_independent_counte
     res = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": context_name,
             "entries": {"dept_id": dept_1, "action": "create_team_1_emp_0_dept_1"},
         },
@@ -982,7 +982,7 @@ async def test_comprehensive_auto_counting_with_hierarchy_and_independent_counte
     res = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": context_name,
             "entries": batch_entries,
         },
@@ -1010,7 +1010,7 @@ async def test_comprehensive_auto_counting_with_hierarchy_and_independent_counte
     res = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": context_name,
             "entries": {
                 "ticket_id": 999,
@@ -1055,7 +1055,7 @@ async def test_create_log_with_explicit_nested_list_type(
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "scores": [95, 87, 92, 88],
                 "explicit_types": {
@@ -1106,7 +1106,7 @@ async def test_create_log_with_explicit_nested_dict_type(
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "metrics": {"accuracy": 0.95, "f1_score": 0.89, "recall": 0.92},
                 "explicit_types": {
@@ -1143,7 +1143,7 @@ async def test_create_log_explicit_type_overrides_field_name_inference(
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "recording_url": "https://example.com/file.mp3",
                 "audio_file": "",
@@ -1185,7 +1185,7 @@ async def test_create_log_explicit_type_overrides_value_inference(
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "time_label": "12:30",  # Would be inferred as time
                 "date_label": "12-30",  # Might be inferred as date
@@ -1224,7 +1224,7 @@ async def test_batch_create_logs_with_nested_types(client: AsyncClient, use_json
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": [
                 {
                     "scores": [85, 90, 88],
@@ -1279,7 +1279,7 @@ async def test_create_field_then_log_with_matching_base_types(
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "name": {"type": "str", "mutable": True},
                 "age": {"type": "int", "mutable": True},
@@ -1295,7 +1295,7 @@ async def test_create_field_then_log_with_matching_base_types(
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "name": "Alice",
                 "age": 30,
@@ -1332,7 +1332,7 @@ async def test_create_field_then_log_with_mismatching_base_types(
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "age": {"type": "int", "mutable": True},
                 "score": {"type": "float", "mutable": True},
@@ -1346,7 +1346,7 @@ async def test_create_field_then_log_with_mismatching_base_types(
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "age": "thirty",  # Wrong: should be int
                 "score": "high",  # Wrong: should be float
@@ -1370,7 +1370,7 @@ async def test_create_field_then_log_with_matching_nested_types(
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "scores": {"type": "List[int]", "mutable": True},
                 "metrics": {"type": "Dict[str, float]", "mutable": True},
@@ -1385,7 +1385,7 @@ async def test_create_field_then_log_with_matching_nested_types(
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "scores": [95, 87, 92],
                 "metrics": {"accuracy": 0.95, "precision": 0.89},
@@ -1421,7 +1421,7 @@ async def test_create_field_then_log_with_mismatching_nested_types(
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "scores": {"type": "List[int]", "mutable": True},
             },
@@ -1434,7 +1434,7 @@ async def test_create_field_then_log_with_mismatching_nested_types(
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "scores": ["high", "medium", "low"],  # Wrong: should be ints
             },
@@ -1458,7 +1458,7 @@ async def test_implicit_then_explicit_nested_type_creation(
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "data": [1, 2, 3],
             },
@@ -1480,7 +1480,7 @@ async def test_implicit_then_explicit_nested_type_creation(
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "scores": [95, 87, 92],
                 "explicit_types": {
@@ -1512,7 +1512,7 @@ async def test_heterogeneous_list_types(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "mixed_data": [1, "text", 3.14, True],
                 "explicit_types": {
@@ -1549,7 +1549,7 @@ async def test_deeply_nested_types(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "complex_data": {
                     "level1": {
@@ -1602,7 +1602,7 @@ async def test_create_with_pydantic_schema(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "person": {"name": "Alice", "age": 30},
                 "explicit_types": {
@@ -1660,7 +1660,7 @@ async def test_create_with_pydantic_schema_validation_failure(
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "person": {"name": "Bob"},  # Missing required 'age'
                 "explicit_types": {
@@ -1701,7 +1701,7 @@ async def test_create_with_nested_pydantic_schema_and_nullable_fields(
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "order": {
                     "order_id": "ORD-001",
@@ -1723,7 +1723,7 @@ async def test_create_with_nested_pydantic_schema_and_nullable_fields(
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "order": {
                     "order_id": "ORD-002",

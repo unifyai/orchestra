@@ -53,7 +53,7 @@ async def test_update_logs_partial_success_flat_and_nested(
     resp_ft = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {"status": {"type": "str", "mutable": True}},
         },
         headers=HEADERS,
@@ -85,7 +85,7 @@ async def test_update_logs_partial_success_flat_and_nested(
             "logs": [id1, id2],
             "entries": flat_entries,
             "context": "",
-            "project": project_name,
+            "project_name": project_name,
             "overwrite": True,
         },
         headers=HEADERS,
@@ -99,7 +99,7 @@ async def test_update_logs_partial_success_flat_and_nested(
             "logs": [id1, id2],
             "entries": nested_entries,
             "context": "",
-            "project": project_name,
+            "project_name": project_name,
             "overwrite": True,
         },
         headers=HEADERS,
@@ -137,7 +137,7 @@ async def test_update_logs_overwrites(client: AsyncClient, use_jsonb_mode):
 
     response = await client.post(
         "/v0/logs",
-        json={"project": project_name, "entries": log_data["log_update"]},
+        json={"project_name": project_name, "entries": log_data["log_update"]},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -410,7 +410,7 @@ async def test_update_logs_by_value_filter(client: AsyncClient, use_jsonb_mode):
         json={
             "logs": {"status": "done"},
             "entries": update_entries,
-            "project": project_name,
+            "project_name": project_name,
             "overwrite": True,
         },
         headers=HEADERS,
@@ -507,7 +507,7 @@ async def test_update_logs_nested_array(client: AsyncClient, use_jsonb_mode):
         json={
             "logs": [log_id],
             "entries": update_entries,
-            "project": project_name,
+            "project_name": project_name,
             "overwrite": True,
         },
         headers=HEADERS,
@@ -556,7 +556,7 @@ async def test_update_logs_nested_object(client: AsyncClient, use_jsonb_mode):
         json={
             "logs": [log_id],
             "entries": update_entries,
-            "project": project_name,
+            "project_name": project_name,
             "overwrite": True,
         },
         headers=HEADERS,
@@ -609,7 +609,7 @@ async def test_update_logs_nested_mixed_notation(client: AsyncClient, use_jsonb_
         json={
             "logs": [log_id],
             "entries": update_entries,
-            "project": project_name,
+            "project_name": project_name,
             "overwrite": True,
         },
         headers=HEADERS,
@@ -655,7 +655,7 @@ async def test_update_logs_invalid_nested_path(client: AsyncClient, use_jsonb_mo
         json={
             "logs": [log_id],
             "entries": update_entries,
-            "project": project_name,
+            "project_name": project_name,
             "overwrite": True,
         },
         headers=HEADERS,
@@ -678,7 +678,7 @@ async def test_update_log_with_explicit_nested_type(
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "scores": [80, 85, 90],
                 "explicit_types": {
@@ -696,7 +696,7 @@ async def test_update_log_with_explicit_nested_type(
         "/v0/logs",
         json={
             "logs": [log_id],
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "scores": [95, 98, 100],
             },
@@ -747,7 +747,7 @@ async def test_update_adds_field_with_explicit_type(
         "/v0/logs",
         json={
             "logs": [log_id],
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "new_scores": [1, 2, 3, 4, 5],
                 "explicit_types": {
@@ -804,7 +804,7 @@ async def test_batch_update_with_nested_types(client: AsyncClient, use_jsonb_mod
         "/v0/logs",
         json={
             "logs": [log_id1, log_id2],
-            "project": project_name,
+            "project_name": project_name,
             "entries": [
                 {"data": [10, 20, 30]},
                 {"data": [40, 50, 60]},
@@ -848,7 +848,7 @@ async def test_update_log_matching_base_types(client: AsyncClient, use_jsonb_mod
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "name": {"type": "str", "mutable": True},
                 "age": {"type": "int", "mutable": True},
@@ -863,7 +863,7 @@ async def test_update_log_matching_base_types(client: AsyncClient, use_jsonb_mod
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "name": "Alice",
                 "age": 30,
@@ -880,7 +880,7 @@ async def test_update_log_matching_base_types(client: AsyncClient, use_jsonb_mod
         "/v0/logs",
         json={
             "logs": [log_id],
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "name": "Bob",
                 "age": 35,
@@ -912,7 +912,7 @@ async def test_update_log_mismatching_base_types(client: AsyncClient, use_jsonb_
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "age": {"type": "int", "mutable": True},
                 "score": {"type": "float", "mutable": True},
@@ -926,7 +926,7 @@ async def test_update_log_mismatching_base_types(client: AsyncClient, use_jsonb_
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "age": 30,
                 "score": 85.5,
@@ -942,7 +942,7 @@ async def test_update_log_mismatching_base_types(client: AsyncClient, use_jsonb_
         "/v0/logs",
         json={
             "logs": [log_id],
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "age": "thirty-five",  # Wrong: should be int
                 "score": "high",  # Wrong: should be float
@@ -964,7 +964,7 @@ async def test_update_log_matching_nested_types(client: AsyncClient, use_jsonb_m
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "scores": {"type": "List[int]", "mutable": True},
                 "metrics": {"type": "Dict[str, float]", "mutable": True},
@@ -978,7 +978,7 @@ async def test_update_log_matching_nested_types(client: AsyncClient, use_jsonb_m
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "scores": [85, 90, 88],
                 "metrics": {"accuracy": 0.85, "precision": 0.90},
@@ -994,7 +994,7 @@ async def test_update_log_matching_nested_types(client: AsyncClient, use_jsonb_m
         "/v0/logs",
         json={
             "logs": [log_id],
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "scores": [95, 92, 98],
                 "metrics": {"accuracy": 0.95, "precision": 0.92},
@@ -1025,7 +1025,7 @@ async def test_update_log_mismatching_nested_types(client: AsyncClient, use_json
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "scores": {"type": "List[int]", "mutable": True},
             },
@@ -1038,7 +1038,7 @@ async def test_update_log_mismatching_nested_types(client: AsyncClient, use_json
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "scores": [85, 90, 88],
             },
@@ -1053,7 +1053,7 @@ async def test_update_log_mismatching_nested_types(client: AsyncClient, use_json
         "/v0/logs",
         json={
             "logs": [log_id],
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "scores": ["high", "medium", "low"],  # Wrong: should be ints
             },
@@ -1086,7 +1086,7 @@ async def test_update_with_pydantic_schema_matching(
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "person": {"name": "Alice", "age": 30},
                 "explicit_types": {
@@ -1104,7 +1104,7 @@ async def test_update_with_pydantic_schema_matching(
         "/v0/logs",
         json={
             "logs": [log_id],
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "person": {"name": "Bob", "age": 35},
             },
@@ -1159,7 +1159,7 @@ async def test_update_with_pydantic_schema_mismatching(
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "person": {"name": "Alice", "age": 30},
                 "explicit_types": {
@@ -1189,7 +1189,7 @@ async def test_update_with_pydantic_schema_mismatching(
         "/v0/logs",
         json={
             "logs": [log_id],
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "person": {"name": "Charlie", "age": 25},
                 "explicit_types": {
@@ -1207,7 +1207,7 @@ async def test_update_with_pydantic_schema_mismatching(
         "/v0/logs",
         json={
             "logs": [log_id],
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "person": {"name": "Charlie"},  # age required
                 "explicit_types": {
@@ -1227,7 +1227,7 @@ async def test_update_with_pydantic_schema_mismatching(
         "/v0/logs",
         json={
             "logs": [log_id],
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "person": {"name": "Charlie", "age": 30},  # no explicit types
             },
@@ -1243,7 +1243,7 @@ async def test_update_with_pydantic_schema_mismatching(
         "/v0/logs",
         json={
             "logs": [log_id],
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "person": {
                     "name": "Charlie",
@@ -1283,7 +1283,7 @@ async def test_update_nested_pydantic_schema(client: AsyncClient, use_jsonb_mode
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "order": {
                     "order_id": "ORD-001",
@@ -1304,7 +1304,7 @@ async def test_update_nested_pydantic_schema(client: AsyncClient, use_jsonb_mode
         "/v0/logs",
         json={
             "logs": [log_id],
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "order": {
                     "order_id": "ORD-002",
@@ -1351,7 +1351,7 @@ async def test_update_complex_nested_dict_types(client: AsyncClient, use_jsonb_m
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "config": {"type": "Dict[str, Dict[str, float]]", "mutable": True},
             },
@@ -1364,7 +1364,7 @@ async def test_update_complex_nested_dict_types(client: AsyncClient, use_jsonb_m
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "config": {
                     "model_a": {"lr": 0.001, "dropout": 0.2},
@@ -1382,7 +1382,7 @@ async def test_update_complex_nested_dict_types(client: AsyncClient, use_jsonb_m
         "/v0/logs",
         json={
             "logs": [log_id],
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "config": {
                     "model_c": {"lr": 0.005, "dropout": 0.25},
@@ -1405,7 +1405,7 @@ async def test_update_list_of_dicts(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "items": {"type": "List[dict]", "mutable": True},
             },
@@ -1418,7 +1418,7 @@ async def test_update_list_of_dicts(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "items": [
                     {"id": 1, "name": "item1"},
@@ -1436,7 +1436,7 @@ async def test_update_list_of_dicts(client: AsyncClient, use_jsonb_mode):
         "/v0/logs",
         json={
             "logs": [log_id],
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "items": [
                     {"id": 3, "name": "item3"},
@@ -1470,7 +1470,7 @@ async def test_update_with_heterogeneous_list(client: AsyncClient, use_jsonb_mod
     response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "mixed": {"type": "List[int, str, float]", "mutable": True},
             },
@@ -1483,7 +1483,7 @@ async def test_update_with_heterogeneous_list(client: AsyncClient, use_jsonb_mod
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "mixed": [1, "text", 3.14],
             },
@@ -1498,7 +1498,7 @@ async def test_update_with_heterogeneous_list(client: AsyncClient, use_jsonb_mod
         "/v0/logs",
         json={
             "logs": [log_id],
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "mixed": [42, "updated", 2.71],
             },
@@ -1513,7 +1513,7 @@ async def test_update_with_heterogeneous_list(client: AsyncClient, use_jsonb_mod
         "/v0/logs",
         json={
             "logs": [log_id],
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "mixed": [45, "updated_again", False],
             },

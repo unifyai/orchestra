@@ -37,7 +37,7 @@ def _create_interface(
         headers=HEADERS,
         json={
             "name": name,
-            "project": project,
+            "project_name": project,
             "items": items,
             "new_counter": new_counter,
             "context": context,
@@ -124,7 +124,7 @@ async def test_update_interface(client: AsyncClient):
         headers=HEADERS,
         json={
             "name": name,
-            "project": project,
+            "project_name": project,
             "items": items,
             "new_counter": new_counter,
             "new_name": "my_new_interface",
