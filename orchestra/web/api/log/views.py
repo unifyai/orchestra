@@ -1378,7 +1378,7 @@ async def update_derived_log(
                             updated_at=datetime.now(timezone.utc),
                         )
                     )
-                    result = session.execute(remove_stmt)
+                    result = await session.execute(remove_stmt)
                     removed_count += result.rowcount
 
                 template.updated_at = datetime.now(timezone.utc)
@@ -1463,7 +1463,7 @@ async def update_derived_log(
                 .where(DerivedLog.id.in_([dlog.id for dlog in existing_derived_logs]))
                 .values(key=updated_key, equation=updated_equation)
             )
-            session.execute(stmt)
+            await session.execute(stmt)
             await session.commit()
         except ValueError as ve:
             raise HTTPException(status_code=400, detail=str(ve))
@@ -6637,10 +6637,10 @@ async def create_fields(
                         AND le.data ? f.field_name
                     """,
                     )
-                    jsonb_results = session.execute(
+                    jsonb_results = (await session.execute(
                         jsonb_check_query,
                         {"log_event_ids": log_event_ids, "field_names": field_names},
-                    ).fetchall()
+                    )).fetchall()
                     existing_jsonb_pairs = [(row[0], row[1]) for row in jsonb_results]
 
                 existing_pairs = (
@@ -6696,7 +6696,7 @@ async def create_fields(
 
                             # Use a CTE with VALUES to perform batch update in a single query
                             # This is O(1) query instead of O(N) queries
-                            session.execute(
+                            await session.execute(
                                 text(
                                     """
                                     UPDATE log_event le
@@ -6921,7 +6921,7 @@ async def delete_fields(
                 if settings.use_jsonb_queries and event_ids:
                     from sqlalchemy import text
 
-                    session.execute(
+                    await session.execute(
                         text(
                             """
                             UPDATE log_event

@@ -911,10 +911,8 @@ async def admin_list_contacts(
     """
     # 3) Find all context IDs whose name contains 'Contacts' (case-sensitive)
     ctx_ids = (
-        session.execute(select(Context.id).where(Context.name.like("%Contacts%")))
-        .scalars()
-        .all()
-    )
+        await session.execute(select(Context.id).where(Context.name.like("%Contacts%")))
+    ).scalars().all()
     if not ctx_ids:
         return []
 
@@ -952,7 +950,7 @@ async def admin_list_contacts(
     if settings.use_jsonb_queries:
         # JSONB mode: Query LogEvent.data directly
         query = select(LogEvent.id, LogEvent.data).where(LogEvent.id.in_(event_ids))
-        rows = session.execute(query).all()
+        rows = (await session.execute(query)).all()
 
         for event_id, data in rows:
             # data is already a dict from JSONB column
@@ -964,13 +962,13 @@ async def admin_list_contacts(
             .join(LogEventLog, LogEventLog.log_id == Log.id)
             .where(LogEventLog.log_event_id.in_(event_ids))
         )
-        raw_entries = session.execute(query).all()
+        raw_entries = (await session.execute(query)).all()
 
         for log_rec, eid in raw_entries:
             grouped.setdefault(eid, {})[log_rec.key] = log_rec.value
 
     # 7) Fetch user_id for each log_event via project
-    rows = session.execute(
+    rows = await session.execute(
         select(LogEvent.id, Project.user_id)
         .join(Project, LogEvent.project_id == Project.id)
         .where(LogEvent.id.in_(event_ids)),

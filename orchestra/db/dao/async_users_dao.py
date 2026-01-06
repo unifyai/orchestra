@@ -1,5 +1,3 @@
-"""Async version of UsersDAO for use with AsyncSession."""
-
 import decimal
 from typing import List, Optional
 
@@ -15,56 +13,268 @@ MIN_AUTORECHARGE_AMOUNT = 25.0  # $25 in credits (25 credits)
 
 
 class AsyncUsersDAO:
-    """Async Data Access Object for Users operations."""
+    """Class for accessing users table."""
 
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def filter(self, id: Optional[str]) -> List[Users]:
-        """Get specific users model."""
-        query = select(Users).where(Users.id == id)
-        result = await self.session.execute(query)
-        return list(result.scalars().fetchall())
+    async def create_users(
+        self,
+        id: str,  # noqa: WPS125
+        credits: float,
+    ) -> None:
+        """
+        Add single users to session.
+
+        :param id: id of a users.
+        :param credits: credits of a users.
+        """
+        self.session.add(
+            Users(
+                id=id,
+                credits=credits,
+                stripe_customer_id=None,
+                autorecharge=False,
+                autorecharge_threshold=0,
+                autorecharge_qty=25,
+                store_prompts=True,
+            ),
+        )
+
+    async def get_all_users(self) -> List[Users]:
+        """
+        Get all users models with limit/offset pagination.
+
+        :return: stream of users.
+        """
+        raw_users = await self.session.execute(select(Users))
+        return list(raw_users.scalars().fetchall())
+
+    async def filter(
+        self,
+        id: Optional[str],  # noqa: WPS125
+    ) -> List[Users]:
+        """
+        Get specific users model.
+
+        :param id: id of users instance.
+        :return: stream of users.
+        """
+        query = select(Users)
+        query = query.where(Users.id == id)
+
+        raw_users = await self.session.execute(query)
+
+        return list(raw_users.scalars().fetchall())
 
     async def get_user_with_id(self, id: str) -> Users:
-        """Get user by ID or raise 404."""
         users = await self.filter(id=id)
-        if not users:
+        try:
+            return users[0]
+        except IndexError:
             raise not_found("User ID")
-        return users[0]
 
     async def get_user_by_stripe_id(self, stripe_id: str) -> Optional[Users]:
-        """Get a user by their Stripe customer ID."""
+        """
+        Get a user by their Stripe customer ID.
+
+        :param stripe_id: The Stripe customer ID.
+        :return: A Users object or None if not found.
+        """
         query = select(Users).where(Users.stripe_customer_id == stripe_id)
         result = await self.session.execute(query)
         return result.scalars().first()
 
     async def get_total_spending(self, user_id: str) -> float:
-        """Calculate total spending for a user from the Query table."""
+        """
+        Calculate total spending for a user from the Query table.
+
+        :param user_id: id of the user
+        :return: total spending in credits (equivalent to dollars since 1 credit = $1)
+        """
         result = await self.session.execute(
-            select(func.sum(Query.credits)).where(Query.user_id == user_id),
+            select(func.sum(Query.credits)).where(
+                Query.user_id == user_id,
+            ),  # Count all queries since providers charge for failed requests too
         )
-        total = result.scalar()
-        return float(total) if total else 0.0
+        scalar = result.scalar()
+
+        return float(scalar) if scalar else 0.0
 
     async def can_enable_monthly_billing(self, user_id: str) -> bool:
-        """Check if user has spent enough to enable monthly billing."""
+        """
+        Check if user has spent enough to enable monthly billing.
+
+        :param user_id: id of the user
+        :return: True if user has spent at least $100
+        """
         total_spending = await self.get_total_spending(user_id)
         return total_spending >= MIN_SPEND_FOR_MONTHLY_BILLING
 
-    async def recharge_credit(self, user_id: str, quantity: float) -> None:
-        """Recharge (or deduct if negative) credits for a user."""
-        query = select(Users).where(Users.id == user_id)
-        result = await self.session.execute(query)
-        user = result.scalars().first()
+    async def is_telemetry_activated(self, id: str) -> bool:
+        users = await self.filter(id=id)
+        try:
+            telemetry_activated = users[0].store_prompts
+            return telemetry_activated if telemetry_activated is not None else True
+        except IndexError:
+            raise not_found("User ID")
+
+    async def recharge_credit(
+        self,
+        user_id: str,
+        quantity: float,
+    ) -> None:
+        """
+        Recharge credit of a users.
+
+        :param user_id: id of a user.
+        :param quantity: positive number of credits to recharge.
+        """
+        query = select(Users)
+        query = query.where(Users.id == user_id)
+
+        raw_users = await self.session.execute(query)
+        user = raw_users.scalars().first()
         if user is not None:
             new_credits = user.credits + decimal.Decimal(quantity)
-            user.credits = new_credits
+            setattr(  # noqa: B010
+                user,
+                "credits",
+                new_credits,
+            )
+
+    async def set_prompt_telemetry(
+        self,
+        user_id: str,
+        activated: bool,
+    ) -> None:
+        """
+        Update the active status of prompt telemetry.
+
+        :param user_id: id of a user.
+        :param activated: whether to store or not the prompts.
+        """
+        query = select(Users)
+        query = query.where(Users.id == user_id)
+
+        raw_users = await self.session.execute(query)
+        user = raw_users.scalars().first()
+        if user is not None:
+            setattr(user, "store_prompts", activated)
+
+    async def set_stripe_customer_id(
+        self,
+        user_id: str,
+        stripe_id: str,
+    ) -> None:
+        """
+        Modify the stripe customer id of a user.
+
+        :param user_id: id of a user.
+        :param stripe_id: stripe customer id of a user.
+        """
+        user = await self.get_user_with_id(user_id)
+        if user is not None:
+            setattr(user, "stripe_customer_id", stripe_id)  # noqa: B010
+
+    async def enable_autorecharge(
+        self,
+        user_id: str,
+        enable: bool,
+    ) -> None:
+        """
+        Enable/disable autorecharge for a user.
+
+        Validates that user has spent at least $100 before enabling monthly billing.
+        No grandfathering - all users must meet spending requirements.
+
+        :param user_id: id of a user.
+        :param enable: whether to enable (true) or disable (false) autorecharge.
+        :raises ValueError: if trying to enable autorecharge without sufficient spending
+        """
+        # First check if user exists - this will raise HTTPException if not found
+        user = await self.get_user_with_id(user_id)
+
+        # Check spending requirements when trying to ENABLE autorecharge
+        if enable and not await self.can_enable_monthly_billing(user_id):
+            total_spending = await self.get_total_spending(user_id)
+            raise ValueError(
+                f"User must spend at least ${MIN_SPEND_FOR_MONTHLY_BILLING:.2f} before enabling monthly billing. "
+                f"Current spending: ${total_spending:.2f}",
+            )
+
+        if user is not None:
+            setattr(user, "autorecharge", enable)  # noqa: B010
+
+    async def set_autorecharge_threshold(
+        self,
+        user_id: str,
+        threshold: float,
+    ) -> None:
+        """
+        Modify the autorecharge threshold for a user.
+
+        :param user_id: id of a user.
+        :param threshold: limit quantity of credits before triggering autorecharge.
+        """
+        user = await self.get_user_with_id(user_id)
+        if user is not None:
+            setattr(
+                user,
+                "autorecharge_threshold",
+                decimal.Decimal(threshold),
+            )  # noqa: B010
+
+    async def set_autorecharge_qty(
+        self,
+        user_id: str,
+        qty: float,
+    ) -> None:
+        """
+        Modify the autorecharge quantity for a user.
+
+        Validates that the quantity meets the minimum requirement.
+
+        :param user_id: id of a user.
+        :param qty: quantity of credits to be added during autorecharge.
+        :raises ValueError: if quantity is below minimum requirement
+        """
+        if qty < MIN_AUTORECHARGE_AMOUNT:
+            raise ValueError(
+                f"Minimum auto-recharge amount is ${MIN_AUTORECHARGE_AMOUNT:.2f} "
+                f"({MIN_AUTORECHARGE_AMOUNT:.0f} credits). Provided: ${qty:.2f}",
+            )
+
+        user = await self.get_user_with_id(user_id)
+        if user is not None:
+            setattr(user, "autorecharge_qty", decimal.Decimal(qty))  # noqa: B010
+
+    async def set_frozen_status(
+        self,
+        user_id: str,
+        frozen: bool,
+    ) -> None:
+        """
+        Set the frozen status of a user account.
+
+        :param user_id: id of a user.
+        :param frozen: whether the account should be frozen (true) or unfrozen (false).
+        """
+        user = await self.get_user_with_id(user_id)
+        if user is not None:
+            setattr(user, "frozen", frozen)
+            await self.session.commit()
 
     async def is_account_frozen(self, user_id: str) -> bool:
-        """Check if a user account is frozen."""
+        """
+        Check if a user account is frozen.
+
+        :param user_id: id of a user.
+        :return: True if the account is frozen, False otherwise.
+        """
         try:
             user = await self.get_user_with_id(user_id)
             return user.frozen
         except Exception:
+            await self.session.rollback()
             return False

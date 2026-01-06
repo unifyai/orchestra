@@ -2233,7 +2233,7 @@ async def admin_duplicate_project(
             .returning(Context.id)
         )
 
-        result = session.execute(stmt)
+        result = await session.execute(stmt)
         new_context_ids = [row[0] for row in result]
 
         # Build the context ID mapping
@@ -2267,7 +2267,7 @@ async def admin_duplicate_project(
 
         if field_type_values:
             stmt = sqlalchemy.insert(FieldType).values(field_type_values)
-            session.execute(stmt)
+            await session.execute(stmt)
             stats["field_types_copied"] = len(field_type_values)
 
     # 7. Duplicate Log Events using bulk insert with RETURNING
@@ -2301,7 +2301,7 @@ async def admin_duplicate_project(
         stmt = (
             sqlalchemy.insert(LogEvent).values(log_event_values).returning(LogEvent.id)
         )
-        result = session.execute(stmt)
+        result = await session.execute(stmt)
         new_log_event_ids = [row[0] for row in result]
 
         # Build the log event ID mapping
@@ -2356,7 +2356,7 @@ async def admin_duplicate_project(
 
         if lec_values:
             stmt = sqlalchemy.insert(LogEventContext).values(lec_values)
-            session.execute(stmt)
+            await session.execute(stmt)
 
     # 9. Duplicate Logs using batched bulk insert
     # In JSONB mode, log data is stored in LogEvent.data, so we skip EAV table copying
@@ -2395,7 +2395,7 @@ async def admin_duplicate_project(
             batch = log_values[i : i + batch_size]
             if batch:
                 stmt = sqlalchemy.insert(Log).values(batch).returning(Log.id)
-                result = session.execute(stmt)
+                result = await session.execute(stmt)
                 new_log_ids.extend([row[0] for row in result])
 
         # Create LogEventLog associations
@@ -2417,7 +2417,7 @@ async def admin_duplicate_project(
             batch = log_event_log_values[i : i + batch_size]
             if batch:
                 stmt = sqlalchemy.insert(LogEventLog).values(batch)
-                session.execute(stmt)
+                await session.execute(stmt)
 
         stats["logs_copied"] = len(log_values)
 
@@ -2457,7 +2457,7 @@ async def admin_duplicate_project(
             if batch:
                 # Insert JSONLogs and get their IDs
                 stmt = sqlalchemy.insert(JSONLog).values(batch).returning(JSONLog.id)
-                result = session.execute(stmt)
+                result = await session.execute(stmt)
                 batch_ids = [row[0] for row in result]
                 all_new_json_log_ids.extend(batch_ids)
 
@@ -2479,7 +2479,7 @@ async def admin_duplicate_project(
             batch = log_event_json_log_values[i : i + batch_size]
             if batch:
                 stmt = sqlalchemy.insert(LogEventJSONLog).values(batch)
-                session.execute(stmt)
+                await session.execute(stmt)
 
         stats["json_logs_copied"] = len(json_log_values)
 
@@ -2532,7 +2532,7 @@ async def admin_duplicate_project(
                 stmt = (
                     sqlalchemy.insert(DerivedLog).values(batch).returning(DerivedLog.id)
                 )
-                result = session.execute(stmt)
+                result = await session.execute(stmt)
                 batch_ids = [row[0] for row in result]
                 all_new_derived_log_ids.extend(batch_ids)
 
@@ -2554,7 +2554,7 @@ async def admin_duplicate_project(
             batch = log_event_derived_log_values[i : i + batch_size]
             if batch:
                 stmt = sqlalchemy.insert(LogEventDerivedLog).values(batch)
-                session.execute(stmt)
+                await session.execute(stmt)
 
         stats["derived_logs_copied"] = len(derived_log_values)
 
