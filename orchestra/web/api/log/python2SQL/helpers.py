@@ -13,7 +13,7 @@ from typing import Optional, Union
 import httpx
 from dotenv import load_dotenv
 from google.auth.transport.requests import Request
-from openai import OpenAI
+from openai import AsyncOpenAI
 from PIL import Image
 from sqlalchemy import (
     TIMESTAMP,
@@ -72,10 +72,13 @@ __all__ = [
     "_substitute_placeholders",
     "_maybe_vector_column",
     "_ensure_vectors_exist",
+    "_ensure_vectors_exist_sync",
     "_queue_embeddings_for_generation",
-    "_get_or_generate_embedding_sync",
+    "_get_or_generate_embedding",
     "_get_embedding",
+    "_get_embedding_sync",
     "_get_embeddings_batch",
+    "_get_embeddings_batch_sync",
     "_get_image_embedding_batch",
     "_get_image_embedding_from_url",
     "_is_jsonb_expression",
@@ -83,12 +86,9 @@ __all__ = [
     "DEFAULT_IMAGE_EMBEDDING_MODEL",
 ]
 
-# Initialize OpenAI client if API key is available
-try:
-    OPENAI_API_KEY = os.getenv("ORCHESTRA_OPENAI_API_KEY")
-    _client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
-except Exception as e:
-    raise ValueError(f"Failed to initialize OpenAI client: {str(e)}")
+# Initialize async OpenAI client if API key is available
+OPENAI_API_KEY = os.getenv("ORCHESTRA_OPENAI_API_KEY")
+_async_client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
 DEFAULT_IMAGE_EMBEDDING_MODEL = "multimodalembedding@001"
@@ -171,8 +171,12 @@ def count_tokens_per_utf_byte(document: str) -> int:
     return math.ceil(0.25 * n_bytes)  # 0.25 tokens per byte
 
 
-@functools.lru_cache(maxsize=4096)
-def _get_embedding(
+# Simple in-memory cache for embeddings (async-compatible)
+_embedding_cache: dict[tuple[str, str | None, int | None], list[float]] = {}
+_EMBEDDING_CACHE_MAX_SIZE = 4096
+
+
+async def _get_embedding(
     text: str,
     model: str | None = None,
     dimensions: int | None = None,
@@ -180,17 +184,31 @@ def _get_embedding(
     """
     Get embedding vector for a single text string.
     This is now a convenience wrapper around the batch-capable function.
+    Uses a simple in-memory cache for repeated queries.
     """
-    return _get_embeddings_batch([text], model, dimensions)[0]
+    cache_key = (text, model, dimensions)
+    if cache_key in _embedding_cache:
+        return _embedding_cache[cache_key]
+
+    result = (await _get_embeddings_batch([text], model, dimensions))[0]
+
+    # Maintain cache size limit with simple eviction
+    if len(_embedding_cache) >= _EMBEDDING_CACHE_MAX_SIZE:
+        # Remove oldest entry (first key)
+        oldest_key = next(iter(_embedding_cache))
+        del _embedding_cache[oldest_key]
+
+    _embedding_cache[cache_key] = result
+    return result
 
 
-def _get_embeddings_batch(
+async def _get_embeddings_batch(
     texts: list[str],
     model: str | None = None,
     dimensions: int | None = None,
 ) -> list[list[float]]:
     """
-    Get embedding vectors for a batch of text strings using OpenAI's API.
+    Get embedding vectors for a batch of text strings using OpenAI's async API.
 
     Token-aware batching
     --------------------
@@ -214,6 +232,7 @@ def _get_embeddings_batch(
                 `MAX_TOKENS_PER_INPUT`, an API call fails for a non-token-limit
                 reason, or embedding dimensions exceed `MAX_EMBEDDING_DIMS`.
     """
+    import asyncio
     import time
 
     import openai
@@ -258,7 +277,10 @@ def _get_embeddings_batch(
     if current_batch:
         batches.append(current_batch)
 
-    def _embed_or_split(batch_texts: list[str], depth: int = 0) -> list[list[float]]:
+    async def _embed_or_split(
+        batch_texts: list[str],
+        depth: int = 0,
+    ) -> list[list[float]]:
         """Try to embed the given batch; on token-limit error, split and retry."""
         kwargs = {"model": model, "input": batch_texts}
         if dimensions is not None:
@@ -273,7 +295,7 @@ def _get_embeddings_batch(
 
             start_time = time.monotonic()
             try:
-                resp = _client.embeddings.create(**kwargs)
+                resp = await _async_client.embeddings.create(**kwargs)
                 duration_ms = (time.monotonic() - start_time) * 1000
                 span.set_attribute("embedding.duration_ms", duration_ms)
                 span.set_attribute("embedding.success", True)
@@ -353,18 +375,73 @@ def _get_embeddings_batch(
                         # Cannot split further; surface error
                         raise ValueError(f"Failed to get embeddings: {str(e)}")
                     mid = len(batch_texts) // 2
-                    left = _embed_or_split(batch_texts[:mid], depth + 1)
-                    right = _embed_or_split(batch_texts[mid:], depth + 1)
+                    left = await _embed_or_split(batch_texts[:mid], depth + 1)
+                    right = await _embed_or_split(batch_texts[mid:], depth + 1)
                     return left + right
 
                 span.set_attribute("embedding.error_type", "other")
                 raise ValueError(f"Failed to get embeddings: {str(e)}")
 
-    # 3) Embed each batch and concatenate results in-order
+    # 3) Embed each batch concurrently and concatenate results in-order
+    tasks = [_embed_or_split(batch) for batch in batches]
+    batch_results = await asyncio.gather(*tasks)
     out: list[list[float]] = []
-    for batch in batches:
-        out.extend(_embed_or_split(batch))
+    for batch_result in batch_results:
+        out.extend(batch_result)
     return out
+
+
+# =============================================================================
+# Sync wrappers for backward compatibility
+# These run the async functions in a new event loop for callers that cannot
+# use async/await (e.g., background workers, sync endpoints).
+# =============================================================================
+
+
+def _get_embedding_sync(
+    text: str,
+    model: str | None = None,
+    dimensions: int | None = None,
+) -> list[float]:
+    """
+    Sync wrapper for _get_embedding.
+    Creates a new event loop to run the async function.
+    """
+    import asyncio
+
+    return asyncio.run(_get_embedding(text, model, dimensions))
+
+
+def _get_embeddings_batch_sync(
+    texts: list[str],
+    model: str | None = None,
+    dimensions: int | None = None,
+) -> list[list[float]]:
+    """
+    Sync wrapper for _get_embeddings_batch.
+    Creates a new event loop to run the async function.
+    """
+    import asyncio
+
+    return asyncio.run(_get_embeddings_batch(texts, model, dimensions))
+
+
+def _ensure_vectors_exist_sync(
+    session: "Session",
+    id_to_text: dict[int, str],
+    model: Optional[str],
+    dimensions: Optional[int],
+    key: str,
+) -> None:
+    """
+    Sync wrapper for _ensure_vectors_exist.
+    Creates a new event loop to run the async function.
+    """
+    import asyncio
+
+    return asyncio.run(
+        _ensure_vectors_exist(session, id_to_text, model, dimensions, key),
+    )
 
 
 def _get_image_embedding_from_url(
@@ -2415,7 +2492,7 @@ def _queue_embeddings_for_generation(
     )
 
 
-def _get_or_generate_embedding_sync(
+async def _get_or_generate_embedding(
     session: Session,
     log_event_id: int,
     text: str,
@@ -2424,7 +2501,7 @@ def _get_or_generate_embedding_sync(
     dimensions: Optional[int] = None,
 ) -> Optional[list]:
     """
-    Get embedding from DB, or generate synchronously if missing.
+    Get embedding from DB, or generate asynchronously if missing.
 
     This is a fallback for when embeddings are queried before background
     processing completes. It ensures queries always return results, even
@@ -2460,14 +2537,14 @@ def _get_or_generate_embedding_sync(
     if not _embeddable(text):
         return None
 
-    # Generate synchronously (rare case - log warning)
+    # Generate asynchronously (rare case - log warning)
     logging.warning(
-        f"Embedding not found for log_event {log_event_id}, generating synchronously. "
+        f"Embedding not found for log_event {log_event_id}, generating on-demand. "
         f"This indicates the background worker is behind.",
     )
 
     try:
-        vector = _get_embedding(text, model, dimensions)
+        vector = await _get_embedding(text, model, dimensions)
 
         # Insert into DB (use upsert to handle race conditions)
         stmt = insert(Embedding).values(
@@ -2490,11 +2567,11 @@ def _get_or_generate_embedding_sync(
         return vector
 
     except Exception as e:
-        logging.error(f"Failed to generate embedding synchronously: {e}")
+        logging.error(f"Failed to generate embedding: {e}")
         return None
 
 
-def _ensure_vectors_exist(
+async def _ensure_vectors_exist(
     session: Session,
     id_to_text: dict[int, str],
     model: Optional[str],
@@ -2513,6 +2590,8 @@ def _ensure_vectors_exist(
         dimensions: Optional number of dimensions for the embedding
         key: The key identifier for these embeddings
     """
+    import asyncio
+
     # If no texts to process, return immediately
     if not id_to_text:
         return
@@ -2548,21 +2627,19 @@ def _ensure_vectors_exist(
 
     texts_to_embed = [id_to_text[id] for id in ids_to_embed]
 
-    # 2. Get embeddings in batches and parallelize batches
+    # 2. Get embeddings in batches concurrently using async
     # OpenAI recommends batch sizes of 2048 for their models.
     BATCH_SIZE = 2048
     text_batches = [
         texts_to_embed[i : i + BATCH_SIZE]
         for i in range(0, len(texts_to_embed), BATCH_SIZE)
     ]
-    embedding_batches = threaded_map(
-        functools.partial(
-            _get_embeddings_batch,
-            model=model_name,
-            dimensions=dimensions,
-        ),
-        text_batches,
-    )
+
+    # Run all batches concurrently
+    embedding_batch_tasks = [
+        _get_embeddings_batch(batch, model_name, dimensions) for batch in text_batches
+    ]
+    embedding_batches = await asyncio.gather(*embedding_batch_tasks)
 
     # Flatten the list of lists of embeddings
     all_embeddings = [embedding for batch in embedding_batches for embedding in batch]
