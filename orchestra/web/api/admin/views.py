@@ -39,8 +39,6 @@ from orchestra.db.dao.async_recharge_type_dao import AsyncRechargeTypeDAO
 from orchestra.db.dao.async_task_dao import AsyncTaskDAO
 from orchestra.db.dao.async_users_dao import AsyncUsersDAO
 from orchestra.db.dao.async_voice_dao import AsyncVoiceDAO
-from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_async_db_session
 from orchestra.db.models.orchestra_models import (
@@ -132,7 +130,6 @@ async def admin_list_organizations(
     :param session: Database session.
     :return: Paginated list of organizations with member counts.
     """
-    from orchestra.db.dao.organization_dao import OrganizationDAO
 
     org_dao = AsyncOrganizationDAO(session)
     member_dao = AsyncOrganizationMemberDAO(session)
@@ -911,8 +908,14 @@ async def admin_list_contacts(
     """
     # 3) Find all context IDs whose name contains 'Contacts' (case-sensitive)
     ctx_ids = (
-        await session.execute(select(Context.id).where(Context.name.like("%Contacts%")))
-    ).scalars().all()
+        (
+            await session.execute(
+                select(Context.id).where(Context.name.like("%Contacts%")),
+            )
+        )
+        .scalars()
+        .all()
+    )
     if not ctx_ids:
         return []
 

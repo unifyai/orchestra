@@ -3,14 +3,6 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
-
-from orchestra.db.dao.auth_user_dao import AuthUserDAO
-from orchestra.db.dao.organization_dao import OrganizationDAO
-from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
-from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
-from orchestra.db.dao.role_dao import RoleDAO
-from orchestra.db.dao.team_dao import TeamDAO
 
 # Async DAOs
 from orchestra.db.dao.async_auth_user_dao import AsyncAuthUserDAO
@@ -19,7 +11,7 @@ from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemb
 from orchestra.db.dao.async_resource_access_dao import AsyncResourceAccessDAO
 from orchestra.db.dao.async_role_dao import AsyncRoleDAO
 from orchestra.db.dao.async_team_dao import AsyncTeamDAO
-from orchestra.db.dependencies import get_async_db_session, get_db_session
+from orchestra.db.dependencies import get_async_db_session
 from orchestra.web.api.teams.schema import (
     ResourceAccessGrant,
     ResourceAccessListResponse,
@@ -150,7 +142,10 @@ async def list_teams(
 
     # Check if user is a member
     is_owner = org.owner_id == user_id
-    is_member = await org_member_dao.filter(user_id=user_id, organization_id=organization_id)
+    is_member = await org_member_dao.filter(
+        user_id=user_id,
+        organization_id=organization_id,
+    )
 
     if not is_owner and not is_member:
         raise HTTPException(
@@ -216,7 +211,10 @@ async def get_team(
 
     # Check if user is a member
     is_owner = org.owner_id == user_id
-    is_member = await org_member_dao.filter(user_id=user_id, organization_id=organization_id)
+    is_member = await org_member_dao.filter(
+        user_id=user_id,
+        organization_id=organization_id,
+    )
 
     if not is_owner and not is_member:
         raise HTTPException(

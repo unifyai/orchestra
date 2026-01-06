@@ -344,10 +344,11 @@ def validate_plot_config(
             validated["bin_count"] = 10
         elif not isinstance(bin_count, int) or bin_count < 1 or bin_count > 100:
             validated["bin_count"] = max(
-                1, min(100, int(bin_count) if bin_count else 10)
+                1,
+                min(100, int(bin_count) if bin_count else 10),
             )
             warnings.append(
-                f"bin_count clamped to valid range: {validated['bin_count']}"
+                f"bin_count clamped to valid range: {validated['bin_count']}",
             )
 
     # 9. Validate sort_by and sort_order (bar charts)

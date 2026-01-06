@@ -18,22 +18,17 @@ from providers.completion.base_completion_provider import BaseCompletionProvider
 
 from orchestra import settings
 
+# Async DAOs
+# from sqlalchemy.ext.asyncio import AsyncSession
+# from orchestra.web.api.utils.http_responses import model_not_found
+from orchestra.web.api.utils.http_responses import not_found
+
 # from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 # from orchestra.db.dao.custom_endpoint_benchmark_dao import CustomEndpointBenchmarkDAO
 # from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 # from orchestra.db.dao.endpoint_dao import EndpointDAO
 # from orchestra.db.dao.latest_benchmark_dao import LatestBenchmarkDAO
 
-# Async DAOs
-from orchestra.db.dao.async_benchmark_run_dao import AsyncBenchmarkRunDAO
-from orchestra.db.dao.async_custom_endpoint_benchmark_dao import AsyncCustomEndpointBenchmarkDAO
-from orchestra.db.dao.async_custom_endpoint_dao import AsyncCustomEndpointDAO
-from orchestra.db.dao.async_endpoint_dao import AsyncEndpointDAO
-from orchestra.db.dao.async_latest_benchmark_dao import AsyncLatestBenchmarkDAO
-# from sqlalchemy.ext.asyncio import AsyncSession
-from orchestra.db.dependencies import get_async_db_session, get_db_session
-# from orchestra.web.api.utils.http_responses import model_not_found
-from orchestra.web.api.utils.http_responses import not_found
 
 # from typing import Dict, List, Optional, Union
 

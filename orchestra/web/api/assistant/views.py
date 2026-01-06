@@ -21,22 +21,6 @@ from fastapi.encoders import jsonable_encoder
 from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
-
-from orchestra.db.dao.api_key_dao import ApiKeyDAO
-from orchestra.db.dao.assistant_dao import AssistantDAO
-from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
-from orchestra.db.dao.auth_user_dao import AuthUserDAO
-from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.log_dao import LogDAO
-from orchestra.db.dao.log_event_dao import LogEventDAO
-from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
-from orchestra.db.dao.project_dao import ProjectDAO
-from orchestra.db.dao.recording_dao import RecordingDAO
-from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
-from orchestra.db.dao.role_dao import RoleDAO
-from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.db.dao.voice_dao import VoiceDAO
 
 # Async DAOs
 from orchestra.db.dao.async_api_key_dao import AsyncApiKeyDAO
@@ -47,12 +31,12 @@ from orchestra.db.dao.async_context_dao import AsyncContextDAO
 from orchestra.db.dao.async_log_dao import AsyncLogDAO
 from orchestra.db.dao.async_log_event_dao import AsyncLogEventDAO
 from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
-from orchestra.db.dao.async_project_dao import AsyncProjectDAO
 from orchestra.db.dao.async_recording_dao import AsyncRecordingDAO
 from orchestra.db.dao.async_resource_access_dao import AsyncResourceAccessDAO
 from orchestra.db.dao.async_role_dao import AsyncRoleDAO
 from orchestra.db.dao.async_users_dao import AsyncUsersDAO
 from orchestra.db.dao.async_voice_dao import AsyncVoiceDAO
+from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_async_db_session, get_db_session
 from orchestra.db.models.orchestra_models import (
     AuthUser,
@@ -381,7 +365,10 @@ async def create_assistant(
 
                 # Grant Owner role to creator
                 if assistants_project:
-                    owner_role = await role_dao.get_by_name("Owner", organization_id=None)
+                    owner_role = await role_dao.get_by_name(
+                        "Owner",
+                        organization_id=None,
+                    )
                     if owner_role:
                         await resource_access_dao.grant_access(
                             resource_type="project",
@@ -395,7 +382,10 @@ async def create_assistant(
                     org_members = await organization_member_dao.filter(
                         organization_id=organization_id,
                     )
-                    member_role = await role_dao.get_by_name("Member", organization_id=None)
+                    member_role = await role_dao.get_by_name(
+                        "Member",
+                        organization_id=None,
+                    )
                     if member_role:
                         for member_row in org_members:
                             member = member_row[0]
@@ -417,7 +407,10 @@ async def create_assistant(
                 )
                 if not has_access:
                     # Grant Member role to user
-                    member_role = await role_dao.get_by_name("Member", organization_id=None)
+                    member_role = await role_dao.get_by_name(
+                        "Member",
+                        organization_id=None,
+                    )
                     if member_role:
                         await resource_access_dao.grant_access(
                             resource_type="project",
@@ -1834,7 +1827,10 @@ async def transfer_assistant_to_org(
                     org_members = await organization_member_dao.filter(
                         organization_id=target_org_id,
                     )
-                    member_role = await role_dao.get_by_name("Member", organization_id=None)
+                    member_role = await role_dao.get_by_name(
+                        "Member",
+                        organization_id=None,
+                    )
                     if member_role:
                         for member_row in org_members:
                             member = member_row[0]
@@ -2802,7 +2798,11 @@ async def delete_voice(
     try:
         # Attempt to delete from our DB first. The DAO method contains the
         # "in-use" validation and will raise a 409 Conflict if necessary.
-        await voice_dao.delete_voice(user_id=user_id, voice_id=voice_id, provider=provider)
+        await voice_dao.delete_voice(
+            user_id=user_id,
+            voice_id=voice_id,
+            provider=provider,
+        )
 
         # If the voice is not a preset, also delete it from the provider.
         if not voice_to_delete.is_preset:

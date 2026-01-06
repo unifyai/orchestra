@@ -2,15 +2,12 @@ from typing import List
 
 from fastapi import APIRouter, Query, Request
 from fastapi.param_functions import Depends
-
-from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
-from orchestra.db.dao.endpoint_dao import EndpointDAO
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # Async DAOs
 from orchestra.db.dao.async_custom_endpoint_dao import AsyncCustomEndpointDAO
 from orchestra.db.dao.async_endpoint_dao import AsyncEndpointDAO
-from sqlalchemy.ext.asyncio import AsyncSession
-from orchestra.db.dependencies import get_async_db_session, get_db_session
+from orchestra.db.dependencies import get_async_db_session
 from orchestra.web.api.utils.http_responses import overspecified_model_provider
 
 router = APIRouter()

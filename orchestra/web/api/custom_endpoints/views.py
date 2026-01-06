@@ -2,15 +2,12 @@ from typing import Dict, List
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette import status
 
-from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
-
 # Async DAOs
-from orchestra.db.dao.async_custom_api_key_dao import AsyncCustomApiKeyDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpoint, CustomEndpointDAO
-from sqlalchemy.ext.asyncio import AsyncSession
-from orchestra.db.dependencies import get_async_db_session, get_db_session
+from orchestra.db.dependencies import get_async_db_session
 from orchestra.web.api.custom_endpoints.schema import CustomEndpointModelResponse
 from orchestra.web.api.utils.http_responses import not_found
 

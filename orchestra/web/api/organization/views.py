@@ -7,33 +7,21 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
-
-from orchestra.db.dao.api_key_dao import ApiKeyDAO
-from orchestra.db.dao.auth_user_dao import AuthUserDAO
-from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.organization_dao import OrganizationDAO
-from orchestra.db.dao.organization_invite_dao import OrganizationInviteDAO
-from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
-from orchestra.db.dao.project_dao import ProjectDAO
-from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
-from orchestra.db.dao.role_dao import RoleDAO
-from orchestra.db.dao.team_dao import TeamDAO
-from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.db.dependencies import get_async_db_session, get_db_session
 
 # Async DAOs
 from orchestra.db.dao.async_api_key_dao import AsyncApiKeyDAO
 from orchestra.db.dao.async_auth_user_dao import AsyncAuthUserDAO
+from orchestra.db.dao.async_organization_billing_dao import AsyncOrganizationBillingDAO
 from orchestra.db.dao.async_organization_dao import AsyncOrganizationDAO
 from orchestra.db.dao.async_organization_invite_dao import AsyncOrganizationInviteDAO
 from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
-from orchestra.db.dao.async_project_dao import AsyncProjectDAO
 from orchestra.db.dao.async_resource_access_dao import AsyncResourceAccessDAO
 from orchestra.db.dao.async_role_dao import AsyncRoleDAO
 from orchestra.db.dao.async_team_dao import AsyncTeamDAO
 from orchestra.db.dao.async_users_dao import AsyncUsersDAO
-from orchestra.db.dao.async_organization_billing_dao import AsyncOrganizationBillingDAO
+from orchestra.db.dao.auth_user_dao import AuthUserDAO
+from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dependencies import get_async_db_session
 from orchestra.services.contact_sync_service import ContactSyncService
 from orchestra.web.api.organization.schema import (
     AcceptInviteResponse,
@@ -836,7 +824,10 @@ async def update_member_role(
         await session.commit()
 
         # Return updated member with user info
-        updated_member = await org_member_dao.get_member(member_user_id, organization_id)
+        updated_member = await org_member_dao.get_member(
+            member_user_id,
+            organization_id,
+        )
 
         # Fetch user info
         auth_user_dao = AsyncAuthUserDAO(session)
@@ -933,7 +924,10 @@ async def transfer_organization_ownership(
         )
 
     # New owner must be an existing member
-    new_owner_member = await org_member_dao.get_member(transfer.new_owner_id, organization_id)
+    new_owner_member = await org_member_dao.get_member(
+        transfer.new_owner_id,
+        organization_id,
+    )
     if not new_owner_member:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1094,7 +1088,12 @@ async def invite_user_to_organization(
         )
         await session.commit()
         await _send_invite_email(existing_invite, org, auth_user_dao, user_id)
-        return await _build_invite_response(existing_invite, org, role_dao, auth_user_dao)
+        return await _build_invite_response(
+            existing_invite,
+            org,
+            role_dao,
+            auth_user_dao,
+        )
 
     # Determine role_id (default to Member role)
     role_id = invite_request.role_id
@@ -1571,7 +1570,6 @@ async def get_organization_billing(
     Returns billing mode (delegated or direct), credits, and billing settings.
     Requires billing:read permission.
     """
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
 
     user_id = request_fastapi.state.user_id
     org_dao = AsyncOrganizationDAO(session)
@@ -1640,7 +1638,6 @@ async def update_organization_billing(
     Requires billing:write permission.
     Owners and Admins have this permission by default.
     """
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
 
     user_id = request_fastapi.state.user_id
     org_dao = AsyncOrganizationDAO(session)
@@ -1669,7 +1666,10 @@ async def update_organization_billing(
 
     # Update settings
     if billing_update.autorecharge is not None:
-        await org_billing_dao.set_autorecharge(organization_id, billing_update.autorecharge)
+        await org_billing_dao.set_autorecharge(
+            organization_id,
+            billing_update.autorecharge,
+        )
 
     if billing_update.autorecharge_threshold is not None:
         await org_billing_dao.set_autorecharge_threshold(
@@ -1728,7 +1728,6 @@ async def get_organization_credits(
     For delegated billing orgs, returns the billing user's credit balance.
     Requires billing:read permission.
     """
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
 
     user_id = request_fastapi.state.user_id
     org_dao = AsyncOrganizationDAO(session)
@@ -1787,7 +1786,6 @@ async def get_organization_business_profile(
 
     Requires billing:read permission.
     """
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
 
     user_id = request_fastapi.state.user_id
     org_dao = AsyncOrganizationDAO(session)
@@ -1834,7 +1832,6 @@ async def update_organization_business_profile(
     Requires billing:write permission.
     Owners and Admins have this permission by default.
     """
-    from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
 
     user_id = request_fastapi.state.user_id
     org_dao = AsyncOrganizationDAO(session)

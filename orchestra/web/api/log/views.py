@@ -26,6 +26,13 @@ from sqlalchemy.exc import DataError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.selectable import Subquery
 
+# Async DAOs
+from orchestra.db.dao.async_context_dao import AsyncContextDAO
+from orchestra.db.dao.async_field_type_dao import AsyncFieldTypeDAO
+from orchestra.db.dao.async_log_event_dao import AsyncLogEventDAO
+from orchestra.db.dao.async_organization_dao import AsyncOrganizationDAO
+from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
+from orchestra.db.dao.async_resource_access_dao import AsyncResourceAccessDAO
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.derived_log_dao import (
     DerivedLogDAO,
@@ -34,20 +41,9 @@ from orchestra.db.dao.derived_log_dao import (
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_dao import ImmutableFieldError, LogDAO, OverwriteError
 from orchestra.db.dao.log_event_dao import LogEventDAO
-from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
-from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
-
-# Async DAOs
-from orchestra.db.dao.async_context_dao import AsyncContextDAO
-from orchestra.db.dao.async_field_type_dao import AsyncFieldTypeDAO
-from orchestra.db.dao.async_log_event_dao import AsyncLogEventDAO
-from orchestra.db.dao.async_organization_dao import AsyncOrganizationDAO
-from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
-from orchestra.db.dao.async_project_dao import AsyncProjectDAO
-from orchestra.db.dao.async_resource_access_dao import AsyncResourceAccessDAO
-from orchestra.db.dependencies import get_async_db_session, get_db_session
+from orchestra.db.dependencies import get_async_db_session
 from orchestra.db.models.orchestra_models import (
     ActiveDerivedLog,
     Context,
@@ -346,7 +342,9 @@ async def create_logs(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
-async def unify_id_sets_by_subset(alias_id_sets: Dict[str, Set[int]]) -> Dict[str, Set[int]]:
+async def unify_id_sets_by_subset(
+    alias_id_sets: Dict[str, Set[int]],
+) -> Dict[str, Set[int]]:
     """
     Applies a 3-step logic:
       1) If all sets are the same size, do nothing.
@@ -2292,10 +2290,12 @@ async def update_logs(
                                 .first()
                             )
                             if ctx_obj and not ctx_obj.allow_duplicates:
-                                duplicate = await context_dao.check_for_duplicates_subset(
-                                    context_id=context_id,
-                                    log_event_id=le_id,
-                                    keys_to_check=list(updated_entry_keys),
+                                duplicate = (
+                                    await context_dao.check_for_duplicates_subset(
+                                        context_id=context_id,
+                                        log_event_id=le_id,
+                                        keys_to_check=list(updated_entry_keys),
+                                    )
                                 )
                                 if duplicate:
                                     failed_updates.append(
@@ -2380,10 +2380,12 @@ async def update_logs(
                                 .first()
                             )
                             if ctx_obj and not ctx_obj.allow_duplicates:
-                                duplicate = await context_dao.check_for_duplicates_subset(
-                                    context_id=context_id,
-                                    log_event_id=le_id,
-                                    keys_to_check=list(updated_entry_keys),
+                                duplicate = (
+                                    await context_dao.check_for_duplicates_subset(
+                                        context_id=context_id,
+                                        log_event_id=le_id,
+                                        keys_to_check=list(updated_entry_keys),
+                                    )
                                 )
                                 if duplicate:
                                     failed_updates.append(
@@ -2631,7 +2633,9 @@ async def _update_logs_jsonb(
 
     # Batch fetch all permissions in a single query
     try:
-        log_id_permissions = await log_event_dao.get_user_and_project_ids_batch(ids_to_update)
+        log_id_permissions = await log_event_dao.get_user_and_project_ids_batch(
+            ids_to_update,
+        )
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -5659,7 +5663,10 @@ async def get_logs_metric(
     context_name = request.context or ""
     context_obj = await context_dao.filter(name=context_name, project_id=project_obj.id)
     context_id = context_obj[0][0].id if context_obj else None
-    field_types = await field_type_dao.get_field_types(project_obj.id, context_id=context_id)
+    field_types = await field_type_dao.get_field_types(
+        project_obj.id,
+        context_id=context_id,
+    )
 
     if isinstance(request.from_ids, str) and isinstance(request.exclude_ids, str):
         raise HTTPException(
@@ -6061,7 +6068,10 @@ async def rename_field(
         project_id = project.id
 
         context_name = request.context if request.context else ""
-        context_id = await context_dao.get_or_create(project_id=project_id, name=context_name)
+        context_id = await context_dao.get_or_create(
+            project_id=project_id,
+            name=context_name,
+        )
         if not context_id:
             raise HTTPException(
                 status_code=404,
@@ -6638,10 +6648,15 @@ async def create_fields(
                         AND le.data ? f.field_name
                     """,
                     )
-                    jsonb_results = (await session.execute(
-                        jsonb_check_query,
-                        {"log_event_ids": log_event_ids, "field_names": field_names},
-                    )).fetchall()
+                    jsonb_results = (
+                        await session.execute(
+                            jsonb_check_query,
+                            {
+                                "log_event_ids": log_event_ids,
+                                "field_names": field_names,
+                            },
+                        )
+                    ).fetchall()
                     existing_jsonb_pairs = [(row[0], row[1]) for row in jsonb_results]
 
                 existing_pairs = (
@@ -7382,9 +7397,10 @@ async def process_traffic_logs(
         ORGANIZATION_NAME = settings.orchestra_organization_name
         PROJ_NAME = settings.orchestra_prod_traffic_name
         admin_org = await organization_dao.filter(name=ORGANIZATION_NAME)[0][0]
-        project_id = await project_dao.filter(organization_id=admin_org.id, name=PROJ_NAME)[
-            0
-        ][0].id
+        project_id = await project_dao.filter(
+            organization_id=admin_org.id,
+            name=PROJ_NAME,
+        )[0][0].id
         context_id = await context_dao.get_or_create(
             project_id,
             name="",

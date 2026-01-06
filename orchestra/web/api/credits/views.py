@@ -5,15 +5,12 @@ from typing import Dict
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
-
-from orchestra.db.dao.async_users_dao import AsyncUsersDAO
-from orchestra.db.dao.recharge_dao import RechargeDAO
-from orchestra.db.dao.users_dao import UsersDAO
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # Async DAOs
 from orchestra.db.dao.async_recharge_dao import AsyncRechargeDAO
-from sqlalchemy.ext.asyncio import AsyncSession
-from orchestra.db.dependencies import get_async_db_session, get_db_session
+from orchestra.db.dao.async_users_dao import AsyncUsersDAO
+from orchestra.db.dependencies import get_async_db_session
 from orchestra.db.models.orchestra_models import Users
 from orchestra.lib.time import month_end_utc
 from orchestra.web.api.credits.schema import (

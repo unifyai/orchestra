@@ -5,23 +5,18 @@ Includes endpoints related to context management within projects.
 from typing import Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
-
-from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.field_type_dao import FieldTypeDAO
-from orchestra.db.dao.log_dao import LogDAO
-from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
-from orchestra.db.dao.project_dao import ProjectDAO
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # Async DAOs
 from orchestra.db.dao.async_context_dao import AsyncContextDAO
 from orchestra.db.dao.async_field_type_dao import AsyncFieldTypeDAO
 from orchestra.db.dao.async_log_dao import AsyncLogDAO
 from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
-from orchestra.db.dao.async_project_dao import AsyncProjectDAO
-from orchestra.db.dependencies import get_async_db_session, get_db_session
+from orchestra.db.dao.log_dao import LogDAO
+from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dependencies import get_async_db_session
 from orchestra.db.models.orchestra_models import Context
 from orchestra.web.api.context.schema import (
     AddLogsToContextRequest,

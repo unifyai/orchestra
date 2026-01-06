@@ -9,23 +9,6 @@ import sqlalchemy
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
 from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
-
-from orchestra.db.dao.api_key_dao import ApiKeyDAO
-from orchestra.db.dao.auth_user_dao import AuthUserDAO
-from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.derived_log_dao import DerivedLogDAO
-from orchestra.db.dao.favorite_project_dao import FavoriteProjectDAO
-from orchestra.db.dao.interface_dao import InterfaceDAO
-from orchestra.db.dao.log_event_dao import LogEventDAO
-from orchestra.db.dao.organization_dao import OrganizationDAO
-from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
-from orchestra.db.dao.plot_dao import PlotDAO
-from orchestra.db.dao.project_dao import ProjectDAO
-from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
-from orchestra.db.dao.role_dao import RoleDAO
-from orchestra.db.dao.tab_dao import TabDAO
-from orchestra.db.dao.tile_dao import TileDAO
 
 # Async DAOs
 from orchestra.db.dao.async_api_key_dao import AsyncApiKeyDAO
@@ -38,12 +21,12 @@ from orchestra.db.dao.async_log_event_dao import AsyncLogEventDAO
 from orchestra.db.dao.async_organization_dao import AsyncOrganizationDAO
 from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
 from orchestra.db.dao.async_plot_dao import AsyncPlotDAO
-from orchestra.db.dao.async_project_dao import AsyncProjectDAO
 from orchestra.db.dao.async_resource_access_dao import AsyncResourceAccessDAO
 from orchestra.db.dao.async_role_dao import AsyncRoleDAO
 from orchestra.db.dao.async_tab_dao import AsyncTabDAO
 from orchestra.db.dao.async_tile_dao import AsyncTileDAO
-from orchestra.db.dependencies import get_async_db_session, get_db_session
+from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dependencies import get_async_db_session
 from orchestra.db.models.orchestra_models import (
     Context,
     DerivedLog,

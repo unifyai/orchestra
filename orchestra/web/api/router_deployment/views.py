@@ -10,7 +10,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from orchestra.db.dao.router_dao import RouterDAO
 
 # Async DAOs
-from orchestra.db.dao.async_router_dao import AsyncRouterDAO
 from orchestra.web.api.utils.gcp import blob_exists, send_pubsub_msg
 
 router = APIRouter()

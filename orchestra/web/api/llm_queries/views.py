@@ -7,17 +7,12 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException, Request, Response
 from fastapi.param_functions import Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from providers.completion import PROVIDER_CLASSES
-
-from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
-from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
-from orchestra.db.dao.users_dao import UsersDAO
+from sqlalchemy.ext.asyncio import AsyncSession
 
 # Async DAOs
-from orchestra.db.dao.async_custom_api_key_dao import AsyncCustomApiKeyDAO
 from orchestra.db.dao.async_custom_endpoint_dao import AsyncCustomEndpointDAO
-from orchestra.db.dao.async_users_dao import AsyncUsersDAO
-from sqlalchemy.ext.asyncio import AsyncSession
-from orchestra.db.dependencies import get_async_db_session, get_db_session
+from orchestra.db.dao.users_dao import UsersDAO
+from orchestra.db.dependencies import get_async_db_session
 from orchestra.settings import settings
 from orchestra.web.api.dependencies import _ro_session
 from orchestra.web.api.llm_queries.schema import (

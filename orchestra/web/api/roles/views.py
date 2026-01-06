@@ -3,17 +3,13 @@ from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
-
-from orchestra.db.dao.organization_dao import OrganizationDAO
-from orchestra.db.dao.permission_dao import PermissionDAO
-from orchestra.db.dao.role_dao import RoleDAO
 
 # Async DAOs
 from orchestra.db.dao.async_organization_dao import AsyncOrganizationDAO
 from orchestra.db.dao.async_permission_dao import AsyncPermissionDAO
 from orchestra.db.dao.async_role_dao import AsyncRoleDAO
-from orchestra.db.dependencies import get_async_db_session, get_db_session
+from orchestra.db.dao.role_dao import RoleDAO
+from orchestra.db.dependencies import get_async_db_session
 from orchestra.web.api.roles.schema import (
     PermissionResponse,
     RoleCreate,

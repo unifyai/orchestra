@@ -4,14 +4,12 @@ Endpoints related to dashboard_view management and operations.
 
 from fastapi import APIRouter, Depends, HTTPException, Path
 from fastapi.responses import JSONResponse
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette import status
-
-from orchestra.db.dao.dashboard_view_dao import DashboardViewDAO
 
 # Async DAOs
 from orchestra.db.dao.async_dashboard_view_dao import AsyncDashboardViewDAO
-from sqlalchemy.ext.asyncio import AsyncSession
-from orchestra.db.dependencies import get_async_db_session, get_db_session
+from orchestra.db.dependencies import get_async_db_session
 from orchestra.web.api.dashboard_view.schema import (
     DashboardViewDelete,
     DashboardViewInfo,

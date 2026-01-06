@@ -8,13 +8,6 @@ from typing import Literal, Optional, Union
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
-
-from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
-from orchestra.db.dao.endpoint_dao import EndpointDAO
-from orchestra.db.dao.local_endpoint_dao import LocalEndpointDAO
-from orchestra.db.dao.query_dao import QueryDAO
-from orchestra.db.dao.tag_dao import TagDAO
 
 # Async DAOs
 from orchestra.db.dao.async_custom_endpoint_dao import AsyncCustomEndpointDAO
@@ -22,7 +15,7 @@ from orchestra.db.dao.async_endpoint_dao import AsyncEndpointDAO
 from orchestra.db.dao.async_local_endpoint_dao import AsyncLocalEndpointDAO
 from orchestra.db.dao.async_query_dao import AsyncQueryDAO
 from orchestra.db.dao.async_tag_dao import AsyncTagDAO
-from orchestra.db.dependencies import get_async_db_session, get_db_session
+from orchestra.db.dependencies import get_async_db_session
 from orchestra.web.api.utils.http_responses import not_found
 
 router = APIRouter()

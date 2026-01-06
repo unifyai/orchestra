@@ -7,38 +7,24 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
 
-from orchestra.db.dao.account_dao import AccountDAO
-from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_hiring_one_time_approval_link_dao import (
     AssistantHiringOneTimeApprovalLinkDAO,
 )
-from orchestra.db.dao.async_auth_user_dao import AsyncAuthUserDAO
-from orchestra.db.dao.async_users_dao import AsyncUsersDAO
-from orchestra.db.dao.auth_user_dao import (
-    ASSISTANT_HIRING_APPROVAL_STATUSES,
-    AuthUser,
-    AuthUserDAO,
-)
-from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.organization_dao import OrganizationDAO
-from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
-from orchestra.db.dao.project_dao import ProjectDAO
-from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
-from orchestra.db.dao.role_dao import RoleDAO
-from orchestra.db.dao.users_dao import UsersDAO
 
 # Async DAOs
 from orchestra.db.dao.async_account_dao import AsyncAccountDAO
 from orchestra.db.dao.async_api_key_dao import AsyncApiKeyDAO
+from orchestra.db.dao.async_auth_user_dao import AsyncAuthUserDAO
 from orchestra.db.dao.async_context_dao import AsyncContextDAO
 from orchestra.db.dao.async_organization_dao import AsyncOrganizationDAO
 from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
-from orchestra.db.dao.async_project_dao import AsyncProjectDAO
 from orchestra.db.dao.async_resource_access_dao import AsyncResourceAccessDAO
 from orchestra.db.dao.async_role_dao import AsyncRoleDAO
-from orchestra.db.dependencies import get_async_db_session, get_db_session
+from orchestra.db.dao.async_users_dao import AsyncUsersDAO
+from orchestra.db.dao.auth_user_dao import ASSISTANT_HIRING_APPROVAL_STATUSES, AuthUser
+from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dependencies import get_async_db_session
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
 from orchestra.services.user_account_cleanup_service import UserAccountCleanupService
 from orchestra.settings import settings
@@ -458,7 +444,11 @@ async def reset_user_quotas(
     user = await auth_user_dao.filter(id=user_id)
     if not user:
         raise not_found("User ID")
-    await auth_user_dao.update(id=user_id, queries_enabled=True, evaluations_enabled=True)
+    await auth_user_dao.update(
+        id=user_id,
+        queries_enabled=True,
+        evaluations_enabled=True,
+    )
     return "User quotas reset successfully!"
 
 
@@ -575,7 +565,10 @@ async def reset_api_key(
     # this will need to be changed once multiple keys are enabled.
     # delete prev key
     api_key_dao = AsyncApiKeyDAO(session)
-    old_api_key = await api_key_dao.filter(user_id=user_id, organization_id=organization_id)
+    old_api_key = await api_key_dao.filter(
+        user_id=user_id,
+        organization_id=organization_id,
+    )
     await api_key_dao.delete(id=old_api_key[0][0].id)
     new_api_key = generate_key()
     await api_key_dao.create(

@@ -9,15 +9,6 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import Session
-
-from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.field_type_dao import FieldTypeDAO
-from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
-from orchestra.db.dao.plot_dao import PlotDAO
-from orchestra.db.dao.project_dao import ProjectDAO
-from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
-from orchestra.db.dependencies import get_async_db_session, get_db_session
 
 # Async DAOs
 from orchestra.db.dao.async_context_dao import AsyncContextDAO
@@ -26,6 +17,8 @@ from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemb
 from orchestra.db.dao.async_plot_dao import AsyncPlotDAO
 from orchestra.db.dao.async_project_dao import AsyncProjectDAO
 from orchestra.db.dao.async_resource_access_dao import AsyncResourceAccessDAO
+from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dependencies import get_async_db_session
 from orchestra.db.models.orchestra_models import Plot, Project
 from orchestra.settings import settings
 from orchestra.web.api.plot.llm_inference import (
@@ -189,7 +182,12 @@ async def create_plot(
         )
 
     # Get and validate project
-    project = await _get_project_by_name(project_name, user_id, organization_id, session)
+    project = await _get_project_by_name(
+        project_name,
+        user_id,
+        organization_id,
+        session,
+    )
     if not project:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -233,7 +231,7 @@ async def create_plot(
 
         try:
             # Get API key for LLM call
-            from orchestra.db.dao.api_key_dao import ApiKeyDAO
+            pass
 
             api_key_dao = AsyncApiKeyDAO(session)
             if organization_id:
@@ -350,7 +348,12 @@ async def list_plots(
     # If project_name specified, get project first
     project_id = None
     if project_name:
-        project = await _get_project_by_name(project_name, user_id, organization_id, session)
+        project = await _get_project_by_name(
+            project_name,
+            user_id,
+            organization_id,
+            session,
+        )
         if project:
             project_id = project.id
 

@@ -12,8 +12,6 @@ from orchestra.db.dao.dataset_dao import DatasetDAO
 from orchestra.db.dao.dataset_entry_dao import DatasetEntryDAO
 
 # Async DAOs
-from orchestra.db.dao.async_dataset_dao import AsyncDatasetDAO
-from orchestra.db.dao.async_dataset_entry_dao import AsyncDatasetEntryDAO
 from orchestra.web.api.dataset.schema import DatasetInfo, DatasetNewName, EntriesConfig
 from orchestra.web.api.utils.http_responses import not_found
 
@@ -276,7 +274,10 @@ async def add_dataset_entries(
             existing_ids.append(existing_id[0].id)
             continue
         # if not, add it to the dataset
-        _id = await dataset_entry_dao.create(dataset_id=dataset_id, entry=json.dumps(entry))
+        _id = await dataset_entry_dao.create(
+            dataset_id=dataset_id,
+            entry=json.dumps(entry),
+        )
         new_ids.append(_id)
     return {
         "already_present": existing_ids,
