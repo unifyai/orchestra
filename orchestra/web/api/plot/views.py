@@ -18,6 +18,14 @@ from orchestra.db.dao.plot_dao import PlotDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dependencies import get_async_db_session, get_db_session
+
+# Async DAOs
+from orchestra.db.dao.async_context_dao import AsyncContextDAO
+from orchestra.db.dao.async_field_type_dao import AsyncFieldTypeDAO
+from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
+from orchestra.db.dao.async_plot_dao import AsyncPlotDAO
+from orchestra.db.dao.async_project_dao import AsyncProjectDAO
+from orchestra.db.dao.async_resource_access_dao import AsyncResourceAccessDAO
 from orchestra.db.models.orchestra_models import Plot, Project
 from orchestra.settings import settings
 from orchestra.web.api.plot.llm_inference import (
@@ -53,16 +61,16 @@ async def _get_project_by_name(
     project_name: str,
     user_id: str,
     organization_id: Optional[int],
-    session: Session,
+    session: AsyncSession,
 ) -> Optional[Project]:
     """Get project by name with access validation."""
     org_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, org_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, org_member_dao, context_dao)
 
     # Use filter_by_user_access to respect API key context
     # Returns list of Row tuples, need to extract Project from first element
-    rows = project_dao.filter_by_user_access(
+    rows = await project_dao.filter_by_user_access(
         user_id=user_id,
         organization_id=organization_id,
         name=project_name,
@@ -76,7 +84,7 @@ async def _check_project_permission(
     user_id: str,
     organization_id: Optional[int],
     permission: str,
-    session: Session,
+    session: AsyncSession,
 ) -> bool:
     """Check if user has the specified permission on the project."""
     # Personal projects: owner has all permissions
@@ -85,7 +93,7 @@ async def _check_project_permission(
 
     # Org projects: check RBAC
     resource_access_dao = AsyncResourceAccessDAO(session)
-    return resource_access_dao.check_user_permission(
+    return await resource_access_dao.check_user_permission(
         user_id=user_id,
         resource_type="project",
         resource_id=project.id,
@@ -93,13 +101,13 @@ async def _check_project_permission(
     )
 
 
-async def _build_plot_url(token: str) -> str:
+def _build_plot_url(token: str) -> str:
     """Build the shareable plot URL."""
     console_url = settings.console_url.rstrip("/")
     return f"{console_url}/plot/view/{token}"
 
 
-async def _plot_to_response(plot: Plot, project_name: str) -> PlotResponse:
+def _plot_to_response(plot: Plot, project_name: str) -> PlotResponse:
     """Convert Plot model to PlotResponse."""
     return PlotResponse(
         url=_build_plot_url(plot.token),
@@ -120,7 +128,7 @@ async def _plot_to_response(plot: Plot, project_name: str) -> PlotResponse:
     )
 
 
-async def _plot_to_list_item(plot: Plot, project_name: str) -> PlotListItem:
+def _plot_to_list_item(plot: Plot, project_name: str) -> PlotListItem:
     """Convert Plot model to PlotListItem."""
     return PlotListItem(
         token=plot.token,
@@ -181,7 +189,7 @@ async def create_plot(
         )
 
     # Get and validate project
-    project = _get_project_by_name(project_name, user_id, organization_id, session)
+    project = await _get_project_by_name(project_name, user_id, organization_id, session)
     if not project:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -189,7 +197,7 @@ async def create_plot(
         )
 
     # Check project:read permission
-    if not _check_project_permission(
+    if not await _check_project_permission(
         project,
         user_id,
         organization_id,
@@ -227,20 +235,11 @@ async def create_plot(
             # Get API key for LLM call
             from orchestra.db.dao.api_key_dao import ApiKeyDAO
 
-# Async DAOs
-from orchestra.db.dao.async_context_dao import AsyncContextDAO
-from orchestra.db.dao.async_field_type_dao import AsyncFieldTypeDAO
-from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
-from orchestra.db.dao.async_plot_dao import AsyncPlotDAO
-from orchestra.db.dao.async_project_dao import AsyncProjectDAO
-from orchestra.db.dao.async_resource_access_dao import AsyncResourceAccessDAO
-from orchestra.db.dao.async_api_key_dao import AsyncApiKeyDAO
-
-            api_key_dao = AsyncApiKeyDAO(session)
+            api_key_dao = ApiKeyDAO(session)
             if organization_id:
-                keys = api_key_dao.get_organization_keys(user_id, organization_id)
+                keys = await api_key_dao.get_organization_keys(user_id, organization_id)
             else:
-                keys = api_key_dao.get_personal_keys(user_id)
+                keys = await api_key_dao.get_personal_keys(user_id)
 
             if not keys:
                 raise HTTPException(
@@ -351,11 +350,11 @@ async def list_plots(
     # If project_name specified, get project first
     project_id = None
     if project_name:
-        project = _get_project_by_name(project_name, user_id, organization_id, session)
+        project = await _get_project_by_name(project_name, user_id, organization_id, session)
         if project:
             project_id = project.id
 
-    plots = plot_dao.list_by_user_context(
+    plots = await plot_dao.list_by_user_context(
         user_id=user_id,
         organization_id=organization_id,
         project_id=project_id,
@@ -399,7 +398,7 @@ async def get_plot(
     organization_id = request_fastapi.state.organization_id
 
     plot_dao = AsyncPlotDAO(session)
-    plot = plot_dao.get_by_token(token)
+    plot = await plot_dao.get_by_token(token)
 
     if not plot:
         raise HTTPException(
@@ -420,7 +419,7 @@ async def get_plot(
         )
 
     # Check project:read permission
-    if not _check_project_permission(
+    if not await _check_project_permission(
         project,
         user_id,
         organization_id,
@@ -459,7 +458,7 @@ async def update_plot(
     organization_id = request_fastapi.state.organization_id
 
     plot_dao = AsyncPlotDAO(session)
-    plot = plot_dao.get_by_token(token)
+    plot = await plot_dao.get_by_token(token)
 
     if not plot:
         raise HTTPException(
@@ -480,7 +479,7 @@ async def update_plot(
         )
 
     # Check project:write permission
-    if not _check_project_permission(
+    if not await _check_project_permission(
         project,
         user_id,
         organization_id,
@@ -532,7 +531,7 @@ async def delete_plot(
     organization_id = request_fastapi.state.organization_id
 
     plot_dao = AsyncPlotDAO(session)
-    plot = plot_dao.get_by_token(token)
+    plot = await plot_dao.get_by_token(token)
 
     if not plot:
         raise HTTPException(
@@ -553,7 +552,7 @@ async def delete_plot(
         )
 
     # Check project:write permission
-    if not _check_project_permission(
+    if not await _check_project_permission(
         project,
         user_id,
         organization_id,
@@ -592,7 +591,7 @@ async def delete_plots_by_project(
     organization_id = request_fastapi.state.organization_id
 
     # Get and validate project
-    project = _get_project_by_name(
+    project = await _get_project_by_name(
         body.project_name,
         user_id,
         organization_id,
@@ -605,7 +604,7 @@ async def delete_plots_by_project(
         )
 
     # Check project:write permission
-    if not _check_project_permission(
+    if not await _check_project_permission(
         project,
         user_id,
         organization_id,
@@ -619,7 +618,7 @@ async def delete_plots_by_project(
 
     # Delete plots
     plot_dao = AsyncPlotDAO(session)
-    deleted_count = plot_dao.delete_by_project(
+    deleted_count = await plot_dao.delete_by_project(
         project_id=project.id,
         context=body.context,
     )
@@ -656,7 +655,7 @@ async def admin_get_plot(
     Returns user_metadata for API key lookup during plot viewing.
     """
     plot_dao = AsyncPlotDAO(session)
-    plot = plot_dao.get_by_token(token)
+    plot = await plot_dao.get_by_token(token)
 
     if not plot:
         raise HTTPException(

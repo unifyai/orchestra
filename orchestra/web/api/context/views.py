@@ -5,6 +5,7 @@ Includes endpoints related to context management within projects.
 from typing import Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
 

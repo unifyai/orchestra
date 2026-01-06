@@ -7,6 +7,7 @@ from orchestra.db.dao.provider_dao import ProviderDAO
 
 # Async DAOs
 from orchestra.db.dao.async_provider_dao import AsyncProviderDAO
+from sqlalchemy.ext.asyncio import AsyncSession
 from orchestra.db.dependencies import get_async_db_session, get_db_session
 from orchestra.db.models.orchestra_models import Provider
 from orchestra.web.api.provider.schema import ProviderModelResponse

@@ -30,7 +30,8 @@ from orchestra.db.dao.async_custom_endpoint_benchmark_dao import AsyncCustomEndp
 from orchestra.db.dao.async_custom_endpoint_dao import AsyncCustomEndpointDAO
 from orchestra.db.dao.async_endpoint_dao import AsyncEndpointDAO
 from orchestra.db.dao.async_latest_benchmark_dao import AsyncLatestBenchmarkDAO
-# from orchestra.db.dependencies import get_async_db_session, get_db_session
+# from sqlalchemy.ext.asyncio import AsyncSession
+from orchestra.db.dependencies import get_async_db_session, get_db_session
 # from orchestra.web.api.utils.http_responses import model_not_found
 from orchestra.web.api.utils.http_responses import not_found
 

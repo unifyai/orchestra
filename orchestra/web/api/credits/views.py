@@ -12,6 +12,7 @@ from orchestra.db.dao.users_dao import UsersDAO
 
 # Async DAOs
 from orchestra.db.dao.async_recharge_dao import AsyncRechargeDAO
+from sqlalchemy.ext.asyncio import AsyncSession
 from orchestra.db.dependencies import get_async_db_session, get_db_session
 from orchestra.db.models.orchestra_models import Users
 from orchestra.lib.time import month_end_utc

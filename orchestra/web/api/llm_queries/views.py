@@ -16,6 +16,7 @@ from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dao.async_custom_api_key_dao import AsyncCustomApiKeyDAO
 from orchestra.db.dao.async_custom_endpoint_dao import AsyncCustomEndpointDAO
 from orchestra.db.dao.async_users_dao import AsyncUsersDAO
+from sqlalchemy.ext.asyncio import AsyncSession
 from orchestra.db.dependencies import get_async_db_session, get_db_session
 from orchestra.settings import settings
 from orchestra.web.api.dependencies import _ro_session

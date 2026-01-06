@@ -8,6 +8,7 @@ from orchestra.db.dao.query_dao import QueryDAO
 
 # Async DAOs
 from orchestra.db.dao.async_query_dao import AsyncQueryDAO
+from sqlalchemy.ext.asyncio import AsyncSession
 from orchestra.db.dependencies import get_async_db_session, get_db_session
 from orchestra.db.models.orchestra_models import Query
 from orchestra.web.api.query.schema import QueryModelRequest, QueryModelResponse

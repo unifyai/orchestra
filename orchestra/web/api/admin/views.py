@@ -108,7 +108,7 @@ async def get_all_users_models(
     :return: list of users objects from database.
     """
     users_dao = AsyncUsersDAO(session)
-    return users_dao.get_all_users()
+    return await users_dao.get_all_users()
 
 
 @router.get(
@@ -1460,8 +1460,8 @@ async def update_user_stripe_customer_id(  # noqa: WPS211
     :param users_dao: DAO for users models.
     """
     users_dao = AsyncUsersDAO(session)
-    users_dao.set_stripe_customer_id(user_id=id, stripe_id=stripe_customer_id)
-    users_dao.session.commit()
+    await users_dao.set_stripe_customer_id(user_id=id, stripe_id=stripe_customer_id)
+    await session.commit()
 
 
 @router.put("/enable_autorecharge")
@@ -1479,8 +1479,8 @@ async def update_user_autorecharge(  # noqa: WPS211
     """
     users_dao = AsyncUsersDAO(session)
     try:
-        users_dao.enable_autorecharge(user_id=id, enable=enable)
-        users_dao.session.commit()
+        await users_dao.enable_autorecharge(user_id=id, enable=enable)
+        await session.commit()
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException as e:
@@ -1502,8 +1502,8 @@ async def update_user_autorecharge_threshold(  # noqa: WPS211
     :param users_dao: DAO for users models.
     """
     users_dao = AsyncUsersDAO(session)
-    users_dao.set_autorecharge_threshold(user_id=id, threshold=threshold)
-    users_dao.session.commit()
+    await users_dao.set_autorecharge_threshold(user_id=id, threshold=threshold)
+    await session.commit()
 
 
 @router.put("/autorecharge_qty")
@@ -1521,8 +1521,8 @@ async def update_user_autorecharge_qty(  # noqa: WPS211
     """
     users_dao = AsyncUsersDAO(session)
     try:
-        users_dao.set_autorecharge_qty(user_id=id, qty=qty)
-        users_dao.session.commit()
+        await users_dao.set_autorecharge_qty(user_id=id, qty=qty)
+        await session.commit()
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except HTTPException as e:
@@ -1556,7 +1556,7 @@ async def update_user_prompt_telemetry(
     Updates database evaluation model in the database.
     """
     users_dao = AsyncUsersDAO(session)
-    users_dao.set_prompt_telemetry(user_id, activated)
+    await users_dao.set_prompt_telemetry(user_id, activated)
 
 
 @router.get("/user_prompt_telemetry")
@@ -1568,7 +1568,7 @@ async def get_user_prompt_telemetry(
     Returns state of the store prompts attr for a given user.
     """
     users_dao = AsyncUsersDAO(session)
-    return users_dao.is_telemetry_activated(user_id)
+    return await users_dao.is_telemetry_activated(user_id)
 
 
 @router.post("/credit_card_fingerprint")
@@ -2313,9 +2313,9 @@ async def get_user_billing_eligibility(
     users_dao = AsyncUsersDAO(session)
 
     try:
-        user = users_dao.get_user_with_id(user_id)
-        total_spending = users_dao.get_total_spending(user_id)
-        can_enable = users_dao.can_enable_monthly_billing(user_id)
+        user = await users_dao.get_user_with_id(user_id)
+        total_spending = await users_dao.get_total_spending(user_id)
+        can_enable = await users_dao.can_enable_monthly_billing(user_id)
 
         return {
             "user_id": user_id,
@@ -2348,7 +2348,7 @@ async def migrate_users_to_billing_compliance(
     users_dao = AsyncUsersDAO(session)
 
     # Get all users with autorecharge enabled or with low autorecharge amounts
-    all_users = users_dao.get_all_users()
+    all_users = await users_dao.get_all_users()
 
     results = {
         "total_users_processed": 0,
@@ -2362,8 +2362,8 @@ async def migrate_users_to_billing_compliance(
         try:
             results["total_users_processed"] += 1
             user_id = user.id
-            total_spending = users_dao.get_total_spending(user_id)
-            can_enable_billing = users_dao.can_enable_monthly_billing(user_id)
+            total_spending = await users_dao.get_total_spending(user_id)
+            can_enable_billing = await users_dao.can_enable_monthly_billing(user_id)
 
             # Capture original values before any modifications
             original_autorecharge = user.autorecharge
@@ -2374,7 +2374,7 @@ async def migrate_users_to_billing_compliance(
             # Check if user has autorecharge enabled but insufficient spending
             if user.autorecharge and not can_enable_billing:
                 # Force disable autorecharge
-                users_dao.enable_autorecharge(user_id, False)
+                await users_dao.enable_autorecharge(user_id, False)
                 results["users_disabled"].append(
                     {
                         "user_id": user_id,
@@ -2387,7 +2387,7 @@ async def migrate_users_to_billing_compliance(
             # Check if user has autorecharge amount below $25 or None (regardless of enabled/disabled status)
             if original_autorecharge_qty is None or original_autorecharge_qty < 25.0:
                 # Force update to $25 for everyone with low amounts or None values
-                users_dao.set_autorecharge_qty(user_id, 25.0)
+                await users_dao.set_autorecharge_qty(user_id, 25.0)
                 results["users_amount_updated"].append(
                     {
                         "user_id": user_id,
@@ -2473,7 +2473,7 @@ async def test_queue_auto_recharge(
 
     try:
         # Get the user
-        user = users_dao.get_user_with_id(user_id)
+        user = await users_dao.get_user_with_id(user_id)
 
         # Log current state
         logger.info(
@@ -2488,11 +2488,11 @@ async def test_queue_auto_recharge(
         queue_auto_recharge(session, user, credits)
 
         # Also credit the user immediately (like the real auto-recharge flow does)
-        users_dao.recharge_credit(user_id, credits)
+        await users_dao.recharge_credit(user_id, credits)
         await session.commit()
 
         # Get updated user state
-        updated_user = users_dao.get_user_with_id(user_id)
+        updated_user = await users_dao.get_user_with_id(user_id)
 
         # Check if a recharge record was created
         recharge_dao = AsyncRechargeDAO(session)

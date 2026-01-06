@@ -23,6 +23,7 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 from sqlalchemy import and_, exists, or_, select, update
 from sqlalchemy.exc import DataError, SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.dao.context_dao import ContextDAO
