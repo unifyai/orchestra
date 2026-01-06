@@ -73,7 +73,7 @@ class StandardFieldDefinition(BaseModel):
 
 
 class CreateLogConfig(BaseModel):
-    project: str = Field(
+    project_name: str = Field(
         description="Name of the project the stored entries will be associated to.",
         json_schema_extra={
             "example": "eval-project",
@@ -183,7 +183,7 @@ class CreateLogConfig(BaseModel):
 
 
 class CreateDerivedEntriesConfig(BaseModel):
-    project: str = Field(
+    project_name: str = Field(
         description="Name of the project the stored entries will be associated to.",
         json_schema_extra={
             "example": "eval-project",
@@ -227,7 +227,7 @@ class UpdateLogRequest(BaseModel):
             "examples": [[123, 456, 789], {"status": "done", "user_id": 12}],
         },
     )
-    project: Optional[str] = Field(
+    project_name: Optional[str] = Field(
         default=None,
         description="Name of the project. Required when using filter dict in `logs`. Omit when passing a list of IDs.",
         example="eval-project",
@@ -319,7 +319,7 @@ class DeleteLogsRequest(BaseModel):
 
 
 class DeleteLogEntryRequest(BaseModel):
-    project: str = Field(
+    project_name: str = Field(
         description="Name of the project the logs belong to.",
         example="eval-project",
     )
@@ -369,7 +369,7 @@ class DeleteLogEntryRequest(BaseModel):
 
 
 class UpdateDerivedEntriesConfig(BaseModel):
-    project: str = Field(
+    project_name: str = Field(
         description="Name of the project these derived logs belong to.",
         example="eval-project",
     )
@@ -416,7 +416,7 @@ class UpdateDerivedEntriesConfig(BaseModel):
 
 
 class RenameFieldRequest(BaseModel):
-    project: str = Field(
+    project_name: str = Field(
         description="Name of the project the field belongs to.",
         example="eval-project",
     )
@@ -477,7 +477,7 @@ class CreateFieldsRequest(BaseModel):
     Immutable fields (mutable=False) provide data integrity guarantees once set.
     """
 
-    project: str = Field(
+    project_name: str = Field(
         description="Name of the project the fields belong to.",
         example="eval-project",
     )
@@ -513,7 +513,7 @@ class CreateFieldsRequest(BaseModel):
 
 
 class DeleteFieldsRequest(BaseModel):
-    project: str = Field(
+    project_name: str = Field(
         description="Name of the project the fields belong to.",
         example="eval-project",
     )
@@ -567,7 +567,7 @@ class JoinLogsRequest(BaseModel):
         ),
         example={"A.user_id": "user_identifier", "B.score": "user_score"},
     )
-    project: str = Field(..., description="Name of the project")
+    project_name: str = Field(..., description="Name of the project")
     copy: bool = Field(
         default=True,
         description="If True, a copy of each log is created and then added to the context. If False, the existing log associations are simply used. If omitted, defaults to True.",
@@ -585,13 +585,13 @@ class QueryLogsPostBody(BaseModel):
     Example with image embedding:
     ```json
     {
-        "project": "my-project",
+        "project_name": "my-project",
         "filter_expr": "cosine(image_embedding, embed_image('data:image/png;base64,iVBORw0KG...')) < 0.3"
     }
     ```
     """
 
-    project: str = Field(description="Project name", example="eval-project")
+    project_name: str = Field(description="Project name", example="eval-project")
     context: Optional[str] = Field(None, description="Context name", example="training")
     column_context: Optional[str] = Field(
         None,
