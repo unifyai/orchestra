@@ -217,15 +217,14 @@ class AsyncContextDAO:
         graph = {}
 
         # Get all existing contexts with foreign keys in this project
-        existing_contexts = (
-            self.session.query(Context)
-            .filter(
+        result = await self.session.execute(
+            select(Context).where(
                 Context.project_id == project_id,
                 Context.foreign_keys != None,  # noqa: E711
                 Context.foreign_keys != text("'[]'::jsonb"),
             )
-            .all()
         )
+        existing_contexts = result.scalars().all()
 
         # Add edges representing CASCADE propagation from existing contexts
         for context in existing_contexts:
@@ -1046,15 +1045,14 @@ class AsyncContextDAO:
         context_name = context.name
 
         # Find all contexts in this project that have foreign keys
-        all_contexts = (
-            self.session.query(Context)
-            .filter(
+        result = await self.session.execute(
+            select(Context).where(
                 Context.project_id == project_id,
                 Context.foreign_keys != None,  # noqa: E711
                 Context.foreign_keys != text("'[]'::jsonb"),
             )
-            .all()
         )
+        all_contexts = result.scalars().all()
 
         # Process each context for FKs that reference this context
         for ref_context in all_contexts:
@@ -3538,12 +3536,10 @@ class AsyncContextDAO:
 
             if is_assistants_project and "/" in context.name:
                 # Get all log event IDs in this context before deletion
-                log_event_ids = [
-                    lec.log_event_id
-                    for lec in self.session.query(LogEventContext)
-                    .filter(LogEventContext.context_id == id)
-                    .all()
-                ]
+                result = await self.session.execute(
+                    select(LogEventContext).where(LogEventContext.context_id == id)
+                )
+                log_event_ids = [lec.log_event_id for lec in result.scalars().all()]
 
                 if log_event_ids:
                     # Find sibling contexts for these logs
