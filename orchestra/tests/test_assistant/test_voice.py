@@ -1,6 +1,6 @@
 import base64
 from pathlib import Path
-from unittest.mock import ANY, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import status
@@ -79,10 +79,33 @@ def mock_tts_services_factory(fastapi_app):
     Provides mock provider instances and overrides the dependencies for FastAPI.
     Yields the mock instances for tests to customize.
     """
+    # CartesiaService methods are async, so use AsyncMock
     cartesia_mock = MagicMock(spec=OriginalCartesiaService)
+    cartesia_mock.clone_voice = AsyncMock()
+    cartesia_mock.delete_voice = AsyncMock()
+    cartesia_mock.generate_speech = AsyncMock()
+    cartesia_mock.list_voices = AsyncMock()
+    cartesia_mock.get_voice = AsyncMock()
+
+    # ElevenLabsService methods are async, so use AsyncMock
     elevenlabs_mock = MagicMock(spec=OriginalElevenLabsService)
+    elevenlabs_mock.clone_voice = AsyncMock()
+    elevenlabs_mock.delete_voice = AsyncMock()
+    elevenlabs_mock.generate_speech = AsyncMock()
+    elevenlabs_mock.list_voices = AsyncMock()
+    elevenlabs_mock.get_voice = AsyncMock()
+    elevenlabs_mock.design_voice_generate_previews = AsyncMock()
+    elevenlabs_mock.create_voice_from_generated_id = AsyncMock()
+
+    # DeepgramService methods are async, so use AsyncMock
     deepgram_mock = MagicMock(spec=OriginalDeepgramService)
+    deepgram_mock.detect_language_from_audio = AsyncMock()
+
+    # OpenAIService methods are async, so use AsyncMock
     openai_mock = MagicMock(spec=OriginalOpenAIService)
+    openai_mock.generate_speech = AsyncMock()
+    openai_mock.detect_language_from_text = AsyncMock()
+    openai_mock.generate_voice_description_from_bio = AsyncMock()
 
     # Generate speech endpoint data
     mock_audio_bytes = b"mock_audio_data"

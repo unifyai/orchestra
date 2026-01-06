@@ -55,6 +55,7 @@ ORCHESTRA_DB_PORT="${ORCHESTRA_DB_PORT:-5432}"
 ORCHESTRA_DB_CONTAINER="${ORCHESTRA_PREFIX}-local-db"
 ORCHESTRA_SERVER_PIDFILE="/tmp/${ORCHESTRA_PREFIX}-local-server.pid"
 ORCHESTRA_SERVER_LOGFILE="/tmp/${ORCHESTRA_PREFIX}-local-server.log"
+ORCHESTRA_SERVER_CONFIGFILE="/tmp/${ORCHESTRA_PREFIX}-local-server.config"
 
 # URLs
 LOCAL_ORCHESTRA_URL="http://127.0.0.1:${ORCHESTRA_PORT}/v0"
@@ -76,6 +77,56 @@ log_error() { echo -e "${RED}[ERROR]${NC} $*"; }
 # Prerequisite Checks
 # =============================================================================
 
+start_docker_daemon() {
+  log_info "Attempting to start Docker daemon..."
+
+  if [[ "$(uname)" == "Darwin" ]]; then
+    # macOS: Start Docker Desktop
+    if [[ -d "/Applications/Docker.app" ]]; then
+      open -a Docker
+      log_info "Started Docker Desktop, waiting for daemon..."
+    else
+      log_error "Docker Desktop not found at /Applications/Docker.app"
+      return 1
+    fi
+  else
+    # Linux: Try systemctl first, then service
+    if command -v systemctl &>/dev/null; then
+      if sudo systemctl start docker 2>/dev/null; then
+        log_info "Started Docker via systemctl"
+      else
+        log_error "Failed to start Docker via systemctl"
+        return 1
+      fi
+    elif command -v service &>/dev/null; then
+      if sudo service docker start 2>/dev/null; then
+        log_info "Started Docker via service"
+      else
+        log_error "Failed to start Docker via service"
+        return 1
+      fi
+    else
+      log_error "No supported method to start Docker daemon"
+      return 1
+    fi
+  fi
+
+  # Wait for Docker daemon to be ready
+  local max_attempts=60
+  local attempt=0
+  while (( attempt < max_attempts )); do
+    if docker info &>/dev/null; then
+      log_success "Docker daemon is now running"
+      return 0
+    fi
+    sleep 1
+    ((attempt++)) || true
+  done
+
+  log_error "Docker daemon failed to start within 60 seconds"
+  return 1
+}
+
 check_docker() {
   if ! command -v docker &>/dev/null; then
     log_error "Docker is not installed"
@@ -83,8 +134,11 @@ check_docker() {
   fi
 
   if ! docker info &>/dev/null; then
-    log_error "Docker daemon is not running"
-    return 1
+    log_warn "Docker daemon is not running"
+    if ! start_docker_daemon; then
+      log_error "Could not start Docker daemon"
+      return 1
+    fi
   fi
 
   log_success "Docker is available"
@@ -457,6 +511,12 @@ start_orchestra_server() {
   disown $pid 2>/dev/null || true
   echo "$pid" > "$ORCHESTRA_SERVER_PIDFILE"
 
+  # Write config file with logging directories for external tools to check
+  {
+    echo "ORCHESTRA_LOG_DIR=${ORCHESTRA_LOG_DIR:-}"
+    echo "ORCHESTRA_OTEL_LOG_DIR=${ORCHESTRA_OTEL_LOG_DIR:-}"
+  } > "$ORCHESTRA_SERVER_CONFIGFILE"
+
   log_info "Orchestra server started with PID $pid"
 
   if wait_for_server; then
@@ -506,6 +566,7 @@ stop_orchestra_server() {
     fi
 
     rm -f "$ORCHESTRA_SERVER_PIDFILE"
+    rm -f "$ORCHESTRA_SERVER_CONFIGFILE"
   fi
 
   pkill -9 -f -- "-m orchestra" 2>/dev/null || true

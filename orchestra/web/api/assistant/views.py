@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import logging
 import time
@@ -202,7 +203,7 @@ admin_router = APIRouter()
         },
     },
 )
-def create_assistant(
+async def create_assistant(
     assistant_in: AssistantCreate,
     request: Request,
     session: Session = Depends(get_db_session),
@@ -237,7 +238,7 @@ def create_assistant(
     total_creation_cost = settings.assistant_creation_cost
     if assistant_in.user_whatsapp_number:
         try:
-            platforms_response = get_social_platforms_costs()
+            platforms_response = await get_social_platforms_costs()
             platforms = platforms_response.get("platforms")
 
             if not isinstance(platforms, dict):
@@ -443,7 +444,7 @@ def create_assistant(
                         if "@" in assistant_in.email
                         else assistant_in.email
                     )
-                    email_response = create_email(
+                    email_response = await create_email(
                         email_local,
                         assistant_in.first_name,
                         assistant_in.surname,
@@ -455,8 +456,8 @@ def create_assistant(
                     created_email = email_response.get("user").get("primaryEmail")
                     print(f"EMAIL CREATED: {created_email}")
 
-                    time.sleep(10)
-                    watch_response = watch_email(
+                    await asyncio.sleep(10)
+                    watch_response = await watch_email(
                         created_email,
                         is_staging=settings.is_staging,
                     )
@@ -474,7 +475,7 @@ def create_assistant(
                         if assistant_in.phone_country
                         else "US"
                     )
-                    phone_response = create_phone_number(
+                    phone_response = await create_phone_number(
                         phone_country=phone_country,
                         is_staging=settings.is_staging,
                     )
@@ -487,13 +488,15 @@ def create_assistant(
 
                 # Step 4: assign whatsapp sender if whatsapp number is provided
                 if assistant_in.user_whatsapp_number:
-                    assigned_whatsapp = assign_whatsapp_sender(
-                        assistant_in.user_whatsapp_number,
-                        is_staging=settings.is_staging,
+                    assigned_whatsapp = (
+                        await assign_whatsapp_sender(
+                            assistant_in.user_whatsapp_number,
+                            is_staging=settings.is_staging,
+                        )
                     )["whatsapp_number"]
 
                 # Step 5: create pubsub topic
-                pubsub_response = create_pubsub_topic(
+                pubsub_response = await create_pubsub_topic(
                     str(assistant_id),
                     is_staging=settings.is_staging,
                 )
@@ -561,7 +564,7 @@ def create_assistant(
 
                 if created_pubsub:
                     try:
-                        delete_pubsub_topic(
+                        await delete_pubsub_topic(
                             str(assistant_id),
                             is_staging=settings.is_staging,
                         )
@@ -573,14 +576,14 @@ def create_assistant(
 
                 if created_phone:
                     try:
-                        delete_phone_number(created_phone)
+                        await delete_phone_number(created_phone)
                     except Exception as e:
                         rollback_errors.append(f"Failed to delete phone: {str(e)}")
                 print(f"PHONE DELETED: {created_phone}")
 
                 if created_email:
                     try:
-                        delete_email(created_email)
+                        await delete_email(created_email)
                     except Exception as e:
                         rollback_errors.append(f"Failed to delete email: {str(e)}")
                 print(f"EMAIL DELETED: {created_email}")
@@ -672,7 +675,10 @@ def create_assistant(
         )
 
     # Phase 3: Wake up assistant
-    response = wake_up_assistant(assistant.agent_id, is_staging=settings.is_staging)
+    response = await wake_up_assistant(
+        assistant.agent_id,
+        is_staging=settings.is_staging,
+    )
     if response.status_code != 200:
         logging.error(f"Failed to wake up assistant: {response.text}")
         raise HTTPException(
@@ -687,7 +693,7 @@ def create_assistant(
         try:
             # Convert Pydantic models to dictionaries for the webhook payload
             chat_messages = jsonable_encoder(assistant_in.pre_hire_chat)
-            log_pre_hire_chat(
+            await log_pre_hire_chat(
                 assistant_id=str(assistant.agent_id),
                 messages=chat_messages,
                 is_staging=settings.is_staging,
@@ -924,7 +930,7 @@ def list_assistants(
         },
     },
 )
-def delete_assistant_contact(
+async def delete_assistant_contact(
     assistant_id: int,
     removal_payload: AssistantContactRemoval,
     request: Request,
@@ -974,12 +980,12 @@ def delete_assistant_contact(
     try:
         if contact_type == "phone":
             if assistant.phone:
-                delete_phone_number(assistant.phone)
+                await delete_phone_number(assistant.phone)
             assistant.phone = None
             assistant.user_phone = None
         elif contact_type == "email":
             if assistant.email:
-                delete_email(assistant.email)
+                await delete_email(assistant.email)
             assistant.email = None
         elif contact_type == "whatsapp":
             # No external infra deletion for WhatsApp based on existing delete_assistant logic
@@ -992,7 +998,7 @@ def delete_assistant_contact(
 
         # After successfully updating, trigger a reawaken
         try:
-            reawaken_assistant(
+            await reawaken_assistant(
                 str(updated_assistant.agent_id),
                 is_staging=settings.is_staging,
             )
@@ -1071,7 +1077,7 @@ def delete_assistant_contact(
         },
     },
 )
-def delete_assistant(
+async def delete_assistant(
     assistant_id: int,
     request: Request,
     session: Session = Depends(get_db_session),
@@ -1123,7 +1129,7 @@ def delete_assistant(
 
         # Suspend any jobs that might be currently running with that assistant
         try:
-            response = stop_jobs(assistant_id, session)
+            response = await stop_jobs(assistant_id, session)
             print(f"JOB STOPPED: {response['job_names']}")
         except Exception as e:
             logging.error(f"Failed to stop job: {str(e)}")
@@ -1221,11 +1227,11 @@ def delete_assistant(
                 cleanup_errors.append(f"Failed to delete profile video: {str(e_gcs)}")
 
         # Wait before starting other infra cleanup (same as rollback operations)
-        time.sleep(10)
+        await asyncio.sleep(10)
 
         # Delete pubsub topic
         try:
-            delete_pubsub_topic(str(assistant_id), is_staging=settings.is_staging)
+            await delete_pubsub_topic(str(assistant_id), is_staging=settings.is_staging)
         except Exception as e:
             cleanup_errors.append(f"Failed to delete pubsub topic: {str(e)}")
         print(f"PUBSUB DELETED: {assistant_id}")
@@ -1233,7 +1239,7 @@ def delete_assistant(
         # Delete phone number if exists
         if assistant.phone:
             try:
-                delete_phone_number(assistant.phone)
+                await delete_phone_number(assistant.phone)
             except Exception as e:
                 cleanup_errors.append(f"Failed to delete phone: {str(e)}")
         print(f"PHONE DELETED: {assistant.phone}")
@@ -1241,7 +1247,7 @@ def delete_assistant(
         # Delete email if exists (with debug print like rollback)
         if assistant.email:
             try:
-                delete_email(assistant.email)
+                await delete_email(assistant.email)
             except Exception as e:
                 cleanup_errors.append(f"Failed to delete email: {str(e)}")
         print(f"EMAIL DELETED: {assistant.email}")
@@ -1350,7 +1356,7 @@ def delete_assistant(
         },
     },
 )
-def update_assistant_config(
+async def update_assistant_config(
     assistant_id: int,
     update: AssistantUpdate,
     request: Request,
@@ -1444,7 +1450,7 @@ def update_assistant_config(
                         if "@" in update.email
                         else update.email
                     )
-                    email_response = create_email(
+                    email_response = await create_email(
                         email_local,
                         existing_assistant.first_name,
                         existing_assistant.surname,
@@ -1456,8 +1462,8 @@ def update_assistant_config(
                     email_to_update = email_response.get("user").get("primaryEmail")
                     print(f"EMAIL CREATED ON ASSISTANT UPDATE: {email_to_update}")
 
-                    time.sleep(10)
-                    watch_response = watch_email(
+                    await asyncio.sleep(10)
+                    watch_response = await watch_email(
                         email_to_update,
                         is_staging=settings.is_staging,
                     )
@@ -1484,7 +1490,7 @@ def update_assistant_config(
                     phone_country = (
                         update.phone_country if update.phone_country else "US"
                     )
-                    phone_response = create_phone_number(
+                    phone_response = await create_phone_number(
                         phone_country=phone_country,
                         is_staging=settings.is_staging,
                     )
@@ -1512,7 +1518,7 @@ def update_assistant_config(
                 if not settings.is_staging:
                     # Cost to create a social account
                     try:
-                        platforms_response = get_social_platforms_costs()
+                        platforms_response = await get_social_platforms_costs()
                         platforms = platforms_response.get("platforms")
 
                         if not isinstance(platforms, dict):
@@ -1543,9 +1549,11 @@ def update_assistant_config(
                         quantity=-float(decimal_cost),
                     )
 
-                assistant_whatsapp_number = assign_whatsapp_sender(
-                    update.user_whatsapp_number,
-                    is_staging=settings.is_staging,
+                assistant_whatsapp_number = (
+                    await assign_whatsapp_sender(
+                        update.user_whatsapp_number,
+                        is_staging=settings.is_staging,
+                    )
                 )["whatsapp_number"]
 
         update_data = update.model_dump(exclude_unset=True)
@@ -1601,7 +1609,7 @@ def update_assistant_config(
         # If contact info was updated and infra creation was enabled, reawaken the assistant
         if contact_info_updated and update.create_infra:
             try:
-                reawaken_assistant(
+                await reawaken_assistant(
                     str(updated.agent_id),
                     is_staging=settings.is_staging,
                 )
@@ -1656,7 +1664,7 @@ def update_assistant_config(
                 f"Update failed. Rolling back created email: {email_to_update}",
             )
             try:
-                delete_email(email_to_update)
+                await delete_email(email_to_update)
             except Exception as cleanup_err:
                 logging.error(
                     f"Failed to clean up (delete) email '{email_to_update}' during rollback: {cleanup_err}",
@@ -1667,7 +1675,7 @@ def update_assistant_config(
                 f"Update failed. Rolling back created phone number: {phone_to_update}",
             )
             try:
-                delete_phone_number(phone_to_update)
+                await delete_phone_number(phone_to_update)
             except Exception as cleanup_err:
                 logging.error(
                     f"Failed to clean up (delete) phone number '{phone_to_update}' during rollback: {cleanup_err}",
@@ -2527,7 +2535,7 @@ async def clone_voice(
         file_content = await file.read()
         if not voice_language:
             try:
-                detected_language = deepgram_service.detect_language_from_audio(
+                detected_language = await deepgram_service.detect_language_from_audio(
                     file_content,
                     user_id,
                     file.content_type,
@@ -2543,7 +2551,7 @@ async def clone_voice(
                 )
 
         if provider == "cartesia":
-            cartesia_response = cartesia_service.clone_voice(
+            cartesia_response = await cartesia_service.clone_voice(
                 file_content=file_content,
                 file_name=file.filename or "audio_clip_default_name",
                 name=name,
@@ -2552,7 +2560,7 @@ async def clone_voice(
             )
             new_voice_id = cartesia_response.get("id")
         elif provider == "elevenlabs":
-            elevenlabs_response = elevenlabs_service.clone_voice(
+            elevenlabs_response = await elevenlabs_service.clone_voice(
                 file_content=file_content,
                 file_name=file.filename or "audio_clip_default_name",
                 name=name,
@@ -2618,7 +2626,7 @@ async def clone_voice(
             elif provider == "elevenlabs":
                 provider_service = elevenlabs_service
             try:
-                provider_service.delete_voice(new_voice_id)
+                await provider_service.delete_voice(new_voice_id)
             except Exception as e_voice_cleanup:
                 logging.error(
                     f"Failed to cleanup {provider} voice {new_voice_id} after DB integrity error: {e_voice_cleanup}",
@@ -2635,7 +2643,7 @@ async def clone_voice(
             elif provider == "elevenlabs":
                 provider_service = elevenlabs_service
             try:
-                cartesia_service.delete_voice(new_voice_id)
+                await provider_service.delete_voice(new_voice_id)
             except Exception:
                 pass
         raise HTTPException(
@@ -2748,7 +2756,7 @@ def list_voices(
     },
     tags=["Voices"],
 )
-def delete_voice(
+async def delete_voice(
     voice_id: str,
     request: Request,
     provider: str = Query(..., description="The provider of the voice to delete"),
@@ -2787,7 +2795,7 @@ def delete_voice(
 
             if provider_service:
                 try:
-                    provider_service.delete_voice(voice_id)
+                    await provider_service.delete_voice(voice_id)
                 except (CartesiaAPIError, ElevenLabsAPIError) as e_provider:
                     # If the provider says "not found," it's a non-critical error.
                     # We can proceed since our goal is to have it deleted.
@@ -2869,7 +2877,7 @@ async def generate_speech(
 
     try:
         if request_data.provider == "cartesia":
-            audio_bytes, content_type = cartesia_service.generate_speech(
+            audio_bytes, content_type = await cartesia_service.generate_speech(
                 transcript=request_data.text,
                 voice_id=request_data.voice_id,
                 model_id=request_data.model_id or "sonic-2",  # Default Cartesia model
@@ -2879,7 +2887,7 @@ async def generate_speech(
                 language=request_data.cartesia_language,
             )
         elif request_data.provider == "elevenlabs":
-            audio_bytes, content_type = elevenlabs_service.generate_speech(
+            audio_bytes, content_type = await elevenlabs_service.generate_speech(
                 text=request_data.text,
                 voice_id=request_data.voice_id,
                 model_id=request_data.model_id
@@ -2890,7 +2898,7 @@ async def generate_speech(
                 similarity_boost=request_data.elevenlabs_voice_settings_similarity_boost,
             )
         elif request_data.provider == "openai":
-            audio_bytes, content_type = openai_service.generate_speech(
+            audio_bytes, content_type = await openai_service.generate_speech(
                 text=request_data.text,
                 voice_id=request_data.voice_id,
                 model_id=request_data.model_id or "gpt-4o-mini-tts",
@@ -2949,7 +2957,7 @@ async def design_voice_generate_previews_endpoint(
         if request_data.bio:
             try:
                 final_voice_description = (
-                    openai_service.generate_voice_description_from_bio(
+                    await openai_service.generate_voice_description_from_bio(
                         bio=request_data.bio,
                         description_hint=request_data.voice_description,
                     )
@@ -2977,7 +2985,7 @@ async def design_voice_generate_previews_endpoint(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="A voice description is required. Provide 'voice_description' or 'bio'.",
             )
-        el_response_data = elevenlabs_service.design_voice_generate_previews(
+        el_response_data = await elevenlabs_service.design_voice_generate_previews(
             voice_description=final_voice_description,
             text_for_preview=request_data.text,
             auto_generate_text_flag=request_data.auto_generate_text,
@@ -3039,10 +3047,12 @@ async def design_voice_create_from_preview_endpoint(
                     audio_content = base64.b64decode(request_data.audio_base_64)
                     # Assume MP3 if media_type is not provided
                     media_type = request_data.media_type or "audio/mpeg"
-                    detected_language = deepgram_service.detect_language_from_audio(
-                        audio_content=audio_content,
-                        user_id=user_id,
-                        content_type=media_type,
+                    detected_language = (
+                        await deepgram_service.detect_language_from_audio(
+                            audio_content=audio_content,
+                            user_id=user_id,
+                            content_type=media_type,
+                        )
                     )
                     voice_language = detected_language or "en"
                 except DeepgramAPIError as e:
@@ -3064,7 +3074,7 @@ async def design_voice_create_from_preview_endpoint(
             # Fallback to language detection from text description
             else:
                 try:
-                    detected_language = openai_service.detect_language_from_text(
+                    detected_language = await openai_service.detect_language_from_text(
                         request_data.voice_description,
                     )
                     voice_language = detected_language or "en"
@@ -3078,7 +3088,7 @@ async def design_voice_create_from_preview_endpoint(
                     )
 
         # Step 1: Call ElevenLabs to create the voice from the generated_voice_id
-        el_created_voice_data = elevenlabs_service.create_voice_from_generated_id(
+        el_created_voice_data = await elevenlabs_service.create_voice_from_generated_id(
             voice_name=request_data.voice_name,
             generated_voice_id=request_data.generated_voice_id,
             description=request_data.voice_description,
@@ -3135,7 +3145,7 @@ async def design_voice_create_from_preview_endpoint(
                 logging.warning(
                     f"Attempting to clean up orphaned ElevenLabs voice {new_el_voice_id} due to error: {e.detail}",
                 )
-                elevenlabs_service.delete_voice(new_el_voice_id)
+                await elevenlabs_service.delete_voice(new_el_voice_id)
             except Exception as e_cleanup:
                 logging.error(
                     f"Failed to cleanup orphaned ElevenLabs voice {new_el_voice_id}: {e_cleanup}",
@@ -3156,7 +3166,7 @@ async def design_voice_create_from_preview_endpoint(
                 f"DB IntegrityError for EL voice {new_el_voice_id}. Attempting EL cleanup.",
             )
             try:
-                elevenlabs_service.delete_voice(new_el_voice_id)
+                await elevenlabs_service.delete_voice(new_el_voice_id)
             except Exception as e_cleanup:
                 logging.error(
                     f"Failed to cleanup EL voice {new_el_voice_id} after DB integrity error: {e_cleanup}",
@@ -3174,7 +3184,7 @@ async def design_voice_create_from_preview_endpoint(
                 f"Generic error after EL voice {new_el_voice_id} might have been created. Attempting EL cleanup.",
             )
             try:
-                elevenlabs_service.delete_voice(new_el_voice_id)
+                await elevenlabs_service.delete_voice(new_el_voice_id)
             except Exception as e_cleanup:
                 logging.error(
                     f"Failed to cleanup EL voice {new_el_voice_id} after generic error: {e_cleanup}",
@@ -3499,7 +3509,7 @@ async def upload_assistant_video(
     description="Generates a new photo using a text prompt and returns the image URL. This action costs credits.",
     tags=["Media"],
 )
-def generate_assistant_photo(
+async def generate_assistant_photo(
     request: Request,
     payload: PhotoGenerateRequest,
     session: Session = Depends(get_db_session),
@@ -3518,7 +3528,7 @@ def generate_assistant_photo(
 
     # 1. Moderate the prompt
     try:
-        moderation_result = openai_service.moderate_text(payload.prompt)
+        moderation_result = await openai_service.moderate_text(payload.prompt)
         if moderation_result.is_nsfw:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -3659,7 +3669,7 @@ async def edit_assistant_photo(
         # 1. Moderate inputs
         try:
             # Moderate text prompt
-            prompt_moderation = openai_service.moderate_text(prompt)
+            prompt_moderation = await openai_service.moderate_text(prompt)
             if prompt_moderation.is_nsfw:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -3667,7 +3677,7 @@ async def edit_assistant_photo(
                 )
 
             # Moderate input image
-            image_analysis = openai_service.analyze_image(
+            image_analysis = await openai_service.analyze_image(
                 image_url=input_image_for_replicate,
             )
             if image_analysis.is_nsfw:
@@ -3847,7 +3857,7 @@ async def animate_video_endpoint(
 
         try:
             # Perform content moderation and analysis
-            image_analysis = openai_service.analyze_image(
+            image_analysis = await openai_service.analyze_image(
                 image_url=final_image_url_for_replicate,
             )
             if not image_analysis.has_human_face:
@@ -3861,7 +3871,7 @@ async def animate_video_endpoint(
                     detail=f"Image moderation failed: The image was flagged as inappropriate. Reason: {image_analysis.reason}",
                 )
 
-            audio_analysis = openai_service.analyze_audio(
+            audio_analysis = await openai_service.analyze_audio(
                 audio_url=final_audio_url_for_replicate,
             )
             # New check for speech content
