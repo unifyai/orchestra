@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestra.db.models.orchestra_models import AuthUser
+from orchestra.web.api.utils.phone_number_validator import validate_phone_number
 
 ASSISTANT_HIRING_APPROVAL_STATUSES = [
     None,
@@ -15,12 +16,101 @@ ASSISTANT_HIRING_APPROVAL_STATUSES = [
     "revoked",
 ]
 
+# Valid IANA timezones
+VALID_TIMEZONES = {
+    "UTC",
+    "America/New_York",
+    "America/Chicago",
+    "America/Denver",
+    "America/Los_Angeles",
+    "America/Phoenix",
+    "America/Anchorage",
+    "Pacific/Honolulu",
+    "Europe/London",
+    "Europe/Paris",
+    "Europe/Berlin",
+    "Asia/Tokyo",
+    "Asia/Shanghai",
+    "Asia/Hong_Kong",
+    "Asia/Singapore",
+    "Australia/Sydney",
+}
+
 
 class AsyncAuthUserDAO:
     """Async Data Access Object for AuthUser operations."""
 
     def __init__(self, session: AsyncSession):
         self.session = session
+
+    async def create(
+        self,
+        email: str,
+        name: Optional[str] = None,
+        last_name: Optional[str] = None,
+        job_title: Optional[str] = None,
+        bio: Optional[str] = None,
+        image: Optional[str] = None,
+        timezone: Optional[str] = None,
+        phone_number: Optional[str] = None,
+        account_type: Optional[str] = None,
+        business_name: Optional[str] = None,
+        tax_id: Optional[str] = None,
+        business_type: Optional[str] = None,
+        business_address_line1: Optional[str] = None,
+        business_address_line2: Optional[str] = None,
+        business_city: Optional[str] = None,
+        business_state: Optional[str] = None,
+        business_country: Optional[str] = None,
+        business_postal_code: Optional[str] = None,
+        tax_exempt: Optional[bool] = None,
+    ) -> None:
+        """Create a new AuthUser."""
+        if timezone is not None and timezone not in VALID_TIMEZONES:
+            raise ValueError(f"'{timezone}' is not a valid IANA timezone.")
+
+        if phone_number is not None:
+            result = validate_phone_number(phone_number)
+            if not result["is_valid"]:
+                raise ValueError(f"Invalid phone number: {result['error']}")
+            phone_number = result["formatted_phone_number"]
+
+        if account_type is not None and account_type not in ["individual", "business"]:
+            raise ValueError("account_type must be 'individual' or 'business'")
+
+        if account_type == "business":
+            if not business_name:
+                raise ValueError("business_name is required for business accounts")
+            if not business_address_line1 or not business_city or not business_country:
+                raise ValueError(
+                    "Complete business address is required for business accounts",
+                )
+
+        self.session.add(
+            AuthUser(
+                email=email,
+                name=name,
+                last_name=last_name,
+                job_title=job_title,
+                bio=bio,
+                image=image,
+                timezone=timezone,
+                phone_number=phone_number,
+                account_type=account_type or "individual",
+                business_name=business_name,
+                tax_id=tax_id,
+                business_type=business_type,
+                business_address_line1=business_address_line1,
+                business_address_line2=business_address_line2,
+                business_city=business_city,
+                business_state=business_state,
+                business_country=business_country,
+                business_postal_code=business_postal_code,
+                tax_exempt=tax_exempt or False,
+                business_verified=False,
+                tax_jurisdiction=None,
+            ),
+        )
 
     async def filter(
         self,

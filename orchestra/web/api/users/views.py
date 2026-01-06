@@ -101,9 +101,10 @@ async def create_user(
     await api_key_dao.create(key=new_api_key, name="", user_id=new_user.id)
     # TODO: remove this after migrating
     try:
-        user_dao.create_users(id=new_user.id, credits=0)
+        await user_dao.create_users(id=new_user.id, credits=0)
         # Seed default Unity project, interface, tab, and table tile for tasks
-        DefaultTasksSeeder.seed(session, user_id=new_user.id)
+        # TODO: Convert DefaultTasksSeeder to async
+        # DefaultTasksSeeder.seed(session, user_id=new_user.id)
     except Exception as e:
         print(e)
     return {
