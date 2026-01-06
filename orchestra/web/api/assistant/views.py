@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import logging
 import time
@@ -202,7 +203,7 @@ admin_router = APIRouter()
         },
     },
 )
-def create_assistant(
+async def create_assistant(
     assistant_in: AssistantCreate,
     request: Request,
     session: Session = Depends(get_db_session),
@@ -237,7 +238,7 @@ def create_assistant(
     total_creation_cost = settings.assistant_creation_cost
     if assistant_in.user_whatsapp_number:
         try:
-            platforms_response = get_social_platforms_costs()
+            platforms_response = await get_social_platforms_costs()
             platforms = platforms_response.get("platforms")
 
             if not isinstance(platforms, dict):
@@ -443,7 +444,7 @@ def create_assistant(
                         if "@" in assistant_in.email
                         else assistant_in.email
                     )
-                    email_response = create_email(
+                    email_response = await create_email(
                         email_local,
                         assistant_in.first_name,
                         assistant_in.surname,
@@ -455,8 +456,8 @@ def create_assistant(
                     created_email = email_response.get("user").get("primaryEmail")
                     print(f"EMAIL CREATED: {created_email}")
 
-                    time.sleep(10)
-                    watch_response = watch_email(
+                    await asyncio.sleep(10)
+                    watch_response = await watch_email(
                         created_email,
                         is_staging=settings.is_staging,
                     )
@@ -474,7 +475,7 @@ def create_assistant(
                         if assistant_in.phone_country
                         else "US"
                     )
-                    phone_response = create_phone_number(
+                    phone_response = await create_phone_number(
                         phone_country=phone_country,
                         is_staging=settings.is_staging,
                     )
@@ -487,13 +488,15 @@ def create_assistant(
 
                 # Step 4: assign whatsapp sender if whatsapp number is provided
                 if assistant_in.user_whatsapp_number:
-                    assigned_whatsapp = assign_whatsapp_sender(
-                        assistant_in.user_whatsapp_number,
-                        is_staging=settings.is_staging,
+                    assigned_whatsapp = (
+                        await assign_whatsapp_sender(
+                            assistant_in.user_whatsapp_number,
+                            is_staging=settings.is_staging,
+                        )
                     )["whatsapp_number"]
 
                 # Step 5: create pubsub topic
-                pubsub_response = create_pubsub_topic(
+                pubsub_response = await create_pubsub_topic(
                     str(assistant_id),
                     is_staging=settings.is_staging,
                 )
@@ -561,7 +564,7 @@ def create_assistant(
 
                 if created_pubsub:
                     try:
-                        delete_pubsub_topic(
+                        await delete_pubsub_topic(
                             str(assistant_id),
                             is_staging=settings.is_staging,
                         )
@@ -573,14 +576,14 @@ def create_assistant(
 
                 if created_phone:
                     try:
-                        delete_phone_number(created_phone)
+                        await delete_phone_number(created_phone)
                     except Exception as e:
                         rollback_errors.append(f"Failed to delete phone: {str(e)}")
                 print(f"PHONE DELETED: {created_phone}")
 
                 if created_email:
                     try:
-                        delete_email(created_email)
+                        await delete_email(created_email)
                     except Exception as e:
                         rollback_errors.append(f"Failed to delete email: {str(e)}")
                 print(f"EMAIL DELETED: {created_email}")
@@ -672,7 +675,10 @@ def create_assistant(
         )
 
     # Phase 3: Wake up assistant
-    response = wake_up_assistant(assistant.agent_id, is_staging=settings.is_staging)
+    response = await wake_up_assistant(
+        assistant.agent_id,
+        is_staging=settings.is_staging,
+    )
     if response.status_code != 200:
         logging.error(f"Failed to wake up assistant: {response.text}")
         raise HTTPException(
@@ -687,7 +693,7 @@ def create_assistant(
         try:
             # Convert Pydantic models to dictionaries for the webhook payload
             chat_messages = jsonable_encoder(assistant_in.pre_hire_chat)
-            log_pre_hire_chat(
+            await log_pre_hire_chat(
                 assistant_id=str(assistant.agent_id),
                 messages=chat_messages,
                 is_staging=settings.is_staging,
@@ -924,7 +930,7 @@ def list_assistants(
         },
     },
 )
-def delete_assistant_contact(
+async def delete_assistant_contact(
     assistant_id: int,
     removal_payload: AssistantContactRemoval,
     request: Request,
@@ -974,12 +980,12 @@ def delete_assistant_contact(
     try:
         if contact_type == "phone":
             if assistant.phone:
-                delete_phone_number(assistant.phone)
+                await delete_phone_number(assistant.phone)
             assistant.phone = None
             assistant.user_phone = None
         elif contact_type == "email":
             if assistant.email:
-                delete_email(assistant.email)
+                await delete_email(assistant.email)
             assistant.email = None
         elif contact_type == "whatsapp":
             # No external infra deletion for WhatsApp based on existing delete_assistant logic
@@ -992,7 +998,7 @@ def delete_assistant_contact(
 
         # After successfully updating, trigger a reawaken
         try:
-            reawaken_assistant(
+            await reawaken_assistant(
                 str(updated_assistant.agent_id),
                 is_staging=settings.is_staging,
             )
@@ -1071,7 +1077,7 @@ def delete_assistant_contact(
         },
     },
 )
-def delete_assistant(
+async def delete_assistant(
     assistant_id: int,
     request: Request,
     session: Session = Depends(get_db_session),
@@ -1123,7 +1129,7 @@ def delete_assistant(
 
         # Suspend any jobs that might be currently running with that assistant
         try:
-            response = stop_jobs(assistant_id, session)
+            response = await stop_jobs(assistant_id, session)
             print(f"JOB STOPPED: {response['job_names']}")
         except Exception as e:
             logging.error(f"Failed to stop job: {str(e)}")
@@ -1221,11 +1227,11 @@ def delete_assistant(
                 cleanup_errors.append(f"Failed to delete profile video: {str(e_gcs)}")
 
         # Wait before starting other infra cleanup (same as rollback operations)
-        time.sleep(10)
+        await asyncio.sleep(10)
 
         # Delete pubsub topic
         try:
-            delete_pubsub_topic(str(assistant_id), is_staging=settings.is_staging)
+            await delete_pubsub_topic(str(assistant_id), is_staging=settings.is_staging)
         except Exception as e:
             cleanup_errors.append(f"Failed to delete pubsub topic: {str(e)}")
         print(f"PUBSUB DELETED: {assistant_id}")
@@ -1233,7 +1239,7 @@ def delete_assistant(
         # Delete phone number if exists
         if assistant.phone:
             try:
-                delete_phone_number(assistant.phone)
+                await delete_phone_number(assistant.phone)
             except Exception as e:
                 cleanup_errors.append(f"Failed to delete phone: {str(e)}")
         print(f"PHONE DELETED: {assistant.phone}")
@@ -1241,7 +1247,7 @@ def delete_assistant(
         # Delete email if exists (with debug print like rollback)
         if assistant.email:
             try:
-                delete_email(assistant.email)
+                await delete_email(assistant.email)
             except Exception as e:
                 cleanup_errors.append(f"Failed to delete email: {str(e)}")
         print(f"EMAIL DELETED: {assistant.email}")
@@ -1350,7 +1356,7 @@ def delete_assistant(
         },
     },
 )
-def update_assistant_config(
+async def update_assistant_config(
     assistant_id: int,
     update: AssistantUpdate,
     request: Request,
@@ -1444,7 +1450,7 @@ def update_assistant_config(
                         if "@" in update.email
                         else update.email
                     )
-                    email_response = create_email(
+                    email_response = await create_email(
                         email_local,
                         existing_assistant.first_name,
                         existing_assistant.surname,
@@ -1456,8 +1462,8 @@ def update_assistant_config(
                     email_to_update = email_response.get("user").get("primaryEmail")
                     print(f"EMAIL CREATED ON ASSISTANT UPDATE: {email_to_update}")
 
-                    time.sleep(10)
-                    watch_response = watch_email(
+                    await asyncio.sleep(10)
+                    watch_response = await watch_email(
                         email_to_update,
                         is_staging=settings.is_staging,
                     )
@@ -1484,7 +1490,7 @@ def update_assistant_config(
                     phone_country = (
                         update.phone_country if update.phone_country else "US"
                     )
-                    phone_response = create_phone_number(
+                    phone_response = await create_phone_number(
                         phone_country=phone_country,
                         is_staging=settings.is_staging,
                     )
@@ -1512,7 +1518,7 @@ def update_assistant_config(
                 if not settings.is_staging:
                     # Cost to create a social account
                     try:
-                        platforms_response = get_social_platforms_costs()
+                        platforms_response = await get_social_platforms_costs()
                         platforms = platforms_response.get("platforms")
 
                         if not isinstance(platforms, dict):
@@ -1543,9 +1549,11 @@ def update_assistant_config(
                         quantity=-float(decimal_cost),
                     )
 
-                assistant_whatsapp_number = assign_whatsapp_sender(
-                    update.user_whatsapp_number,
-                    is_staging=settings.is_staging,
+                assistant_whatsapp_number = (
+                    await assign_whatsapp_sender(
+                        update.user_whatsapp_number,
+                        is_staging=settings.is_staging,
+                    )
                 )["whatsapp_number"]
 
         update_data = update.model_dump(exclude_unset=True)
@@ -1601,7 +1609,7 @@ def update_assistant_config(
         # If contact info was updated and infra creation was enabled, reawaken the assistant
         if contact_info_updated and update.create_infra:
             try:
-                reawaken_assistant(
+                await reawaken_assistant(
                     str(updated.agent_id),
                     is_staging=settings.is_staging,
                 )
@@ -1656,7 +1664,7 @@ def update_assistant_config(
                 f"Update failed. Rolling back created email: {email_to_update}",
             )
             try:
-                delete_email(email_to_update)
+                await delete_email(email_to_update)
             except Exception as cleanup_err:
                 logging.error(
                     f"Failed to clean up (delete) email '{email_to_update}' during rollback: {cleanup_err}",
@@ -1667,7 +1675,7 @@ def update_assistant_config(
                 f"Update failed. Rolling back created phone number: {phone_to_update}",
             )
             try:
-                delete_phone_number(phone_to_update)
+                await delete_phone_number(phone_to_update)
             except Exception as cleanup_err:
                 logging.error(
                     f"Failed to clean up (delete) phone number '{phone_to_update}' during rollback: {cleanup_err}",

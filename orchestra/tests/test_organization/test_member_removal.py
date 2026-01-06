@@ -7,7 +7,7 @@ When a member is removed from an organization, the following should happen:
 4. Shared resources created by the user are kept
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import status
@@ -33,10 +33,13 @@ def mock_assistant_infra_calls(request):
 
     with patch(
         "orchestra.web.api.assistant.views.wake_up_assistant",
+        new_callable=AsyncMock,
     ) as mock_wake_up, patch(
         "orchestra.web.api.assistant.views.reawaken_assistant",
+        new_callable=AsyncMock,
     ) as mock_reawaken, patch(
         "orchestra.web.api.assistant.views.stop_jobs",
+        new_callable=AsyncMock,
     ) as mock_stop_jobs, patch(
         "orchestra.web.api.assistant.views.settings",
     ) as mock_settings:

@@ -1,6 +1,6 @@
 import base64
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import status
@@ -43,8 +43,10 @@ def mock_assistant_infra_calls(request):
 
     with patch(
         "orchestra.web.api.assistant.views.wake_up_assistant",
+        new_callable=AsyncMock,
     ) as mock_wake_up, patch(
         "orchestra.web.api.assistant.views.reawaken_assistant",
+        new_callable=AsyncMock,
     ) as mock_reawaken:
 
         mock_wake_up.return_value = MagicMock(status_code=200)
@@ -1136,7 +1138,7 @@ async def test_create_assistant_creates_assistants_project(
 
 
 @pytest.mark.anyio
-@patch("orchestra.web.api.assistant.views.log_pre_hire_chat")
+@patch("orchestra.web.api.assistant.views.log_pre_hire_chat", new_callable=AsyncMock)
 async def test_create_assistant_with_pre_hire_chat_logs_correctly(
     mock_log_pre_hire_chat,
     client: AsyncClient,
@@ -1284,8 +1286,10 @@ async def test_delete_assistant_contact(client: AsyncClient):
     # Mock the infrastructure deletion calls to avoid external API calls during testing
     with patch(
         "orchestra.web.api.assistant.views.delete_phone_number",
+        new_callable=AsyncMock,
     ) as mock_delete_phone, patch(
         "orchestra.web.api.assistant.views.delete_email",
+        new_callable=AsyncMock,
     ) as mock_delete_email:
 
         # 1. Create a base assistant
@@ -1398,7 +1402,7 @@ async def test_delete_assistant_contact(client: AsyncClient):
 
 
 @pytest.mark.anyio
-@patch("orchestra.web.api.assistant.views.reawaken_assistant")
+@patch("orchestra.web.api.assistant.views.reawaken_assistant", new_callable=AsyncMock)
 async def test_update_assistant_contact_info_reawakens(
     mock_reawaken,
     client: AsyncClient,
@@ -1462,8 +1466,8 @@ async def test_update_assistant_with_invalid_timezone(client: AsyncClient):
 
 
 @pytest.mark.anyio
-@patch("orchestra.web.api.assistant.views.delete_phone_number")
-@patch("orchestra.web.api.assistant.views.reawaken_assistant")
+@patch("orchestra.web.api.assistant.views.delete_phone_number", new_callable=AsyncMock)
+@patch("orchestra.web.api.assistant.views.reawaken_assistant", new_callable=AsyncMock)
 async def test_delete_assistant_contact_reawakens(
     mock_reawaken,
     mock_delete_phone,
