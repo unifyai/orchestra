@@ -1,7 +1,7 @@
 import os
 from typing import List
 
-import requests
+import httpx
 from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
@@ -17,7 +17,7 @@ ADAPTERS_URL = os.environ.get("UNITY_ADAPTERS_URL")
 ADMIN_KEY = os.environ.get("ORCHESTRA_ADMIN_KEY")
 
 
-def create_phone_number(phone_country: str = "US", is_staging: bool = False):
+async def create_phone_number(phone_country: str = "US", is_staging: bool = False):
     """
     Create a phone number for the user by making a POST request to the comms endpoint.
 
@@ -31,19 +31,21 @@ def create_phone_number(phone_country: str = "US", is_staging: bool = False):
     voice_url = ADAPTERS_URL + "/twilio/call"
     sms_url = ADAPTERS_URL + "/twilio/sms"
     status_callback = ADAPTERS_URL + "/twilio/call-status"
-    return requests.post(
-        f"{COMMS_URL}/phone/create",
-        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-        json={
-            "voice_url": voice_url,
-            "sms_url": sms_url,
-            "status_callback": status_callback,
-            "phone_country": phone_country,
-        },
-    ).json()
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{COMMS_URL}/phone/create",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            json={
+                "voice_url": voice_url,
+                "sms_url": sms_url,
+                "status_callback": status_callback,
+                "phone_country": phone_country,
+            },
+        )
+        return response.json()
 
 
-def assign_whatsapp_sender(user_whatsapp_number: str, is_staging: bool = False):
+async def assign_whatsapp_sender(user_whatsapp_number: str, is_staging: bool = False):
     """
     Create a WhatsApp sender by making a POST request to the comms endpoint.
 
@@ -55,17 +57,19 @@ def assign_whatsapp_sender(user_whatsapp_number: str, is_staging: bool = False):
         JSON response from the WhatsApp creation endpoint
     """
     callback_url = ADAPTERS_URL + "/twilio/whatsapp"
-    return requests.post(
-        f"{COMMS_URL}/whatsapp/create",
-        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-        json={
-            "user_whatsapp_number": user_whatsapp_number,
-            "callback_url": callback_url,
-        },
-    ).json()
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{COMMS_URL}/whatsapp/create",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            json={
+                "user_whatsapp_number": user_whatsapp_number,
+                "callback_url": callback_url,
+            },
+        )
+        return response.json()
 
 
-def delete_phone_number(phone_number: str):
+async def delete_phone_number(phone_number: str):
     """
     Delete a phone number by making a DELETE request to the comms endpoint.
 
@@ -75,14 +79,17 @@ def delete_phone_number(phone_number: str):
     Returns:
         JSON response from the phone deletion endpoint
     """
-    return requests.delete(
-        f"{COMMS_URL}/phone/delete",
-        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-        json={"PhoneNumber": phone_number},
-    ).json()
+    async with httpx.AsyncClient() as client:
+        response = await client.request(
+            "DELETE",
+            f"{COMMS_URL}/phone/delete",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            json={"PhoneNumber": phone_number},
+        )
+        return response.json()
 
 
-def create_email(local: str, first_name: str, last_name: str):
+async def create_email(local: str, first_name: str, last_name: str):
     """
     Create an email for the user by making a POST request to the UNIFY_COMMS_URL endpoint.
 
@@ -94,18 +101,20 @@ def create_email(local: str, first_name: str, last_name: str):
     Returns:
         Response from the email creation endpoint
     """
-    return requests.post(
-        f"{COMMS_URL}/gmail/create",
-        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-        json={
-            "local": local,
-            "first_name": first_name,
-            "last_name": last_name,
-        },
-    ).json()
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{COMMS_URL}/gmail/create",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            json={
+                "local": local,
+                "first_name": first_name,
+                "last_name": last_name,
+            },
+        )
+        return response.json()
 
 
-def delete_email(email: str):
+async def delete_email(email: str):
     """
     Delete an email by making a DELETE request to the comms endpoint.
 
@@ -115,14 +124,17 @@ def delete_email(email: str):
     Returns:
         JSON response from the email deletion endpoint
     """
-    return requests.delete(
-        f"{COMMS_URL}/gmail/delete",
-        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-        json={"primary_email": email},
-    ).json()
+    async with httpx.AsyncClient() as client:
+        response = await client.request(
+            "DELETE",
+            f"{COMMS_URL}/gmail/delete",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            json={"primary_email": email},
+        )
+        return response.json()
 
 
-def watch_email(email: str, is_staging: bool = False):
+async def watch_email(email: str, is_staging: bool = False):
     """
     Watch an email by making a POST request to the comms endpoint.
 
@@ -134,19 +146,21 @@ def watch_email(email: str, is_staging: bool = False):
         JSON response from the email watch endpoint
     """
     print(f"Watching email: {email}")
-    return requests.post(
-        f"{COMMS_URL}/gmail/watch",
-        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-        json={
-            "primary_email": email,
-            "topic": "gmail-notifications-staging"
-            if is_staging
-            else "gmail-notifications",
-        },
-    ).json()
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{COMMS_URL}/gmail/watch",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            json={
+                "primary_email": email,
+                "topic": "gmail-notifications-staging"
+                if is_staging
+                else "gmail-notifications",
+            },
+        )
+        return response.json()
 
 
-def create_pubsub_topic(assistant_id: str, is_staging: bool = False):
+async def create_pubsub_topic(assistant_id: str, is_staging: bool = False):
     """
     Create a pubsub topic for the assistant by making a POST request to the comms endpoint.
 
@@ -158,14 +172,16 @@ def create_pubsub_topic(assistant_id: str, is_staging: bool = False):
         JSON response from the pubsub topic creation endpoint
     """
     topic_name = f"unity-{assistant_id}" + ("-staging" if is_staging else "")
-    return requests.post(
-        f"{COMMS_URL}/infra/pubsub/topic",
-        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-        data={"topic_name": topic_name},
-    ).json()
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{COMMS_URL}/infra/pubsub/topic",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            data={"topic_name": topic_name},
+        )
+        return response.json()
 
 
-def delete_pubsub_topic(assistant_id: str, is_staging: bool = False):
+async def delete_pubsub_topic(assistant_id: str, is_staging: bool = False):
     """
     Delete a pubsub topic for the assistant by making a DELETE request to the comms endpoint.
 
@@ -177,21 +193,26 @@ def delete_pubsub_topic(assistant_id: str, is_staging: bool = False):
         JSON response from the pubsub topic deletion endpoint
     """
     topic_name = f"unity-{assistant_id}" + ("-staging" if is_staging else "")
-    return requests.delete(
-        f"{COMMS_URL}/infra/pubsub/topic",
-        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-        data={"topic_name": topic_name},
-    ).json()
+    async with httpx.AsyncClient() as client:
+        response = await client.request(
+            "DELETE",
+            f"{COMMS_URL}/infra/pubsub/topic",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            data={"topic_name": topic_name},
+        )
+        return response.json()
 
 
-def get_social_platforms_costs():
+async def get_social_platforms_costs():
     """
     Fetch available social platforms and their costs.
     """
-    return requests.get(
-        f"{COMMS_URL}/social/available-platforms",
-        headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-    ).json()
+    async with httpx.AsyncClient() as client:
+        response = await client.get(
+            f"{COMMS_URL}/social/available-platforms",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+        )
+        return response.json()
 
 
 def get_running_jobs(assistant_id: str, session: Session) -> List[str]:
@@ -245,7 +266,7 @@ def get_running_jobs(assistant_id: str, session: Session) -> List[str]:
     return job_names
 
 
-def stop_jobs(assistant_id: str, session: Session):
+async def stop_jobs(assistant_id: str, session: Session):
     """
     Stop a job by making a POST request to the comms endpoint.
 
@@ -256,25 +277,27 @@ def stop_jobs(assistant_id: str, session: Session):
     job_names = get_running_jobs(assistant_id, session)
     # if running job found, stop it
     if len(job_names) > 0:
-        response = requests.post(
-            f"{COMMS_URL}/infra/job/stop",
-            data={"job_name": job_names[0]},
-            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
-        )
-        response.raise_for_status()
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{COMMS_URL}/infra/job/stop",
+                data={"job_name": job_names[0]},
+                headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            )
+            response.raise_for_status()
 
     return {"success": True, "job_names": job_names}
 
 
-def wake_up_assistant(assistant_id: str, is_staging: bool = False):
+async def wake_up_assistant(assistant_id: str, is_staging: bool = False):
     wake_up_url = ADAPTERS_URL + "/assistant/wakeup"
-    return requests.post(
-        wake_up_url,
-        data={"assistant_id": assistant_id},
-    )
+    async with httpx.AsyncClient() as client:
+        return await client.post(
+            wake_up_url,
+            data={"assistant_id": assistant_id},
+        )
 
 
-def reawaken_assistant(assistant_id: str, is_staging: bool = False):
+async def reawaken_assistant(assistant_id: str, is_staging: bool = False):
     """
     Triggers the assistant update webhook to reawaken or sync the assistant.
     Args:
@@ -284,15 +307,20 @@ def reawaken_assistant(assistant_id: str, is_staging: bool = False):
         The JSON response from the webhook.
     """
     reawaken_url = ADAPTERS_URL + "/assistant/update"
-    response = requests.post(
-        reawaken_url,
-        data={"assistant_id": assistant_id},
-    )
-    response.raise_for_status()  # Raise an exception for bad status codes
-    return response.json()
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            reawaken_url,
+            data={"assistant_id": assistant_id},
+        )
+        response.raise_for_status()  # Raise an exception for bad status codes
+        return response.json()
 
 
-def log_pre_hire_chat(assistant_id: str, messages: list, is_staging: bool = False):
+async def log_pre_hire_chat(
+    assistant_id: str,
+    messages: list,
+    is_staging: bool = False,
+):
     """
     Logs pre-hire chat messages for an assistant using the webhook.
     Args:
@@ -304,19 +332,20 @@ def log_pre_hire_chat(assistant_id: str, messages: list, is_staging: bool = Fals
     """
     log_pre_hire_chat_url = ADAPTERS_URL + "/unity/pre-hire"
     payload = {"assistant_id": assistant_id, "body": messages}
-    response = requests.post(
-        log_pre_hire_chat_url,
-        headers={
-            "Authorization": f"Bearer {ADMIN_KEY}",
-            "Content-Type": "application/json",
-        },
-        json=payload,
-    )
-    response.raise_for_status()
-    return {"status": "success"}
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            log_pre_hire_chat_url,
+            headers={
+                "Authorization": f"Bearer {ADMIN_KEY}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+        response.raise_for_status()
+        return {"status": "success"}
 
 
-def trigger_contact_sync(assistant_id: int) -> dict:
+async def trigger_contact_sync(assistant_id: int) -> dict:
     """
     Trigger contact sync for an assistant via the system-event webhook.
 
@@ -327,17 +356,18 @@ def trigger_contact_sync(assistant_id: int) -> dict:
         JSON response from the webhook
     """
     url = f"{ADAPTERS_URL}/unity/system-event"
-    response = requests.post(
-        url,
-        headers={
-            "Authorization": f"Bearer {ADMIN_KEY}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "assistant_id": assistant_id,
-            "event_type": "sync_contacts",
-            "message": "Contacts sync triggered.",
-        },
-    )
-    response.raise_for_status()
-    return response.json()
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {ADMIN_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "assistant_id": assistant_id,
+                "event_type": "sync_contacts",
+                "message": "Contacts sync triggered.",
+            },
+        )
+        response.raise_for_status()
+        return response.json()

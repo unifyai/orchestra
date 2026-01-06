@@ -5,7 +5,7 @@ Tests the automatic synchronization of User/Assistant profile fields
 (timezone, bio) to Contact logs in the Assistants project.
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
@@ -29,10 +29,13 @@ def mock_assistant_infra_calls(request):
 
     with patch(
         "orchestra.web.api.assistant.views.wake_up_assistant",
+        new_callable=AsyncMock,
     ) as mock_wake_up, patch(
         "orchestra.web.api.assistant.views.reawaken_assistant",
+        new_callable=AsyncMock,
     ) as mock_reawaken, patch(
         "orchestra.web.api.assistant.views.stop_jobs",
+        new_callable=AsyncMock,
     ) as mock_stop_jobs, patch(
         "orchestra.web.api.assistant.views.settings",
     ) as mock_settings:
