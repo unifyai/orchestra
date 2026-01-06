@@ -5,8 +5,11 @@ from fastapi.param_functions import Depends
 from starlette import status
 
 from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
+
+# Async DAOs
+from orchestra.db.dao.async_custom_api_key_dao import AsyncCustomApiKeyDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpoint, CustomEndpointDAO
-from orchestra.db.dependencies import get_db_session
+from orchestra.db.dependencies import get_async_db_session, get_db_session
 from orchestra.web.api.custom_endpoints.schema import CustomEndpointModelResponse
 from orchestra.web.api.utils.http_responses import not_found
 
@@ -43,7 +46,7 @@ VALID_CUSTOM_PROVIDERS = (
         },
     },
 )
-def create_custom_endpoint(
+async def create_custom_endpoint(
     request_fastapi: Request,
     name: str = Query(
         description="The endpoint name for your custom endpoint, "
@@ -73,7 +76,7 @@ def create_custom_endpoint(
         ),
         example="llama-3.1-8b-finetuned",
     ),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> Dict[str, str]:
     """
     Creates a custom endpoint. This endpoint must either be a fine-tuned model from one
@@ -86,7 +89,7 @@ def create_custom_endpoint(
 
     """
     custom_endpoint_dao = CustomEndpointDAO(session)
-    custom_api_key_dao = CustomApiKeyDAO(session)
+    custom_api_key_dao = AsyncCustomApiKeyDAO(session)
     user_id = request_fastapi.state.user_id
     if "@" not in name:
         raise HTTPException(
@@ -103,7 +106,7 @@ def create_custom_endpoint(
             f"{VALID_CUSTOM_PROVIDERS}, but found {provider}.",
         )
     try:
-        key_id = custom_api_key_dao.filter(user_id=user_id, key=key_name)[0].id
+        key_id = await custom_api_key_dao.filter(user_id=user_id, key=key_name)[0].id
     except Exception:
         raise not_found("Custom API Key")
     custom_endpoint_dao.create_custom_endpoint(
@@ -137,13 +140,13 @@ def create_custom_endpoint(
         },
     },
 )
-def delete_custom_endpoint(
+async def delete_custom_endpoint(
     request_fastapi: Request,
     name: str = Query(
         description="Name of the custom endpoint to delete.",
         example="endpoint1",
     ),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> Dict[str, str]:
     """
     Deletes a custom endpoint from your account.
@@ -151,11 +154,11 @@ def delete_custom_endpoint(
     """
     user_id = request_fastapi.state.user_id
     custom_endpoint_dao = CustomEndpointDAO(session)
-    existing_endpoint = custom_endpoint_dao.filter(user_id=user_id, name=name)
+    existing_endpoint = await custom_endpoint_dao.filter(user_id=user_id, name=name)
     if not existing_endpoint:
         raise not_found("Custom endpoint")
 
-    custom_endpoint_dao.delete(
+    await custom_endpoint_dao.delete(
         user_id=user_id,
         name=name,
     )
@@ -183,7 +186,7 @@ def delete_custom_endpoint(
         },
     },
 )
-def rename_custom_endpoint(
+async def rename_custom_endpoint(
     request_fastapi: Request,
     name: str = Query(
         description="Name of the custom endpoint to be updated.",
@@ -193,7 +196,7 @@ def rename_custom_endpoint(
         description="New name for the custom endpoint.",
         example="name2",
     ),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> Dict[str, str]:
     """
     Renames a custom endpoint in your account.
@@ -201,7 +204,7 @@ def rename_custom_endpoint(
     """
     user_id = request_fastapi.state.user_id
     custom_endpoint_dao = CustomEndpointDAO(session)
-    existing_endpoint = custom_endpoint_dao.filter(user_id=user_id, name=name)
+    existing_endpoint = await custom_endpoint_dao.filter(user_id=user_id, name=name)
     if not existing_endpoint:
         raise not_found("Custom endpoint")
 
@@ -240,9 +243,9 @@ def rename_custom_endpoint(
         },
     },
 )
-def list_custom_endpoints(
+async def list_custom_endpoints(
     request_fastapi: Request,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[CustomEndpoint]:
     """
     Returns a list of the available custom endpoints.

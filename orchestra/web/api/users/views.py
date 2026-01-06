@@ -28,6 +28,16 @@ from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.users_dao import UsersDAO
+
+# Async DAOs
+from orchestra.db.dao.async_account_dao import AsyncAccountDAO
+from orchestra.db.dao.async_api_key_dao import AsyncApiKeyDAO
+from orchestra.db.dao.async_context_dao import AsyncContextDAO
+from orchestra.db.dao.async_organization_dao import AsyncOrganizationDAO
+from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
+from orchestra.db.dao.async_project_dao import AsyncProjectDAO
+from orchestra.db.dao.async_resource_access_dao import AsyncResourceAccessDAO
+from orchestra.db.dao.async_role_dao import AsyncRoleDAO
 from orchestra.db.dependencies import get_async_db_session, get_db_session
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
 from orchestra.services.user_account_cleanup_service import UserAccountCleanupService
@@ -82,13 +92,13 @@ logger = logging.getLogger(__name__)
 @admin_router.post("/auth-user")
 async def create_user(
     user: UserRequest,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     auth_user_dao = AuthUserDAO(session)
-    api_key_dao = ApiKeyDAO(session)
-    user_dao = UsersDAO(session)
+    api_key_dao = AsyncApiKeyDAO(session)
+    user_dao = AsyncUsersDAO(session)
 
-    auth_user_dao.create(
+    await auth_user_dao.create(
         email=user.email,
         name=user.name,
         last_name=user.last_name,
@@ -98,11 +108,11 @@ async def create_user(
         timezone=user.timezone,
         phone_number=user.phone_number,
     )
-    user_row = auth_user_dao.filter(email=user.email)
+    user_row = await auth_user_dao.filter(email=user.email)
     new_user = user_row[0][0]
 
     new_api_key = generate_key()
-    api_key_dao.create(key=new_api_key, name="", user_id=new_user.id)
+    await api_key_dao.create(key=new_api_key, name="", user_id=new_user.id)
     # TODO: remove this after migrating
     try:
         user_dao.create_users(id=new_user.id, credits=0)
@@ -124,36 +134,36 @@ async def create_user(
 @admin_router.get("/auth-user/by-user-id")
 async def get_user(
     user_id: str,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     auth_user_dao = AuthUserDAO(session)
-    api_key_dao = ApiKeyDAO(session)
-    organization_member_dao = OrganizationMemberDAO(session)
-    organization_dao = OrganizationDAO(session)
-    role_dao = RoleDAO(session)
+    api_key_dao = AsyncApiKeyDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    organization_dao = AsyncOrganizationDAO(session)
+    role_dao = AsyncRoleDAO(session)
 
-    user = auth_user_dao.filter(id=user_id)
+    user = await auth_user_dao.filter(id=user_id)
     if not user:
         raise not_found("User ID")
     user_instance = user[0][0]
 
-    api_key = api_key_dao.filter(user_id=user[0][0].id)
+    api_key = await api_key_dao.filter(user_id=user[0][0].id)
     api_key_instance = api_key[0][0]
 
-    org_members = organization_member_dao.filter(user_id=user[0][0].id)
+    org_members = await organization_member_dao.filter(user_id=user[0][0].id)
     org_name, org_role_id, org_role_name = None, None, None
     if org_members:
         org_role_id = org_members[0][0].role_id
-        role = role_dao.get(org_role_id)
+        role = await role_dao.get(org_role_id)
         org_role_name = role.name if role else None
-        org = organization_dao.filter(id=org_members[0][0].organization_id)
+        org = await organization_dao.filter(id=org_members[0][0].organization_id)
         org_name = org[0][0].name
 
     # Build organizations list with org-specific API keys
     organizations = []
     for member_row in org_members:
         member = member_row[0]
-        org_result = organization_dao.get(member.organization_id)
+        org_result = await organization_dao.get(member.organization_id)
         if org_result:
             # Get org-specific API key for this user+org
             org_keys = api_key_dao.get_organization_keys(
@@ -162,7 +172,7 @@ async def get_user(
             )
             org_api_key = org_keys[0][0].key if org_keys else None
             # Get role name for this membership
-            member_role = role_dao.get(member.role_id)
+            member_role = await role_dao.get(member.role_id)
             member_role_name = member_role.name if member_role else None
             organizations.append(
                 {
@@ -202,36 +212,36 @@ async def get_user(
 @admin_router.get("/auth-user/by-email")
 async def get_user_by_email(
     email: str,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     auth_user_dao = AuthUserDAO(session)
-    api_key_dao = ApiKeyDAO(session)
-    organization_member_dao = OrganizationMemberDAO(session)
-    organization_dao = OrganizationDAO(session)
-    role_dao = RoleDAO(session)
+    api_key_dao = AsyncApiKeyDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    organization_dao = AsyncOrganizationDAO(session)
+    role_dao = AsyncRoleDAO(session)
 
-    user = auth_user_dao.filter(email=email)
+    user = await auth_user_dao.filter(email=email)
     if not user:
         return None
     user_instance = user[0][0]
 
-    api_key = api_key_dao.filter(user_id=user[0][0].id)
+    api_key = await api_key_dao.filter(user_id=user[0][0].id)
     api_key_instance = api_key[0][0]
 
-    org_members = organization_member_dao.filter(user_id=user[0][0].id)
+    org_members = await organization_member_dao.filter(user_id=user[0][0].id)
     org_name, org_role_id, org_role_name = None, None, None
     if org_members:
         org_role_id = org_members[0][0].role_id
-        role = role_dao.get(org_role_id)
+        role = await role_dao.get(org_role_id)
         org_role_name = role.name if role else None
-        org = organization_dao.filter(id=org_members[0][0].organization_id)
+        org = await organization_dao.filter(id=org_members[0][0].organization_id)
         org_name = org[0][0].name
 
     # Build organizations list with org-specific API keys
     organizations = []
     for member_row in org_members:
         member = member_row[0]
-        org_result = organization_dao.get(member.organization_id)
+        org_result = await organization_dao.get(member.organization_id)
         if org_result:
             # Get org-specific API key for this user+org
             org_keys = api_key_dao.get_organization_keys(
@@ -240,7 +250,7 @@ async def get_user_by_email(
             )
             org_api_key = org_keys[0][0].key if org_keys else None
             # Get role name for this membership
-            member_role = role_dao.get(member.role_id)
+            member_role = await role_dao.get(member.role_id)
             member_role_name = member_role.name if member_role else None
             organizations.append(
                 {
@@ -281,36 +291,36 @@ async def get_user_by_email(
 async def get_user_by_account(
     provider_account_id: str,
     provider: str,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
-    account_dao = AccountDAO(session)
+    account_dao = AsyncAccountDAO(session)
     auth_user_dao = AuthUserDAO(session)
-    api_key_dao = ApiKeyDAO(session)
-    organization_member_dao = OrganizationMemberDAO(session)
-    organization_dao = OrganizationDAO(session)
-    role_dao = RoleDAO(session)
+    api_key_dao = AsyncApiKeyDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    organization_dao = AsyncOrganizationDAO(session)
+    role_dao = AsyncRoleDAO(session)
 
-    account = account_dao.filter(
+    account = await account_dao.filter(
         provider_account_id=provider_account_id,
         provider=provider,
     )
     if not account:
         return None
-    user = auth_user_dao.filter(id=account[0][0].user_id)
+    user = await auth_user_dao.filter(id=account[0][0].user_id)
     if not user:
         return None
     user_instance = user[0][0]
 
-    api_key = api_key_dao.filter(user_id=user[0][0].id)
+    api_key = await api_key_dao.filter(user_id=user[0][0].id)
     api_key_instance = api_key[0][0]
 
-    org_member = organization_member_dao.filter(user_id=user[0][0].id)
+    org_member = await organization_member_dao.filter(user_id=user[0][0].id)
     org_name, org_role_id, org_role_name = None, None, None
     if org_member:
         org_role_id = org_member[0][0].role_id
-        role = role_dao.get(org_role_id)
+        role = await role_dao.get(org_role_id)
         org_role_name = role.name if role else None
-        org = organization_dao.filter(id=org_member[0][0].organization_id)
+        org = await organization_dao.filter(id=org_member[0][0].organization_id)
         org_name = org[0][0].name
     return {
         "id": user_instance.id,
@@ -339,13 +349,13 @@ async def get_user_by_account(
 @admin_router.put("/auth-user")
 async def update_user(
     updated_user: UserRequest,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     auth_user_dao = AuthUserDAO(session)
-    user = auth_user_dao.filter(id=updated_user.user_id)
+    user = await auth_user_dao.filter(id=updated_user.user_id)
     if not user:
         raise not_found("User")
-    auth_user_dao.update(
+    await auth_user_dao.update(
         id=updated_user.user_id,
         name=updated_user.name,
         last_name=updated_user.last_name,
@@ -364,7 +374,7 @@ async def delete_user(
         False,
         description="Skip organization ownership check (use with caution)",
     ),
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Delete a user account and all associated data (admin endpoint).
@@ -390,10 +400,10 @@ async def delete_user(
 @admin_router.post("/account")
 async def link_account(
     account: AccountRequest,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
-    account_dao = AccountDAO(session)
-    account_dao.create(
+    account_dao = AsyncAccountDAO(session)
+    await account_dao.create(
         user_id=account.userId,
         provider=account.provider,
         provider_type="oauth",  # TODO: This can most likely be removed look into it
@@ -413,7 +423,7 @@ async def unlink_account(account: AccountRequest):  # TODO, when would this be u
 ### Not related to next-auth
 
 
-def generate_key(size=32):
+async def generate_key(size=32):
     buffer = secrets.token_bytes(size)
     key = base64.b64encode(buffer).decode("utf-8")
     # Replace forward slashes with hyphens to avoid issues with URL encoding
@@ -424,10 +434,10 @@ def generate_key(size=32):
 async def set_user_tier(
     user_id: str,
     tier: str,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     auth_user_dao = AuthUserDAO(session)
-    user = auth_user_dao.filter(id=user_id)
+    user = await auth_user_dao.filter(id=user_id)
     if not user:
         raise not_found("User ID")
     if tier not in ["developer", "professional", "enterprise"]:
@@ -435,31 +445,31 @@ async def set_user_tier(
             status_code=400,
             detail="Tier must be one of developer, professional, or enterprise.",
         )
-    auth_user_dao.update(id=user_id, tier=tier)
+    await auth_user_dao.update(id=user_id, tier=tier)
     return "User tier updated successfully!"
 
 
 @admin_router.put("/auth-user/quotas/reset")
 async def reset_user_quotas(
     user_id: str,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     auth_user_dao = AuthUserDAO(session)
-    user = auth_user_dao.filter(id=user_id)
+    user = await auth_user_dao.filter(id=user_id)
     if not user:
         raise not_found("User ID")
-    auth_user_dao.update(id=user_id, queries_enabled=True, evaluations_enabled=True)
+    await auth_user_dao.update(id=user_id, queries_enabled=True, evaluations_enabled=True)
     return "User quotas reset successfully!"
 
 
 @admin_router.put("/auth-user/quotas/reset/all")
 async def reset_all_user_quotas(
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     auth_user_dao = AuthUserDAO(session)
-    users = auth_user_dao.filter()
+    users = await auth_user_dao.filter()
     for user in users:
-        auth_user_dao.update(
+        await auth_user_dao.update(
             id=user[0].id,
             queries_enabled=True,
             evaluations_enabled=True,
@@ -470,9 +480,9 @@ async def reset_all_user_quotas(
 @admin_router.post("/auth-user/freeze")
 async def freeze_account(
     request: FreezeAccountRequest,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
-    users_dao = UsersDAO(session)
+    users_dao = AsyncUsersDAO(session)
     users_dao.set_frozen_status(request.user_id, request.freeze)
     status_str = "frozen" if request.freeze else "unfrozen"
     return {"message": f"Account {status_str} successfully!"}
@@ -481,9 +491,9 @@ async def freeze_account(
 @admin_router.post("/auth-user/freeze-by-stripe-id")
 async def freeze_account_by_stripe_id(
     request: FreezeAccountByStripeIdRequest,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
-    users_dao = UsersDAO(session)
+    users_dao = AsyncUsersDAO(session)
     user = users_dao.get_user_by_stripe_id(request.stripe_id)
     if not user:
         raise not_found("User with specified Stripe ID")
@@ -497,11 +507,11 @@ async def freeze_account_by_stripe_id(
 @admin_router.put("/auth-user/stripe-id")
 async def set_stripe_id_for_user(
     request: StripeIdRequest,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
-    users_dao = UsersDAO(session)
+    users_dao = AsyncUsersDAO(session)
     users_dao.set_stripe_customer_id(request.user_id, request.stripe_id)
-    session.commit()
+    await session.commit()
     return {"message": f"Stripe ID set for user {request.user_id}"}
 
 
@@ -518,10 +528,10 @@ async def is_account_frozen(
 @admin_router.get("/api_key/list")
 async def list_user_api_keys(
     user_id: str,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
-    api_key_dao = ApiKeyDAO(session)
-    keys = api_key_dao.filter(user_id=user_id)
+    api_key_dao = AsyncApiKeyDAO(session)
+    keys = await api_key_dao.filter(user_id=user_id)
     if not keys:
         raise not_found("API Keys")
     return keys
@@ -532,11 +542,11 @@ async def create_api_key(
     name: str,
     user_id: Optional[str] = None,
     organization_id: Optional[int] = None,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
-    api_key_dao = ApiKeyDAO(session)
+    api_key_dao = AsyncApiKeyDAO(session)
     # TODO: This only allows for one api key at the time
-    existing_api_key = api_key_dao.filter(
+    existing_api_key = await api_key_dao.filter(
         user_id=user_id,
         organization_id=organization_id,
     )
@@ -546,7 +556,7 @@ async def create_api_key(
             detail="This user/organization already has an API key.",
         )
     new_api_key = generate_key()
-    api_key_dao.create(
+    await api_key_dao.create(
         key=new_api_key,
         name=name,
         user_id=user_id,
@@ -559,16 +569,16 @@ async def create_api_key(
 async def reset_api_key(
     user_id: Optional[str] = None,
     organization_id: Optional[int] = None,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     # TODO: This deletes all previous key from a user/org and creates a new one,
     # this will need to be changed once multiple keys are enabled.
     # delete prev key
-    api_key_dao = ApiKeyDAO(session)
-    old_api_key = api_key_dao.filter(user_id=user_id, organization_id=organization_id)
-    api_key_dao.delete(id=old_api_key[0][0].id)
+    api_key_dao = AsyncApiKeyDAO(session)
+    old_api_key = await api_key_dao.filter(user_id=user_id, organization_id=organization_id)
+    await api_key_dao.delete(id=old_api_key[0][0].id)
     new_api_key = generate_key()
-    api_key_dao.create(
+    await api_key_dao.create(
         key=new_api_key,
         name="",
         user_id=user_id,
@@ -580,7 +590,7 @@ async def reset_api_key(
 @admin_router.post("/api-keys/{key_id}/regenerate")
 async def regenerate_api_key(
     key_id: int,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Regenerate an API key by ID.
@@ -589,10 +599,10 @@ async def regenerate_api_key(
     Works for both personal and organization API keys.
     Returns the full new key.
     """
-    api_key_dao = ApiKeyDAO(session)
+    api_key_dao = AsyncApiKeyDAO(session)
 
     # Get existing key
-    keys = api_key_dao.filter(id=key_id)
+    keys = await api_key_dao.filter(id=key_id)
     if not keys:
         raise HTTPException(
             status_code=404,
@@ -607,17 +617,17 @@ async def regenerate_api_key(
     name = old_key.name
 
     # Delete old key
-    api_key_dao.delete(key_id)
+    await api_key_dao.delete(key_id)
 
     # Create new key with same metadata
     new_api_key = generate_key()
-    api_key_dao.create(
+    await api_key_dao.create(
         key=new_api_key,
         name=name,
         user_id=user_id,
         organization_id=organization_id,
     )
-    session.commit()
+    await session.commit()
 
     return {
         "api_key": new_api_key,
@@ -632,7 +642,7 @@ async def create_organization_api_key(
     organization_id: int,
     name: str = "",
     custom_key: Optional[str] = None,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Create an organization-specific API key for a user.
@@ -647,12 +657,12 @@ async def create_organization_api_key(
         custom_key: Optional custom API key value. If not provided, a random key
                     will be generated. Must be unique across all API keys.
     """
-    api_key_dao = ApiKeyDAO(session)
-    org_dao = OrganizationDAO(session)
-    org_member_dao = OrganizationMemberDAO(session)
+    api_key_dao = AsyncApiKeyDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    org_member_dao = AsyncOrganizationMemberDAO(session)
 
     # Verify organization exists
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=404,
@@ -660,7 +670,7 @@ async def create_organization_api_key(
         )
 
     # Verify user is a member of the organization
-    memberships = org_member_dao.filter(
+    memberships = await org_member_dao.filter(
         organization_id=organization_id,
         user_id=user_id,
     )
@@ -671,7 +681,7 @@ async def create_organization_api_key(
         )
 
     # Check if org API key already exists for this user+org
-    existing_key = api_key_dao.filter(
+    existing_key = await api_key_dao.filter(
         user_id=user_id,
         organization_id=organization_id,
     )
@@ -683,7 +693,7 @@ async def create_organization_api_key(
 
     # If custom key provided, verify it doesn't already exist
     if custom_key:
-        existing_custom = api_key_dao.filter(key=custom_key)
+        existing_custom = await api_key_dao.filter(key=custom_key)
         if existing_custom:
             raise HTTPException(
                 status_code=400,
@@ -692,13 +702,13 @@ async def create_organization_api_key(
 
     # Create organization API key (use custom key or generate one)
     new_api_key = custom_key or generate_key()
-    api_key_dao.create(
+    await api_key_dao.create(
         key=new_api_key,
         name=name or f"org_{org.name}",
         user_id=user_id,
         organization_id=organization_id,
     )
-    session.commit()
+    await session.commit()
 
     return {"api_key": new_api_key, "organization_id": organization_id}
 
@@ -706,12 +716,12 @@ async def create_organization_api_key(
 @admin_router.get("/organization/list")
 async def list_organization(
     name: str,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
-    organization_dao = OrganizationDAO(session)
-    organization_member_dao = OrganizationMemberDAO(session)
+    organization_dao = AsyncOrganizationDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
 
-    org = organization_dao.filter(name=name)
+    org = await organization_dao.filter(name=name)
     if not org:
         raise not_found("Organization")
     org_members = organization_member_dao.list_members(name=name)
@@ -722,13 +732,13 @@ async def list_organization(
 async def create_organization(
     name: str,
     owner_id: Optional[str] = None,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
-    organization_dao = OrganizationDAO(session)
-    organization_member_dao = OrganizationMemberDAO(session)
-    role_dao = RoleDAO(session)
+    organization_dao = AsyncOrganizationDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    role_dao = AsyncRoleDAO(session)
 
-    existing_org = organization_dao.filter(owner_id=owner_id)
+    existing_org = await organization_dao.filter(owner_id=owner_id)
     if existing_org:
         raise HTTPException(
             status_code=400,
@@ -740,9 +750,9 @@ async def create_organization(
     if not owner_role:
         raise HTTPException(status_code=500, detail="Owner system role not found")
 
-    organization_dao.create(name=name, owner_id=owner_id)
-    new_org = organization_dao.filter(owner_id=owner_id)
-    organization_member_dao.create(
+    await organization_dao.create(name=name, owner_id=owner_id)
+    new_org = await organization_dao.filter(owner_id=owner_id)
+    await organization_member_dao.create(
         organization_id=new_org[0][0].id,
         user_id=owner_id,
         role_id=owner_role.id,
@@ -755,17 +765,17 @@ async def add_organization_member(
     name: str,
     new_member_email: str,
     role_id: Optional[int] = None,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     auth_user_dao = AuthUserDAO(session)
-    organization_dao = OrganizationDAO(session)
-    organization_member_dao = OrganizationMemberDAO(session)
-    role_dao = RoleDAO(session)
+    organization_dao = AsyncOrganizationDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    role_dao = AsyncRoleDAO(session)
 
-    new_user = auth_user_dao.filter(email=new_member_email)
+    new_user = await auth_user_dao.filter(email=new_member_email)
     if not new_user:
         raise not_found("User")
-    org = organization_dao.filter(name=name)
+    org = await organization_dao.filter(name=name)
     if not org:
         raise not_found("Organization")
 
@@ -776,17 +786,17 @@ async def add_organization_member(
             raise HTTPException(status_code=500, detail="Member system role not found")
         role_id = member_role.id
 
-    organization_member_dao.create(
+    await organization_member_dao.create(
         organization_id=org[0][0].id,
         user_id=new_user[0][0].id,
         role_id=role_id,
     )
 
     # Grant Member access to Assistants project if it exists
-    context_dao = ContextDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    resource_access_dao = ResourceAccessDAO(session)
-    assistants_projects = project_dao.filter(
+    resource_access_dao = AsyncResourceAccessDAO(session)
+    assistants_projects = await project_dao.filter(
         organization_id=org[0][0].id,
         name="Assistants",
     )
@@ -810,27 +820,27 @@ async def update_organization_member_role(
     organization: str,
     member_email: str,
     role_id: int,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     auth_user_dao = AuthUserDAO(session)
-    organization_dao = OrganizationDAO(session)
-    organization_member_dao = OrganizationMemberDAO(session)
-    role_dao = RoleDAO(session)
+    organization_dao = AsyncOrganizationDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    role_dao = AsyncRoleDAO(session)
 
     # Validate role exists
-    role = role_dao.get(role_id)
+    role = await role_dao.get(role_id)
     if not role:
         raise HTTPException(status_code=404, detail="Role not found")
     if not role.is_system_role:
         raise HTTPException(status_code=400, detail="Only system roles can be assigned")
 
-    user = auth_user_dao.filter(email=member_email)
+    user = await auth_user_dao.filter(email=member_email)
     if not user:
         raise not_found("User")
-    org = organization_dao.filter(name=organization)
+    org = await organization_dao.filter(name=organization)
     if not org:
         raise not_found("Organization")
-    org_member = organization_member_dao.filter(
+    org_member = await organization_member_dao.filter(
         user_id=user[0][0].id,
         organization_id=org[0][0].id,
     )
@@ -957,7 +967,7 @@ async def get_user_business_status(
 async def update_user_account_type(
     request: Request,
     body: UpdateAccountTypeRequest,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """Update user account type (individual vs business)."""
     user_id = getattr(request.state, "user_id", None)
@@ -1000,7 +1010,7 @@ async def update_user_account_type(
 async def update_user_business_info(
     request: Request,
     body: UpdateBusinessInfoRequest,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """Update business information for business accounts."""
     user_id = getattr(request.state, "user_id", None)
@@ -1043,7 +1053,7 @@ async def update_user_business_info(
 @admin_router.post("/auth-user/verify-business")
 async def verify_business_account(
     body: BusinessVerificationRequest,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """Admin endpoint to verify a business account."""
     auth_user_dao = AuthUserDAO(session)
@@ -1072,7 +1082,7 @@ async def list_business_accounts(
     verified: Optional[bool] = Query(None, description="Filter by verification status"),
     limit: int = Query(50, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """Admin endpoint to list business accounts."""
     auth_user_dao = AuthUserDAO(session)
@@ -1107,13 +1117,13 @@ async def list_business_accounts(
 @router.post("/user/create-with-business-info")
 async def create_user_with_business_info(
     body: UpdateAccountTypeRequest,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """Create a new user with business classification (for signup flow)."""
     auth_user_dao = AuthUserDAO(session)
 
     # Check if user already exists
-    existing_user = auth_user_dao.filter(email=body.email)
+    existing_user = await auth_user_dao.filter(email=body.email)
     if existing_user:
         raise HTTPException(
             status_code=400,
@@ -1123,7 +1133,7 @@ async def create_user_with_business_info(
     try:
         if body.account_type == "business" and body.business_info:
             # Create business user
-            auth_user_dao.create(
+            await auth_user_dao.create(
                 email=body.email,
                 name=body.name,
                 last_name=body.last_name,
@@ -1141,14 +1151,14 @@ async def create_user_with_business_info(
             )
         else:
             # Create individual user
-            auth_user_dao.create(
+            await auth_user_dao.create(
                 email=body.email,
                 name=body.name,
                 last_name=body.last_name,
                 account_type=body.account_type or "individual",
             )
 
-        session.commit()
+        await session.commit()
         return {
             "message": f"User created successfully with account type: {body.account_type}",
         }
@@ -1166,11 +1176,11 @@ async def create_user_with_business_info(
 )
 async def request_assistant_hiring_approval(
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     auth_user_dao = AuthUserDAO(session)
     user_id = request.state.user_id
-    user_row_proxy = auth_user_dao.get_by_id(user_id)  # This returns a RowProxy
+    user_row_proxy = await auth_user_dao.get_by_id(user_id)  # This returns a RowProxy
     if not user_row_proxy:
         raise not_found("User")
 
@@ -1189,7 +1199,7 @@ async def request_assistant_hiring_approval(
         )
 
     if auth_user_dao.set_assistant_hiring_approval(user_instance.id, "pending"):
-        session.commit()
+        await session.commit()
         return AssistantHiringApprovalResponse(
             message="Request for assistant hiring submitted. You've been added to the waitlist.",
             assistant_hiring_approval="pending",
@@ -1209,7 +1219,7 @@ async def request_assistant_hiring_approval(
 async def set_user_assistant_hiring_status(
     target_user_id: str,
     status: str,  # e.g., "approved", "pending", "rejected", "revoked"
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     if status not in ASSISTANT_HIRING_APPROVAL_STATUSES or status is None:
         raise HTTPException(
@@ -1218,13 +1228,13 @@ async def set_user_assistant_hiring_status(
         )
 
     auth_user_dao = AuthUserDAO(session)
-    user = auth_user_dao.get_by_id(target_user_id)
+    user = await auth_user_dao.get_by_id(target_user_id)
     if not user:
         raise not_found(f"User ID: {target_user_id}")
 
     user_instance = user[0]
     if auth_user_dao.set_assistant_hiring_approval(target_user_id, status):
-        session.commit()
+        await session.commit()
         if status == "approved":
             try:
                 email_recipient = user_instance.name or "there"
@@ -1286,20 +1296,20 @@ async def list_users_by_assistant_hiring_approval(
     ),
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     auth_user_dao = AuthUserDAO(session)
 
     users_to_return: List[AuthUser] = []  # This will hold AuthUser ORM instances
 
     if not status_filter or status_filter.lower() == "all":
-        user_rows = auth_user_dao.filter(
+        user_rows = await auth_user_dao.filter(
             limit=limit,
             offset=offset,
         )  # No approval filter (uses sentinel default)
         users_to_return = [row[0] for row in user_rows if row]
     elif status_filter.lower() == "none":
-        user_rows = auth_user_dao.filter(
+        user_rows = await auth_user_dao.filter(
             assistant_hiring_approval=None,
             limit=limit,
             offset=offset,
@@ -1343,16 +1353,16 @@ async def list_users_by_assistant_hiring_approval(
 async def claim_assistant_hiring_one_time_link(
     request: Request,
     payload: AssistantHiringOneTimeLinkClaimTokenRequest,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     auth_user_dao = AuthUserDAO(session)
     user_id = request.state.user_id
-    user_row_proxy = auth_user_dao.get_by_id(user_id)
+    user_row_proxy = await auth_user_dao.get_by_id(user_id)
     if not user_row_proxy:
         raise not_found("User")
 
     user_instance = user_row_proxy[0]
-    users_dao = UsersDAO(session)
+    users_dao = AsyncUsersDAO(session)
     token_dao = AssistantHiringOneTimeApprovalLinkDAO(session)
 
     link = token_dao.get_by_token(payload.token)
@@ -1376,7 +1386,7 @@ async def claim_assistant_hiring_one_time_link(
                     status_code=500,
                     detail="Failed to re-activate approval status.",
                 )
-            session.commit()
+            await session.commit()
             session.refresh(
                 user_instance,
             )  # Refresh to get the latest state for user_instance
@@ -1430,14 +1440,14 @@ async def claim_assistant_hiring_one_time_link(
                 detail="Failed to set approval status.",
             )
 
-        auth_user_dao.update(id=user_instance.id, has_claimed_approval_link=True)
+        await auth_user_dao.update(id=user_instance.id, has_claimed_approval_link=True)
 
         users_dao.recharge_credit(
             user_id=user_instance.id,
             quantity=float(settings.assistant_creation_cost),
         )
 
-        session.commit()
+        await session.commit()
         return AssistantHiringApprovalResponse(
             message="Approval link successfully claimed and credits awarded.",
             assistant_hiring_approval="approved",
@@ -1460,7 +1470,7 @@ async def claim_assistant_hiring_one_time_link(
 )
 async def create_assistant_hiring_one_time_link(
     payload: AssistantHiringApprovalCreateLinkRequest = Depends(),
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     token_dao = AssistantHiringOneTimeApprovalLinkDAO(session)
     if payload.expires_in_days <= 0:
@@ -1469,8 +1479,8 @@ async def create_assistant_hiring_one_time_link(
     expires_at = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(
         days=payload.expires_in_days,
     )
-    link = token_dao.create(expires_at=expires_at)
-    session.commit()
+    link = await token_dao.create(expires_at=expires_at)
+    await session.commit()
     session.refresh(link)
     return AssistantHiringOneTimeLinkResponse(
         id=link.id,
@@ -1488,7 +1498,7 @@ async def create_assistant_hiring_one_time_link(
 async def list_assistant_hiring_one_time_link(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     token_dao = AssistantHiringOneTimeApprovalLinkDAO(session)
     links = token_dao.list_links(limit=limit, offset=offset)
@@ -1507,12 +1517,12 @@ async def list_assistant_hiring_one_time_link(
 @admin_router.delete("/assistant-hiring-one-time-link/{link_id}", status_code=204)
 async def delete_assistant_hiring_one_time_link(
     link_id: str,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     token_dao = AssistantHiringOneTimeApprovalLinkDAO(session)
     if not token_dao.delete_link(link_id):
         raise not_found("One-time approval link")
-    session.commit()
+    await session.commit()
     return None
 
 
@@ -1521,7 +1531,7 @@ async def validate_tax_id(
     request: Request,
     tax_id: str = Query(..., description="Tax ID to validate"),
     country: str = Query(..., description="Two-letter country code"),
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """Validate a tax ID format for a specific country."""
     try:
@@ -1587,7 +1597,7 @@ async def update_onboarding_status(
 @router.get("/user/can-delete-account", response_model=CanDeleteAccountResponse)
 async def can_delete_account(
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Pre-flight check for account deletion.
@@ -1612,7 +1622,7 @@ async def can_delete_account(
 async def delete_own_account(
     request: Request,
     body: AccountDeletionConfirmation,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Delete the current user's account (self-service).
@@ -1625,7 +1635,7 @@ async def delete_own_account(
     - User owns organizations (must transfer ownership first)
     """
     auth_user_dao = AuthUserDAO(session)
-    user = auth_user_dao.get_by_id(request.state.user_id)
+    user = await auth_user_dao.get_by_id(request.state.user_id)
 
     if not user:
         raise not_found("User")

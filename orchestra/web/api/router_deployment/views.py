@@ -8,6 +8,9 @@ from typing import Dict
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from orchestra.db.dao.router_dao import RouterDAO
+
+# Async DAOs
+from orchestra.db.dao.async_router_dao import AsyncRouterDAO
 from orchestra.web.api.utils.gcp import blob_exists, send_pubsub_msg
 
 router = APIRouter()
@@ -15,7 +18,7 @@ router = APIRouter()
 # utils
 
 
-def router_training_exists(user_id, name):
+async def router_training_exists(user_id, name):
     # TODO: The router directory with files needs a
     # metadata.json with the datasets it has been trained on
     bucket_name = "custom_router_data"
@@ -27,7 +30,7 @@ def router_training_exists(user_id, name):
     return True
 
 
-def send_to_deploy_server(action, **data):
+async def send_to_deploy_server(action, **data):
     topic = "projects/saas-368716/topics/deploy_router"
     url = "https://api.unify.ai"  # TODO: Deal with staging/test
     send_pubsub_msg(
@@ -76,7 +79,7 @@ def send_to_deploy_server(action, **data):
         },
     },
 )
-def deploy_router(
+async def deploy_router(
     request_fastapi: Request,
     name: str = Query(
         description="Name of the router to deploy.",
@@ -93,7 +96,7 @@ def deploy_router(
 
     """
     user_id = request_fastapi.state.user_id
-    router_exists = router_dao.filter(user_id=user_id, name=name)
+    router_exists = await router_dao.filter(user_id=user_id, name=name)
 
     if not router_exists:
         raise HTTPException(
@@ -121,7 +124,7 @@ def deploy_router(
     # Send the request with the job to the router deployment service
 
     # TODO: move the deployed things elsewhere
-    router_dao.update(router_info.id, deployed=True)
+    await router_dao.update(router_info.id, deployed=True)
 
     send_to_deploy_server(action="deploy", user_id=user_id, router_id=router_info.id)
     return {"info": "Router deployment started! You will receive an email soon!"}
@@ -151,7 +154,7 @@ def deploy_router(
         },
     },
 )
-def undeploy_router(
+async def undeploy_router(
     request_fastapi: Request,
     name: str = Query(
         description="Name of the router to un-deploy.",
@@ -166,7 +169,7 @@ def undeploy_router(
     """
 
     user_id = request_fastapi.state.user_id
-    router_exists = router_dao.filter(user_id=user_id, name=name)
+    router_exists = await router_dao.filter(user_id=user_id, name=name)
 
     if not router_exists:
         raise HTTPException(
@@ -180,7 +183,7 @@ def undeploy_router(
             detail=f"The router: {name} is not deployed.",
         )
 
-    router_dao.update(router_info.id, deployed=False)
+    await router_dao.update(router_info.id, deployed=False)
     send_to_deploy_server(
         action="undeploy",
         user_id=user_id,
@@ -208,7 +211,7 @@ def undeploy_router(
         },
     },
 )
-def list_deployed_routers(
+async def list_deployed_routers(
     request_fastapi: Request,
     router_dao: RouterDAO = Depends(),
 ) -> list:
@@ -222,7 +225,7 @@ def list_deployed_routers(
 
     """
     user_id = request_fastapi.state.user_id
-    raw = router_dao.filter(user_id=user_id)
+    raw = await router_dao.filter(user_id=user_id)
     # TODO: return more information (dataset, evaluator, endpoints etc)
     routers_list = [r.name for r in raw if r.deployed]
     return routers_list

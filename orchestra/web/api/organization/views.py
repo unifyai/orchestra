@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
@@ -19,7 +20,7 @@ from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.team_dao import TeamDAO
 from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.db.dependencies import get_db_session
+from orchestra.db.dependencies import get_async_db_session, get_db_session
 from orchestra.services.contact_sync_service import ContactSyncService
 from orchestra.web.api.organization.schema import (
     AcceptInviteResponse,
@@ -55,7 +56,7 @@ router = APIRouter()
 async def create_organization(
     request_fastapi: Request,
     organization: OrganizationCreate,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> dict:
     """
     Create a new organization.
@@ -65,13 +66,13 @@ async def create_organization(
     Returns the organization details and the owner's organization API key.
     """
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    org_member_dao = OrganizationMemberDAO(session)
-    api_key_dao = ApiKeyDAO(session)
-    role_dao = RoleDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    org_member_dao = AsyncOrganizationMemberDAO(session)
+    api_key_dao = AsyncApiKeyDAO(session)
+    role_dao = AsyncRoleDAO(session)
 
     # Check if organization name already exists
-    existing = org_dao.filter(name=organization.name)
+    existing = await org_dao.filter(name=organization.name)
     if existing:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -81,7 +82,7 @@ async def create_organization(
     # Create organization
     try:
         # billing_user_id always equals owner_id
-        org = org_dao.create(
+        org = await org_dao.create(
             name=organization.name,
             owner_id=user_id,
             billing_user_id=user_id,
@@ -93,7 +94,7 @@ async def create_organization(
             raise ValueError("Owner system role not found")
 
         # Add creator as owner member with Owner role
-        org_member_dao.create(
+        await org_member_dao.create(
             organization_id=org.id,
             user_id=user_id,
             role_id=owner_role.id,
@@ -101,14 +102,14 @@ async def create_organization(
 
         # Create organization API key for the owner
         new_api_key = generate_key()
-        api_key_dao.create(
+        await api_key_dao.create(
             key=new_api_key,
             name=f"org_{org.name}",
             user_id=user_id,
             organization_id=org.id,
         )
 
-        session.commit()
+        await session.commit()
 
         org_response = OrganizationResponse.model_validate(org)
         return {
@@ -126,7 +127,7 @@ async def create_organization(
 @router.get("/organizations", response_model=List[OrganizationResponse])
 async def list_organizations(
     request_fastapi: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[OrganizationResponse]:
     """
     List all organizations the authenticated user has access to.
@@ -136,7 +137,7 @@ async def list_organizations(
     - A member
     """
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
 
     organizations = org_dao.get_user_organizations(user_id)
 
@@ -149,7 +150,7 @@ async def list_organizations(
 )
 async def list_organization_members_by_api_key(
     request_fastapi: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[OrganizationMemberResponse]:
     """
     List all members of the organization associated with the API key.
@@ -164,14 +165,14 @@ async def list_organization_members_by_api_key(
     if organization_id is None:
         return []
 
-    org_dao = OrganizationDAO(session)
-    org_member_dao = OrganizationMemberDAO(session)
-    role_dao = RoleDAO(session)
-    resource_access_dao = ResourceAccessDAO(session)
-    auth_user_dao = AuthUserDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    org_member_dao = AsyncOrganizationMemberDAO(session)
+    role_dao = AsyncRoleDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
 
     # Verify organization exists
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -191,7 +192,7 @@ async def list_organization_members_by_api_key(
         )
 
     # Get all members
-    all_members_result = org_member_dao.filter(organization_id=organization_id)
+    all_members_result = await org_member_dao.filter(organization_id=organization_id)
 
     # Build response with role names and user info
     members_response = []
@@ -199,11 +200,11 @@ async def list_organization_members_by_api_key(
         member = member_row[0]
         role_name = None
         if member.role_id:
-            role = role_dao.get(member.role_id)
+            role = await role_dao.get(member.role_id)
             role_name = role.name if role else None
 
         # Fetch user info
-        user_info_row = auth_user_dao.get_by_id(member.user_id)
+        user_info_row = await auth_user_dao.get_by_id(member.user_id)
         user_name = None
         user_email = None
         user_image = None
@@ -248,15 +249,15 @@ async def list_organization_members_by_api_key(
 async def get_organization(
     request_fastapi: Request,
     organization_id: int,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> OrganizationResponse:
     """Get details of a specific organization."""
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    org_member_dao = OrganizationMemberDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    org_member_dao = AsyncOrganizationMemberDAO(session)
 
     # Get organization
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -264,7 +265,7 @@ async def get_organization(
         )
 
     # Check if user has org:read permission via org membership role
-    resource_access_dao = ResourceAccessDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
     has_permission = resource_access_dao.check_org_member_permission(
         user_id,
         organization_id,
@@ -284,7 +285,7 @@ async def update_organization(
     request_fastapi: Request,
     organization_id: int,
     organization: OrganizationUpdate,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> OrganizationResponse:
     """
     Update an organization.
@@ -293,11 +294,11 @@ async def update_organization(
     Note: To change owner or billing_user_id, use the transfer-ownership endpoint.
     """
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    resource_access_dao = ResourceAccessDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Get organization
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -318,7 +319,7 @@ async def update_organization(
 
     # Check for name conflict if name is being updated
     if organization.name and organization.name != org.name:
-        existing = org_dao.filter(name=organization.name)
+        existing = await org_dao.filter(name=organization.name)
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
@@ -327,14 +328,14 @@ async def update_organization(
 
     # Update organization (only name can be updated here)
     try:
-        org_dao.update(
+        await org_dao.update(
             id=organization_id,
             name=organization.name,
         )
-        session.commit()
+        await session.commit()
 
         # Refresh to get updated data
-        updated_org = org_dao.get(organization_id)
+        updated_org = await org_dao.get(organization_id)
         return OrganizationResponse.model_validate(updated_org)
     except Exception as e:
         session.rollback()
@@ -351,7 +352,7 @@ async def update_organization(
 async def delete_organization(
     request_fastapi: Request,
     organization_id: int,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Delete an organization.
@@ -360,11 +361,11 @@ async def delete_organization(
     This will also delete all associated data (projects, members, etc.).
     """
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    resource_access_dao = ResourceAccessDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Get organization
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -385,7 +386,7 @@ async def delete_organization(
 
     # Delete organization
     try:
-        org_dao.delete(organization_id)
+        await org_dao.delete(organization_id)
         return None
     except Exception as e:
         session.rollback()
@@ -403,7 +404,7 @@ async def add_organization_member(
     request_fastapi: Request,
     organization_id: int,
     member_data: OrganizationMemberAdd,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> dict:
     """
     Add a member to an organization.
@@ -412,14 +413,14 @@ async def add_organization_member(
     Automatically creates an organization-specific API key for the new member.
     """
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    org_member_dao = OrganizationMemberDAO(session)
-    api_key_dao = ApiKeyDAO(session)
-    role_dao = RoleDAO(session)
-    resource_access_dao = ResourceAccessDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    org_member_dao = AsyncOrganizationMemberDAO(session)
+    api_key_dao = AsyncApiKeyDAO(session)
+    role_dao = AsyncRoleDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Get organization
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -439,7 +440,7 @@ async def add_organization_member(
         )
 
     # Check if member already exists
-    existing_member = org_member_dao.filter(
+    existing_member = await org_member_dao.filter(
         organization_id=organization_id,
         user_id=member_data.user_id,
     )
@@ -461,7 +462,7 @@ async def add_organization_member(
         role_id = member_role.id
     else:
         # Block Owner role assignment via add_member
-        requested_role = role_dao.get(role_id)
+        requested_role = await role_dao.get(role_id)
         if requested_role and requested_role.name == "Owner":
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -471,7 +472,7 @@ async def add_organization_member(
 
     # Add member
     try:
-        org_member_dao.create(
+        await org_member_dao.create(
             organization_id=organization_id,
             user_id=member_data.user_id,
             role_id=role_id,
@@ -479,7 +480,7 @@ async def add_organization_member(
 
         # Create organization API key for the new member
         new_api_key = generate_key()
-        api_key_dao.create(
+        await api_key_dao.create(
             key=new_api_key,
             name=f"org_{org.name}",
             user_id=member_data.user_id,
@@ -487,9 +488,9 @@ async def add_organization_member(
         )
 
         # Grant Member access to Assistants project if it exists
-        context_dao = ContextDAO(session)
+        context_dao = AsyncContextDAO(session)
         project_dao = ProjectDAO(session, org_member_dao, context_dao)
-        assistants_projects = project_dao.filter(
+        assistants_projects = await project_dao.filter(
             organization_id=organization_id,
             name="Assistants",
         )
@@ -505,7 +506,7 @@ async def add_organization_member(
                     grantee_id=member_data.user_id,
                 )
 
-        session.commit()
+        await session.commit()
 
         return {
             "message": "Member added successfully",
@@ -528,7 +529,7 @@ async def remove_organization_member(
     request_fastapi: Request,
     organization_id: int,
     user_id: str,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Remove a member from an organization.
@@ -541,13 +542,13 @@ async def remove_organization_member(
     Personal API keys are NOT affected.
     """
     requesting_user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    org_member_dao = OrganizationMemberDAO(session)
-    api_key_dao = ApiKeyDAO(session)
-    resource_access_dao = ResourceAccessDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    org_member_dao = AsyncOrganizationMemberDAO(session)
+    api_key_dao = AsyncApiKeyDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Get organization
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -575,7 +576,7 @@ async def remove_organization_member(
         )
 
     # Check if member exists
-    existing_member = org_member_dao.filter(
+    existing_member = await org_member_dao.filter(
         organization_id=organization_id,
         user_id=user_id,
     )
@@ -587,12 +588,12 @@ async def remove_organization_member(
 
     # Remove member and clean up all associated data
     try:
-        team_dao = TeamDAO(session)
-        auth_user_dao = AuthUserDAO(session)
+        team_dao = AsyncTeamDAO(session)
+        auth_user_dao = AsyncAuthUserDAO(session)
         contact_sync_service = ContactSyncService(session)
 
         # Get user info for Contact update
-        user_row = auth_user_dao.get_by_id(user_id)
+        user_row = await auth_user_dao.get_by_id(user_id)
         departing_user = user_row[0] if user_row else None
 
         # 1. Delete unshared resources created by this user
@@ -625,9 +626,9 @@ async def remove_organization_member(
 
         # 6. Remove member from organization
         member = existing_member[0][0]
-        org_member_dao.delete(member.id)
+        await org_member_dao.delete(member.id)
 
-        session.commit()
+        await session.commit()
         return None
     except Exception as e:
         session.rollback()
@@ -644,7 +645,7 @@ async def remove_organization_member(
 async def list_organization_members(
     request_fastapi: Request,
     organization_id: int,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[OrganizationMemberResponse]:
     """
     List all members of an organization with their roles.
@@ -652,14 +653,14 @@ async def list_organization_members(
     Requires org:read permission.
     """
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    org_member_dao = OrganizationMemberDAO(session)
-    role_dao = RoleDAO(session)
-    resource_access_dao = ResourceAccessDAO(session)
-    auth_user_dao = AuthUserDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    org_member_dao = AsyncOrganizationMemberDAO(session)
+    role_dao = AsyncRoleDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
 
     # Get organization
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -679,7 +680,7 @@ async def list_organization_members(
         )
 
     # Get all members
-    all_members_result = org_member_dao.filter(organization_id=organization_id)
+    all_members_result = await org_member_dao.filter(organization_id=organization_id)
 
     # Build response with role names and user info
     members_response = []
@@ -687,11 +688,11 @@ async def list_organization_members(
         member = member_row[0]
         role_name = None
         if member.role_id:
-            role = role_dao.get(member.role_id)
+            role = await role_dao.get(member.role_id)
             role_name = role.name if role else None
 
         # Fetch user info
-        user_info_row = auth_user_dao.get_by_id(member.user_id)
+        user_info_row = await auth_user_dao.get_by_id(member.user_id)
         user_name = None
         user_email = None
         user_image = None
@@ -743,7 +744,7 @@ async def update_member_role(
     organization_id: int,
     member_user_id: str,
     role_update: OrganizationMemberRoleUpdate,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> OrganizationMemberResponse:
     """
     Update an organization member's RBAC role.
@@ -751,13 +752,13 @@ async def update_member_role(
     Requires org:write permission.
     """
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    org_member_dao = OrganizationMemberDAO(session)
-    role_dao = RoleDAO(session)
-    resource_access_dao = ResourceAccessDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    org_member_dao = AsyncOrganizationMemberDAO(session)
+    role_dao = AsyncRoleDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Get organization
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -784,7 +785,7 @@ async def update_member_role(
         )
 
     # Verify the role exists and is a system role
-    role = role_dao.get(role_update.role_id)
+    role = await role_dao.get(role_update.role_id)
     if not role:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -819,14 +820,14 @@ async def update_member_role(
             organization_id=organization_id,
             role_id=role_update.role_id,
         )
-        session.commit()
+        await session.commit()
 
         # Return updated member with user info
         updated_member = org_member_dao.get_member(member_user_id, organization_id)
 
         # Fetch user info
-        auth_user_dao = AuthUserDAO(session)
-        user_info_row = auth_user_dao.get_by_id(member_user_id)
+        auth_user_dao = AsyncAuthUserDAO(session)
+        user_info_row = await auth_user_dao.get_by_id(member_user_id)
         user_name = None
         user_email = None
         user_image = None
@@ -877,7 +878,7 @@ async def transfer_organization_ownership(
     request_fastapi: Request,
     organization_id: int,
     transfer: OrganizationOwnershipTransfer,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> OrganizationResponse:
     """
     Transfer organization ownership to another member.
@@ -892,12 +893,12 @@ async def transfer_organization_ownership(
     - old_owner's role → Admin
     """
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    org_member_dao = OrganizationMemberDAO(session)
-    role_dao = RoleDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    org_member_dao = AsyncOrganizationMemberDAO(session)
+    role_dao = AsyncRoleDAO(session)
 
     # Get organization
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -935,7 +936,7 @@ async def transfer_organization_ownership(
             raise ValueError("Required system roles not found")
 
         # Update organization: owner_id and billing_user_id
-        org_dao.update(
+        await org_dao.update(
             id=organization_id,
             owner_id=transfer.new_owner_id,
             billing_user_id=transfer.new_owner_id,
@@ -955,9 +956,9 @@ async def transfer_organization_ownership(
             role_id=admin_role.id,
         )
 
-        session.commit()
+        await session.commit()
 
-        updated_org = org_dao.get(organization_id)
+        updated_org = await org_dao.get(organization_id)
         return OrganizationResponse.model_validate(updated_org)
 
     except Exception as e:
@@ -971,7 +972,7 @@ async def transfer_organization_ownership(
 # ============== Organization Invite Endpoints ==============
 
 
-def _build_invite_response(
+async def _build_invite_response(
     invite,
     org,
     role_dao: RoleDAO,
@@ -980,11 +981,11 @@ def _build_invite_response(
     """Helper to build InviteResponse from invite object."""
     role_name = None
     if invite.role_id:
-        role = role_dao.get(invite.role_id)
+        role = await role_dao.get(invite.role_id)
         role_name = role.name if role else None
 
     invited_by_name = None
-    inviter_row = auth_user_dao.get_by_id(invite.invited_by_user_id)
+    inviter_row = await auth_user_dao.get_by_id(invite.invited_by_user_id)
     if inviter_row:
         inviter = inviter_row[0]
         name_parts = []
@@ -1018,7 +1019,7 @@ async def invite_user_to_organization(
     request_fastapi: Request,
     organization_id: int,
     invite_request: InviteUserRequest,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> InviteResponse:
     """
     Invite a user to join an organization via email.
@@ -1027,15 +1028,15 @@ async def invite_user_to_organization(
     Sends an email with an invite link to the specified email address.
     """
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    org_member_dao = OrganizationMemberDAO(session)
-    invite_dao = OrganizationInviteDAO(session)
-    role_dao = RoleDAO(session)
-    auth_user_dao = AuthUserDAO(session)
-    resource_access_dao = ResourceAccessDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    org_member_dao = AsyncOrganizationMemberDAO(session)
+    invite_dao = AsyncOrganizationInviteDAO(session)
+    role_dao = AsyncRoleDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Get organization
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1058,10 +1059,10 @@ async def invite_user_to_organization(
 
     # Check if user is already a member
     # First, try to find the user by email
-    existing_user_row = auth_user_dao.filter(email=email)
+    existing_user_row = await auth_user_dao.filter(email=email)
     if existing_user_row:
         existing_user = existing_user_row[0][0]
-        existing_member = org_member_dao.filter(
+        existing_member = await org_member_dao.filter(
             organization_id=organization_id,
             user_id=existing_user.id,
         )
@@ -1078,7 +1079,7 @@ async def invite_user_to_organization(
         existing_invite.expires_at = datetime.now(timezone.utc) + timedelta(
             days=invite_request.expires_in_days,
         )
-        session.commit()
+        await session.commit()
         await _send_invite_email(existing_invite, org, auth_user_dao, user_id)
         return _build_invite_response(existing_invite, org, role_dao, auth_user_dao)
 
@@ -1094,7 +1095,7 @@ async def invite_user_to_organization(
         role_id = member_role.id
 
     # Block Owner role assignment via invite
-    requested_role = role_dao.get(role_id)
+    requested_role = await role_dao.get(role_id)
     if requested_role and requested_role.name == "Owner":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -1107,7 +1108,7 @@ async def invite_user_to_organization(
         invitee_user_id = existing_user_row[0][0].id
 
     try:
-        invite = invite_dao.create(
+        invite = await invite_dao.create(
             organization_id=organization_id,
             invitee_email=email,
             invited_by_user_id=user_id,
@@ -1115,7 +1116,7 @@ async def invite_user_to_organization(
             expires_in_days=invite_request.expires_in_days,
             invitee_user_id=invitee_user_id,
         )
-        session.commit()
+        await session.commit()
 
         # Send invite email
         await _send_invite_email(invite, org, auth_user_dao, user_id)
@@ -1139,7 +1140,7 @@ async def _send_invite_email(
     """Send the invitation email."""
     # Get inviter info
     inviter_name = "A team member"
-    inviter_row = auth_user_dao.get_by_id(inviter_user_id)
+    inviter_row = await auth_user_dao.get_by_id(inviter_user_id)
     if inviter_row:
         inviter = inviter_row[0]
         if inviter.name:
@@ -1201,7 +1202,7 @@ async def _send_invite_email(
 async def list_organization_invites(
     request_fastapi: Request,
     organization_id: int,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> InviteListResponse:
     """
     List pending invites for an organization.
@@ -1210,14 +1211,14 @@ async def list_organization_invites(
     All invites returned are pending (not expired).
     """
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    invite_dao = OrganizationInviteDAO(session)
-    role_dao = RoleDAO(session)
-    auth_user_dao = AuthUserDAO(session)
-    resource_access_dao = ResourceAccessDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    invite_dao = AsyncOrganizationInviteDAO(session)
+    role_dao = AsyncRoleDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Get organization
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1254,7 +1255,7 @@ async def cancel_organization_invite(
     request_fastapi: Request,
     organization_id: int,
     invite_id: str,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Cancel a pending invite.
@@ -1262,12 +1263,12 @@ async def cancel_organization_invite(
     Requires org:write permission.
     """
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    invite_dao = OrganizationInviteDAO(session)
-    resource_access_dao = ResourceAccessDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    invite_dao = AsyncOrganizationInviteDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Get organization
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1287,15 +1288,15 @@ async def cancel_organization_invite(
         )
 
     # Get and verify invite
-    invite = invite_dao.get_by_id(invite_id)
+    invite = await invite_dao.get_by_id(invite_id)
     if not invite or invite.organization_id != organization_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Invite not found",
         )
 
-    invite_dao.delete(invite_id)
-    session.commit()
+    await invite_dao.delete(invite_id)
+    await session.commit()
 
 
 @router.get(
@@ -1304,19 +1305,19 @@ async def cancel_organization_invite(
 )
 async def list_my_pending_invites(
     request_fastapi: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> InviteListResponse:
     """
     List all pending invites for the current user's email.
     """
     user_id = request_fastapi.state.user_id
-    auth_user_dao = AuthUserDAO(session)
-    invite_dao = OrganizationInviteDAO(session)
-    org_dao = OrganizationDAO(session)
-    role_dao = RoleDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
+    invite_dao = AsyncOrganizationInviteDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    role_dao = AsyncRoleDAO(session)
 
     # Get current user's email
-    user_row = auth_user_dao.get_by_id(user_id)
+    user_row = await auth_user_dao.get_by_id(user_id)
     if not user_row:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1328,7 +1329,7 @@ async def list_my_pending_invites(
 
     invite_responses = []
     for invite in invites:
-        org = org_dao.get(invite.organization_id)
+        org = await org_dao.get(invite.organization_id)
         if org:
             invite_responses.append(
                 _build_invite_response(invite, org, role_dao, auth_user_dao),
@@ -1344,7 +1345,7 @@ async def list_my_pending_invites(
 async def accept_invite(
     request_fastapi: Request,
     token: str,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> AcceptInviteResponse:
     """
     Accept an organization invite.
@@ -1353,14 +1354,14 @@ async def accept_invite(
     The current user's email must match the invite email.
     """
     user_id = request_fastapi.state.user_id
-    auth_user_dao = AuthUserDAO(session)
-    invite_dao = OrganizationInviteDAO(session)
-    org_dao = OrganizationDAO(session)
-    org_member_dao = OrganizationMemberDAO(session)
-    api_key_dao = ApiKeyDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
+    invite_dao = AsyncOrganizationInviteDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    org_member_dao = AsyncOrganizationMemberDAO(session)
+    api_key_dao = AsyncApiKeyDAO(session)
 
     # Get current user
-    user_row = auth_user_dao.get_by_id(user_id)
+    user_row = await auth_user_dao.get_by_id(user_id)
     if not user_row:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1392,7 +1393,7 @@ async def accept_invite(
         )
 
     # Get organization
-    org = org_dao.get(invite.organization_id)
+    org = await org_dao.get(invite.organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1400,14 +1401,14 @@ async def accept_invite(
         )
 
     # Check if already a member
-    existing_member = org_member_dao.filter(
+    existing_member = await org_member_dao.filter(
         organization_id=invite.organization_id,
         user_id=user_id,
     )
     if existing_member:
         # Delete invite since user is already a member
         invite_dao.delete_invite(invite)
-        session.commit()
+        await session.commit()
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="You are already a member of this organization",
@@ -1415,7 +1416,7 @@ async def accept_invite(
 
     try:
         # Add user as member
-        org_member_dao.create(
+        await org_member_dao.create(
             organization_id=invite.organization_id,
             user_id=user_id,
             role_id=invite.role_id,
@@ -1423,7 +1424,7 @@ async def accept_invite(
 
         # Create organization API key
         new_api_key = generate_key()
-        api_key_dao.create(
+        await api_key_dao.create(
             key=new_api_key,
             name=f"org_{org.name}",
             user_id=user_id,
@@ -1431,11 +1432,11 @@ async def accept_invite(
         )
 
         # Grant Member access to Assistants project if it exists
-        context_dao = ContextDAO(session)
+        context_dao = AsyncContextDAO(session)
         project_dao = ProjectDAO(session, org_member_dao, context_dao)
-        role_dao = RoleDAO(session)
-        resource_access_dao = ResourceAccessDAO(session)
-        assistants_projects = project_dao.filter(
+        role_dao = AsyncRoleDAO(session)
+        resource_access_dao = AsyncResourceAccessDAO(session)
+        assistants_projects = await project_dao.filter(
             organization_id=invite.organization_id,
             name="Assistants",
         )
@@ -1454,13 +1455,13 @@ async def accept_invite(
         # Delete the invite (accepted)
         invite_dao.delete_invite(invite)
 
-        session.commit()
+        await session.commit()
 
         # Trigger contact sync for all org assistants (non-blocking)
         from orchestra.db.dao.assistant_dao import AssistantDAO
         from orchestra.web.api.utils.assistant_infra import trigger_contact_sync
 
-        assistant_dao = AssistantDAO(session)
+        assistant_dao = AsyncAssistantDAO(session)
         org_assistants = assistant_dao.list_all_org_assistants(
             organization_id=invite.organization_id,
         )
@@ -1499,17 +1500,17 @@ async def accept_invite(
 async def decline_invite(
     request_fastapi: Request,
     token: str,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> DeclineInviteResponse:
     """
     Decline an organization invite.
     """
     user_id = request_fastapi.state.user_id
-    auth_user_dao = AuthUserDAO(session)
-    invite_dao = OrganizationInviteDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
+    invite_dao = AsyncOrganizationInviteDAO(session)
 
     # Get current user
-    user_row = auth_user_dao.get_by_id(user_id)
+    user_row = await auth_user_dao.get_by_id(user_id)
     if not user_row:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1534,7 +1535,7 @@ async def decline_invite(
 
     # Delete the invite (declined)
     invite_dao.delete_invite(invite)
-    session.commit()
+    await session.commit()
 
     return DeclineInviteResponse(message="Invite declined")
 
@@ -1549,7 +1550,7 @@ async def decline_invite(
 async def get_organization_billing(
     request_fastapi: Request,
     organization_id: int,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> dict:
     """
     Get billing information for an organization.
@@ -1560,12 +1561,12 @@ async def get_organization_billing(
     from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
 
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    org_billing_dao = OrganizationBillingDAO(session)
-    resource_access_dao = ResourceAccessDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    org_billing_dao = AsyncOrganizationBillingDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Get organization
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1618,7 +1619,7 @@ async def update_organization_billing(
     request_fastapi: Request,
     organization_id: int,
     billing_update: "OrganizationBillingUpdate",
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> dict:
     """
     Update billing settings for an organization.
@@ -1629,12 +1630,12 @@ async def update_organization_billing(
     from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
 
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    org_billing_dao = OrganizationBillingDAO(session)
-    resource_access_dao = ResourceAccessDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    org_billing_dao = AsyncOrganizationBillingDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Get organization
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1669,7 +1670,7 @@ async def update_organization_billing(
             billing_update.autorecharge_qty,
         )
 
-    session.commit()
+    await session.commit()
 
     # Return updated billing info
     has_direct_billing = org_billing_dao.has_direct_billing(organization_id)
@@ -1705,7 +1706,7 @@ async def update_organization_billing(
 async def get_organization_credits(
     request_fastapi: Request,
     organization_id: int,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> dict:
     """
     Get credit balance for an organization.
@@ -1717,13 +1718,13 @@ async def get_organization_credits(
     from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
 
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    org_billing_dao = OrganizationBillingDAO(session)
-    users_dao = UsersDAO(session)
-    resource_access_dao = ResourceAccessDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    org_billing_dao = AsyncOrganizationBillingDAO(session)
+    users_dao = AsyncUsersDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Get organization
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1766,7 +1767,7 @@ async def get_organization_credits(
 async def get_organization_business_profile(
     request_fastapi: Request,
     organization_id: int,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> dict:
     """
     Get business profile for an organization (invoicing information).
@@ -1776,12 +1777,12 @@ async def get_organization_business_profile(
     from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
 
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    org_billing_dao = OrganizationBillingDAO(session)
-    resource_access_dao = ResourceAccessDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    org_billing_dao = AsyncOrganizationBillingDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Get organization
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1812,7 +1813,7 @@ async def update_organization_business_profile(
     request_fastapi: Request,
     organization_id: int,
     profile_update: "OrganizationBusinessProfileUpdate",
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> dict:
     """
     Update business profile for an organization.
@@ -1822,13 +1823,32 @@ async def update_organization_business_profile(
     """
     from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
 
+# Async DAOs
+from orchestra.db.dao.async_api_key_dao import AsyncApiKeyDAO
+from orchestra.db.dao.async_auth_user_dao import AsyncAuthUserDAO
+from orchestra.db.dao.async_context_dao import AsyncContextDAO
+from orchestra.db.dao.async_organization_dao import AsyncOrganizationDAO
+from orchestra.db.dao.async_organization_invite_dao import AsyncOrganizationInviteDAO
+from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
+from orchestra.db.dao.async_project_dao import AsyncProjectDAO
+from orchestra.db.dao.async_resource_access_dao import AsyncResourceAccessDAO
+from orchestra.db.dao.async_role_dao import AsyncRoleDAO
+from orchestra.db.dao.async_team_dao import AsyncTeamDAO
+from orchestra.db.dao.async_users_dao import AsyncUsersDAO
+from orchestra.db.dao.async_assistant_dao import AsyncAssistantDAO
+from orchestra.db.dao.async_organization_billing_dao import AsyncOrganizationBillingDAO
+from orchestra.db.dao.async_organization_billing_dao import AsyncOrganizationBillingDAO
+from orchestra.db.dao.async_organization_billing_dao import AsyncOrganizationBillingDAO
+from orchestra.db.dao.async_organization_billing_dao import AsyncOrganizationBillingDAO
+from orchestra.db.dao.async_organization_billing_dao import AsyncOrganizationBillingDAO
+
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    org_billing_dao = OrganizationBillingDAO(session)
-    resource_access_dao = ResourceAccessDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    org_billing_dao = AsyncOrganizationBillingDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Get organization
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1885,7 +1905,7 @@ async def update_organization_business_profile(
         tax_id=profile_update.tax_id,
         billing_address=billing_address_dict,
     )
-    session.commit()
+    await session.commit()
 
     # Return updated profile
     profile = org_billing_dao.get_business_profile(organization_id)

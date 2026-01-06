@@ -8,6 +8,7 @@ from typing import List
 import sqlalchemy
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
 from sqlalchemy import func
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
@@ -25,7 +26,24 @@ from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.tab_dao import TabDAO
 from orchestra.db.dao.tile_dao import TileDAO
-from orchestra.db.dependencies import get_db_session
+
+# Async DAOs
+from orchestra.db.dao.async_api_key_dao import AsyncApiKeyDAO
+from orchestra.db.dao.async_auth_user_dao import AsyncAuthUserDAO
+from orchestra.db.dao.async_context_dao import AsyncContextDAO
+from orchestra.db.dao.async_derived_log_dao import AsyncDerivedLogDAO
+from orchestra.db.dao.async_favorite_project_dao import AsyncFavoriteProjectDAO
+from orchestra.db.dao.async_interface_dao import AsyncInterfaceDAO
+from orchestra.db.dao.async_log_event_dao import AsyncLogEventDAO
+from orchestra.db.dao.async_organization_dao import AsyncOrganizationDAO
+from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
+from orchestra.db.dao.async_plot_dao import AsyncPlotDAO
+from orchestra.db.dao.async_project_dao import AsyncProjectDAO
+from orchestra.db.dao.async_resource_access_dao import AsyncResourceAccessDAO
+from orchestra.db.dao.async_role_dao import AsyncRoleDAO
+from orchestra.db.dao.async_tab_dao import AsyncTabDAO
+from orchestra.db.dao.async_tile_dao import AsyncTileDAO
+from orchestra.db.dependencies import get_async_db_session, get_db_session
 from orchestra.db.models.orchestra_models import (
     Context,
     DerivedLog,
@@ -79,14 +97,14 @@ from orchestra.web.api.utils.http_responses import not_found
 router = APIRouter()
 
 
-def get_project_or_404(
+async def get_project_or_404(
     request_fastapi: Request,
     project_name: str = Path(
         ...,
         description="Project name, may contain slashes",
         example="proj/a",
     ),
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> Project:
     """
     Get a project by name, validating API key context.
@@ -96,8 +114,8 @@ def get_project_or_404(
 
     Raises 404 if project not found or not accessible with the current API key context.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
     # Get API key context (None = personal, int = org-specific)
@@ -162,17 +180,17 @@ def get_project_or_404(
         },
     },
 )
-def commit_project(
+async def commit_project(
     request_fastapi: Request,
     request: ProjectCommitRequest,
     project: Project = Depends(get_project_or_404),
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Creates a new version of a project.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     try:
         commit_hash = project_dao.commit(
@@ -221,17 +239,17 @@ def commit_project(
         },
     },
 )
-def rollback_project(
+async def rollback_project(
     request_fastapi: Request,
     request: ProjectRollbackRequest,
     project: Project = Depends(get_project_or_404),
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Rolls back a project to a specific version.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     try:
         project_dao.rollback(project_id=project.id, commit_hash=request.commit_hash)
@@ -245,17 +263,17 @@ def rollback_project(
     response_model=List[ProjectCommitHistory],
     summary="Get project commit history",
 )
-def get_project_commits(
+async def get_project_commits(
     request_fastapi: Request,
     project_name: str,
     project: Project = Depends(get_project_or_404),
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Retrieves the commit history for a versioned project.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
     try:
@@ -292,17 +310,17 @@ def get_project_commits(
         },
     },
 )
-def get_favorites(
+async def get_favorites(
     request_fastapi: Request,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Returns a list of the user's favorite projects, sorted by position.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    favorite_project_dao = FavoriteProjectDAO(session)
+    favorite_project_dao = AsyncFavoriteProjectDAO(session)
 
     favorites = favorite_project_dao.filter_by_user(request_fastapi.state.user_id)
 
@@ -314,7 +332,7 @@ def get_favorites(
     for fav in favorites:
         project_name = str(fav.project_id)
         try:
-            project = project_dao.filter(id=fav.project_id)[0][0]
+            project = await project_dao.filter(id=fav.project_id)[0][0]
             if project:
                 project_name = project.name
         except Exception:
@@ -367,20 +385,20 @@ def get_favorites(
         },
     },
 )
-def create_favorite(
+async def create_favorite(
     request_fastapi: Request,
     favorite: FavoriteProjectIn,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Creates a new favorite project for the user.
 
     Each favorite must include a project name, icon, and position.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    favorite_project_dao = FavoriteProjectDAO(session)
+    favorite_project_dao = AsyncFavoriteProjectDAO(session)
 
     user_id = request_fastapi.state.user_id
 
@@ -395,7 +413,7 @@ def create_favorite(
 
     try:
         # Create new favorite
-        favorite_project_dao.create(
+        await favorite_project_dao.create(
             user_id=user_id,
             project_id=project.id,
             position=favorite.position,
@@ -453,29 +471,29 @@ def create_favorite(
         },
     },
 )
-def get_favorite(
+async def get_favorite(
     request_fastapi: Request,
     id: int = Path(..., description="The ID of the favorite to retrieve"),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Returns details of a specific favorite project.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    favorite_project_dao = FavoriteProjectDAO(session)
+    favorite_project_dao = AsyncFavoriteProjectDAO(session)
 
     user_id = request_fastapi.state.user_id
     # Get the favorite
     try:
-        favorite = favorite_project_dao.get_by_id(user_id, id)
+        favorite = await favorite_project_dao.get_by_id(user_id, id)
     except:
         raise HTTPException(status_code=404, detail=f"Favorite with ID {id} not found")
 
     # Get project name from project_id
     try:
-        project = project_dao.filter(id=favorite.project_id)[0][0]
+        project = await project_dao.filter(id=favorite.project_id)[0][0]
         project_name = project.name if project else str(favorite.project_id)
     except:
         raise HTTPException(
@@ -518,26 +536,26 @@ def get_favorite(
         },
     },
 )
-def update_favorite(
+async def update_favorite(
     request_fastapi: Request,
     update: FavoriteProjectUpdate,
     id: int = Path(..., description="The ID of the favorite to update"),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Updates a specific favorite project.
 
     Only the provided fields will be updated.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    favorite_project_dao = FavoriteProjectDAO(session)
+    favorite_project_dao = AsyncFavoriteProjectDAO(session)
 
     # Get the favorite
     user_id = request_fastapi.state.user_id
     try:
-        favorite = favorite_project_dao.get_by_id(user_id, id)
+        favorite = await favorite_project_dao.get_by_id(user_id, id)
     except:
         raise HTTPException(status_code=404, detail=f"Favorite with ID {id} not found")
 
@@ -549,15 +567,15 @@ def update_favorite(
 
         # Apply updates
         if update_data:
-            favorite_project_dao.update(user_id, id, **update_data)
+            await favorite_project_dao.update(user_id, id, **update_data)
             favorite_project_dao.session.commit()
 
         # Get updated favorite
-        updated_favorite = favorite_project_dao.get_by_id(user_id, id)
+        updated_favorite = await favorite_project_dao.get_by_id(user_id, id)
 
         # Get project name from project_id
         try:
-            project = project_dao.filter(id=updated_favorite.project_id)[0][0]
+            project = await project_dao.filter(id=updated_favorite.project_id)[0][0]
             project_name = project.name if project else str(updated_favorite.project_id)
         except:
             raise HTTPException(
@@ -600,25 +618,25 @@ def update_favorite(
         },
     },
 )
-def delete_favorite(
+async def delete_favorite(
     request_fastapi: Request,
     id: int = Path(..., description="The ID of the favorite to delete"),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Deletes a specific favorite project.
     """
-    favorite_project_dao = FavoriteProjectDAO(session)
+    favorite_project_dao = AsyncFavoriteProjectDAO(session)
     # Get the favorite
     user_id = request_fastapi.state.user_id
     try:
-        favorite = favorite_project_dao.get_by_id(user_id, id)
+        favorite = await favorite_project_dao.get_by_id(user_id, id)
     except:
         raise HTTPException(status_code=404, detail=f"Favorite with ID {id} not found")
 
     try:
         # Delete the favorite
-        favorite_project_dao.delete(user_id, id)
+        await favorite_project_dao.delete(user_id, id)
         favorite_project_dao.session.commit()
 
         # Return no content
@@ -664,10 +682,10 @@ def delete_favorite(
         },
     },
 )
-def create_project(
+async def create_project(
     request_fastapi: Request,
     request: ProjectConfig,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Creates a logging project and adds this to your account.
@@ -676,10 +694,10 @@ def create_project(
     organizational project (requires project:write permission in the org).
     If using a personal API key, the project will be a personal project.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    resource_access_dao = ResourceAccessDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Check if using an organization API key
     organization_id = getattr(request_fastapi.state, "organization_id", None)
@@ -700,7 +718,7 @@ def create_project(
                 )
 
             # Check for existing org project with same name
-            existing_projects = project_dao.filter(
+            existing_projects = await project_dao.filter(
                 organization_id=organization_id,
                 name=request.name,
             )
@@ -708,7 +726,7 @@ def create_project(
                 raise ValueError("Project already exists")
 
             # Create org project (user_id is NULL for org projects)
-            project_dao.create(
+            await project_dao.create(
                 user_id=None,
                 organization_id=organization_id,
                 name=request.name,
@@ -720,13 +738,13 @@ def create_project(
 
             # Flush to get project ID, then add explicit Owner grant for creator
             session.flush()
-            created_projects = project_dao.filter(
+            created_projects = await project_dao.filter(
                 organization_id=organization_id,
                 name=request.name,
             )
             project = created_projects[0][0]
 
-            role_dao = RoleDAO(session)
+            role_dao = AsyncRoleDAO(session)
             owner_role = role_dao.get_by_name("Owner", organization_id=None)
             resource_access_dao.grant_access(
                 resource_type="project",
@@ -743,7 +761,7 @@ def create_project(
             )
             if existing_project:
                 raise ValueError("Project already exists")
-            project_dao.create(
+            await project_dao.create(
                 user_id=request_fastapi.state.user_id,
                 name=request.name,
                 icon=request.icon or "folder",
@@ -793,9 +811,9 @@ def create_project(
         },
     },
 )
-def delete_project_logs(
+async def delete_project_logs(
     request_fastapi: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     project: Project = Depends(get_project_or_404),
 ):
     """
@@ -811,13 +829,13 @@ def delete_project_logs(
             ),
         )
 
-    log_event_dao = LogEventDAO(session)
+    log_event_dao = AsyncLogEventDAO(session)
     # Get all log events for the project
-    log_events = log_event_dao.filter(project_id=project.id)
+    log_events = await log_event_dao.filter(project_id=project.id)
 
     # Delete each log event (cascade delete will handle related logs)
     for event in log_events:
-        log_event_dao.delete(event[0].id)
+        await log_event_dao.delete(event[0].id)
 
     return {"info": "All logs in project deleted successfully"}
 
@@ -847,10 +865,10 @@ def delete_project_logs(
         },
     },
 )
-def delete_project_contexts(
+async def delete_project_contexts(
     request_fastapi: Request,
     project: Project = Depends(get_project_or_404),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Deletes all contexts and their associated logs from a project.
@@ -866,11 +884,11 @@ def delete_project_contexts(
             ),
         )
 
-    context_dao = ContextDAO(session)
+    context_dao = AsyncContextDAO(session)
     # Get all contexts for the project
-    contexts = context_dao.filter(project_id=project.id)
+    contexts = await context_dao.filter(project_id=project.id)
     for context in contexts:
-        context_dao.delete(context[0].id)
+        await context_dao.delete(context[0].id)
 
     return {"info": "Project contexts and logs deleted successfully!"}
 
@@ -898,16 +916,16 @@ def delete_project_contexts(
         },
     },
 )
-def delete_project(
+async def delete_project(
     request_fastapi: Request,
     project: Project = Depends(get_project_or_404),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Deletes a project from your account.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
     # Check if trying to delete the protected projects (Unity, AssistantJobs)
@@ -944,7 +962,7 @@ def delete_project(
                 status_code=403,
                 detail=f"The '{PROD_TRAFFIC_PROJECT_NAME}' project cannot be deleted.",
             )
-        project_dao.delete(id=project.id)
+        await project_dao.delete(id=project.id)
 
     except:
         raise not_found(f"Project {project.name}")
@@ -985,17 +1003,17 @@ def delete_project(
         },
     },
 )
-def update_project(
+async def update_project(
     request_fastapi: Request,
     request: ProjectUpdate,
     project: Project = Depends(get_project_or_404),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Updates a project's name and/or description in your account.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
     # Check if trying to rename the protected Unity project
@@ -1024,7 +1042,7 @@ def update_project(
             update_kwargs["order"] = request.order
 
         if update_kwargs:
-            project_dao.update(id=project.id, **update_kwargs)
+            await project_dao.update(id=project.id, **update_kwargs)
 
         return {"info": "Project updated successfully!"}
     except ValueError as e:
@@ -1063,11 +1081,11 @@ def update_project(
         },
     },
 )
-def transfer_project_to_organization(
+async def transfer_project_to_organization(
     request_fastapi: Request,
     project_id: int,
     transfer_request: TransferToOrganizationRequest,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> TransferResponse:
     """
     Transfer a personal project to an organization.
@@ -1083,12 +1101,12 @@ def transfer_project_to_organization(
     - Creates explicit Owner ResourceAccess grant for the transferring user
     """
     user_id = request_fastapi.state.user_id
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    org_dao = OrganizationDAO(session)
-    resource_access_dao = ResourceAccessDAO(session)
-    role_dao = RoleDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
+    role_dao = AsyncRoleDAO(session)
 
     # Get project
     project = session.query(Project).filter(Project.id == project_id).first()
@@ -1114,7 +1132,7 @@ def transfer_project_to_organization(
         )
 
     # Get target organization
-    org = org_dao.get(transfer_request.organization_id)
+    org = await org_dao.get(transfer_request.organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1166,13 +1184,13 @@ def transfer_project_to_organization(
         )
 
         # Update organization_id for all plots belonging to this project
-        plot_dao = PlotDAO(session)
+        plot_dao = AsyncPlotDAO(session)
         plot_dao.update_organization_id(
             project_id=project_id,
             organization_id=transfer_request.organization_id,
         )
 
-        session.commit()
+        await session.commit()
 
         return TransferResponse(
             success=True,
@@ -1220,10 +1238,10 @@ def transfer_project_to_organization(
         },
     },
 )
-def transfer_project_to_personal(
+async def transfer_project_to_personal(
     request_fastapi: Request,
     project_id: int,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> TransferResponse:
     """
     Transfer an organizational project to personal ownership.
@@ -1241,11 +1259,11 @@ def transfer_project_to_personal(
     Warning: This is a destructive operation that removes team sharing.
     """
     user_id = request_fastapi.state.user_id
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    org_dao = OrganizationDAO(session)
-    resource_access_dao = ResourceAccessDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Get project
     project = session.query(Project).filter(Project.id == project_id).first()
@@ -1263,7 +1281,7 @@ def transfer_project_to_personal(
         )
 
     # Get organization
-    org = org_dao.get(project.organization_id)
+    org = await org_dao.get(project.organization_id)
 
     # Verify user has project:write permission
     has_write_permission = resource_access_dao.check_user_permission(
@@ -1308,13 +1326,13 @@ def transfer_project_to_personal(
         project.organization_id = None
 
         # Update organization_id for all plots belonging to this project
-        plot_dao = PlotDAO(session)
+        plot_dao = AsyncPlotDAO(session)
         plot_dao.update_organization_id(
             project_id=project_id,
             organization_id=None,  # Personal project
         )
 
-        session.commit()
+        await session.commit()
 
         return TransferResponse(
             success=True,
@@ -1363,10 +1381,10 @@ def transfer_project_to_personal(
         },
     },
 )
-def get_project(
+async def get_project(
     request_fastapi: Request,
     project: Project = Depends(get_project_or_404),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Returns detailed information about a specific project.
@@ -1401,9 +1419,9 @@ def get_project(
         },
     },
 )
-def list_projects(
+async def list_projects(
     request_fastapi: Request,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Returns the names of all projects stored in your account.
@@ -1411,8 +1429,8 @@ def list_projects(
     When using a personal API key, returns only personal projects.
     When using an organization API key, returns only that organization's projects.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
     # Get API key context (None = personal, int = org-specific)
@@ -1428,7 +1446,7 @@ def list_projects(
 @router.get("/projects/tree", response_model=List[ProjectTreeItem])
 async def list_projects_tree(
     request_fastapi: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Return all projects the user can access with their icons and interface names.
@@ -1436,12 +1454,12 @@ async def list_projects_tree(
     When using a personal API key, returns only personal projects.
     When using an organization API key, returns only that organization's projects.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    interface_dao = InterfaceDAO(session)
-    tab_dao = TabDAO(session)
-    favorite_project_dao = FavoriteProjectDAO(session)
+    interface_dao = AsyncInterfaceDAO(session)
+    tab_dao = AsyncTabDAO(session)
+    favorite_project_dao = AsyncFavoriteProjectDAO(session)
 
     # Get API key context (None = personal, int = org-specific)
     organization_id = getattr(request_fastapi.state, "organization_id", None)
@@ -1569,17 +1587,17 @@ async def list_projects_tree(
         },
     },
 )
-def export_project_template(
+async def export_project_template(
     request_fastapi: Request,
     request: ExportProjectTemplateRequest,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """Export project interfaces as a reusable template."""
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    interface_dao = InterfaceDAO(session)
-    tab_dao = TabDAO(session)
+    interface_dao = AsyncInterfaceDAO(session)
+    tab_dao = AsyncTabDAO(session)
 
     # Get the project
     project = project_dao.get_by_user_and_name(
@@ -1684,18 +1702,18 @@ def export_project_template(
         },
     },
 )
-def import_project_template(
+async def import_project_template(
     request_fastapi: Request,
     request: ImportProjectTemplateRequest,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """Import a project template into a project."""
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    interface_dao = InterfaceDAO(session)
-    tab_dao = TabDAO(session)
-    tile_dao = TileDAO(session)
+    interface_dao = AsyncInterfaceDAO(session)
+    tab_dao = AsyncTabDAO(session)
+    tile_dao = AsyncTileDAO(session)
 
     # Get target project
     project = project_dao.get_by_user_and_name(
@@ -1903,26 +1921,26 @@ admin_router = APIRouter()
         },
     },
 )
-def admin_share_project(
+async def admin_share_project(
     request: ShareProjectRequest,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Admin endpoint to share a project between users.
     This enables real-time collaboration between users.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    auth_user_dao = AuthUserDAO(session)
-    organization_dao = OrganizationDAO(session)
-    role_dao = RoleDAO(session)
-    api_key_dao = ApiKeyDAO(session)
-    resource_access_dao = ResourceAccessDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
+    organization_dao = AsyncOrganizationDAO(session)
+    role_dao = AsyncRoleDAO(session)
+    api_key_dao = AsyncApiKeyDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Lookup the from_user and to_user
-    from_user = auth_user_dao.get_by_id(request.from_user_id)
-    to_user = auth_user_dao.get_by_id(request.to_user_id)
+    from_user = await auth_user_dao.get_by_id(request.from_user_id)
+    to_user = await auth_user_dao.get_by_id(request.to_user_id)
 
     if not from_user or not to_user:
         raise not_found("User")
@@ -1939,7 +1957,7 @@ def admin_share_project(
     if project.organization_id is None:
         # Project is not associated with an organization yet
         # Try to find an existing organization for from_user
-        orgs = organization_dao.filter(owner_id=request.from_user_id)
+        orgs = await organization_dao.filter(owner_id=request.from_user_id)
 
         if orgs:
             # Use existing organization
@@ -1947,22 +1965,22 @@ def admin_share_project(
         else:
             # Create a new organization
             org_name = f"{from_user[0].email.split('@')[0]}'s Organization"
-            organization_dao.create(name=org_name, owner_id=request.from_user_id)
+            await organization_dao.create(name=org_name, owner_id=request.from_user_id)
             organization_dao.session.commit()
 
             # Re-fetch the newly created organization
-            orgs = organization_dao.filter(owner_id=request.from_user_id)
+            orgs = await organization_dao.filter(owner_id=request.from_user_id)
             organization = orgs[0][0]
 
         # Update the project to be associated with the organization
-        project_dao.update(
+        await project_dao.update(
             id=project.id,
             organization_id=organization.id,
             user_id=None,  # Remove user_id as it's now org-owned
         )
     else:
         # Project already belongs to an organization
-        orgs = organization_dao.filter(id=project.organization_id)
+        orgs = await organization_dao.filter(id=project.organization_id)
         organization = orgs[0][0]
 
     # Add the to_user to the organization with Admin role
@@ -1972,7 +1990,7 @@ def admin_share_project(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Admin system role not found",
         )
-    organization_member_dao.create(
+    await organization_member_dao.create(
         organization_id=organization.id,
         user_id=request.to_user_id,
         role_id=admin_role.id,
@@ -1980,13 +1998,13 @@ def admin_share_project(
 
     # Create org API keys for both users if they don't have them
     for user_id in [request.from_user_id, request.to_user_id]:
-        existing_key = api_key_dao.filter(
+        existing_key = await api_key_dao.filter(
             user_id=user_id,
             organization_id=organization.id,
         )
         if not existing_key:
             new_api_key = generate_key()
-            api_key_dao.create(
+            await api_key_dao.create(
                 key=new_api_key,
                 name=f"org_{organization.name}",
                 user_id=user_id,
@@ -2081,9 +2099,9 @@ def admin_share_project(
         },
     },
 )
-def admin_duplicate_project(
+async def admin_duplicate_project(
     request: DuplicateProjectRequest,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Admin endpoint to deep-copy (duplicate) a project from one user to another.
@@ -2106,19 +2124,19 @@ def admin_duplicate_project(
 
     The duplicate is a separate project where changes in one do not affect the other.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    auth_user_dao = AuthUserDAO(session)
-    log_event_dao = LogEventDAO(session)
-    derived_log_dao = DerivedLogDAO(session)
-    interface_dao = InterfaceDAO(session)
-    tab_dao = TabDAO(session)
-    tile_dao = TileDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
+    log_event_dao = AsyncLogEventDAO(session)
+    derived_log_dao = AsyncDerivedLogDAO(session)
+    interface_dao = AsyncInterfaceDAO(session)
+    tab_dao = AsyncTabDAO(session)
+    tile_dao = AsyncTileDAO(session)
 
     # 1. Validate users exist
-    from_user = auth_user_dao.get_by_id(request.from_user_id)
-    to_user = auth_user_dao.get_by_id(request.to_user_id)
+    from_user = await auth_user_dao.get_by_id(request.from_user_id)
+    to_user = await auth_user_dao.get_by_id(request.to_user_id)
 
     if not from_user or not to_user:
         raise not_found("User")
@@ -2145,7 +2163,7 @@ def admin_duplicate_project(
         )
 
     # 4. Create a new project for the target user
-    project_dao.create(
+    await project_dao.create(
         user_id=request.to_user_id,
         name=request.new_project_name,
         description=source_project.description,
@@ -2182,7 +2200,7 @@ def admin_duplicate_project(
     log_event_id_map = {}
 
     # 5. Duplicate Contexts using bulk insert with RETURNING
-    contexts = context_dao.filter(project_id=source_project.id)
+    contexts = await context_dao.filter(project_id=source_project.id)
     context_values = []
     old_context_ids = []
 
@@ -2474,7 +2492,7 @@ def admin_duplicate_project(
         )  # Track (old_log_event_id, new_log_event_id) for associations
 
         for old_log_event_id, new_log_event_id in log_event_id_map.items():
-            derived_logs = derived_log_dao.filter(log_event_id=old_log_event_id)
+            derived_logs = await derived_log_dao.filter(log_event_id=old_log_event_id)
 
             for dl_tuple in derived_logs:
                 dl = dl_tuple[0]
@@ -2568,7 +2586,7 @@ def admin_duplicate_project(
             stats["terminal_tiles_copied"] = tile_result["terminal_tile_count"]
 
     # 13. Commit all changes
-    session.commit()
+    await session.commit()
 
     return {
         "info": f"Project '{request.from_project_name}' duplicated successfully to '{request.new_project_name}'!",
@@ -2583,17 +2601,17 @@ def admin_duplicate_project(
     description="Lists ALL projects in an org, bypassing ResourceAccess checks. "
     "Useful for finding orphaned projects.",
 )
-def admin_list_org_projects(
+async def admin_list_org_projects(
     org_id: int,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[ProjectOut]:
     """List all projects in an org without access control checks."""
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
     # Use filter() which bypasses RBAC (not filter_by_user_access)
-    projects = project_dao.filter(organization_id=org_id)
+    projects = await project_dao.filter(organization_id=org_id)
 
     return [
         ProjectOut(
@@ -2618,18 +2636,18 @@ def admin_list_org_projects(
     description="Deletes any project by ID, including orphaned projects. "
     "Use with caution - this bypasses all access checks.",
 )
-def admin_delete_project(
+async def admin_delete_project(
     project_id: int,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """Delete a project by ID (admin bypass)."""
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    resource_access_dao = ResourceAccessDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Get project
-    project = project_dao.get(project_id)
+    project = await project_dao.get(project_id)
     if not project:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -2655,8 +2673,8 @@ def admin_delete_project(
             )
 
         # Delete the project (cascades to contexts, logs, etc.)
-        project_dao.delete(project_id)
-        session.commit()
+        await project_dao.delete(project_id)
+        await session.commit()
 
         return {
             "info": f"Project '{project_name}' (id={project_id}) deleted successfully",
@@ -2677,16 +2695,16 @@ def admin_delete_project(
     description="Grants access to any resource, bypassing permission checks. "
     "Useful for fixing orphaned resources.",
 )
-def admin_grant_resource_access(
+async def admin_grant_resource_access(
     request: AdminResourceAccessGrant,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """Grant resource access (admin bypass)."""
-    resource_access_dao = ResourceAccessDAO(session)
-    role_dao = RoleDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
+    role_dao = AsyncRoleDAO(session)
 
     # Verify role exists
-    role = role_dao.get(request.role_id)
+    role = await role_dao.get(request.role_id)
     if not role:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -2701,7 +2719,7 @@ def admin_grant_resource_access(
             grantee_type=request.grantee_type,
             grantee_id=request.grantee_id,
         )
-        session.commit()
+        await session.commit()
 
         return {
             "info": "Access granted successfully",

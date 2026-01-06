@@ -13,7 +13,14 @@ from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
-from orchestra.db.dependencies import get_db_session
+
+# Async DAOs
+from orchestra.db.dao.async_context_dao import AsyncContextDAO
+from orchestra.db.dao.async_field_type_dao import AsyncFieldTypeDAO
+from orchestra.db.dao.async_log_dao import AsyncLogDAO
+from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
+from orchestra.db.dao.async_project_dao import AsyncProjectDAO
+from orchestra.db.dependencies import get_async_db_session, get_db_session
 from orchestra.db.models.orchestra_models import Context
 from orchestra.web.api.context.schema import (
     AddLogsToContextRequest,
@@ -104,7 +111,7 @@ router = APIRouter()
         },
     },
 )
-def create_context(
+async def create_context(
     request_fastapi: Request,
     request: Union[
         ContextCreateRequest,
@@ -115,7 +122,7 @@ def create_context(
         description="Name of the project to create context in.",
         example="my_project",
     ),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Creates one or more contexts within a project. Contexts can be used to organize logs
@@ -130,8 +137,8 @@ def create_context(
     - A list of strings for batch creation
     - A list of ContextCreateRequest objects for batch creation
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
     organization_id = getattr(request_fastapi.state, "organization_id", None)
@@ -287,7 +294,7 @@ def create_context(
         },
     },
 )
-def get_contexts(
+async def get_contexts(
     request_fastapi: Request,
     project_name: str = Path(
         description="Name of the project to create context in.",
@@ -298,14 +305,14 @@ def get_contexts(
         description="Optional prefix to filter contexts by name",
         example="experiment1/",
     ),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Get a list of contexts within a project.
     Returns information about each context including its versioning status and current version.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
     organization_id = getattr(request_fastapi.state, "organization_id", None)
@@ -318,7 +325,7 @@ def get_contexts(
         if not project:
             raise IndexError
         project_id = project.id
-        existing_contexts = context_dao.filter(project_id=project_id)
+        existing_contexts = await context_dao.filter(project_id=project_id)
         # filter out default context
         if not existing_contexts:
             return []
@@ -353,17 +360,17 @@ def get_contexts(
     response_model=List[ContextCommitHistory],
     summary="Get context commit history",
 )
-def get_context_commits(
+async def get_context_commits(
     request_fastapi: Request,
     project_name: str,
     context_name: str,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Retrieves the commit history for a versioned context.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     user_id = request_fastapi.state.user_id
     organization_id = getattr(request_fastapi.state, "organization_id", None)
@@ -376,7 +383,7 @@ def get_context_commits(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    context_obj = context_dao.filter(project_id=project.id, name=context_name)
+    context_obj = await context_dao.filter(project_id=project.id, name=context_name)
     if not context_obj:
         raise HTTPException(status_code=404, detail="Context not found")
     context_id = context_obj[0][0].id
@@ -418,7 +425,7 @@ def get_context_commits(
         },
     },
 )
-def get_context(
+async def get_context(
     request_fastapi: Request,
     project_name: str = Path(
         description="Name of the project containing the context.",
@@ -428,13 +435,13 @@ def get_context(
         description="Name of the context to retrieve.",
         example="my_context",
     ),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Get information about a specific context including its versioning status and current version.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
@@ -450,7 +457,7 @@ def get_context(
         # Normalize context name: remove leading slash to treat '/exp1/name1' the same as 'exp1/name1'
         context_name = context_name.lstrip("/")
 
-        context = context_dao.filter(
+        context = await context_dao.filter(
             project_id=project_id,
             name=context_name,
         )
@@ -519,7 +526,7 @@ def get_context(
         },
     },
 )
-def delete_context(
+async def delete_context(
     request_fastapi: Request,
     project_name: str = Path(
         description="Name of the project to delete context from.",
@@ -538,7 +545,7 @@ def delete_context(
             "does not need to exist for children to be deleted."
         ),
     ),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Deletes a context from a project. This will not delete the logs or artifacts
@@ -549,8 +556,8 @@ def delete_context(
     exist in sibling contexts (All/X, User/All/X) will also have their associations
     cleaned up.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
     # Normalize context name: remove leading/trailing slashes
@@ -583,7 +590,7 @@ def delete_context(
             )
         else:
             # Exact match only
-            context_result = context_dao.filter(
+            context_result = await context_dao.filter(
                 project_id=project_id,
                 name=context_name,
             )
@@ -608,7 +615,7 @@ def delete_context(
             # Delete the context
             # The DAO handles sibling cleanup for Assistants/UnityTests projects,
             # GCS media cleanup, cascade deletion, and orphan log event cleanup
-            context_dao.delete(id=ctx.id)
+            await context_dao.delete(id=ctx.id)
             deleted_names.append(ctx.name)
 
         if len(deleted_names) == 1:
@@ -645,14 +652,14 @@ def delete_context(
         },
     },
 )
-def add_logs_to_context(
+async def add_logs_to_context(
     request_fastapi: Request,
     request: AddLogsToContextRequest,
     project_name: str = Path(
         description="Name of the project to create context in.",
         example="my_project",
     ),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Adds existing logs to a context within a project. The logs must already exist
@@ -665,10 +672,10 @@ def add_logs_to_context(
     If copy=True, new copies of the logs will be created and added to the context.
     If copy=False (default), the existing logs will be associated with the context.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    field_type_dao = FieldTypeDAO(session)
+    field_type_dao = AsyncFieldTypeDAO(session)
     log_dao = LogDAO(session, context_dao)
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
@@ -689,14 +696,14 @@ def add_logs_to_context(
         else:
             context_name_value = context_name.get("name")
 
-        context = context_dao.filter(
+        context = await context_dao.filter(
             project_id=project_id,
             name=context_name_value,
         )
 
         # Implicitly create the context if it doesn't exist
         if not context:
-            context_id = context_dao.create(
+            context_id = await context_dao.create(
                 project_id=project_id,
                 name=context_name_value,
                 description=None,  # Default description to None for implicitly created contexts
@@ -851,7 +858,7 @@ def add_logs_to_context(
                     existing_field_names.add(field_name)
         else:
             # EAV mode: query Log table
-            logs = log_dao.filter(
+            logs = await log_dao.filter(
                 project_id=project_id,
                 log_event_id=log_ids,
             )
@@ -931,16 +938,16 @@ def add_logs_to_context(
         },
     },
 )
-def rename_context(
+async def rename_context(
     request_fastapi: Request,
     body: RenameContextRequest,
     project_name: str = Path(...),
     context_name: str = Path(...),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """Rename an existing context within a project."""
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
 
     # Normalize context name: remove leading slash to treat '/exp1/name1' the same as 'exp1/name1'
@@ -962,7 +969,7 @@ def rename_context(
     if not project:
         raise not_found("Project")
     # 2) Load context
-    ctx_list = context_dao.filter(
+    ctx_list = await context_dao.filter(
         project_id=project.id,
         name=context_name,
     )
@@ -973,7 +980,7 @@ def rename_context(
     try:
         # Normalize new context name: remove any leading slash from provided name
         new_name = body.name.lstrip("/")
-        context_dao.update(id=ctx_id, name=new_name)
+        await context_dao.update(id=ctx_id, name=new_name)
     except IntegrityError:
         raise HTTPException(
             status_code=400,
@@ -986,18 +993,18 @@ def rename_context(
     "/project/{project_name:path}/contexts/{context_name:path}/commit",
     summary="Commit a context version",
 )
-def commit_context_version(
+async def commit_context_version(
     request_fastapi: Request,
     project_name: str,
     context_name: str,
     commit_data: ContextCommit,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Creates a new version snapshot for a specific context.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     user_id = request_fastapi.state.user_id
     organization_id = getattr(request_fastapi.state, "organization_id", None)
@@ -1010,7 +1017,7 @@ def commit_context_version(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    context_obj = context_dao.filter(project_id=project.id, name=context_name)
+    context_obj = await context_dao.filter(project_id=project.id, name=context_name)
     if not context_obj:
         raise HTTPException(status_code=404, detail="Context not found")
     context_id = context_obj[0][0].id
@@ -1026,18 +1033,18 @@ def commit_context_version(
     "/project/{project_name:path}/contexts/{context_name:path}/rollback",
     summary="Rollback a context to a version",
 )
-def rollback_context_version(
+async def rollback_context_version(
     request_fastapi: Request,
     project_name: str,
     context_name: str,
     rollback_data: ContextRollback,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Rolls back a context to a specific version by commit hash.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     user_id = request_fastapi.state.user_id
     organization_id = getattr(request_fastapi.state, "organization_id", None)
@@ -1050,7 +1057,7 @@ def rollback_context_version(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    context_obj = context_dao.filter(project_id=project.id, name=context_name)
+    context_obj = await context_dao.filter(project_id=project.id, name=context_name)
     if not context_obj:
         raise HTTPException(status_code=404, detail="Context not found")
     context_id = context_obj[0][0].id

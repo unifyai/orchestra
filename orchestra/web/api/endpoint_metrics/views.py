@@ -23,7 +23,14 @@ from orchestra import settings
 # from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 # from orchestra.db.dao.endpoint_dao import EndpointDAO
 # from orchestra.db.dao.latest_benchmark_dao import LatestBenchmarkDAO
-# from orchestra.db.dependencies import get_db_session
+
+# Async DAOs
+from orchestra.db.dao.async_benchmark_run_dao import AsyncBenchmarkRunDAO
+from orchestra.db.dao.async_custom_endpoint_benchmark_dao import AsyncCustomEndpointBenchmarkDAO
+from orchestra.db.dao.async_custom_endpoint_dao import AsyncCustomEndpointDAO
+from orchestra.db.dao.async_endpoint_dao import AsyncEndpointDAO
+from orchestra.db.dao.async_latest_benchmark_dao import AsyncLatestBenchmarkDAO
+# from orchestra.db.dependencies import get_async_db_session, get_db_session
 # from orchestra.web.api.utils.http_responses import model_not_found
 from orchestra.web.api.utils.http_responses import not_found
 
@@ -47,9 +54,9 @@ ALLOWED_METRICS_STR = ALLOWED_METRICS_STR[:-2]
 # def _get_endpoint_from_model_provider(
 #     model: str,
 #     provider: str,
-#     session=Depends(get_db_session),
+#     session: AsyncSession = Depends(get_async_db_session),
 # ):
-#     endpoint_dao = EndpointDAO(session)
+#     endpoint_dao = AsyncEndpointDAO(session)
 #     try:
 #         endpoints = endpoint_dao.get_endpoints_of(
 #             models=(model,) if isinstance(model, str) else model,
@@ -73,15 +80,15 @@ ALLOWED_METRICS_STR = ALLOWED_METRICS_STR[:-2]
 #     model: str,
 #     start_time: str = None,
 #     end_time: str = None,
-#     session=Depends(get_db_session),
+#     session: AsyncSession = Depends(get_async_db_session),
 # ):
-#     custom_endpoint_dao = CustomEndpointDAO(session)
-#     custom_endpoint_benchmark_dao = CustomEndpointBenchmarkDAO(session)
+#     custom_endpoint_dao = AsyncCustomEndpointDAO(session)
+#     custom_endpoint_benchmark_dao = AsyncCustomEndpointBenchmarkDAO(session)
 #     start_time_provided = start_time is not None
 #     end_time_provided = end_time is not None
 #     try:
 #         user_id = request_fastapi.state.user_id
-#         available_endpoints = custom_endpoint_dao.filter(
+#         available_endpoints = await custom_endpoint_dao.filter(
 #             user_id=user_id,
 #             name=model,
 #         )
@@ -218,10 +225,10 @@ ALLOWED_METRICS_STR = ALLOWED_METRICS_STR[:-2]
 #         "Defaults to current time if unspecified.",
 #         example="2024-08-12T04:20:32.808410",
 #     ),
-#     session=Depends(get_db_session),
+#     session: AsyncSession = Depends(get_async_db_session),
 # ):
-#     custom_endpoint_dao = CustomEndpointDAO(session)
-#     custom_endpoint_benchmark_dao = CustomEndpointBenchmarkDAO(session)
+#     custom_endpoint_dao = AsyncCustomEndpointDAO(session)
+#     custom_endpoint_benchmark_dao = AsyncCustomEndpointBenchmarkDAO(session)
 #     """
 #     Append speed or cost data to the standardized time-series benchmarks for a custom
 #     endpoint (only custom endpoints are publishable by end users).
@@ -234,7 +241,7 @@ ALLOWED_METRICS_STR = ALLOWED_METRICS_STR[:-2]
 #         )
 #     # check if the endpoint is valid
 #     user_id = request_fastapi.state.user_id
-#     available_endpoints = custom_endpoint_dao.filter(
+#     available_endpoints = await custom_endpoint_dao.filter(
 #         user_id=user_id,
 #         name=endpoint_name,
 #     )
@@ -326,7 +333,7 @@ ALLOWED_METRICS_STR = ALLOWED_METRICS_STR[:-2]
 #         "Only the latest benchmark is returned if both are unspecified.",
 #         example="2024-08-12T04:20:32.808410",
 #     ),
-#     session=Depends(get_db_session),
+#     session: AsyncSession = Depends(get_async_db_session),
 # ):
 #     """
 #     Extracts cost and speed data for the provided endpoint via our standardized
@@ -342,11 +349,11 @@ ALLOWED_METRICS_STR = ALLOWED_METRICS_STR[:-2]
 #     assumed to be the current time. An exception is raised if only `end_time` is
 #     provided.
 #     """
-#     endpoint_dao = EndpointDAO(session)
-#     latest_benchmark_dao = LatestBenchmarkDAO(session)
-#     benchmark_run_dao = BenchmarkRunDAO(session)
-#     custom_endpoint_dao = CustomEndpointDAO(session)
-#     custom_endpoint_benchmark_dao = CustomEndpointBenchmarkDAO(session)
+#     endpoint_dao = AsyncEndpointDAO(session)
+#     latest_benchmark_dao = AsyncLatestBenchmarkDAO(session)
+#     benchmark_run_dao = AsyncBenchmarkRunDAO(session)
+#     custom_endpoint_dao = AsyncCustomEndpointDAO(session)
+#     custom_endpoint_benchmark_dao = AsyncCustomEndpointBenchmarkDAO(session)
 
 #     start_time_provided = start_time is not None
 #     end_time_provided = end_time is not None
@@ -472,7 +479,7 @@ ALLOWED_METRICS_STR = ALLOWED_METRICS_STR[:-2]
 #         description="List of timestamps to delete the endpoint metrics for.",
 #         example="2024-08-17T19:19:37.289937",
 #     ),
-#     session=Depends(get_db_session),
+#     session: AsyncSession = Depends(get_async_db_session),
 # ) -> Dict[str, str]:
 #     """
 #     Delete all benchmark time-series data for a given *custom* endpoint with the
@@ -480,11 +487,11 @@ ALLOWED_METRICS_STR = ALLOWED_METRICS_STR[:-2]
 #     will be deleted for the specified custom endpoint.
 #     The time-series benchmark data for *public* endpoints are not deletable.
 #     """
-#     custom_endpoint_dao = CustomEndpointDAO(session)
-#     custom_endpoint_benchmark_dao = CustomEndpointBenchmarkDAO(session)
+#     custom_endpoint_dao = AsyncCustomEndpointDAO(session)
+#     custom_endpoint_benchmark_dao = AsyncCustomEndpointBenchmarkDAO(session)
 
 #     user_id = request_fastapi.state.user_id
-#     available_endpoints = custom_endpoint_dao.filter(
+#     available_endpoints = await custom_endpoint_dao.filter(
 #         user_id=user_id,
 #         name=endpoint_name,
 #     )
@@ -497,7 +504,7 @@ ALLOWED_METRICS_STR = ALLOWED_METRICS_STR[:-2]
 #             status_code=400,
 #             detail=f"""The endpoint: {endpoint_name} was not found in your account.""",
 #         )
-#     custom_endpoint_benchmark_dao.delete(
+#     await custom_endpoint_benchmark_dao.delete(
 #         endpoint_id,
 #         timestamps,
 #     )
@@ -523,7 +530,7 @@ ALLOWED_METRICS_STR = ALLOWED_METRICS_STR[:-2]
         },
     },
 )
-def get_endpoint_details(
+async def get_endpoint_details(
     endpoint: str = Query(
         default=None,
         description="Name of the endpoint.",

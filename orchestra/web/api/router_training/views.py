@@ -10,6 +10,10 @@ from providers.completion import PROVIDER_CLASSES
 
 from orchestra.db.dao.dataset_dao import DatasetDAO
 from orchestra.db.dao.router_dao import RouterDAO
+
+# Async DAOs
+from orchestra.db.dao.async_dataset_dao import AsyncDatasetDAO
+from orchestra.db.dao.async_router_dao import AsyncRouterDAO
 from orchestra.web.api.utils.gcp import read_from_bucket, send_pubsub_msg
 
 router = APIRouter()
@@ -17,7 +21,7 @@ router = APIRouter()
 # utils
 
 
-def is_standard_endpoint(model: str, provider: str):
+async def is_standard_endpoint(model: str, provider: str):
     if provider in PROVIDER_CLASSES:
         lm = PROVIDER_CLASSES[provider](model)
         if model in lm.supported_models:
@@ -25,7 +29,7 @@ def is_standard_endpoint(model: str, provider: str):
     return False
 
 
-def find_invalid_endpoints(endpoints):
+async def find_invalid_endpoints(endpoints):
     invalid_endpoints = []
     for e in endpoints:
         model, provider = e.split("@")
@@ -44,7 +48,7 @@ def find_invalid_endpoints(endpoints):
     return invalid_endpoints
 
 
-def send_to_train_server(action, **data):
+async def send_to_train_server(action, **data):
     topic = "projects/saas-368716/topics/train_router"
     url = "https://api.unify.ai"  # TODO: Deal with staging/test
     send_pubsub_msg(
@@ -103,7 +107,7 @@ def send_to_train_server(action, **data):
         },
     },
 )
-def train_router(
+async def train_router(
     request_fastapi: Request,
     name: str = Query(description="Name of the router.", example="my_router"),
     dataset: Optional[str] = Query(
@@ -139,7 +143,7 @@ def train_router(
     api_key = request_fastapi.headers["authorization"].removeprefix("Bearer ")
 
     # Check if the name is unique
-    name_exists = router_dao.filter(user_id=user_id, name=name)
+    name_exists = await router_dao.filter(user_id=user_id, name=name)
     if name_exists:
         raise HTTPException(
             status_code=400,
@@ -161,7 +165,7 @@ def train_router(
         raise invalid_training_endpoints(invalid_endpoints)
 
     # check if the evaluator exists
-    evaluator_id = evaluator_dao.filter(user_id=user_id, name=evaluator)
+    evaluator_id = await evaluator_dao.filter(user_id=user_id, name=evaluator)
     if not evaluator_id:
         raise HTTPException(
             status_code=400,
@@ -174,7 +178,7 @@ def train_router(
     # or no evaluations exist
 
     # create in the router db
-    router_id = router_dao.create(
+    router_id = await router_dao.create(
         user_id=user_id,
         name=name,
         endpoints=",".join(endpoints),
@@ -221,7 +225,7 @@ def train_router(
         },
     },
 )
-def delete_router(
+async def delete_router(
     request_fastapi: Request,
     name: str = Query(
         description="Name of the router to delete.",
@@ -233,7 +237,7 @@ def delete_router(
     Deletes a specific trained router, as well as all the training files etc.
     """
     user_id = request_fastapi.state.user_id
-    name_exists = router_dao.filter(user_id=user_id, name=name)
+    name_exists = await router_dao.filter(user_id=user_id, name=name)
     if not name_exists:
         raise HTTPException(
             status_code=400,
@@ -242,13 +246,13 @@ def delete_router(
 
     # TODO: delete training artifacts + from gcp
 
-    router_dao.delete(user_id=user_id, name=name)
+    await router_dao.delete(user_id=user_id, name=name)
 
     return {"info": "Trained router deleted!"}
 
 
 @router.post("/router/rename")
-def rename_router(
+async def rename_router(
     request_fastapi: Request,
     name: str = Query(
         description="The original name of the router.",
@@ -265,14 +269,14 @@ def rename_router(
     """
     user_id = request_fastapi.state.user_id
 
-    name_exists = router_dao.filter(user_id=user_id, name=name)
+    name_exists = await router_dao.filter(user_id=user_id, name=name)
     if not name_exists:
         raise HTTPException(
             status_code=400,
             detail=f"You don't have a router with the name: {name}",
         )
 
-    new_name_exists = router_dao.filter(user_id=user_id, name=new_name)
+    new_name_exists = await router_dao.filter(user_id=user_id, name=new_name)
     if new_name_exists:
         raise HTTPException(
             status_code=400,
@@ -302,7 +306,7 @@ def rename_router(
         },
     },
 )
-def list_routers(
+async def list_routers(
     request_fastapi: Request,
     router_dao: RouterDAO = Depends(),
 ) -> list[str]:
@@ -314,7 +318,7 @@ def list_routers(
     """
     user_id = request_fastapi.state.user_id
 
-    raw = router_dao.filter(user_id=user_id)
+    raw = await router_dao.filter(user_id=user_id)
 
     # TODO: return more information (dataset, evaluator, endpoints etc)
     routers_list = [r.name for r in raw]
@@ -323,7 +327,7 @@ def list_routers(
 
 # old function for frontend
 @router.get("/get_dataset_evaluation")
-def get_dataset_evaluation(
+async def get_dataset_evaluation(
     request_fastapi: Request,
     dataset_name: str,
 ) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:

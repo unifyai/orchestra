@@ -8,6 +8,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.context_dao import ContextDAO
@@ -16,7 +17,7 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.plot_dao import PlotDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
-from orchestra.db.dependencies import get_db_session
+from orchestra.db.dependencies import get_async_db_session, get_db_session
 from orchestra.db.models.orchestra_models import Plot, Project
 from orchestra.settings import settings
 from orchestra.web.api.plot.llm_inference import (
@@ -48,15 +49,15 @@ admin_router = APIRouter()
 # =============================================================================
 
 
-def _get_project_by_name(
+async def _get_project_by_name(
     project_name: str,
     user_id: str,
     organization_id: Optional[int],
     session: Session,
 ) -> Optional[Project]:
     """Get project by name with access validation."""
-    org_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    org_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, org_member_dao, context_dao)
 
     # Use filter_by_user_access to respect API key context
@@ -70,7 +71,7 @@ def _get_project_by_name(
     return rows[0][0] if rows else None
 
 
-def _check_project_permission(
+async def _check_project_permission(
     project: Project,
     user_id: str,
     organization_id: Optional[int],
@@ -83,7 +84,7 @@ def _check_project_permission(
         return project.user_id == user_id
 
     # Org projects: check RBAC
-    resource_access_dao = ResourceAccessDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
     return resource_access_dao.check_user_permission(
         user_id=user_id,
         resource_type="project",
@@ -92,13 +93,13 @@ def _check_project_permission(
     )
 
 
-def _build_plot_url(token: str) -> str:
+async def _build_plot_url(token: str) -> str:
     """Build the shareable plot URL."""
     console_url = settings.console_url.rstrip("/")
     return f"{console_url}/plot/view/{token}"
 
 
-def _plot_to_response(plot: Plot, project_name: str) -> PlotResponse:
+async def _plot_to_response(plot: Plot, project_name: str) -> PlotResponse:
     """Convert Plot model to PlotResponse."""
     return PlotResponse(
         url=_build_plot_url(plot.token),
@@ -119,7 +120,7 @@ def _plot_to_response(plot: Plot, project_name: str) -> PlotResponse:
     )
 
 
-def _plot_to_list_item(plot: Plot, project_name: str) -> PlotListItem:
+async def _plot_to_list_item(plot: Plot, project_name: str) -> PlotListItem:
     """Convert Plot model to PlotListItem."""
     return PlotListItem(
         token=plot.token,
@@ -150,7 +151,7 @@ def _plot_to_list_item(plot: Plot, project_name: str) -> PlotListItem:
 async def create_plot(
     request_fastapi: Request,
     body: CreatePlotRequest,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> PlotResponse:
     """
     Create a new shareable plot.
@@ -207,8 +208,8 @@ async def create_plot(
     if body.description and not body.plot_config:
         # LLM inference mode
         # Fetch available fields
-        field_type_dao = FieldTypeDAO(session)
-        field_types = field_type_dao.filter(
+        field_type_dao = AsyncFieldTypeDAO(session)
+        field_types = await field_type_dao.filter(
             project_id=project.id,
             context_id=None,
         )
@@ -226,7 +227,16 @@ async def create_plot(
             # Get API key for LLM call
             from orchestra.db.dao.api_key_dao import ApiKeyDAO
 
-            api_key_dao = ApiKeyDAO(session)
+# Async DAOs
+from orchestra.db.dao.async_context_dao import AsyncContextDAO
+from orchestra.db.dao.async_field_type_dao import AsyncFieldTypeDAO
+from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
+from orchestra.db.dao.async_plot_dao import AsyncPlotDAO
+from orchestra.db.dao.async_project_dao import AsyncProjectDAO
+from orchestra.db.dao.async_resource_access_dao import AsyncResourceAccessDAO
+from orchestra.db.dao.async_api_key_dao import AsyncApiKeyDAO
+
+            api_key_dao = AsyncApiKeyDAO(session)
             if organization_id:
                 keys = api_key_dao.get_organization_keys(user_id, organization_id)
             else:
@@ -289,8 +299,8 @@ async def create_plot(
     project_config_dict = body.project_config.model_dump(exclude_none=True)
 
     # Create plot
-    plot_dao = PlotDAO(session)
-    plot = plot_dao.create(
+    plot_dao = AsyncPlotDAO(session)
+    plot = await plot_dao.create(
         project_id=project.id,
         user_id=user_id,
         organization_id=organization_id,
@@ -299,7 +309,7 @@ async def create_plot(
         title=body.title,
     )
 
-    session.commit()
+    await session.commit()
 
     response = _plot_to_response(plot, project_name)
     if inferred_config:
@@ -315,7 +325,7 @@ async def create_plot(
         200: {"description": "List of plots"},
     },
 )
-def list_plots(
+async def list_plots(
     request_fastapi: Request,
     project_name: Optional[str] = Query(
         None,
@@ -325,7 +335,7 @@ def list_plots(
         None,
         description="Filter by context (stored in project_config)",
     ),
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> PlotListResponse:
     """
     List plots accessible to the user.
@@ -336,7 +346,7 @@ def list_plots(
     user_id = request_fastapi.state.user_id
     organization_id = request_fastapi.state.organization_id
 
-    plot_dao = PlotDAO(session)
+    plot_dao = AsyncPlotDAO(session)
 
     # If project_name specified, get project first
     project_id = None
@@ -353,13 +363,13 @@ def list_plots(
     )
 
     # Get project names for response
-    org_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    org_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, org_member_dao, context_dao)
 
     items = []
     for plot in plots:
-        project = project_dao.get(plot.project_id)
+        project = await project_dao.get(plot.project_id)
         if project:
             items.append(_plot_to_list_item(plot, project.name))
 
@@ -375,10 +385,10 @@ def list_plots(
         404: {"description": "Plot not found"},
     },
 )
-def get_plot(
+async def get_plot(
     request_fastapi: Request,
     token: str,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> PlotResponse:
     """
     Get a plot by token.
@@ -388,7 +398,7 @@ def get_plot(
     user_id = request_fastapi.state.user_id
     organization_id = request_fastapi.state.organization_id
 
-    plot_dao = PlotDAO(session)
+    plot_dao = AsyncPlotDAO(session)
     plot = plot_dao.get_by_token(token)
 
     if not plot:
@@ -398,10 +408,10 @@ def get_plot(
         )
 
     # Get project
-    org_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    org_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, org_member_dao, context_dao)
-    project = project_dao.get(plot.project_id)
+    project = await project_dao.get(plot.project_id)
 
     if not project:
         raise HTTPException(
@@ -434,11 +444,11 @@ def get_plot(
         404: {"description": "Plot not found"},
     },
 )
-def update_plot(
+async def update_plot(
     request_fastapi: Request,
     token: str,
     body: UpdatePlotRequest,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> PlotResponse:
     """
     Update a plot.
@@ -448,7 +458,7 @@ def update_plot(
     user_id = request_fastapi.state.user_id
     organization_id = request_fastapi.state.organization_id
 
-    plot_dao = PlotDAO(session)
+    plot_dao = AsyncPlotDAO(session)
     plot = plot_dao.get_by_token(token)
 
     if not plot:
@@ -458,10 +468,10 @@ def update_plot(
         )
 
     # Get project
-    org_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    org_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, org_member_dao, context_dao)
-    project = project_dao.get(plot.project_id)
+    project = await project_dao.get(plot.project_id)
 
     if not project:
         raise HTTPException(
@@ -483,7 +493,7 @@ def update_plot(
         )
 
     # Update plot
-    updated_plot = plot_dao.update(
+    updated_plot = await plot_dao.update(
         plot_id=plot.id,
         title=body.title,
         plot_config=body.plot_config.model_dump(exclude_none=True)
@@ -494,7 +504,7 @@ def update_plot(
         else None,
     )
 
-    session.commit()
+    await session.commit()
 
     return _plot_to_response(updated_plot, project.name)
 
@@ -508,10 +518,10 @@ def update_plot(
         404: {"description": "Plot not found"},
     },
 )
-def delete_plot(
+async def delete_plot(
     request_fastapi: Request,
     token: str,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Delete a plot.
@@ -521,7 +531,7 @@ def delete_plot(
     user_id = request_fastapi.state.user_id
     organization_id = request_fastapi.state.organization_id
 
-    plot_dao = PlotDAO(session)
+    plot_dao = AsyncPlotDAO(session)
     plot = plot_dao.get_by_token(token)
 
     if not plot:
@@ -531,10 +541,10 @@ def delete_plot(
         )
 
     # Get project
-    org_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    org_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, org_member_dao, context_dao)
-    project = project_dao.get(plot.project_id)
+    project = await project_dao.get(plot.project_id)
 
     if not project:
         raise HTTPException(
@@ -555,8 +565,8 @@ def delete_plot(
             detail="You do not have write access to this plot's project",
         )
 
-    plot_dao.delete(plot.id)
-    session.commit()
+    await plot_dao.delete(plot.id)
+    await session.commit()
 
 
 @router.delete(
@@ -568,10 +578,10 @@ def delete_plot(
         404: {"description": "Project not found"},
     },
 )
-def delete_plots_by_project(
+async def delete_plots_by_project(
     request_fastapi: Request,
     body: DeletePlotsByProjectRequest,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> dict:
     """
     Delete all plots for a project, optionally filtered by context.
@@ -608,13 +618,13 @@ def delete_plots_by_project(
         )
 
     # Delete plots
-    plot_dao = PlotDAO(session)
+    plot_dao = AsyncPlotDAO(session)
     deleted_count = plot_dao.delete_by_project(
         project_id=project.id,
         context=body.context,
     )
 
-    session.commit()
+    await session.commit()
 
     return {
         "deleted_count": deleted_count,
@@ -636,16 +646,16 @@ def delete_plots_by_project(
         404: {"description": "Plot not found"},
     },
 )
-def admin_get_plot(
+async def admin_get_plot(
     token: str = Query(..., description="Plot token"),
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> AdminPlotResponse:
     """
     Admin endpoint to get plot by token.
 
     Returns user_metadata for API key lookup during plot viewing.
     """
-    plot_dao = PlotDAO(session)
+    plot_dao = AsyncPlotDAO(session)
     plot = plot_dao.get_by_token(token)
 
     if not plot:
@@ -655,10 +665,10 @@ def admin_get_plot(
         )
 
     # Get project name
-    org_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    org_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, org_member_dao, context_dao)
-    project = project_dao.get(plot.project_id)
+    project = await project_dao.get(plot.project_id)
 
     project_name = project.name if project else "Unknown"
 

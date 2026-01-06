@@ -4,7 +4,7 @@ router = APIRouter()
 
 
 @router.get("/health", include_in_schema=False)
-def health_check() -> None:
+async def health_check() -> None:
     """
     Checks the health of a project.
 

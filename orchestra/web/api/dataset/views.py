@@ -10,6 +10,10 @@ from starlette import status
 
 from orchestra.db.dao.dataset_dao import DatasetDAO
 from orchestra.db.dao.dataset_entry_dao import DatasetEntryDAO
+
+# Async DAOs
+from orchestra.db.dao.async_dataset_dao import AsyncDatasetDAO
+from orchestra.db.dao.async_dataset_entry_dao import AsyncDatasetEntryDAO
 from orchestra.web.api.dataset.schema import DatasetInfo, DatasetNewName, EntriesConfig
 from orchestra.web.api.utils.http_responses import not_found
 
@@ -32,7 +36,7 @@ router = APIRouter()
         },
     },
 )
-def list_datasets(
+async def list_datasets(
     request: Request,
     dataset_dao: DatasetDAO = Depends(),
 ):
@@ -65,7 +69,7 @@ def list_datasets(
         },
     },
 )
-def get_dataset_entries(
+async def get_dataset_entries(
     request: Request,
     name: str = Path(
         ...,
@@ -88,7 +92,7 @@ def get_dataset_entries(
     if dataset_id is None:
         raise not_found("Dataset")
     # Get entries of the dataset
-    raw_entries = dataset_entry_dao.filter(
+    raw_entries = await dataset_entry_dao.filter(
         dataset_id=dataset_id,
         limit=limit,
         offset=offset,
@@ -143,7 +147,7 @@ def get_dataset_entries(
         },
     },
 )
-def get_dataset_entry(
+async def get_dataset_entry(
     request: Request,
     name: str = Path(
         ...,
@@ -165,7 +169,7 @@ def get_dataset_entry(
     if dataset_id is None:
         raise not_found("Dataset")
     # Get entry
-    raw_entry = dataset_entry_dao.filter(id=id, dataset_id=dataset_id)
+    raw_entry = await dataset_entry_dao.filter(id=id, dataset_id=dataset_id)
     if not raw_entry:
         raise not_found(f"Dataset entry {id}")
     entry = raw_entry[0]
@@ -193,7 +197,7 @@ def get_dataset_entry(
         },
     },
 )
-def create_dataset(
+async def create_dataset(
     request: Request,
     dataset: DatasetInfo,
     dataset_dao: DatasetDAO = Depends(),
@@ -209,7 +213,7 @@ def create_dataset(
     )
     if dataset_id is not None:
         raise HTTPException(status_code=400, detail="Dataset already exists")
-    dataset_dao.create(user_id=request.state.user_id, name=dataset.name)
+    await dataset_dao.create(user_id=request.state.user_id, name=dataset.name)
     return JSONResponse(
         status_code=status.HTTP_201_CREATED,
         content={"info": "Dataset created successfully!"},
@@ -237,7 +241,7 @@ def create_dataset(
         },
     },
 )
-def add_dataset_entries(
+async def add_dataset_entries(
     request_fastapi: Request,
     request: EntriesConfig,
     name: str = Path(
@@ -264,7 +268,7 @@ def add_dataset_entries(
 
     for entry in request.entries:
         # check if the entry already exists
-        existing_id = dataset_entry_dao.filter(
+        existing_id = await dataset_entry_dao.filter(
             dataset_id=dataset_id,
             entry=json.dumps(entry),
         )
@@ -272,7 +276,7 @@ def add_dataset_entries(
             existing_ids.append(existing_id[0].id)
             continue
         # if not, add it to the dataset
-        _id = dataset_entry_dao.create(dataset_id=dataset_id, entry=json.dumps(entry))
+        _id = await dataset_entry_dao.create(dataset_id=dataset_id, entry=json.dumps(entry))
         new_ids.append(_id)
     return {
         "already_present": existing_ids,
@@ -293,7 +297,7 @@ def add_dataset_entries(
         },
     },
 )
-def rename_dataset(
+async def rename_dataset(
     request: Request,
     new_name: DatasetNewName,
     name: str = Path(
@@ -313,7 +317,7 @@ def rename_dataset(
     )
     if dataset_id is None:
         raise not_found("Dataset")
-    dataset_dao.update(id=dataset_id, name=new_name.name)
+    await dataset_dao.update(id=dataset_id, name=new_name.name)
     return {"info": "Dataset renamed successfully!"}
 
 
@@ -338,7 +342,7 @@ def rename_dataset(
         },
     },
 )
-def delete_dataset_entry(
+async def delete_dataset_entry(
     request: Request,
     name: str = Path(
         ...,
@@ -359,10 +363,10 @@ def delete_dataset_entry(
     )
     if dataset_id is None:
         raise not_found("Dataset")
-    dataset_entry = dataset_entry_dao.filter(id=id, dataset_id=dataset_id)
+    dataset_entry = await dataset_entry_dao.filter(id=id, dataset_id=dataset_id)
     if not dataset_entry:
         raise not_found(f"Dataset entry {id}")
-    dataset_entry_dao.delete(id=id)
+    await dataset_entry_dao.delete(id=id)
     return {"info": "Dataset Entry deleted successfully!"}
 
 
@@ -381,7 +385,7 @@ def delete_dataset_entry(
         },
     },
 )
-def delete_dataset(
+async def delete_dataset(
     request: Request,
     name: str = Path(
         ...,
@@ -400,5 +404,5 @@ def delete_dataset(
     )
     if dataset_id is None:
         raise not_found("Dataset")
-    dataset_dao.delete(id=dataset_id)
+    await dataset_dao.delete(id=dataset_id)
     return {"info": "Dataset deleted successfully!"}

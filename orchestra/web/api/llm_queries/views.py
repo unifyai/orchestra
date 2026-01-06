@@ -11,7 +11,12 @@ from providers.completion import PROVIDER_CLASSES
 from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.db.dependencies import get_db_session
+
+# Async DAOs
+from orchestra.db.dao.async_custom_api_key_dao import AsyncCustomApiKeyDAO
+from orchestra.db.dao.async_custom_endpoint_dao import AsyncCustomEndpointDAO
+from orchestra.db.dao.async_users_dao import AsyncUsersDAO
+from orchestra.db.dependencies import get_async_db_session, get_db_session
 from orchestra.settings import settings
 from orchestra.web.api.dependencies import _ro_session
 from orchestra.web.api.llm_queries.schema import (
@@ -31,12 +36,12 @@ router = APIRouter()
 
 
 @router.post("/chat/completions", response_model=ChatCompletionResponse)
-def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
+async def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     background_tasks: BackgroundTasks,
     request_fastapi: Request,
     request: Union[ChatCompletionRequest, List[ChatCompletionRequest]],
     response_fastapi: Response,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> Union[ChatCompletionResponse, StreamingResponse]:
     """
     OpenAI compatible `/chat/completions` endpoint for LLM inference.
@@ -60,8 +65,8 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     :raises HTTPException: when user has insufficient credits.
     """
-    custom_endpoint_dao = CustomEndpointDAO(session)
-    custom_api_key_dao = CustomApiKeyDAO(session)
+    custom_endpoint_dao = AsyncCustomEndpointDAO(session)
+    custom_api_key_dao = AsyncCustomApiKeyDAO(session)
 
     if isinstance(request, list):
         request_priority_list = request
@@ -185,7 +190,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                     # but using custom keys with the provider
                     if "custom" not in provider:
                         try:
-                            custom_api_key = custom_api_key_dao.filter(
+                            custom_api_key = await custom_api_key_dao.filter(
                                 user_id=user_id,
                                 key=provider,
                             )[0].value
@@ -195,14 +200,14 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                     # either to an existing provider or a custom provider
                     else:
                         try:
-                            custom_endpoint = custom_endpoint_dao.filter(
+                            custom_endpoint = await custom_endpoint_dao.filter(
                                 user_id=user_id,
                                 name=model,
                             )[0]
                         except IndexError:
                             raise not_found("Custom endpoint")
                         try:
-                            custom_api_key = custom_api_key_dao.filter(
+                            custom_api_key = await custom_api_key_dao.filter(
                                 id=custom_endpoint.key_id,
                             )[0].value
                         except IndexError:

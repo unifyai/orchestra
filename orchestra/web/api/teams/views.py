@@ -2,6 +2,7 @@
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.auth_user_dao import AuthUserDAO
@@ -10,7 +11,15 @@ from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.team_dao import TeamDAO
-from orchestra.db.dependencies import get_db_session
+
+# Async DAOs
+from orchestra.db.dao.async_auth_user_dao import AsyncAuthUserDAO
+from orchestra.db.dao.async_organization_dao import AsyncOrganizationDAO
+from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
+from orchestra.db.dao.async_resource_access_dao import AsyncResourceAccessDAO
+from orchestra.db.dao.async_role_dao import AsyncRoleDAO
+from orchestra.db.dao.async_team_dao import AsyncTeamDAO
+from orchestra.db.dependencies import get_async_db_session, get_db_session
 from orchestra.web.api.teams.schema import (
     ResourceAccessGrant,
     ResourceAccessListResponse,
@@ -38,7 +47,7 @@ async def create_team(
     request_fastapi: Request,
     organization_id: int,
     team_data: TeamCreate,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> TeamResponse:
     """
     Create a new team in an organization.
@@ -52,12 +61,12 @@ async def create_team(
     :return: Created team.
     """
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    team_dao = TeamDAO(session)
-    resource_access_dao = ResourceAccessDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    team_dao = AsyncTeamDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Verify organization exists
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -85,12 +94,12 @@ async def create_team(
         )
 
     try:
-        team = team_dao.create(
+        team = await team_dao.create(
             name=team_data.name,
             organization_id=organization_id,
             description=team_data.description,
         )
-        session.commit()
+        await session.commit()
 
         return TeamResponse(
             id=team.id,
@@ -116,7 +125,7 @@ async def create_team(
 async def list_teams(
     request_fastapi: Request,
     organization_id: int,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[TeamResponse]:
     """
     List all teams in an organization.
@@ -127,12 +136,12 @@ async def list_teams(
     :return: List of teams.
     """
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    team_dao = TeamDAO(session)
-    org_member_dao = OrganizationMemberDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    team_dao = AsyncTeamDAO(session)
+    org_member_dao = AsyncOrganizationMemberDAO(session)
 
     # Verify organization exists
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -141,7 +150,7 @@ async def list_teams(
 
     # Check if user is a member
     is_owner = org.owner_id == user_id
-    is_member = org_member_dao.filter(user_id=user_id, organization_id=organization_id)
+    is_member = await org_member_dao.filter(user_id=user_id, organization_id=organization_id)
 
     if not is_owner and not is_member:
         raise HTTPException(
@@ -173,7 +182,7 @@ async def get_team(
     request_fastapi: Request,
     organization_id: int,
     team_id: int,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> TeamWithMembersResponse:
     """
     Get team details including members.
@@ -185,12 +194,12 @@ async def get_team(
     :return: Team details with members.
     """
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    team_dao = TeamDAO(session)
-    org_member_dao = OrganizationMemberDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    team_dao = AsyncTeamDAO(session)
+    org_member_dao = AsyncOrganizationMemberDAO(session)
 
     # Verify organization exists
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -198,7 +207,7 @@ async def get_team(
         )
 
     # Get team
-    team = team_dao.get(team_id)
+    team = await team_dao.get(team_id)
     if not team or team.organization_id != organization_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -207,7 +216,7 @@ async def get_team(
 
     # Check if user is a member
     is_owner = org.owner_id == user_id
-    is_member = org_member_dao.filter(user_id=user_id, organization_id=organization_id)
+    is_member = await org_member_dao.filter(user_id=user_id, organization_id=organization_id)
 
     if not is_owner and not is_member:
         raise HTTPException(
@@ -237,7 +246,7 @@ async def update_team(
     organization_id: int,
     team_id: int,
     team_data: TeamUpdate,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> TeamResponse:
     """
     Update a team.
@@ -252,12 +261,12 @@ async def update_team(
     :return: Updated team.
     """
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    team_dao = TeamDAO(session)
-    resource_access_dao = ResourceAccessDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    team_dao = AsyncTeamDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Verify organization exists
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -277,7 +286,7 @@ async def update_team(
         )
 
     # Get team
-    team = team_dao.get(team_id)
+    team = await team_dao.get(team_id)
     if not team or team.organization_id != organization_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -294,15 +303,15 @@ async def update_team(
             )
 
     try:
-        team_dao.update(
+        await team_dao.update(
             id=team_id,
             name=team_data.name,
             description=team_data.description,
         )
-        session.commit()
+        await session.commit()
 
         # Refresh team
-        team = team_dao.get(team_id)
+        team = await team_dao.get(team_id)
 
         return TeamResponse(
             id=team.id,
@@ -328,7 +337,7 @@ async def delete_team(
     request_fastapi: Request,
     organization_id: int,
     team_id: int,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Delete a team.
@@ -341,12 +350,12 @@ async def delete_team(
     :param session: Database session.
     """
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    team_dao = TeamDAO(session)
-    resource_access_dao = ResourceAccessDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    team_dao = AsyncTeamDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Verify organization exists
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -366,7 +375,7 @@ async def delete_team(
         )
 
     # Get team
-    team = team_dao.get(team_id)
+    team = await team_dao.get(team_id)
     if not team or team.organization_id != organization_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -374,8 +383,8 @@ async def delete_team(
         )
 
     try:
-        team_dao.delete(team_id)
-        session.commit()
+        await team_dao.delete(team_id)
+        await session.commit()
         return None
     except Exception as e:
         session.rollback()
@@ -395,7 +404,7 @@ async def add_team_members(
     organization_id: int,
     team_id: int,
     member_data: TeamMemberAdd,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> TeamWithMembersResponse:
     """
     Add members to a team.
@@ -410,14 +419,14 @@ async def add_team_members(
     :return: Updated team with members.
     """
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    team_dao = TeamDAO(session)
-    org_member_dao = OrganizationMemberDAO(session)
-    auth_user_dao = AuthUserDAO(session)
-    resource_access_dao = ResourceAccessDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    team_dao = AsyncTeamDAO(session)
+    org_member_dao = AsyncOrganizationMemberDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Verify organization exists
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -437,7 +446,7 @@ async def add_team_members(
         )
 
     # Get team
-    team = team_dao.get(team_id)
+    team = await team_dao.get(team_id)
     if not team or team.organization_id != organization_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -447,7 +456,7 @@ async def add_team_members(
     try:
         # Verify all users exist and are org members
         for user_id_to_add in member_data.user_ids:
-            user = auth_user_dao.get_by_id(user_id_to_add)
+            user = await auth_user_dao.get_by_id(user_id_to_add)
             if not user:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -456,7 +465,7 @@ async def add_team_members(
 
             # Check if user is org member
             is_owner = org.owner_id == user_id_to_add
-            is_member = org_member_dao.filter(
+            is_member = await org_member_dao.filter(
                 user_id=user_id_to_add,
                 organization_id=organization_id,
             )
@@ -469,9 +478,9 @@ async def add_team_members(
 
             # Add to team (skip if already member)
             if not team_dao.is_team_member(team_id, user_id_to_add):
-                team_dao.add_member(team_id, user_id_to_add)
+                await team_dao.add_member(team_id, user_id_to_add)
 
-        session.commit()
+        await session.commit()
 
         members = team_dao.get_team_members(team_id)
 
@@ -504,7 +513,7 @@ async def remove_team_member(
     organization_id: int,
     team_id: int,
     user_id_to_remove: str,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> TeamWithMembersResponse:
     """
     Remove a member from a team.
@@ -519,12 +528,12 @@ async def remove_team_member(
     :return: Updated team with members.
     """
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    team_dao = TeamDAO(session)
-    resource_access_dao = ResourceAccessDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    team_dao = AsyncTeamDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Verify organization exists
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -544,7 +553,7 @@ async def remove_team_member(
         )
 
     # Get team
-    team = team_dao.get(team_id)
+    team = await team_dao.get(team_id)
     if not team or team.organization_id != organization_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -552,8 +561,8 @@ async def remove_team_member(
         )
 
     try:
-        team_dao.remove_member(team_id, user_id_to_remove)
-        session.commit()
+        await team_dao.remove_member(team_id, user_id_to_remove)
+        await session.commit()
 
         members = team_dao.get_team_members(team_id)
 
@@ -583,7 +592,7 @@ async def grant_resource_access(
     resource_type: str,
     resource_id: int,
     access_data: ResourceAccessGrant,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> ResourceAccessResponse:
     """
     Grant access to a resource (project).
@@ -609,8 +618,8 @@ async def grant_resource_access(
         )
 
     user_id = request_fastapi.state.user_id
-    resource_access_dao = ResourceAccessDAO(session)
-    role_dao = RoleDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
+    role_dao = AsyncRoleDAO(session)
 
     # Verify resource is not personal
     if resource_access_dao._is_personal_resource(resource_type, resource_id):
@@ -634,7 +643,7 @@ async def grant_resource_access(
         )
 
     # Verify role exists
-    role = role_dao.get(access_data.role_id)
+    role = await role_dao.get(access_data.role_id)
     if not role:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -649,7 +658,7 @@ async def grant_resource_access(
             grantee_type=access_data.grantee_type,
             grantee_id=access_data.grantee_id,
         )
-        session.commit()
+        await session.commit()
 
         return ResourceAccessResponse(
             id=access.id,
@@ -678,7 +687,7 @@ async def revoke_resource_access(
     resource_type: str,
     resource_id: int,
     access_data: ResourceAccessRevoke,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Revoke access to a resource (project).
@@ -702,7 +711,7 @@ async def revoke_resource_access(
         )
 
     user_id = request_fastapi.state.user_id
-    resource_access_dao = ResourceAccessDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Check if user has write/owner permission on the resource
     has_permission = resource_access_dao.check_user_permission(
@@ -726,7 +735,7 @@ async def revoke_resource_access(
             grantee_id=access_data.grantee_id,
             role_id=access_data.role_id,
         )
-        session.commit()
+        await session.commit()
         return None
     except Exception as e:
         session.rollback()
@@ -747,7 +756,7 @@ async def update_resource_access(
     resource_id: int,
     access_id: int,
     update_data: ResourceAccessUpdate,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> ResourceAccessResponse:
     """
     Update an existing resource access grant (change role).
@@ -776,11 +785,11 @@ async def update_resource_access(
         )
 
     user_id = request_fastapi.state.user_id
-    resource_access_dao = ResourceAccessDAO(session)
-    role_dao = RoleDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
+    role_dao = AsyncRoleDAO(session)
 
     # Verify the access entry exists and belongs to this resource
-    existing_access = resource_access_dao.get(access_id)
+    existing_access = await resource_access_dao.get(access_id)
     if not existing_access:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -811,7 +820,7 @@ async def update_resource_access(
         )
 
     # Verify the new role exists
-    new_role = role_dao.get(update_data.role_id)
+    new_role = await role_dao.get(update_data.role_id)
     if not new_role:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -824,7 +833,7 @@ async def update_resource_access(
             access_id=access_id,
             new_role_id=update_data.role_id,
         )
-        session.commit()
+        await session.commit()
 
         return ResourceAccessResponse(
             id=updated_access.id,
@@ -860,7 +869,7 @@ async def list_resource_access(
     request_fastapi: Request,
     resource_type: str,
     resource_id: int,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> ResourceAccessListResponse:
     """
     List all access entries for a resource (project).
@@ -884,10 +893,10 @@ async def list_resource_access(
         )
 
     user_id = request_fastapi.state.user_id
-    resource_access_dao = ResourceAccessDAO(session)
-    role_dao = RoleDAO(session)
-    auth_user_dao = AuthUserDAO(session)
-    team_dao = TeamDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
+    role_dao = AsyncRoleDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
+    team_dao = AsyncTeamDAO(session)
 
     # Check if user has read permission on the resource
     has_permission = resource_access_dao.check_user_permission(
@@ -907,17 +916,17 @@ async def list_resource_access(
 
     response_entries = []
     for entry in access_entries:
-        role = role_dao.get(entry.role_id)
+        role = await role_dao.get(entry.role_id)
         role_name = role.name if role else "Unknown"
 
         # Get grantee name
         grantee_name = None
         if entry.grantee_type == "user":
-            user = auth_user_dao.get_by_id(entry.grantee_id)
+            user = await auth_user_dao.get_by_id(entry.grantee_id)
             grantee_name = user[0].email if user else entry.grantee_id
         elif entry.grantee_type == "team":
             try:
-                team = team_dao.get(int(entry.grantee_id))
+                team = await team_dao.get(int(entry.grantee_id))
                 grantee_name = team.name if team else entry.grantee_id
             except ValueError:
                 grantee_name = entry.grantee_id
@@ -953,7 +962,7 @@ async def get_user_resource_access(
     resource_type: str,
     resource_id: int,
     user_id: str,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> UserResourceAccessResponse:
     """
     Get a specific user's access entries for a resource.
@@ -976,9 +985,9 @@ async def get_user_resource_access(
         )
 
     requesting_user_id = request_fastapi.state.user_id
-    resource_access_dao = ResourceAccessDAO(session)
-    role_dao = RoleDAO(session)
-    team_dao = TeamDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
+    role_dao = AsyncRoleDAO(session)
+    team_dao = AsyncTeamDAO(session)
 
     # Check if requesting user has read permission on the resource
     has_permission = resource_access_dao.check_user_permission(
@@ -1008,7 +1017,7 @@ async def get_user_resource_access(
     highest_priority = 0
 
     for entry in access_entries:
-        role = role_dao.get(entry.role_id)
+        role = await role_dao.get(entry.role_id)
         role_name = role.name if role else "Unknown"
 
         # Get permissions for this role
@@ -1023,7 +1032,7 @@ async def get_user_resource_access(
         if is_team_grant:
             try:
                 team_id = int(entry.grantee_id)
-                team = team_dao.get(team_id)
+                team = await team_dao.get(team_id)
                 team_name = team.name if team else None
             except ValueError:
                 pass

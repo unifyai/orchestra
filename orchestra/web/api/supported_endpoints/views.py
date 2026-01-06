@@ -5,7 +5,11 @@ from fastapi.param_functions import Depends
 
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
-from orchestra.db.dependencies import get_db_session
+
+# Async DAOs
+from orchestra.db.dao.async_custom_endpoint_dao import AsyncCustomEndpointDAO
+from orchestra.db.dao.async_endpoint_dao import AsyncEndpointDAO
+from orchestra.db.dependencies import get_async_db_session, get_db_session
 from orchestra.web.api.utils.http_responses import overspecified_model_provider
 
 router = APIRouter()
@@ -25,21 +29,21 @@ router = APIRouter()
         },
     },
 )
-def list_providers(
+async def list_providers(
     request_fastapi: Request,
     model: str = Query(
         default=None,
         description="Model to get available providers for.",
         example="llama-3.1-405b-chat",
     ),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Lists available providers. If `model` is specified,
     returns the providers that support that model.
     """
-    endpoint_dao = EndpointDAO(session)
-    custom_endpoint_dao = CustomEndpointDAO(session)
+    endpoint_dao = AsyncEndpointDAO(session)
+    custom_endpoint_dao = AsyncCustomEndpointDAO(session)
 
     user_id = request_fastapi.state.user_id
 
@@ -72,22 +76,22 @@ def list_providers(
         },
     },
 )
-def list_models(
+async def list_models(
     request_fastapi: Request,
     provider: str = Query(
         default=None,
         description="Provider to get available models from.",
         example="openai",
     ),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Lists available models. If `provider` is specified,
     returns the models that the provider supports.
     You can also show all *custom* models by passing `custom` as the provider.
     """
-    endpoint_dao = EndpointDAO(session)
-    custom_endpoint_dao = CustomEndpointDAO(session)
+    endpoint_dao = AsyncEndpointDAO(session)
+    custom_endpoint_dao = AsyncCustomEndpointDAO(session)
 
     user_id = request_fastapi.state.user_id
 
@@ -122,7 +126,7 @@ def list_models(
         },
     },
 )
-def list_endpoints(
+async def list_endpoints(
     request_fastapi: Request,
     model: str = Query(
         default=None,
@@ -134,15 +138,15 @@ def list_endpoints(
         description="Provider to get available endpoints for.",
         example="openai",
     ),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Lists available endpoints in `model@provider` format.
     If `model` or `provider` are specified, only the matching endpoints will be listed.
     You can also show all *custom* endpoints by passing `custom` as the provider.
     """
-    endpoint_dao = EndpointDAO(session)
-    custom_endpoint_dao = CustomEndpointDAO(session)
+    endpoint_dao = AsyncEndpointDAO(session)
+    custom_endpoint_dao = AsyncCustomEndpointDAO(session)
 
     user_id = request_fastapi.state.user_id
     if model and provider:

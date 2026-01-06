@@ -2,12 +2,18 @@
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.permission_dao import PermissionDAO
 from orchestra.db.dao.role_dao import RoleDAO
-from orchestra.db.dependencies import get_db_session
+
+# Async DAOs
+from orchestra.db.dao.async_organization_dao import AsyncOrganizationDAO
+from orchestra.db.dao.async_permission_dao import AsyncPermissionDAO
+from orchestra.db.dao.async_role_dao import AsyncRoleDAO
+from orchestra.db.dependencies import get_async_db_session, get_db_session
 from orchestra.web.api.roles.schema import (
     PermissionResponse,
     RoleCreate,
@@ -26,7 +32,7 @@ router = APIRouter()
 )
 async def list_permissions(
     resource_type: str | None = None,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[PermissionResponse]:
     """
     List all available permissions, optionally filtered by resource type.
@@ -35,12 +41,12 @@ async def list_permissions(
     :param session: Database session.
     :return: List of permissions.
     """
-    permission_dao = PermissionDAO(session)
+    permission_dao = AsyncPermissionDAO(session)
 
     if resource_type:
         permissions = permission_dao.get_by_resource_type(resource_type)
     else:
-        permissions = permission_dao.list_all()
+        permissions = await permission_dao.list_all()
 
     return [
         PermissionResponse(
@@ -63,7 +69,7 @@ async def list_permissions(
 async def list_organization_roles(
     request_fastapi: Request,
     organization_id: int,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[RoleResponse]:
     """
     List all roles available to an organization (system roles + custom roles).
@@ -76,11 +82,11 @@ async def list_organization_roles(
     :return: List of roles.
     """
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    role_dao = RoleDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    role_dao = AsyncRoleDAO(session)
 
     # Verify organization exists
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -102,7 +108,7 @@ async def create_custom_role(
     request_fastapi: Request,
     organization_id: int,
     role_data: RoleCreate,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> RoleResponse:
     """
     Create a custom role for an organization.
@@ -116,11 +122,11 @@ async def create_custom_role(
     :return: Created role.
     """
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    role_dao = RoleDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    role_dao = AsyncRoleDAO(session)
 
     # Verify organization exists
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -144,7 +150,7 @@ async def create_custom_role(
 
     try:
         # Create the role
-        role = role_dao.create(
+        role = await role_dao.create(
             name=role_data.name,
             description=role_data.description,
             organization_id=organization_id,
@@ -155,7 +161,7 @@ async def create_custom_role(
         for permission_id in role_data.permission_ids:
             role_dao.add_permission(role.id, permission_id)
 
-        session.commit()
+        await session.commit()
 
         return _role_to_response(role, role_dao)
     except Exception as e:
@@ -175,7 +181,7 @@ async def get_role(
     request_fastapi: Request,
     organization_id: int,
     role_id: int,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> RoleResponse:
     """
     Get details of a specific role.
@@ -187,11 +193,11 @@ async def get_role(
     :return: Role details.
     """
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    role_dao = RoleDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    role_dao = AsyncRoleDAO(session)
 
     # Verify organization exists
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -199,7 +205,7 @@ async def get_role(
         )
 
     # Get role
-    role = role_dao.get(role_id)
+    role = await role_dao.get(role_id)
     if not role:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -226,7 +232,7 @@ async def update_role(
     organization_id: int,
     role_id: int,
     role_data: RoleUpdate,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> RoleResponse:
     """
     Update a custom role (name and description only).
@@ -242,11 +248,11 @@ async def update_role(
     :return: Updated role.
     """
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    role_dao = RoleDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    role_dao = AsyncRoleDAO(session)
 
     # Verify organization exists
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -261,7 +267,7 @@ async def update_role(
         )
 
     # Get role
-    role = role_dao.get(role_id)
+    role = await role_dao.get(role_id)
     if not role:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -283,12 +289,12 @@ async def update_role(
         )
 
     try:
-        role_dao.update(
+        await role_dao.update(
             id=role_id,
             name=role_data.name,
             description=role_data.description,
         )
-        session.commit()
+        await session.commit()
 
         return _role_to_response(role, role_dao)
     except Exception as e:
@@ -307,7 +313,7 @@ async def delete_role(
     request_fastapi: Request,
     organization_id: int,
     role_id: int,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Delete a custom role.
@@ -321,11 +327,11 @@ async def delete_role(
     :param session: Database session.
     """
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    role_dao = RoleDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    role_dao = AsyncRoleDAO(session)
 
     # Verify organization exists
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -340,7 +346,7 @@ async def delete_role(
         )
 
     # Get role
-    role = role_dao.get(role_id)
+    role = await role_dao.get(role_id)
     if not role:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -362,8 +368,8 @@ async def delete_role(
         )
 
     try:
-        role_dao.delete(role_id)
-        session.commit()
+        await role_dao.delete(role_id)
+        await session.commit()
         return None
     except Exception as e:
         session.rollback()
@@ -383,7 +389,7 @@ async def add_permissions_to_role(
     organization_id: int,
     role_id: int,
     permission_data: RolePermissionAdd,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> RoleResponse:
     """
     Add permissions to a custom role.
@@ -399,11 +405,11 @@ async def add_permissions_to_role(
     :return: Updated role.
     """
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    role_dao = RoleDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    role_dao = AsyncRoleDAO(session)
 
     # Verify organization exists
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -418,7 +424,7 @@ async def add_permissions_to_role(
         )
 
     # Get role
-    role = role_dao.get(role_id)
+    role = await role_dao.get(role_id)
     if not role:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -443,7 +449,7 @@ async def add_permissions_to_role(
         for permission_id in permission_data.permission_ids:
             role_dao.add_permission(role_id, permission_id)
 
-        session.commit()
+        await session.commit()
 
         return _role_to_response(role, role_dao)
     except Exception as e:
@@ -464,7 +470,7 @@ async def remove_permission_from_role(
     organization_id: int,
     role_id: int,
     permission_id: int,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> RoleResponse:
     """
     Remove a permission from a custom role.
@@ -480,11 +486,11 @@ async def remove_permission_from_role(
     :return: Updated role.
     """
     user_id = request_fastapi.state.user_id
-    org_dao = OrganizationDAO(session)
-    role_dao = RoleDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
+    role_dao = AsyncRoleDAO(session)
 
     # Verify organization exists
-    org = org_dao.get(organization_id)
+    org = await org_dao.get(organization_id)
     if not org:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -499,7 +505,7 @@ async def remove_permission_from_role(
         )
 
     # Get role
-    role = role_dao.get(role_id)
+    role = await role_dao.get(role_id)
     if not role:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -522,7 +528,7 @@ async def remove_permission_from_role(
 
     try:
         role_dao.remove_permission(role_id, permission_id)
-        session.commit()
+        await session.commit()
 
         return _role_to_response(role, role_dao)
     except Exception as e:
@@ -533,7 +539,7 @@ async def remove_permission_from_role(
         )
 
 
-def _role_to_response(role, role_dao: RoleDAO) -> RoleResponse:
+async def _role_to_response(role, role_dao: RoleDAO) -> RoleResponse:
     """Convert Role model to RoleResponse schema."""
     permissions = role_dao.get_role_permissions(role.id)
 

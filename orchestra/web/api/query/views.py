@@ -5,7 +5,10 @@ from fastapi import APIRouter
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.query_dao import QueryDAO
-from orchestra.db.dependencies import get_db_session
+
+# Async DAOs
+from orchestra.db.dao.async_query_dao import AsyncQueryDAO
+from orchestra.db.dependencies import get_async_db_session, get_db_session
 from orchestra.db.models.orchestra_models import Query
 from orchestra.web.api.query.schema import QueryModelRequest, QueryModelResponse
 
@@ -13,10 +16,10 @@ router = APIRouter()
 
 
 @router.get("/", response_model=List[QueryModelResponse])
-def get_query_models(
+async def get_query_models(
     limit: int = 10,
     offset: int = 0,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[Query]:
     """
     Retrieve all query objects from the database.
@@ -26,14 +29,14 @@ def get_query_models(
     :param query_dao: DAO for query models.
     :return: list of query objects from database.
     """
-    query_dao = QueryDAO(session)
+    query_dao = AsyncQueryDAO(session)
     return query_dao.get_all_queries(limit=limit, offset=offset)
 
 
 @router.put("/")
-def create_query_model(
+async def create_query_model(
     new_query_object: QueryModelRequest,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Creates query model in the database.
@@ -41,7 +44,7 @@ def create_query_model(
     :param new_query_object: new query model item.
     :param query_dao: DAO for query models.
     """
-    query_dao = QueryDAO(session)
+    query_dao = AsyncQueryDAO(session)
     at = datetime.now(timezone.utc)
     query_dao.create_query(
         user_id=new_query_object.user_id,

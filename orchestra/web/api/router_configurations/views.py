@@ -13,7 +13,7 @@ router = APIRouter()
 
 
 @router.post("/router/config")
-def create_router_config(
+async def create_router_config(
     config_name: str = Query(
         description="The name of the router configuration to create.",
         example="cost_and_speed_optimized",
@@ -35,7 +35,7 @@ def create_router_config(
 
 
 @router.get("/router/config")
-def get_router_config(
+async def get_router_config(
     config_name: str = Query(
         description="The name of the router configuration to retrieve the "
         "full endpoint string for.",
@@ -49,7 +49,7 @@ def get_router_config(
 
 
 @router.delete("/router/config")
-def delete_router_config(
+async def delete_router_config(
     config_name: str = Query(
         description="The name of the router configuration to delete.",
         example="cost_and_speed_optimized",
@@ -62,7 +62,7 @@ def delete_router_config(
 
 
 @router.post("/router/config/rename")
-def rename_router_config(
+async def rename_router_config(
     name: str = Query(
         description="The original name of the router configuration.",
         example="original_name",
@@ -79,7 +79,7 @@ def rename_router_config(
 
 
 @router.get("/router/config/list")
-def list_router_configs() -> List[str]:
+async def list_router_configs() -> List[str]:
     """
     Lists all saved router configurations by name.
     """

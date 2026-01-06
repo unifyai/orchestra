@@ -68,7 +68,7 @@ Google Cloud Storage object without requiring authentication.
 The signed URL can be used to download the object directly via HTTP GET.
     """,
 )
-def generate_signed_url(
+async def generate_signed_url(
     request: SignedUrlRequest,
     bucket_service: BucketService = Depends(BucketService),
 ) -> SignedUrlResponse:
@@ -161,7 +161,7 @@ This is useful for retrieving binary content (images, files) through
 the API without requiring direct GCS access.
     """,
 )
-def download_object(
+async def download_object(
     request: DownloadRequest,
     bucket_service: BucketService = Depends(BucketService),
 ) -> DownloadResponse:

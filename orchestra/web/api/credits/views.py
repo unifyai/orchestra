@@ -9,6 +9,9 @@ from fastapi.param_functions import Depends
 from orchestra.db.dao.async_users_dao import AsyncUsersDAO
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.users_dao import UsersDAO
+
+# Async DAOs
+from orchestra.db.dao.async_recharge_dao import AsyncRechargeDAO
 from orchestra.db.dependencies import get_async_db_session, get_db_session
 from orchestra.db.models.orchestra_models import Users
 from orchestra.lib.time import month_end_utc
@@ -153,7 +156,7 @@ async def deduct_credits(
         },
     },
 )
-def promo_code(
+async def promo_code(
     request_fastapi: Request,
     code: str = Query(
         description="Promo code to be activated.",
@@ -167,7 +170,7 @@ def promo_code(
         ),
         example="sample_user_id",
     ),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> Dict[str, str]:
     """
     Activates a promotional code.
@@ -180,8 +183,8 @@ def promo_code(
     :param users_dao: DAO for users models.
     :return: user instance with credits from database.
     """
-    recharge_dao = RechargeDAO(session)
-    users_dao = UsersDAO(session)
+    recharge_dao = AsyncRechargeDAO(session)
+    users_dao = AsyncUsersDAO(session)
 
     raise HTTPException(
         status_code=400,
@@ -224,7 +227,7 @@ def promo_code(
         else:
             raise not_found("User ID")
 
-    prev_recharges = recharge_dao.filter(user_id=user_id)
+    prev_recharges = await recharge_dao.filter(user_id=user_id)
 
     if any(pr.type == code for pr in prev_recharges):
         raise HTTPException(

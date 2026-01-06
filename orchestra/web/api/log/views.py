@@ -37,7 +37,16 @@ from orchestra.db.dao.organization_dao import OrganizationDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
-from orchestra.db.dependencies import get_db_session
+
+# Async DAOs
+from orchestra.db.dao.async_context_dao import AsyncContextDAO
+from orchestra.db.dao.async_field_type_dao import AsyncFieldTypeDAO
+from orchestra.db.dao.async_log_event_dao import AsyncLogEventDAO
+from orchestra.db.dao.async_organization_dao import AsyncOrganizationDAO
+from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
+from orchestra.db.dao.async_project_dao import AsyncProjectDAO
+from orchestra.db.dao.async_resource_access_dao import AsyncResourceAccessDAO
+from orchestra.db.dependencies import get_async_db_session, get_db_session
 from orchestra.db.models.orchestra_models import (
     ActiveDerivedLog,
     Context,
@@ -130,7 +139,7 @@ async def get_jsonb_mode_endpoint():
     return {"jsonb_mode": settings.use_jsonb_queries}
 
 
-def _sanitize_sql_error(error: Exception) -> str:
+async def _sanitize_sql_error(error: Exception) -> str:
     """
     Extract a clean error message from SQLAlchemy exceptions, removing SQL traces.
 
@@ -201,10 +210,10 @@ from orchestra.db.dao.sibling_context_cleanup import (
         },
     },
 )
-def create_logs(
+async def create_logs(
     request_fastapi: Request,
     request: CreateLogConfig,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Creates one or more logs associated to a project. Logs are
@@ -247,11 +256,11 @@ def create_logs(
     This method returns the ids of the new stored logs along with any auto-counting values.
     """
     # Instantiate DAOs with shared session (types may be strings or JSON schemas)
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    field_type_dao = FieldTypeDAO(session)
-    log_event_dao = LogEventDAO(session)
+    field_type_dao = AsyncFieldTypeDAO(session)
+    log_event_dao = AsyncLogEventDAO(session)
     log_dao = LogDAO(session, context_dao)
 
     # check if the project exists
@@ -269,7 +278,7 @@ def create_logs(
 
     # Check write permission for org projects with explicit grants
     if organization_id is not None:
-        resource_access_dao = ResourceAccessDAO(session)
+        resource_access_dao = AsyncResourceAccessDAO(session)
         has_write = resource_access_dao.check_user_permission(
             user_id=user_id,
             resource_type="project",
@@ -286,14 +295,14 @@ def create_logs(
     if request.context:
         # Check if context is a string
         if isinstance(request.context, str):
-            context_id = context_dao.get_or_create(
+            context_id = await context_dao.get_or_create(
                 project_id,
                 name=request.context,
                 description=None,
                 is_versioned=False,
             )
         else:
-            context_id = context_dao.get_or_create(
+            context_id = await context_dao.get_or_create(
                 project_id,
                 name=request.context.name,
                 description=request.context.description,
@@ -301,7 +310,7 @@ def create_logs(
             )
     else:
         # get the default context
-        context_id = context_dao.get_or_create(project_id, name="")
+        context_id = await context_dao.get_or_create(project_id, name="")
 
     # Load the Context object once
     context_obj = session.get(Context, context_id)
@@ -336,7 +345,7 @@ def create_logs(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
-def unify_id_sets_by_subset(alias_id_sets: Dict[str, Set[int]]) -> Dict[str, Set[int]]:
+async def unify_id_sets_by_subset(alias_id_sets: Dict[str, Set[int]]) -> Dict[str, Set[int]]:
     """
     Applies a 3-step logic:
       1) If all sets are the same size, do nothing.
@@ -375,7 +384,7 @@ def unify_id_sets_by_subset(alias_id_sets: Dict[str, Set[int]]) -> Dict[str, Set
     return alias_id_sets
 
 
-def prepare_resolved_ids(
+async def prepare_resolved_ids(
     equation: str,
     referenced_logs: Dict[str, Union[List[int], Dict[str, Any]]],
     request_fastapi: Request,
@@ -557,10 +566,10 @@ def prepare_resolved_ids(
         },
     },
 )
-def create_from_logs(
+async def create_from_logs(
     request_fastapi: Request,
     body: CreateDerivedEntriesConfig,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Creates one or more entries based on `body.equation` and `body.referenced_logs`.
@@ -576,10 +585,10 @@ def create_from_logs(
     - An object: Uses the object's name, description, and is_versioned properties
     """
     # Instantiate DAOs with shared session
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    field_type_dao = FieldTypeDAO(session)
+    field_type_dao = AsyncFieldTypeDAO(session)
     log_dao = LogDAO(session, context_dao)
 
     user_id = request_fastapi.state.user_id
@@ -602,14 +611,14 @@ def create_from_logs(
     if body.context:
         # Check if context is a string
         if isinstance(body.context, str):
-            context_id = context_dao.get_or_create(
+            context_id = await context_dao.get_or_create(
                 project_obj.id,
                 name=body.context,
                 description=None,
                 is_versioned=False,
             )
         else:
-            context_id = context_dao.get_or_create(
+            context_id = await context_dao.get_or_create(
                 project_obj.id,
                 name=body.context.name,
                 description=body.context.description,
@@ -617,7 +626,7 @@ def create_from_logs(
             )
     else:
         # get the default context
-        context_id = context_dao.get_or_create(project_obj.id, name="")
+        context_id = await context_dao.get_or_create(project_obj.id, name="")
 
     # Resolve IDs for both derived and non-derived paths
     resolved_ids = prepare_resolved_ids(
@@ -714,7 +723,7 @@ def create_from_logs(
                     infer_type=True,  # Infer type from value for static entries
                 )
 
-                session.commit()
+                await session.commit()
 
                 return {
                     "info": f"Created {len(updates)} static entries with key='{body.key}'.",
@@ -923,7 +932,7 @@ def create_from_logs(
                         existing_template.is_active = True
                         existing_template.updated_at = datetime.now(timezone.utc)
 
-                session.commit()
+                await session.commit()
 
                 # Create field type with appropriate category
                 # When derived=False, use "entry" category so values appear in entries
@@ -941,7 +950,7 @@ def create_from_logs(
                     field_type="vector" if is_embedding else None,
                     infer_type=not is_embedding,
                 )
-                session.commit()  # Commit the FieldType creation
+                await session.commit()  # Commit the FieldType creation
 
                 return {
                     "info": f"Created {len(updates)} derived logs with key='{body.key}'.",
@@ -1158,7 +1167,7 @@ def create_from_logs(
                     existing_template.is_active = True
                     existing_template.updated_at = datetime.now(timezone.utc)
 
-            session.commit()
+            await session.commit()
 
             # Create or update field type record for derived entry
             # For embeddings, explicitly set field_type="vector" instead of inferring
@@ -1220,10 +1229,10 @@ def create_from_logs(
         },
     },
 )
-def update_derived_log(
+async def update_derived_log(
     request_fastapi: Request,
     body: UpdateDerivedEntriesConfig,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Updates multiple derived logs, identified either by a direct list of derived IDs or by
@@ -1236,10 +1245,10 @@ def update_derived_log(
     - An object: Uses the object's name, description, and is_versioned properties
     """
     # Instantiate DAOs with shared session
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    field_type_dao = FieldTypeDAO(session)
+    field_type_dao = AsyncFieldTypeDAO(session)
     derived_log_dao = DerivedLogDAO(session)
 
     user_id = request_fastapi.state.user_id
@@ -1262,14 +1271,14 @@ def update_derived_log(
     if body.context:
         # Check if context is a string
         if isinstance(body.context, str):
-            context_id = context_dao.get_or_create(
+            context_id = await context_dao.get_or_create(
                 project_obj.id,
                 name=body.context,
                 description=None,
                 is_versioned=False,
             )
         else:
-            context_id = context_dao.get_or_create(
+            context_id = await context_dao.get_or_create(
                 project_obj.id,
                 name=body.context.name,
                 description=body.context.description,
@@ -1277,7 +1286,7 @@ def update_derived_log(
             )
     else:
         # get the default context
-        context_id = context_dao.get_or_create(project_obj.id, name="")
+        context_id = await context_dao.get_or_create(project_obj.id, name="")
 
     updated_equation = body.equation if body.equation else None
     updated_key = body.key
@@ -1375,7 +1384,7 @@ def update_derived_log(
                 template.updated_at = datetime.now(timezone.utc)
                 updated_count += 1
 
-            session.commit()
+            await session.commit()
 
             # Recompute if requested (default behavior)
             # Only recompute for logs that are in the template's referenced_logs
@@ -1455,7 +1464,7 @@ def update_derived_log(
                 .values(key=updated_key, equation=updated_equation)
             )
             session.execute(stmt)
-            session.commit()
+            await session.commit()
         except ValueError as ve:
             raise HTTPException(status_code=400, detail=str(ve))
         # recompute
@@ -1631,7 +1640,7 @@ def update_derived_log(
                 )
                 session.add(association)
 
-        session.commit()
+        await session.commit()
 
         # Update the field type record for the derived entry
         # Use infer_type=True to infer type from value (no explicit_types here)
@@ -1683,10 +1692,10 @@ def update_derived_log(
         },
     },
 )
-def update_logs(
+async def update_logs(
     request_fastapi: Request,
     body: UpdateLogRequest,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Updates multiple logs with the provided entries. Each entry will be either added
@@ -1700,11 +1709,11 @@ def update_logs(
     If present, it will override the inferred type of any matching key in all logs.
     """
     # Instantiate DAOs with shared session
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    field_type_dao = FieldTypeDAO(session)
-    log_event_dao = LogEventDAO(session)
+    field_type_dao = AsyncFieldTypeDAO(session)
+    log_event_dao = AsyncLogEventDAO(session)
     log_dao = LogDAO(session, context_dao)
     derived_log_dao = DerivedLogDAO(session)
 
@@ -1760,7 +1769,7 @@ def update_logs(
                 context_ids = None
                 if body.context:
                     if isinstance(body.context, str):
-                        ctx = context_dao.filter(
+                        ctx = await context_dao.filter(
                             project_id=project_id,
                             name=body.context,
                         )
@@ -1770,7 +1779,7 @@ def update_logs(
                         context_ids = []
                         for ctx_name in body.context:
                             if isinstance(ctx_name, str):
-                                ctx = context_dao.filter(
+                                ctx = await context_dao.filter(
                                     project_id=project_id,
                                     name=ctx_name,
                                 )
@@ -1865,7 +1874,7 @@ def update_logs(
             for ctx in body.context:
                 if isinstance(ctx, str):
                     # String context - get or create with default values
-                    ctx_id = context_dao.get_or_create(
+                    ctx_id = await context_dao.get_or_create(
                         project_id,
                         name=ctx,
                         description=None,
@@ -1874,7 +1883,7 @@ def update_logs(
                     ctx_ids.append(ctx_id)
                 else:
                     # Object context - use provided values
-                    ctx_id = context_dao.get_or_create(
+                    ctx_id = await context_dao.get_or_create(
                         project_id,
                         name=ctx.name,
                         description=ctx.description,
@@ -1886,7 +1895,7 @@ def update_logs(
             ctx_id = ctx_ids[0] if ctx_ids else None
         # Case 2: context is a string
         elif isinstance(body.context, str):
-            ctx_id = context_dao.get_or_create(
+            ctx_id = await context_dao.get_or_create(
                 project_id,
                 name=body.context,
                 description=None,
@@ -1894,7 +1903,7 @@ def update_logs(
             )
         # Case 3: context is an object (original behavior)
         else:
-            ctx_id = context_dao.get_or_create(
+            ctx_id = await context_dao.get_or_create(
                 project_id,
                 name=body.context.name,
                 description=body.context.description,
@@ -1902,7 +1911,7 @@ def update_logs(
             )
     else:
         # get the default context
-        ctx_id = context_dao.get_or_create(project_id, name="")
+        ctx_id = await context_dao.get_or_create(project_id, name="")
         ctx_ids = [ctx_id] if ctx_id else []
 
     # Fetch field types once
@@ -2204,7 +2213,7 @@ def update_logs(
                 # Compute the version based on whether we're handling params or entries.
                 param_version = None
                 if data_type == "params":
-                    existing = log_dao.filter(
+                    existing = await log_dao.filter(
                         key=k,
                         value=json.dumps(v),
                         project_id=project_id,
@@ -2492,7 +2501,7 @@ def update_logs(
     return {"info": "Logs updated successfully!", "failed": failed_updates}
 
 
-def _update_logs_jsonb(
+async def _update_logs_jsonb(
     request_fastapi: Request,
     body: UpdateLogRequest,
     session,
@@ -2568,7 +2577,7 @@ def _update_logs_jsonb(
                 context_ids = None
                 if body.context:
                     if isinstance(body.context, str):
-                        ctx = context_dao.filter(
+                        ctx = await context_dao.filter(
                             project_id=project_id,
                             name=body.context,
                         )
@@ -2578,7 +2587,7 @@ def _update_logs_jsonb(
                         context_ids = []
                         for ctx_name in body.context:
                             if isinstance(ctx_name, str):
-                                ctx = context_dao.filter(
+                                ctx = await context_dao.filter(
                                     project_id=project_id,
                                     name=ctx_name,
                                 )
@@ -2683,28 +2692,28 @@ def _update_logs_jsonb(
             # Use first context for JSONB mode
             first_ctx = body.context[0]
             if isinstance(first_ctx, str):
-                ctx_id = context_dao.get_or_create(
+                ctx_id = await context_dao.get_or_create(
                     project_id,
                     name=first_ctx,
                     description=None,
                     is_versioned=False,
                 )
             else:
-                ctx_id = context_dao.get_or_create(
+                ctx_id = await context_dao.get_or_create(
                     project_id,
                     name=first_ctx.name,
                     description=first_ctx.description,
                     is_versioned=first_ctx.is_versioned,
                 )
         elif isinstance(body.context, str):
-            ctx_id = context_dao.get_or_create(
+            ctx_id = await context_dao.get_or_create(
                 project_id,
                 name=body.context,
                 description=None,
                 is_versioned=False,
             )
         else:
-            ctx_id = context_dao.get_or_create(
+            ctx_id = await context_dao.get_or_create(
                 project_id,
                 name=body.context.name,
                 description=body.context.description,
@@ -2712,7 +2721,7 @@ def _update_logs_jsonb(
             )
     else:
         # get the default context
-        ctx_id = context_dao.get_or_create(project_id, name="")
+        ctx_id = await context_dao.get_or_create(project_id, name="")
 
     # Populate context object cache for duplicate checks (single query, reused later)
     if ctx_id is not None:
@@ -3183,7 +3192,7 @@ def _update_logs_jsonb(
     }
 
 
-def _delete_logs_jsonb(
+async def _delete_logs_jsonb(
     session,
     user_id: int,
     project_id: int,
@@ -3462,7 +3471,7 @@ def _delete_logs_jsonb(
                         .delete(synchronize_session=False)
                     )
                     if sibling_removed > 0:
-                        sib_ctx = context_dao.filter(
+                        sib_ctx = await context_dao.filter(
                             project_id=project_id,
                             id=sib_ctx_id,
                         )
@@ -3753,10 +3762,10 @@ def _delete_logs_jsonb(
         },
     },
 )
-def delete_logs(
+async def delete_logs(
     request_fastapi: Request,
     body: DeleteLogEntryRequest,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Deletes log entries based on specified criteria. Can delete both base logs and derived logs.
@@ -3772,11 +3781,11 @@ def delete_logs(
             - 'derived': Only delete derived logs
     """
     # Instantiate DAOs with shared session
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    field_type_dao = FieldTypeDAO(session)
-    log_event_dao = LogEventDAO(session)
+    field_type_dao = AsyncFieldTypeDAO(session)
+    log_event_dao = AsyncLogEventDAO(session)
     log_dao = LogDAO(session, context_dao)
 
     if body.source_type not in ("all", "base", "derived"):
@@ -3806,7 +3815,7 @@ def delete_logs(
 
     # Validate context
     context_name = body.context if body.context else ""
-    context = context_dao.filter(project_id=project_id, name=context_name)
+    context = await context_dao.filter(project_id=project_id, name=context_name)
     if not context:
         raise HTTPException(
             status_code=404,
@@ -4157,7 +4166,7 @@ def delete_logs(
                     )
                     if sibling_removed > 0:
                         # Get sibling context name for logging
-                        sib_ctx = context_dao.filter(
+                        sib_ctx = await context_dao.filter(
                             project_id=project_id,
                             id=sib_ctx_id,
                         )
@@ -4423,7 +4432,7 @@ def delete_logs(
                         )
                         if sibling_removed > 0:
                             # Get sibling context name for logging
-                            sib_ctx = context_dao.filter(
+                            sib_ctx = await context_dao.filter(
                                 project_id=project_id,
                                 id=sib_ctx_id,
                             )
@@ -4564,7 +4573,7 @@ def delete_logs(
         },
     },
 )
-def get_logs(
+async def get_logs(
     request_fastapi: Request,
     project: str = Query(
         description="Name of the project to get entries from.",
@@ -4674,7 +4683,7 @@ def get_logs(
         "42",
         description="If provided, use this seed for deterministic random ordering instead of the default.",
     ),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Returns a list of filtered log entries from a project with various expressiveness options:
@@ -4707,10 +4716,10 @@ def get_logs(
 
     """
     # Instantiate DAOs with shared session
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    field_type_dao = FieldTypeDAO(session)
+    field_type_dao = AsyncFieldTypeDAO(session)
 
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
@@ -4726,7 +4735,7 @@ def get_logs(
         )
     # Format logs into flat structure.
     context_name = "" if not context else context
-    context_obj = context_dao.filter(name=context_name, project_id=project_id)
+    context_obj = await context_dao.filter(name=context_name, project_id=project_id)
     if context_obj:
         context_id = context_obj[0][0].id
     else:
@@ -5117,10 +5126,10 @@ def get_logs(
         },
     },
 )
-def query_logs_post(
+async def query_logs_post(
     request_fastapi: Request,
     body: QueryLogsPostBody = Body(...),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Query logs via POST request.
@@ -5141,10 +5150,10 @@ def query_logs_post(
     ```
     """
     # Instantiate DAOs with shared session
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    field_type_dao = FieldTypeDAO(session)
+    field_type_dao = AsyncFieldTypeDAO(session)
 
     # Validate project
     organization_id = getattr(request_fastapi.state, "organization_id", None)
@@ -5162,7 +5171,7 @@ def query_logs_post(
 
     # Format logs into flat structure.
     context_name = "" if not body.context else body.context
-    context_obj = context_dao.filter(name=context_name, project_id=project_id)
+    context_obj = await context_dao.filter(name=context_name, project_id=project_id)
     if context_obj:
         context_id = context_obj[0][0].id
     else:
@@ -5394,7 +5403,7 @@ def query_logs_post(
         },
     },
 )
-def get_logs_latest_timestamp(
+async def get_logs_latest_timestamp(
     request_fastapi: Request,
     project: str = Query(
         description="Name of the project to get entries from.",
@@ -5458,7 +5467,7 @@ def get_logs_latest_timestamp(
     ),
     limit: Optional[int] = Query(None, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     randomize: bool = Query(
         False,
         description="If true, return logs in a deterministic random order (fixed seed) instead of newest-first.",
@@ -5469,10 +5478,10 @@ def get_logs_latest_timestamp(
     page and filter bounds.
     """
     # Instantiate DAOs with shared session
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    field_type_dao = FieldTypeDAO(session)
+    field_type_dao = AsyncFieldTypeDAO(session)
 
     if settings.use_jsonb_queries:
         return _get_logs_query_jsonb(
@@ -5534,12 +5543,12 @@ def get_logs_latest_timestamp(
         },
     },
 )
-def get_logs_metric(
+async def get_logs_metric(
     request_fastapi: Request,
     default_metric: str = Path(...),
     project: str = Query(...),
     request: Optional[GetLogsMetricRequest] = Body(None),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> Union[Dict[str, Any], float, int, bool, str, None]:
     """
     Returns the reduction metric for filtered values (base + derived) for one or more keys from a project.
@@ -5590,10 +5599,10 @@ def get_logs_metric(
     nested grouping. Each group_by field can be prefixed with "params/" to indicate it's a parameter.
     """
     # Instantiate DAOs with shared session
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    field_type_dao = FieldTypeDAO(session)
+    field_type_dao = AsyncFieldTypeDAO(session)
 
     # Handle old usage if request body is not provided
     if request is None:
@@ -5647,7 +5656,7 @@ def get_logs_metric(
         raise not_found(f"Project {project}")
 
     context_name = request.context or ""
-    context_obj = context_dao.filter(name=context_name, project_id=project_obj.id)
+    context_obj = await context_dao.filter(name=context_name, project_id=project_obj.id)
     context_id = context_obj[0][0].id if context_obj else None
     field_types = field_type_dao.get_field_types(project_obj.id, context_id=context_id)
 
@@ -5818,7 +5827,7 @@ def get_logs_metric(
         },
     },
 )
-def get_log_groups(
+async def get_log_groups(
     request_fastapi: Request,
     project: str = Query(
         description="Name of the project to get entries from.",
@@ -5854,7 +5863,7 @@ def get_log_groups(
         "be set if `from_ids` is set.",
         example="0&1&2",
     ),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> Dict[str, Any]:
     """
     Returns a dict with the different versions as keys and the values of the remaining
@@ -5863,10 +5872,10 @@ def get_log_groups(
     before grouping.
     """
     # Instantiate DAOs with shared session
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    field_type_dao = FieldTypeDAO(session)
+    field_type_dao = AsyncFieldTypeDAO(session)
 
     groups = dict()
 
@@ -6007,10 +6016,10 @@ def get_log_groups(
         },
     },
 )
-def rename_field(
+async def rename_field(
     request_fastapi: Request,
     request: RenameFieldRequest,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Renames a field across all logs in a project. This includes:
@@ -6020,10 +6029,10 @@ def rename_field(
     The operation is atomic - either all renames succeed or none do.
     """
     # Instantiate DAOs with shared session
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    field_type_dao = FieldTypeDAO(session)
+    field_type_dao = AsyncFieldTypeDAO(session)
     log_dao = LogDAO(session, context_dao)
 
     try:
@@ -6051,7 +6060,7 @@ def rename_field(
         project_id = project.id
 
         context_name = request.context if request.context else ""
-        context_id = context_dao.get_or_create(project_id=project_id, name=context_name)
+        context_id = await context_dao.get_or_create(project_id=project_id, name=context_name)
         if not context_id:
             raise HTTPException(
                 status_code=404,
@@ -6162,10 +6171,10 @@ def rename_field(
         },
     },
 )
-def join_logs(
+async def join_logs(
     request_fastapi: Request,
     request: JoinLogsRequest,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Joins two sets of logs based on specified criteria and creates new logs with the joined data.
@@ -6187,10 +6196,10 @@ def join_logs(
         JSON response with info about the join operation
     """
     # Instantiate DAOs with shared session
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    field_type_dao = FieldTypeDAO(session)
+    field_type_dao = AsyncFieldTypeDAO(session)
 
     # Validate input parameters
     user_id = request_fastapi.state.user_id
@@ -6241,7 +6250,7 @@ def join_logs(
 
     # Create or get the new context
     try:
-        context_id = context_dao.get_or_create(
+        context_id = await context_dao.get_or_create(
             project_id=project_id,
             name=request.new_context,
             description=f"Joined logs context created via join operation ({request.mode} join)",
@@ -6320,7 +6329,7 @@ def join_logs(
         },
     },
 )
-def get_fields(
+async def get_fields(
     request_fastapi: Request,
     project: str = Query(
         description="Name of the project to get fields and their types for.",
@@ -6334,7 +6343,7 @@ def get_fields(
         ),
         example="training",
     ),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Returns field definitions and their types for the specified project.
@@ -6357,10 +6366,10 @@ def get_fields(
     - description: The description of the field
     """
     # Instantiate DAOs with shared session
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    field_type_dao = FieldTypeDAO(session)
+    field_type_dao = AsyncFieldTypeDAO(session)
 
     try:
         user_id = request_fastapi.state.user_id
@@ -6402,7 +6411,7 @@ def get_fields(
 
     # Wildcard: return mapping of context_name -> fields
     if context == "*":
-        all_contexts = context_dao.filter(project_id=project_obj.id)
+        all_contexts = await context_dao.filter(project_id=project_obj.id)
         result = {}
 
         for ctx_row in all_contexts:
@@ -6443,10 +6452,10 @@ def get_fields(
     context_obj = None
 
     if context:
-        context_obj = context_dao.filter(project_id=project_obj.id, name=context)
+        context_obj = await context_dao.filter(project_id=project_obj.id, name=context)
     else:
         # use the default context
-        context_obj = context_dao.filter(project_id=project_obj.id, name="")
+        context_obj = await context_dao.filter(project_id=project_obj.id, name="")
         if not context_obj:
             return {}
 
@@ -6508,10 +6517,10 @@ def get_fields(
         },
     },
 )
-def create_fields(
+async def create_fields(
     request_fastapi: Request,
     request: CreateFieldsRequest,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Creates one or more fields in a project. Fields are field definitions that can be used
@@ -6521,10 +6530,10 @@ def create_fields(
     will be updated.
     """
     # Instantiate DAOs with shared session
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    field_type_dao = FieldTypeDAO(session)
+    field_type_dao = AsyncFieldTypeDAO(session)
 
     # Validate project
     try:
@@ -6544,7 +6553,7 @@ def create_fields(
 
     # Get or create context
     context_name = request.context if request.context else ""
-    context_id = context_dao.get_or_create(
+    context_id = await context_dao.get_or_create(
         project_id=project_id,
         name=context_name,
         description=None,
@@ -6702,7 +6711,7 @@ def create_fields(
                                 },
                             )
 
-                    session.commit()
+                    await session.commit()
         except Exception as e:
             session.rollback()
             raise HTTPException(
@@ -6742,10 +6751,10 @@ def create_fields(
         },
     },
 )
-def delete_fields(
+async def delete_fields(
     request_fastapi: Request,
     request: DeleteFieldsRequest,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Deletes one or more fields from a project. This will:
@@ -6755,10 +6764,10 @@ def delete_fields(
     This operation cannot be undone, so use with caution.
     """
     # Instantiate DAOs with shared session
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    field_type_dao = FieldTypeDAO(session)
+    field_type_dao = AsyncFieldTypeDAO(session)
     log_dao = LogDAO(session, context_dao)
 
     # Check if this is the protected Unity/Tasks context
@@ -6786,7 +6795,7 @@ def delete_fields(
 
     # Get context
     context_name = request.context if request.context else ""
-    context = context_dao.filter(project_id=project_id, name=context_name)
+    context = await context_dao.filter(project_id=project_id, name=context_name)
     if not context:
         raise HTTPException(
             status_code=404,
@@ -6983,8 +6992,8 @@ def delete_fields(
         },
     },
 )
-def update_active_derived_logs(
-    session=Depends(get_db_session),
+async def update_active_derived_logs(
+    session: AsyncSession = Depends(get_async_db_session),
     _=Depends(auth_admin_key),
 ):
     """
@@ -6993,7 +7002,7 @@ def update_active_derived_logs(
     This endpoint  is designed to be calledby internal processes (e.g., Cloud Scheduler) or administrators.
     """
     # Instantiate DAO with shared session
-    field_type_dao = FieldTypeDAO(session)
+    field_type_dao = AsyncFieldTypeDAO(session)
 
     try:
         # Get all active templates
@@ -7106,7 +7115,7 @@ def update_active_derived_logs(
                     )
                     continue
 
-            session.commit()
+            await session.commit()
 
             return {
                 "info": f"Created {total_derived_logs_created} new derived logs",
@@ -7307,7 +7316,7 @@ def update_active_derived_logs(
                     detail=f"Error processing template {template.id}: {str(e)}",
                 )
         # Commit all changes
-        session.commit()
+        await session.commit()
 
         return {
             "info": f"Created {total_derived_logs_created} new derived logs",
@@ -7348,7 +7357,7 @@ def update_active_derived_logs(
 )
 async def process_traffic_logs(
     max_messages: int = Query(100, description="Maximum number of messages to pull"),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     _=Depends(auth_admin_key),
 ):
     """
@@ -7356,12 +7365,12 @@ async def process_traffic_logs(
     This endpoint is designed to be called by internal processes (e.g., Cloud Scheduler) or administrators.
     """
     # Instantiate DAOs with shared session
-    organization_dao = OrganizationDAO(session)
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_dao = AsyncOrganizationDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    field_type_dao = FieldTypeDAO(session)
-    log_event_dao = LogEventDAO(session)
+    field_type_dao = AsyncFieldTypeDAO(session)
+    log_event_dao = AsyncLogEventDAO(session)
     log_dao = LogDAO(session, context_dao)
     try:
         from google.cloud import pubsub_v1
@@ -7371,11 +7380,11 @@ async def process_traffic_logs(
         # 1. Fetch the 'Production Traffic' project
         ORGANIZATION_NAME = settings.orchestra_organization_name
         PROJ_NAME = settings.orchestra_prod_traffic_name
-        admin_org = organization_dao.filter(name=ORGANIZATION_NAME)[0][0]
-        project_id = project_dao.filter(organization_id=admin_org.id, name=PROJ_NAME)[
+        admin_org = await organization_dao.filter(name=ORGANIZATION_NAME)[0][0]
+        project_id = await project_dao.filter(organization_id=admin_org.id, name=PROJ_NAME)[
             0
         ][0].id
-        context_id = context_dao.get_or_create(
+        context_id = await context_dao.get_or_create(
             project_id,
             name="",
             description=None,
@@ -7523,7 +7532,7 @@ async def process_embedding_queue(
         le=MAX_TIME_SECONDS_HARD_CAP,
         description=f"Maximum processing time in seconds (hard cap: {MAX_TIME_SECONDS_HARD_CAP})",
     ),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     _=Depends(auth_admin_key),
 ):
     """
@@ -7644,7 +7653,7 @@ async def process_embedding_queue(
     },
 )
 async def run_index_maintenance(
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     _=Depends(auth_admin_key),
 ):
     """

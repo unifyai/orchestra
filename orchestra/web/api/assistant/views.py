@@ -20,6 +20,7 @@ from fastapi import (
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import or_
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.api_key_dao import ApiKeyDAO
@@ -36,7 +37,23 @@ from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
-from orchestra.db.dependencies import get_db_session
+
+# Async DAOs
+from orchestra.db.dao.async_api_key_dao import AsyncApiKeyDAO
+from orchestra.db.dao.async_assistant_dao import AsyncAssistantDAO
+from orchestra.db.dao.async_assistant_secret_dao import AsyncAssistantSecretDAO
+from orchestra.db.dao.async_auth_user_dao import AsyncAuthUserDAO
+from orchestra.db.dao.async_context_dao import AsyncContextDAO
+from orchestra.db.dao.async_log_dao import AsyncLogDAO
+from orchestra.db.dao.async_log_event_dao import AsyncLogEventDAO
+from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
+from orchestra.db.dao.async_project_dao import AsyncProjectDAO
+from orchestra.db.dao.async_recording_dao import AsyncRecordingDAO
+from orchestra.db.dao.async_resource_access_dao import AsyncResourceAccessDAO
+from orchestra.db.dao.async_role_dao import AsyncRoleDAO
+from orchestra.db.dao.async_users_dao import AsyncUsersDAO
+from orchestra.db.dao.async_voice_dao import AsyncVoiceDAO
+from orchestra.db.dependencies import get_async_db_session, get_db_session
 from orchestra.db.models.orchestra_models import (
     AuthUser,
     Context,
@@ -100,7 +117,7 @@ from orchestra.web.api.utils.assistant_infra import (
 )
 
 
-def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:
+async def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:
     """
     Normalize phone parameter that may have been URL-decoded.
     FastAPI URL-decodes '+' to space, so convert leading space back to '+'.
@@ -110,9 +127,9 @@ def normalize_phone_parameter(raw_phone: Optional[str]) -> Optional[str]:
     return raw_phone
 
 
-def check_assistant_hiring_approval(
+async def check_assistant_hiring_approval(
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     user_id = request.state.user_id
     user = session.query(AuthUser).filter(AuthUser.id == user_id).one_or_none()
@@ -206,7 +223,7 @@ admin_router = APIRouter()
 async def create_assistant(
     assistant_in: AssistantCreate,
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[AssistantRead]:
     """
@@ -217,15 +234,15 @@ async def create_assistant(
     to the authenticated user's account. Creating an assistant incurs a credit cost.
     """
     user_id = request.state.user_id
-    users_dao = UsersDAO(session)
-    assistant_dao = AssistantDAO(session)
-    api_key_dao = ApiKeyDAO(session)
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    users_dao = AsyncUsersDAO(session)
+    assistant_dao = AsyncAssistantDAO(session)
+    api_key_dao = AsyncApiKeyDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    log_event_dao = LogEventDAO(session)
+    log_event_dao = AsyncLogEventDAO(session)
     log_dao = LogDAO(session, context_dao)
-    api_keys = api_key_dao.filter(user_id=user_id)
+    api_keys = await api_key_dao.filter(user_id=user_id)
     if not api_keys:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -264,8 +281,8 @@ async def create_assistant(
     try:
         # Get organization context from API key (None = personal, int = org)
         organization_id = getattr(request.state, "organization_id", None)
-        resource_access_dao = ResourceAccessDAO(session)
-        role_dao = RoleDAO(session)
+        resource_access_dao = AsyncResourceAccessDAO(session)
+        role_dao = AsyncRoleDAO(session)
 
         # For org context, check assistant:write permission
         if organization_id is not None:
@@ -336,7 +353,7 @@ async def create_assistant(
 
         if organization_id is not None:
             # For org context, check if project exists in org (not user-access based)
-            org_projects = project_dao.filter(
+            org_projects = await project_dao.filter(
                 organization_id=organization_id,
                 name=ASSISTANTS_PROJECT_NAME,
             )
@@ -344,7 +361,7 @@ async def create_assistant(
 
             if not assistants_project:
                 # Create org Assistants project
-                project_dao.create(
+                await project_dao.create(
                     user_id=None,
                     organization_id=organization_id,
                     name=ASSISTANTS_PROJECT_NAME,
@@ -354,7 +371,7 @@ async def create_assistant(
                 session.flush()
 
                 # Fetch the created project
-                org_projects = project_dao.filter(
+                org_projects = await project_dao.filter(
                     organization_id=organization_id,
                     name=ASSISTANTS_PROJECT_NAME,
                 )
@@ -373,7 +390,7 @@ async def create_assistant(
                         )
 
                     # Grant Member access to all other existing org members
-                    org_members = organization_member_dao.filter(
+                    org_members = await organization_member_dao.filter(
                         organization_id=organization_id,
                     )
                     member_role = role_dao.get_by_name("Member", organization_id=None)
@@ -416,7 +433,7 @@ async def create_assistant(
             )
             if not assistants_project:
                 # Create personal Assistants project
-                project_dao.create(
+                await project_dao.create(
                     user_id=user_id,
                     organization_id=None,
                     name=ASSISTANTS_PROJECT_NAME,
@@ -426,7 +443,7 @@ async def create_assistant(
 
         # Commit the assistant creation before infrastructure setup
         # This ensures the assistant persists even if we refresh the session later
-        session.commit()
+        await session.commit()
 
         assistant_id = assistant.agent_id
         # Infrastructure creation with rollback on failure
@@ -513,7 +530,7 @@ async def create_assistant(
                 )
                 session.close()
                 session = next(get_db_session(request))
-                assistant_dao = AssistantDAO(session)
+                assistant_dao = AsyncAssistantDAO(session)
 
                 # Update assistant with created infrastructure details
                 update_data = {
@@ -529,7 +546,7 @@ async def create_assistant(
                     update_data=update_data,
                 )
                 # Commit the infrastructure updates
-                session.commit()
+                await session.commit()
                 print(f"ASSISTANT UPDATED: {assistant_id}")
 
                 # Retrieve the updated assistant for the final response
@@ -551,8 +568,8 @@ async def create_assistant(
                 )
                 session.close()
                 session = next(get_db_session(request))
-                assistant_dao = AssistantDAO(session)
-                context_dao = ContextDAO(session)
+                assistant_dao = AsyncAssistantDAO(session)
+                context_dao = AsyncContextDAO(session)
                 project_dao = ProjectDAO(
                     session,
                     organization_member_dao,
@@ -600,12 +617,12 @@ async def create_assistant(
                                 organization_id=None,
                             )
                             if assistants_project:
-                                context_to_delete = context_dao.filter(
+                                context_to_delete = await context_dao.filter(
                                     project_id=assistants_project.id,
                                     name=context_name,
                                 )
                                 if context_to_delete:
-                                    context_dao.delete(context_to_delete[0][0].id)
+                                    await context_dao.delete(context_to_delete[0][0].id)
                                     logging.info(
                                         f"Deleted chat transcript context for failed assistant {assistant_id}",
                                     )
@@ -618,7 +635,7 @@ async def create_assistant(
                         agent_id=assistant_id,
                     )
                     # Commit the assistant deletion
-                    session.commit()
+                    await session.commit()
                 except Exception as e:
                     rollback_errors.append(f"Failed to delete assistant: {str(e)}")
                 print(f"ASSISTANT DELETED: {assistant_id}")
@@ -660,7 +677,7 @@ async def create_assistant(
                 user_id=user_id,
                 quantity=-float(total_creation_cost),
             )
-            session.commit()
+            await session.commit()
         except Exception as e_commit:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -805,9 +822,9 @@ async def create_assistant(
         },
     },
 )
-def list_assistants(
+async def list_assistants(
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     phone: Optional[str] = Query(
         None,
         description="Only return assistants whose phone number matches this E.164-style value (leading '+' is URL-encoded).",
@@ -831,7 +848,7 @@ def list_assistants(
     # Correct for URL-decoded '+' in query parameters.
     phone = normalize_phone_parameter(phone)
 
-    assistant_dao = AssistantDAO(session)
+    assistant_dao = AsyncAssistantDAO(session)
     user_id = request.state.user_id
 
     # Get organization context from API key
@@ -841,7 +858,7 @@ def list_assistants(
         if organization_id is not None and list_all_org:
             # Org context with list_all_org=True: list all org assistants
             # Check if user has assistant:read permission
-            resource_access_dao = ResourceAccessDAO(session)
+            resource_access_dao = AsyncResourceAccessDAO(session)
             has_permission = resource_access_dao.check_org_member_permission(
                 user_id,
                 organization_id,
@@ -865,7 +882,7 @@ def list_assistants(
                 phone=phone,
                 email=email,
             )
-        voice_dao = VoiceDAO(session)
+        voice_dao = AsyncVoiceDAO(session)
 
         return InfoResponse(
             info=[
@@ -934,7 +951,7 @@ async def delete_assistant_contact(
     assistant_id: int,
     removal_payload: AssistantContactRemoval,
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[AssistantRead]:
     """
@@ -946,7 +963,7 @@ async def delete_assistant_contact(
     """
     user_id = request.state.user_id
     organization_id = getattr(request.state, "organization_id", None)
-    assistant_dao = AssistantDAO(session)
+    assistant_dao = AsyncAssistantDAO(session)
 
     assistant = assistant_dao.get_assistant_by_id(
         user_id=user_id,
@@ -962,7 +979,7 @@ async def delete_assistant_contact(
 
     # For org assistants, check assistant:write permission
     if organization_id is not None:
-        resource_access_dao = ResourceAccessDAO(session)
+        resource_access_dao = AsyncResourceAccessDAO(session)
         has_permission = resource_access_dao.check_user_permission(
             user_id,
             "assistant",
@@ -992,7 +1009,7 @@ async def delete_assistant_contact(
             assistant.user_whatsapp_number = None
             assistant.assistant_whatsapp_number = None
 
-        session.commit()
+        await session.commit()
         session.refresh(assistant)
         updated_assistant = assistant
 
@@ -1080,7 +1097,7 @@ async def delete_assistant_contact(
 async def delete_assistant(
     assistant_id: int,
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[str]:
     """
@@ -1090,9 +1107,9 @@ async def delete_assistant(
     This action cannot be undone. Associated GCS profile photos will also be deleted.
     """
     bucket_service = BucketService()
-    dao = AssistantDAO(session)
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    dao = AsyncAssistantDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     organization_id = getattr(request.state, "organization_id", None)
     cleanup_errors = []
@@ -1114,7 +1131,7 @@ async def delete_assistant(
 
         # For org assistants, check assistant:delete permission
         if organization_id is not None:
-            resource_access_dao = ResourceAccessDAO(session)
+            resource_access_dao = AsyncResourceAccessDAO(session)
             has_permission = resource_access_dao.check_user_permission(
                 request.state.user_id,
                 "assistant",
@@ -1178,7 +1195,7 @@ async def delete_assistant(
                 )
                 if contexts_to_delete:
                     for context_to_del in contexts_to_delete:
-                        context_dao.delete(context_to_del.id)
+                        await context_dao.delete(context_to_del.id)
 
         except Exception as e_ctx:
             logging.error(
@@ -1263,7 +1280,7 @@ async def delete_assistant(
             cleanup_errors.append(f"Failed to delete assistant: {str(e)}")
 
         # Commit the entire transaction
-        session.commit()
+        await session.commit()
 
         response_msg = "Assistant deleted successfully"
         if cleanup_errors:
@@ -1360,7 +1377,7 @@ async def update_assistant_config(
     assistant_id: int,
     update: AssistantUpdate,
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[AssistantRead]:
     """
@@ -1371,8 +1388,8 @@ async def update_assistant_config(
     """
     user_id = request.state.user_id
     organization_id = getattr(request.state, "organization_id", None)
-    users_dao = UsersDAO(session)
-    assistant_dao = AssistantDAO(session)
+    users_dao = AsyncUsersDAO(session)
+    assistant_dao = AsyncAssistantDAO(session)
     bucket_service = BucketService()
 
     # Store the old photo URL before the update
@@ -1402,7 +1419,7 @@ async def update_assistant_config(
 
     # For org assistants, check assistant:write permission
     if organization_id is not None:
-        resource_access_dao = ResourceAccessDAO(session)
+        resource_access_dao = AsyncResourceAccessDAO(session)
         has_permission = resource_access_dao.check_user_permission(
             user_id,
             "assistant",
@@ -1604,7 +1621,7 @@ async def update_assistant_config(
                     f"Failed to delete old profile video {old_video_url} for assistant {assistant_id} during update. Error: {str(e)}",
                 )
 
-        session.commit()
+        await session.commit()
 
         # If contact info was updated and infra creation was enabled, reawaken the assistant
         if contact_info_updated and update.create_infra:
@@ -1704,11 +1721,11 @@ async def update_assistant_config(
         400: {"description": "Invalid transfer request"},
     },
 )
-def transfer_assistant_to_org(
+async def transfer_assistant_to_org(
     assistant_id: int,
     transfer_request: AssistantTransferToOrgRequest,
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[AssistantTransferResponse]:
     """
@@ -1722,12 +1739,12 @@ def transfer_assistant_to_org(
     """
     user_id = request.state.user_id
     target_org_id = transfer_request.organization_id
-    assistant_dao = AssistantDAO(session)
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    assistant_dao = AsyncAssistantDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    resource_access_dao = ResourceAccessDAO(session)
-    role_dao = RoleDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
+    role_dao = AsyncRoleDAO(session)
 
     # Verify this is a personal assistant (must use personal API key)
     current_org_id = getattr(request.state, "organization_id", None)
@@ -1775,14 +1792,14 @@ def transfer_assistant_to_org(
             # Get or create org Assistants project
             # Use filter() instead of get_by_user_and_name() because we need to find
             # org projects directly without requiring user access checks
-            org_projects = project_dao.filter(
+            org_projects = await project_dao.filter(
                 organization_id=target_org_id,
                 name=ASSISTANTS_PROJECT_NAME,
             )
             org_project = org_projects[0][0] if org_projects else None
             project_created = False
             if not org_project:
-                project_dao.create(
+                await project_dao.create(
                     user_id=None,
                     organization_id=target_org_id,
                     name=ASSISTANTS_PROJECT_NAME,
@@ -1790,7 +1807,7 @@ def transfer_assistant_to_org(
                     is_versioned=False,
                 )
                 session.flush()  # Get project ID
-                org_projects = project_dao.filter(
+                org_projects = await project_dao.filter(
                     organization_id=target_org_id,
                     name=ASSISTANTS_PROJECT_NAME,
                 )
@@ -1812,7 +1829,7 @@ def transfer_assistant_to_org(
                         )
 
                     # Grant Member access to all other existing org members
-                    org_members = organization_member_dao.filter(
+                    org_members = await organization_member_dao.filter(
                         organization_id=target_org_id,
                     )
                     member_role = role_dao.get_by_name("Member", organization_id=None)
@@ -1992,7 +2009,7 @@ def transfer_assistant_to_org(
                 grantee_id=user_id,
             )
 
-        session.commit()
+        await session.commit()
 
         return InfoResponse(
             info=AssistantTransferResponse(
@@ -2028,11 +2045,11 @@ def transfer_assistant_to_org(
         400: {"description": "Invalid transfer request"},
     },
 )
-def transfer_assistant_to_personal(
+async def transfer_assistant_to_personal(
     assistant_id: int,
     transfer_request: AssistantTransferToPersonalRequest,
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[AssistantTransferResponse]:
     """
@@ -2046,11 +2063,11 @@ def transfer_assistant_to_personal(
     """
     user_id = request.state.user_id
     organization_id = getattr(request.state, "organization_id", None)
-    assistant_dao = AssistantDAO(session)
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    assistant_dao = AsyncAssistantDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    resource_access_dao = ResourceAccessDAO(session)
+    resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Verify this is an org assistant (must use org API key)
     if organization_id is None:
@@ -2091,7 +2108,7 @@ def transfer_assistant_to_personal(
             ASSISTANTS_PROJECT_NAME = "Assistants"
             # Use filter() instead of get_by_user_and_name() because we need to find
             # org projects directly without requiring user access checks
-            org_projects = project_dao.filter(
+            org_projects = await project_dao.filter(
                 organization_id=organization_id,
                 name=ASSISTANTS_PROJECT_NAME,
             )
@@ -2112,9 +2129,9 @@ def transfer_assistant_to_personal(
                     .all()
                 )
                 for ctx in contexts_to_delete:
-                    # context_dao.delete() handles sibling cleanup automatically
+                    # await context_dao.delete() handles sibling cleanup automatically
                     # for Assistants projects (removes logs from All/* and User/All/*)
-                    context_dao.delete(ctx.id)
+                    await context_dao.delete(ctx.id)
 
                 logs_deleted = len(contexts_to_delete) > 0
 
@@ -2143,7 +2160,7 @@ def transfer_assistant_to_personal(
                 detail="Failed to transfer assistant.",
             )
 
-        session.commit()
+        await session.commit()
 
         return InfoResponse(
             info=AssistantTransferResponse(
@@ -2205,7 +2222,7 @@ def transfer_assistant_to_personal(
 )
 async def create_recording(
     recording: RecordingCreate,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> InfoResponse[RecordingInfo]:
     """
     Add a new call recording for the specified assistant.
@@ -2213,8 +2230,8 @@ async def create_recording(
     This endpoint allows uploading a call recording by providing base64-encoded audio data.
     The system will decode the audio, store it securely, and associate it with the assistant.
     """
-    assistant_dao = AssistantDAO(session)
-    recording_dao = RecordingDAO(session)
+    assistant_dao = AsyncAssistantDAO(session)
+    recording_dao = AsyncRecordingDAO(session)
     bucket_service = BucketService()
     recording_service = CallRecordingService(
         assistant_dao=assistant_dao,
@@ -2285,10 +2302,10 @@ async def create_recording(
         },
     },
 )
-def list_recordings(
+async def list_recordings(
     assistant_id: int,
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[List[RecordingInfo]]:
     """
@@ -2297,8 +2314,8 @@ def list_recordings(
     Retrieves all call recordings associated with the assistant, including their
     URLs and creation timestamps.
     """
-    assistant_dao = AssistantDAO(session)
-    recording_dao = RecordingDAO(session)
+    assistant_dao = AsyncAssistantDAO(session)
+    recording_dao = AsyncRecordingDAO(session)
     try:
         # Verify assistant exists and belongs to user
         assistant = assistant_dao.get_assistant_by_id(
@@ -2354,11 +2371,11 @@ def list_recordings(
         },
     },
 )
-def delete_recording(
+async def delete_recording(
     assistant_id: int,
     recording_id: int,
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[str]:
     """
@@ -2367,8 +2384,8 @@ def delete_recording(
     Permanently removes the specified recording from the system.
     This action cannot be undone.
     """
-    assistant_dao = AssistantDAO(session)
-    recording_dao = RecordingDAO(session)
+    assistant_dao = AsyncAssistantDAO(session)
+    recording_dao = AsyncRecordingDAO(session)
     try:
         # Verify assistant exists and belongs to user
         assistant = assistant_dao.get_assistant_by_id(
@@ -2446,13 +2463,13 @@ def delete_recording(
     },
     tags=["Voices"],
 )
-def register_voice(
+async def register_voice(
     voice_in: VoiceCreate,
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[VoiceRead]:
-    dao = VoiceDAO(session)
+    dao = AsyncVoiceDAO(session)
     try:
 
         voice = dao.create_voice(
@@ -2467,7 +2484,7 @@ def register_voice(
         voice.is_preset = (
             voice_in.is_preset if voice_in.is_preset is not None else False
         )
-        session.commit()
+        await session.commit()
         return InfoResponse(
             info=VoiceRead(
                 voice_id=voice.voice_id,
@@ -2514,7 +2531,7 @@ def register_voice(
 )
 async def clone_voice(
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     cartesia_service: CartesiaService = Depends(),
     elevenlabs_service: ElevenLabsService = Depends(),
     deepgram_service: DeepgramService = Depends(),
@@ -2527,7 +2544,7 @@ async def clone_voice(
     _: None = Depends(check_assistant_hiring_approval),
 ):
     user_id = request.state.user_id
-    voice_dao = VoiceDAO(session)
+    voice_dao = AsyncVoiceDAO(session)
     new_voice_id: Optional[str] = None
     voice_language: Optional[str] = language
 
@@ -2588,7 +2605,7 @@ async def clone_voice(
         if provider == "cartesia" and not gender:
             db_voice.gender = cartesia_response.get("gender")
         db_voice.is_preset = False
-        session.commit()
+        await session.commit()
 
         return InfoResponse(
             info=VoiceRead(
@@ -2697,15 +2714,15 @@ async def clone_voice(
     },
     tags=["Voices"],
 )
-def list_voices(
+async def list_voices(
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[List[VoiceRead]]:
     """
     List all voices saved by the authenticated user.
     """
-    dao = VoiceDAO(session)
+    dao = AsyncVoiceDAO(session)
     try:
         voices = dao.list_voices_for_user(
             user_id=request.state.user_id,
@@ -2760,13 +2777,13 @@ async def delete_voice(
     voice_id: str,
     request: Request,
     provider: str = Query(..., description="The provider of the voice to delete"),
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     cartesia_service: CartesiaService = Depends(),
     elevenlabs_service: ElevenLabsService = Depends(),
     _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[str]:
     user_id = request.state.user_id
-    voice_dao = VoiceDAO(session)
+    voice_dao = AsyncVoiceDAO(session)
 
     # First, get the voice to check its existence and preset status.
     voice_to_delete = voice_dao.get_voice_by_id(
@@ -2808,7 +2825,7 @@ async def delete_voice(
                         raise e_provider  # This will be caught below.
 
         # If both DB and provider deletions were successful (or skippable), commit.
-        session.commit()
+        await session.commit()
         return InfoResponse(info="Voice deleted successfully.")
 
     except HTTPException as e:
@@ -2865,7 +2882,7 @@ async def delete_voice(
 async def generate_speech(
     request_data: VoiceGenerateRequest,
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     cartesia_service: CartesiaService = Depends(),
     elevenlabs_service: ElevenLabsService = Depends(),
     openai_service: OpenAIService = Depends(),
@@ -2944,7 +2961,7 @@ async def generate_speech(
 async def design_voice_generate_previews_endpoint(
     request_data: VoiceDesignGeneratePreviewsRequest,
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     elevenlabs_service: ElevenLabsService = Depends(),
     openai_service: OpenAIService = Depends(),
     _: None = Depends(check_assistant_hiring_approval),
@@ -3028,14 +3045,14 @@ async def design_voice_generate_previews_endpoint(
 async def design_voice_create_from_preview_endpoint(
     request_data: VoiceDesignCreateFromPreviewRequest,
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     elevenlabs_service: ElevenLabsService = Depends(),
     deepgram_service: DeepgramService = Depends(),
     openai_service: OpenAIService = Depends(),
     _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[VoiceRead]:
     user_id = request.state.user_id
-    voice_dao = VoiceDAO(session)
+    voice_dao = AsyncVoiceDAO(session)
     new_el_voice_id: Optional[str] = None
     voice_language: Optional[str] = request_data.language
 
@@ -3115,7 +3132,7 @@ async def design_voice_create_from_preview_endpoint(
         )
         db_voice.is_preset = False  # Designed voices are not presets
         session.flush()  # Ensure db_voice gets all attributes before commit
-        session.commit()  # Commit DB voice creation
+        await session.commit()  # Commit DB voice creation
 
         return InfoResponse(
             info=VoiceRead(
@@ -3215,17 +3232,17 @@ async def design_voice_create_from_preview_endpoint(
     },
     tags=["Secrets"],
 )
-def create_secret(
+async def create_secret(
     assistant_id: int,
     secret_in: SecretCreate,
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[SecretRead]:
     user_id = request.state.user_id
     organization_id = getattr(request.state, "organization_id", None)
-    assistant_dao = AssistantDAO(session)
-    secret_dao = AssistantSecretDAO(session)
+    assistant_dao = AsyncAssistantDAO(session)
+    secret_dao = AsyncAssistantSecretDAO(session)
 
     # Verify access to the assistant
     assistant = assistant_dao.get_assistant_by_id(
@@ -3247,7 +3264,7 @@ def create_secret(
             secret_value=secret_in.secret_value,
             description=secret_in.description,
         )
-        session.commit()
+        await session.commit()
         return InfoResponse(
             info=SecretRead(
                 secret_name=secret.secret_name,
@@ -3281,18 +3298,18 @@ def create_secret(
     },
     tags=["Secrets"],
 )
-def update_secret(
+async def update_secret(
     assistant_id: int,
     secret_name: str,
     secret_in: SecretUpdate,
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[SecretRead]:
     user_id = request.state.user_id
     organization_id = getattr(request.state, "organization_id", None)
-    assistant_dao = AssistantDAO(session)
-    secret_dao = AssistantSecretDAO(session)
+    assistant_dao = AsyncAssistantDAO(session)
+    secret_dao = AsyncAssistantSecretDAO(session)
 
     # Verify access to the assistant
     assistant = assistant_dao.get_assistant_by_id(
@@ -3320,7 +3337,7 @@ def update_secret(
             detail=f"Secret '{secret_name}' not found.",
         )
 
-    session.commit()
+    await session.commit()
     return InfoResponse(
         info=SecretRead(
             secret_name=secret.secret_name,
@@ -3341,17 +3358,17 @@ def update_secret(
     },
     tags=["Secrets"],
 )
-def delete_secret(
+async def delete_secret(
     assistant_id: int,
     secret_name: str,
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[dict]:
     user_id = request.state.user_id
     organization_id = getattr(request.state, "organization_id", None)
-    assistant_dao = AssistantDAO(session)
-    secret_dao = AssistantSecretDAO(session)
+    assistant_dao = AsyncAssistantDAO(session)
+    secret_dao = AsyncAssistantSecretDAO(session)
 
     # Verify access to the assistant
     assistant = assistant_dao.get_assistant_by_id(
@@ -3367,7 +3384,7 @@ def delete_secret(
 
     try:
         secret_dao.delete_secret(user_id, assistant_id, secret_name)
-        session.commit()
+        await session.commit()
         return InfoResponse(
             info={"message": f"Secret '{secret_name}' deleted successfully."},
         )
@@ -3512,7 +3529,7 @@ async def upload_assistant_video(
 async def generate_assistant_photo(
     request: Request,
     payload: PhotoGenerateRequest,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     replicate_service: ReplicateService = Depends(),
     openai_service: OpenAIService = Depends(),
     _: None = Depends(check_assistant_hiring_approval),
@@ -3524,7 +3541,7 @@ async def generate_assistant_photo(
     text prompt. The user's account is charged for this operation.
     """
     user_id = request.state.user_id
-    users_dao = UsersDAO(session)
+    users_dao = AsyncUsersDAO(session)
 
     # 1. Moderate the prompt
     try:
@@ -3566,7 +3583,7 @@ async def generate_assistant_photo(
                 user_id=user_id,
                 quantity=-float(settings.photo_generation_cost),
             )
-            session.commit()
+            await session.commit()
 
         return InfoResponse(info=image_url)
     except ReplicateAPIError as e:
@@ -3594,7 +3611,7 @@ async def generate_assistant_photo(
 )
 async def edit_assistant_photo(
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     replicate_service: ReplicateService = Depends(),
     bucket_service: BucketService = Depends(),
     openai_service: OpenAIService = Depends(),
@@ -3620,7 +3637,7 @@ async def edit_assistant_photo(
     The user's account is charged for this operation.
     """
     user_id = request.state.user_id
-    users_dao = UsersDAO(session)
+    users_dao = AsyncUsersDAO(session)
     temp_gcs_url_to_delete: Optional[str] = None
     input_image_for_replicate: Optional[str] = None
 
@@ -3717,7 +3734,7 @@ async def edit_assistant_photo(
                 user_id=user_id,
                 quantity=-float(settings.photo_generation_cost),
             )
-            session.commit()
+            await session.commit()
 
         return InfoResponse(info=image_url)
 
@@ -3762,7 +3779,7 @@ async def edit_assistant_photo(
 )
 async def animate_video_endpoint(
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
     replicate_service: ReplicateService = Depends(),
     bucket_service: BucketService = Depends(),
     openai_service: OpenAIService = Depends(),
@@ -3775,7 +3792,7 @@ async def animate_video_endpoint(
     _: None = Depends(check_assistant_hiring_approval),
 ) -> InfoResponse[ReplicatePredictionResponse]:
     user_id = request.state.user_id
-    users_dao = UsersDAO(session)
+    users_dao = AsyncUsersDAO(session)
 
     temp_image_gcs_url: Optional[str] = None
     final_image_url_for_replicate: Optional[str] = None
@@ -3928,7 +3945,7 @@ async def animate_video_endpoint(
                 user_id=user_id,
                 quantity=-float(settings.video_generation_cost),
             )
-            session.commit()
+            await session.commit()
 
         response_data = ReplicatePredictionResponse.from_orm(prediction)
         return InfoResponse(info=response_data)
@@ -3985,7 +4002,7 @@ async def animate_video_endpoint(
     description="Retrieves the status and result of a video animation job.",
     tags=["Media"],
 )
-def get_animation_prediction(
+async def get_animation_prediction(
     prediction_id: str,
     request: Request,
     replicate_service: ReplicateService = Depends(),
@@ -4010,7 +4027,7 @@ def get_animation_prediction(
     description="Cancels a running video animation job.",
     tags=["Media"],
 )
-def cancel_animation_prediction(
+async def cancel_animation_prediction(
     prediction_id: str,
     request: Request,
     replicate_service: ReplicateService = Depends(),
@@ -4038,9 +4055,9 @@ def cancel_animation_prediction(
     summary="Admin: list all assistant email addresses",
 )
 async def admin_list_assistant_emails(
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> InfoResponse[List[str]]:
-    dao = AssistantDAO(session)
+    dao = AsyncAssistantDAO(session)
     """Return every non-null email address that has been set on an Assistant."""
     emails = dao.list_all_assistant_emails()
     return InfoResponse(info=emails)
@@ -4075,10 +4092,10 @@ async def admin_list_assistant_emails(
         },
     },
 )
-def admin_get_assistant_status(
+async def admin_get_assistant_status(
     assistant_id: str,
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> InfoResponse[AssistantStatus]:
     """
     Get the live status of an assistant's dedicated service.
@@ -4134,9 +4151,9 @@ def admin_get_assistant_status(
         },
     },
 )
-def admin_update_user_by_assistant(
+async def admin_update_user_by_assistant(
     request_body: AdminUpdateUserByAssistant,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> AdminUpdateUserByAssistantResponse:
     """
     Update a user's profile by looking up an assistant.
@@ -4144,9 +4161,9 @@ def admin_update_user_by_assistant(
     For personal assistants: updates the owner's profile if email matches.
     For org assistants: finds the org member by email and updates their profile.
     """
-    assistant_dao = AssistantDAO(session)
-    auth_user_dao = AuthUserDAO(session)
-    org_member_dao = OrganizationMemberDAO(session)
+    assistant_dao = AsyncAssistantDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
+    org_member_dao = AsyncOrganizationMemberDAO(session)
 
     # Get assistant without user/org context (admin bypass)
     assistant = assistant_dao.get_assistant_by_agent_id(request_body.assistant_id)
@@ -4162,7 +4179,7 @@ def admin_update_user_by_assistant(
     if assistant.organization_id is None:
         # Personal assistant: check if target_user_email matches owner
         assistant_type = "personal"
-        owner = auth_user_dao.get_by_id(assistant.user_id)
+        owner = await auth_user_dao.get_by_id(assistant.user_id)
         if not owner:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -4180,12 +4197,12 @@ def admin_update_user_by_assistant(
     else:
         # Org assistant: find member by email
         assistant_type = "organization"
-        members = org_member_dao.filter(organization_id=assistant.organization_id)
+        members = await org_member_dao.filter(organization_id=assistant.organization_id)
 
         # Find member whose email matches target_user_email
         for member_tuple in members:
             member = member_tuple[0]
-            user_row = auth_user_dao.get_by_id(member.user_id)
+            user_row = await auth_user_dao.get_by_id(member.user_id)
             if user_row:
                 user = user_row[0]
                 if user.email == request_body.target_user_email:
@@ -4214,7 +4231,7 @@ def admin_update_user_by_assistant(
 
     # Update the user
     try:
-        auth_user_dao.update(id=target_user_id, **update_kwargs)
+        await auth_user_dao.update(id=target_user_id, **update_kwargs)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -4263,17 +4280,17 @@ def admin_update_user_by_assistant(
         },
     },
 )
-def admin_update_assistant(
+async def admin_update_assistant(
     assistant_id: int,
     request_body: AdminUpdateAssistant,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> AdminUpdateAssistantResponse:
     """
     Update an assistant's details directly (admin bypass).
 
     Updates timezone and/or about fields without requiring user context.
     """
-    assistant_dao = AssistantDAO(session)
+    assistant_dao = AsyncAssistantDAO(session)
 
     # Get assistant without user/org context (admin bypass)
     assistant = assistant_dao.get_assistant_by_agent_id(assistant_id)
@@ -4301,7 +4318,7 @@ def admin_update_assistant(
         )
 
     # Commit changes
-    session.commit()
+    await session.commit()
 
     return AdminUpdateAssistantResponse(
         info="Assistant updated successfully",

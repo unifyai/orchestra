@@ -4,7 +4,10 @@ from fastapi import APIRouter, Query, Request
 from fastapi.param_functions import Depends
 
 from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
-from orchestra.db.dependencies import get_db_session
+
+# Async DAOs
+from orchestra.db.dao.async_custom_api_key_dao import AsyncCustomApiKeyDAO
+from orchestra.db.dependencies import get_async_db_session, get_db_session
 from orchestra.web.api.custom_api_keys.schema import CustomApiKeyModelResponse
 from orchestra.web.api.utils.http_responses import not_found
 
@@ -24,11 +27,11 @@ router = APIRouter()
         },
     },
 )
-def create_custom_api_key(
+async def create_custom_api_key(
     request_fastapi: Request,
     name: str = Query(description="Name of the API key.", example="key1"),
     value: str = Query(description="Value of the API key.", example="value1"),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> Dict[str, str]:
     """
     Stores a custom API key from an LLM provider in your account. This can be done in
@@ -44,7 +47,7 @@ def create_custom_api_key(
 
     """
     user_id = request_fastapi.state.user_id
-    custom_api_key_dao = CustomApiKeyDAO(session)
+    custom_api_key_dao = AsyncCustomApiKeyDAO(session)
     custom_api_key_dao.create_custom_api_key(
         user_id=user_id,
         key=name,
@@ -78,19 +81,19 @@ def create_custom_api_key(
         },
     },
 )
-def get_custom_api_key(
+async def get_custom_api_key(
     request_fastapi: Request,
     name: str = Query(
         description="Name of the API key to get the value for.",
         example="key1",
     ),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> CustomApiKeyModelResponse:
     """
     Returns the value of the key for the specified custom API key name.
     """
     user_id = request_fastapi.state.user_id
-    custom_api_key_dao = CustomApiKeyDAO(session)
+    custom_api_key_dao = AsyncCustomApiKeyDAO(session)
     all_keys = custom_api_key_dao.get_user_keys(user_id=user_id)
     for api_key in all_keys:
         if api_key.key == name:
@@ -119,25 +122,25 @@ def get_custom_api_key(
         },
     },
 )
-def delete_custom_api_key(
+async def delete_custom_api_key(
     request_fastapi: Request,
     name: str = Query(
         description="Name of the custom API key to delete.",
         example="key1",
     ),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> Dict[str, str]:
     """
     Deletes the custom API key from your account.
 
     """
     user_id = request_fastapi.state.user_id
-    custom_api_key_dao = CustomApiKeyDAO(session)
-    existing_key = custom_api_key_dao.filter(user_id=user_id, key=name)
+    custom_api_key_dao = AsyncCustomApiKeyDAO(session)
+    existing_key = await custom_api_key_dao.filter(user_id=user_id, key=name)
     if not existing_key:
         raise not_found("Custom API Key")
 
-    custom_api_key_dao.delete(
+    await custom_api_key_dao.delete(
         user_id=user_id,
         name=name,
     )
@@ -165,7 +168,7 @@ def delete_custom_api_key(
         },
     },
 )
-def rename_custom_api_key(
+async def rename_custom_api_key(
     request_fastapi: Request,
     name: str = Query(
         description="Name of the custom API key to be updated.",
@@ -175,15 +178,15 @@ def rename_custom_api_key(
         description="New name for the custom API key.",
         example="key2",
     ),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> Dict[str, str]:
     """
     Renames the custom API key in your account.
 
     """
     user_id = request_fastapi.state.user_id
-    custom_api_key_dao = CustomApiKeyDAO(session)
-    existing_key = custom_api_key_dao.filter(user_id=user_id, key=name)
+    custom_api_key_dao = AsyncCustomApiKeyDAO(session)
+    existing_key = await custom_api_key_dao.filter(user_id=user_id, key=name)
     if not existing_key:
         raise not_found("Custom API Key")
 
@@ -212,15 +215,15 @@ def rename_custom_api_key(
         },
     },
 )
-def list_custom_api_keys(
+async def list_custom_api_keys(
     request_fastapi: Request,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[CustomApiKeyModelResponse]:
     """
     Returns a list of the names for all custom API keys in your account.
     """
     user_id = request_fastapi.state.user_id
-    custom_api_key_dao = CustomApiKeyDAO(session)
+    custom_api_key_dao = AsyncCustomApiKeyDAO(session)
     raw_response = custom_api_key_dao.get_user_keys(user_id=user_id)
     return [
         CustomApiKeyModelResponse(name=rr.key, value=rr.value) for rr in raw_response
