@@ -193,7 +193,7 @@ async def test_update_derived_entry_with_referenced_logs(
     )
     assert resp.status_code == 200
     # Verify initial derived values
-    resp = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    resp = await client.get(f"/v0/logs?project_name={project_name}", headers=HEADERS)
     assert resp.status_code == 200
     logs = resp.json()["logs"]
 
@@ -226,7 +226,7 @@ async def test_update_derived_entry_with_referenced_logs(
     assert resp.status_code == 200
 
     # 4. Verify the updates
-    resp = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    resp = await client.get(f"/v0/logs?project_name={project_name}", headers=HEADERS)
     assert resp.status_code == 200
     updated_logs = resp.json()["logs"]
 
@@ -307,7 +307,7 @@ async def test_update_derived_entry_with_filter(client: AsyncClient, use_jsonb_m
     assert "Updated" in updated_info["info"]
 
     # 5) Check final state: only the "temp_plus_10" logs should be changed
-    resp = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    resp = await client.get(f"/v0/logs?project_name={project_name}", headers=HEADERS)
     assert resp.status_code == 200
     data = resp.json()
 
@@ -611,7 +611,10 @@ async def test_delete_derived_logs(client: AsyncClient, use_jsonb_mode):
     assert "Logs and fields deleted successfully" in response.json()["info"]
 
     # Verify first derived log is deleted but second remains
-    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS,
+    )
     assert response.status_code == 200
     logs = response.json()["logs"]
 
@@ -632,7 +635,10 @@ async def test_delete_derived_logs(client: AsyncClient, use_jsonb_mode):
     assert "Logs and fields deleted successfully" in response.json()["info"]
 
     # Verify all derived logs are deleted
-    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS,
+    )
     assert response.status_code == 200
     logs = response.json()["logs"]
     for log in logs:
@@ -822,7 +828,7 @@ async def test_derived_entry_datetime_arithmetic(client: AsyncClient, use_jsonb_
 
     # Verify the derived entries
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.text
@@ -905,7 +911,7 @@ async def test_derived_entry_datetime_arithmetic(client: AsyncClient, use_jsonb_
 
     # Verify the update
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.text
@@ -960,7 +966,7 @@ async def test_active_derived_logs_processing(client: AsyncClient, use_jsonb_mod
 
     # Verify only logs with score > 40 have the derived entry
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -982,7 +988,7 @@ async def test_active_derived_logs_processing(client: AsyncClient, use_jsonb_mod
 
     # Verify the new log doesn't have the derived entry yet
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"from_ids": new_log_id},
         headers=HEADERS,
     )
@@ -1002,7 +1008,7 @@ async def test_active_derived_logs_processing(client: AsyncClient, use_jsonb_mod
 
     # Verify the new log now has the derived entry
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"from_ids": new_log_id},
         headers=HEADERS,
     )
@@ -1134,7 +1140,7 @@ async def test_advanced_comprehensions_and_conditionals(
     ), f"Failed to create derived entry: {response.text}"
 
     response = await client.get(
-        f"/v0/logs?project={project}&filter_expr={field} is not None",
+        f"/v0/logs?project_name={project}&filter_expr={field} is not None",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -1184,7 +1190,7 @@ async def test_create_static_entries_with_flag(client: AsyncClient, use_jsonb_mo
 
     # 4. Fetch logs and verify the new key is in entries, not in derived_entries
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1281,7 +1287,7 @@ async def test_division_by_zero_safeguarding_all_operators(
 
     # Verify the results
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1377,7 +1383,7 @@ async def test_division_by_zero_safeguarding_all_operators(
 
     # Verify the complex equation results
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1735,7 +1741,7 @@ async def test_create_derived_entry_with_partial_null_values(
 
     # Verify the derived field is not NoneType
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1745,7 +1751,7 @@ async def test_create_derived_entry_with_partial_null_values(
 
     # Verify the derived entries were created correctly
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1796,7 +1802,7 @@ async def test_create_static_entries_with_correct_id_alignment(
 
     # 3. Fetch all logs and verify the integrity of the new static field
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1921,7 +1927,7 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
 
     # Verify that the derived field was created
     response = await client.get(
-        f"/v0/logs/fields?project={project}",
+        f"/v0/logs/fields?project_name={project}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -1998,7 +2004,7 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
 
     # Test getting all logs to verify that null/empty logs still exist but have null embeddings
     response = await client.get(
-        f"/v0/logs?project={project}",
+        f"/v0/logs?project_name={project}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2083,7 +2089,7 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient, use_jsonb_mode):
 
     # Get the image URLs from the logs
     response = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}",
+        f"/v0/logs?project_name={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2150,7 +2156,7 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient, use_jsonb_mode):
 
     # 4. Verify all animal images have valid pHashes
     response = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}"
+        f"/v0/logs?project_name={project_name}&context={context_name}"
         f"&filter_expr=type == 'animal'",
         headers=HEADERS,
     )
@@ -2336,7 +2342,7 @@ async def test_derived_field_category_jsonb(client: AsyncClient, use_jsonb_mode)
 
     # Verify field category
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -2388,7 +2394,7 @@ async def test_no_derived_log_rows_jsonb(client: AsyncClient, monkeypatch):
 
     # Verify derived values exist in logs (they should be in entries, not derived_entries in JSONB mode)
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -2608,7 +2614,7 @@ async def test_ripple_effect_jsonb(client: AsyncClient, monkeypatch):
 
     # Verify initial derived values via GET /v0/logs API
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2641,7 +2647,7 @@ async def test_ripple_effect_jsonb(client: AsyncClient, monkeypatch):
 
     # Verify ripple effect via GET /v0/logs API
     response = await client.get(
-        f"/v0/logs?project={project_name}&from_ids={log_ids[0]}",
+        f"/v0/logs?project_name={project_name}&from_ids={log_ids[0]}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2710,7 +2716,7 @@ async def test_active_derived_log_materialization_jsonb(
 
     # Verify initial derived values via GET /v0/logs API
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2739,7 +2745,7 @@ async def test_active_derived_log_materialization_jsonb(
 
     # Verify new log doesn't have derived entry yet via API
     response = await client.get(
-        f"/v0/logs?project={project_name}&from_ids={new_log_id}",
+        f"/v0/logs?project_name={project_name}&from_ids={new_log_id}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2763,7 +2769,7 @@ async def test_active_derived_log_materialization_jsonb(
 
     # Verify new log now has derived entry via API
     response = await client.get(
-        f"/v0/logs?project={project_name}&from_ids={new_log_id}",
+        f"/v0/logs?project_name={project_name}&from_ids={new_log_id}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -2837,7 +2843,7 @@ async def test_derived_embedding_filtering_and_sorting_jsonb(
 
     # Verify embeddings were created
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -2989,7 +2995,7 @@ async def test_create_derived_entry_both_modes(client: AsyncClient, use_jsonb_mo
 
     # Verify derived values
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -3051,7 +3057,7 @@ async def test_update_derived_entry_both_modes(client: AsyncClient, use_jsonb_mo
 
     # Verify updated values
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
