@@ -1,19 +1,18 @@
 """
-Tests for AsyncOpenAI client connection pool issues when used across event loops.
+Tests for AsyncOpenAI client connection pool fix.
 
-This test reproduces the issue where a shared global AsyncOpenAI client's
-connection pool gets confused when called from different event loops,
+Verifies the fix for a bug where a shared global AsyncOpenAI client's
+connection pool got confused when called from different event loops,
 causing PoolTimeout errors.
 
-The issue manifests when:
-1. The global _async_client is created at module import time
-2. Multiple concurrent calls go through _run_async_in_sync, each spawning
+The bug manifested when:
+1. A global _async_client was created at module import time
+2. Multiple concurrent calls went through _run_async_in_sync, each spawning
    a new event loop in a ThreadPoolExecutor
-3. The httpx connection pool tracks connections per-event-loop, so connections
-   "checked out" in one loop appear stuck when accessed from another
+3. The httpx connection pool tracked connections per-event-loop, so connections
+   "checked out" in one loop appeared stuck when accessed from another
 
-The symptom is: some embedding requests hang indefinitely waiting for a
-connection from the pool, eventually timing out with httpcore.PoolTimeout.
+The fix: Use per-event-loop AsyncOpenAI clients via _get_async_client().
 """
 
 import asyncio
@@ -30,25 +29,29 @@ class TestAsyncClientPoolContention:
     """
 
     @pytest.mark.anyio
-    async def test_shared_async_client_pool_contention(self):
+    async def test_per_loop_clients_avoid_pool_contention(self):
         """
-        Reproduce the connection pool issue by:
-        1. Running in an async test (one event loop)
-        2. Calling sync wrappers that create NEW event loops via ThreadPoolExecutor
-        3. Multiple concurrent calls cause pool contention due to shared client
+        Verify that per-event-loop clients avoid connection pool contention.
+
+        This test:
+        1. Runs in an async test (one event loop)
+        2. Calls sync wrappers that create NEW event loops via ThreadPoolExecutor
+        3. Each event loop gets its own AsyncOpenAI client with its own pool
+
+        Before the fix, this would hang with pool contention.
+        After the fix, all calls complete successfully.
         """
         from orchestra.web.api.log.python2SQL.helpers import (
-            _async_client,
+            OPENAI_API_KEY,
             _get_embeddings_batch_sync,
         )
 
-        # Skip if no OpenAI API key configured
-        if _async_client is None:
+        if not OPENAI_API_KEY:
             pytest.skip("No OpenAI API key configured")
 
-        # We'll make concurrent sync calls from this async context.
+        # Make concurrent sync calls from this async context.
         # Each call goes through _run_async_in_sync which creates a new event loop.
-        # The shared _async_client causes pool contention.
+        # With the fix, each loop gets its own client, avoiding contention.
 
         num_concurrent_calls = 10
         texts_per_call = ["test text for embedding"] * 2
@@ -95,9 +98,8 @@ class TestAsyncClientPoolContention:
                 for f in futures:
                     f.cancel()
                 pytest.fail(
-                    f"POOL CONTENTION BUG: Only {completed}/{num_concurrent_calls} "
-                    f"calls completed within 5 seconds. The remaining calls are stuck "
-                    f"waiting for connections from the shared AsyncClient's pool.",
+                    f"Pool contention occurred: Only {completed}/{num_concurrent_calls} "
+                    f"calls completed within 5 seconds. Per-loop clients should prevent this.",
                 )
         finally:
             executor.shutdown(wait=False, cancel_futures=True)
@@ -120,9 +122,8 @@ class TestAsyncClientPoolContention:
         Minimal test demonstrating that _run_async_in_sync creates different
         event loops when called from an async context.
 
-        This proves that the global _async_client will be accessed from
-        multiple different event loops, which is the root cause of the
-        connection pool issue.
+        This proves why per-loop clients are needed: a shared client would be
+        accessed from multiple different event loops, causing pool confusion.
         """
         from orchestra.web.api.log.python2SQL.helpers import _run_async_in_sync
 
