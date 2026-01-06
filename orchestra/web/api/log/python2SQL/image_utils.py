@@ -103,7 +103,7 @@ def is_phash_hex(value: str) -> bool:
         return False
 
 
-async def fetch_media_with_retry(
+def fetch_media_with_retry(
     bucket_service,
     filename: str,
     max_retries: int = 5,
@@ -129,14 +129,11 @@ async def fetch_media_with_retry(
     Returns:
         Base64 encoded media string, or None if all retries fail
     """
-    import asyncio
-
     last_error = None
 
     for attempt in range(max_retries + 1):
         try:
-            # Run sync GCS operation in thread pool to not block event loop
-            result = await asyncio.to_thread(bucket_service.get_media, filename)
+            result = bucket_service.get_media(filename)
             if result is not None:
                 return result
 
@@ -147,7 +144,7 @@ async def fetch_media_with_retry(
                     f"GCS object '{filename}' not found, retrying in {delay}s "
                     f"(attempt {attempt + 1}/{max_retries + 1})",
                 )
-                await asyncio.sleep(delay)
+                time.sleep(delay)
         except Exception as e:
             last_error = e
             if attempt < max_retries:
@@ -156,7 +153,7 @@ async def fetch_media_with_retry(
                     f"Error fetching '{filename}' from GCS: {e}, retrying in {delay}s "
                     f"(attempt {attempt + 1}/{max_retries + 1})",
                 )
-                await asyncio.sleep(delay)
+                time.sleep(delay)
 
     if last_error:
         logging.warning(

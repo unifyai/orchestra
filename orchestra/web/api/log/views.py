@@ -557,7 +557,7 @@ def prepare_resolved_ids(
         },
     },
 )
-async def create_from_logs(
+def create_from_logs(
     request_fastapi: Request,
     body: CreateDerivedEntriesConfig,
     session=Depends(get_db_session),
@@ -661,7 +661,7 @@ async def create_from_logs(
             )
 
             # 3) Compute values
-            computed_values = await _compute_expression(
+            computed_values = _compute_expression(
                 filter_dict,
                 LogEvent,
                 session,
@@ -779,7 +779,7 @@ async def create_from_logs(
                     .subquery(name="log_event_ids_subq")
                 )
 
-                computed_values = await _compute_expression(
+                computed_values = _compute_expression(
                     filter_dict,
                     LogEvent,
                     session,
@@ -1000,7 +1000,7 @@ async def create_from_logs(
                 )
                 .subquery(name="log_event_ids_subq")
             )
-            computed_values = await _compute_expression(
+            computed_values = _compute_expression(
                 filter_dict,
                 LogEvent,
                 session,
@@ -1220,7 +1220,7 @@ async def create_from_logs(
         },
     },
 )
-async def update_derived_log(
+def update_derived_log(
     request_fastapi: Request,
     body: UpdateDerivedEntriesConfig,
     session=Depends(get_db_session),
@@ -1570,7 +1570,7 @@ async def update_derived_log(
         )
 
         # 6. Compute the values directly using the filter dictionary
-        computed_values = await _compute_expression(
+        computed_values = _compute_expression(
             filter_dict,
             LogEvent,
             session,
@@ -6983,7 +6983,7 @@ def delete_fields(
         },
     },
 )
-async def update_active_derived_logs(
+def update_active_derived_logs(
     session=Depends(get_db_session),
     _=Depends(auth_admin_key),
 ):
@@ -7051,7 +7051,7 @@ async def update_active_derived_logs(
                                         filter_config["filter_expr"],
                                         field_names=list(field_types.keys()),
                                     )
-                                    condition = await build_sql_query(
+                                    condition = build_sql_query(
                                         filter_dict,
                                         LogEvent,
                                         session,
@@ -7188,7 +7188,7 @@ async def update_active_derived_logs(
                                 )
 
                                 # Apply the filter to find matching log events
-                                condition = await build_sql_query(
+                                condition = build_sql_query(
                                     filter_dict,
                                     LogEvent,
                                     session,
@@ -7243,7 +7243,7 @@ async def update_active_derived_logs(
                         filter_expr,
                         field_names=list(field_types.keys()),
                     )
-                    computed_values = await _compute_expression(
+                    computed_values = _compute_expression(
                         filter_dict,
                         LogEvent,
                         session,

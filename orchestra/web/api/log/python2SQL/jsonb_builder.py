@@ -2,7 +2,6 @@
 Query builder for JSONB-based log storage. Translates Python filter expressions to PostgreSQL JSONB queries.
 """
 
-import asyncio
 import base64
 import io
 import logging
@@ -37,13 +36,14 @@ from sqlalchemy.sql.elements import BinaryExpression, BindParameter, Cast, Claus
 from sqlalchemy.sql.selectable import Subquery
 
 from orchestra.db.models.orchestra_models import Embedding, LogEvent
+from orchestra.lib.parallel import threaded_map
 from orchestra.services.bucket_service import BucketService
 
 from . import alias_utils
 from .ast_utils import get_identifier_value, is_identifier_node, parse_base_params
 from .helpers import (
     _embeddable,
-    _get_embedding,
+    _get_embedding_sync,
     _get_field_type_from_db,
     _get_image_embedding_from_url,
     _infer_expression_type,
@@ -361,7 +361,7 @@ def _build_jsonb_field_expression(
     return jsonb_col.op("->>")(key)
 
 
-async def _handle_comparison_operator_jsonb(
+def _handle_comparison_operator_jsonb(
     filter_dict,
     log_event_alias,
     session,
@@ -404,7 +404,7 @@ async def _handle_comparison_operator_jsonb(
     lhs_dict = filter_dict["lhs"]
     rhs_dict = filter_dict["rhs"]
 
-    lhs_expr = await _build_sql_query_jsonb(
+    lhs_expr = _build_sql_query_jsonb(
         lhs_dict,
         log_event_alias,
         session,
@@ -416,7 +416,7 @@ async def _handle_comparison_operator_jsonb(
         context_id=context_id,
         query_context=query_context,
     )
-    rhs_expr = await _build_sql_query_jsonb(
+    rhs_expr = _build_sql_query_jsonb(
         rhs_dict,
         log_event_alias,
         session,
@@ -680,7 +680,7 @@ async def _handle_comparison_operator_jsonb(
         )
 
 
-async def _value_or_coalesce_jsonb(
+def _value_or_coalesce_jsonb(
     or_filter_dict,
     log_event_alias,
     session,
@@ -704,7 +704,7 @@ async def _value_or_coalesce_jsonb(
     lhs_node = or_filter_dict.get("lhs")
     rhs_node = or_filter_dict.get("rhs")
 
-    lhs_expr = await _build_sql_query_jsonb(
+    lhs_expr = _build_sql_query_jsonb(
         lhs_node,
         log_event_alias,
         session,
@@ -716,7 +716,7 @@ async def _value_or_coalesce_jsonb(
         context_id=context_id,
         query_context=query_context,
     )
-    rhs_expr = await _build_sql_query_jsonb(
+    rhs_expr = _build_sql_query_jsonb(
         rhs_node,
         log_event_alias,
         session,
@@ -745,7 +745,7 @@ async def _value_or_coalesce_jsonb(
     return case((lhs_truthy, lhs_text), else_=rhs_text)
 
 
-async def _handle_arithmetic_operator_jsonb(
+def _handle_arithmetic_operator_jsonb(
     filter_dict,
     log_event_alias,
     session,
@@ -789,7 +789,7 @@ async def _handle_arithmetic_operator_jsonb(
     # Rewrite value-level `or` used inside arithmetic into a coalescing expression
     # This handles expressions like `(first_name or '') + ' ' + (surname or '')`
     if isinstance(lhs_dict, dict) and lhs_dict.get("operand") == "or":
-        lhs_expr = await _value_or_coalesce_jsonb(
+        lhs_expr = _value_or_coalesce_jsonb(
             lhs_dict,
             log_event_alias,
             session,
@@ -802,7 +802,7 @@ async def _handle_arithmetic_operator_jsonb(
             query_context=query_context,
         )
     else:
-        lhs_expr = await _build_sql_query_jsonb(
+        lhs_expr = _build_sql_query_jsonb(
             lhs_dict,
             log_event_alias,
             session,
@@ -816,7 +816,7 @@ async def _handle_arithmetic_operator_jsonb(
         )
 
     if isinstance(rhs_dict, dict) and rhs_dict.get("operand") == "or":
-        rhs_expr = await _value_or_coalesce_jsonb(
+        rhs_expr = _value_or_coalesce_jsonb(
             rhs_dict,
             log_event_alias,
             session,
@@ -829,7 +829,7 @@ async def _handle_arithmetic_operator_jsonb(
             query_context=query_context,
         )
     else:
-        rhs_expr = await _build_sql_query_jsonb(
+        rhs_expr = _build_sql_query_jsonb(
             rhs_dict,
             log_event_alias,
             session,
@@ -980,7 +980,7 @@ async def _handle_arithmetic_operator_jsonb(
 from .truthiness import get_or_list_fallback as _get_or_list_fallback
 
 
-async def _handle_membership_operator_jsonb(
+def _handle_membership_operator_jsonb(
     filter_dict,
     log_event_alias,
     session,
@@ -1029,7 +1029,7 @@ async def _handle_membership_operator_jsonb(
     or_fallback_array_expr = None
     if or_fallback_list is not None:
         # Build only the LHS of the 'or' (the array expression)
-        or_fallback_array_expr = await _build_sql_query_jsonb(
+        or_fallback_array_expr = _build_sql_query_jsonb(
             rhs_dict["lhs"],
             log_event_alias,
             session,
@@ -1042,7 +1042,7 @@ async def _handle_membership_operator_jsonb(
             query_context=query_context,
         )
 
-    lhs_expr = await _build_sql_query_jsonb(
+    lhs_expr = _build_sql_query_jsonb(
         lhs_dict,
         log_event_alias,
         session,
@@ -1059,7 +1059,7 @@ async def _handle_membership_operator_jsonb(
     if or_fallback_array_expr is not None:
         rhs_expr = or_fallback_array_expr
     else:
-        rhs_expr = await _build_sql_query_jsonb(
+        rhs_expr = _build_sql_query_jsonb(
             rhs_dict,
             log_event_alias,
             session,
@@ -1227,7 +1227,7 @@ async def _handle_membership_operator_jsonb(
         )
 
 
-async def _handle_logical_operator_jsonb(
+def _handle_logical_operator_jsonb(
     filter_dict,
     log_event_alias,
     session,
@@ -1269,7 +1269,7 @@ async def _handle_logical_operator_jsonb(
 
     if operand == "not":
         rhs_dict = filter_dict["rhs"]
-        rhs_expr = await _build_sql_query_jsonb(
+        rhs_expr = _build_sql_query_jsonb(
             rhs_dict,
             log_event_alias,
             session,
@@ -1305,7 +1305,7 @@ async def _handle_logical_operator_jsonb(
     lhs_dict = filter_dict["lhs"]
     rhs_dict = filter_dict["rhs"]
 
-    lhs_expr = await _build_sql_query_jsonb(
+    lhs_expr = _build_sql_query_jsonb(
         lhs_dict,
         log_event_alias,
         session,
@@ -1317,7 +1317,7 @@ async def _handle_logical_operator_jsonb(
         context_id=context_id,
         query_context=query_context,
     )
-    rhs_expr = await _build_sql_query_jsonb(
+    rhs_expr = _build_sql_query_jsonb(
         rhs_dict,
         log_event_alias,
         session,
@@ -1419,7 +1419,7 @@ async def _handle_logical_operator_jsonb(
         )
 
 
-async def _handle_functions_jsonb(
+def _handle_functions_jsonb(
     filter_dict,
     log_event_alias,
     session,
@@ -1473,7 +1473,7 @@ async def _handle_functions_jsonb(
 
         # rhs is the argument (unwrapped by parser if single arg, or list if multiple/list literal)
         # We pass it directly to _build_sql_query_jsonb
-        arg_expr = await _build_sql_query_jsonb(
+        arg_expr = _build_sql_query_jsonb(
             rhs,
             log_event_alias,
             session,
@@ -1585,7 +1585,7 @@ async def _handle_functions_jsonb(
                     inferred_type = normalize_field_type(ft)
 
         # Build argument expression
-        expr = await _build_sql_query_jsonb(
+        expr = _build_sql_query_jsonb(
             arg,
             log_event_alias,
             session,
@@ -1704,7 +1704,7 @@ async def _handle_functions_jsonb(
             return log_event_alias.data.op("?")(literal(key))
         else:
             # Complex expression existence check
-            expr = await _build_sql_query_jsonb(
+            expr = _build_sql_query_jsonb(
                 arg,
                 log_event_alias,
                 session,
@@ -1757,7 +1757,7 @@ async def _handle_functions_jsonb(
 
     # --- Length Function ---
     if operand == "len":
-        expr = await _build_sql_query_jsonb(
+        expr = _build_sql_query_jsonb(
             _get_single_arg(rhs_dict),
             log_event_alias,
             session,
@@ -1839,7 +1839,7 @@ async def _handle_functions_jsonb(
                 return literal(normalized)
 
         # Fallback to runtime inspection
-        expr = await _build_sql_query_jsonb(
+        expr = _build_sql_query_jsonb(
             arg,
             log_event_alias,
             session,
@@ -1917,7 +1917,7 @@ async def _handle_functions_jsonb(
 
     # --- String Conversion ---
     if operand == "str":
-        expr = await _build_sql_query_jsonb(
+        expr = _build_sql_query_jsonb(
             _get_single_arg(rhs_dict),
             log_event_alias,
             session,
@@ -1977,7 +1977,7 @@ async def _handle_functions_jsonb(
                 Float,
             )
 
-        expr = await _build_sql_query_jsonb(
+        expr = _build_sql_query_jsonb(
             arg_dict,
             log_event_alias,
             session,
@@ -2027,7 +2027,7 @@ async def _handle_functions_jsonb(
         if operand == "now":
             return func.timezone("UTC", func.now())
 
-        return await _handle_date_function_jsonb(
+        return _handle_date_function_jsonb(
             operand,
             filter_dict,
             log_event_alias,
@@ -2120,7 +2120,7 @@ async def _handle_functions_jsonb(
         # isNone(x) checks if x is None/NULL and returns a boolean
         # Example: "isNone(field1)" returns True if field1 is NULL
         # Returns True if the value is NULL/None
-        arg_expr = await _build_sql_query_jsonb(
+        arg_expr = _build_sql_query_jsonb(
             _get_single_arg(rhs_dict),
             log_event_alias,
             session,
@@ -2163,7 +2163,7 @@ async def _handle_functions_jsonb(
             raise ValueError("BASE(...) requires exactly 2 arguments: (event_id, key)")
 
         # Build the event_ids expression
-        event_id_expr = await _build_sql_query_jsonb(
+        event_id_expr = _build_sql_query_jsonb(
             rhs_dict[0],
             log_event_alias,
             session,
@@ -2443,7 +2443,7 @@ async def _handle_functions_jsonb(
 
     # --- Embedding Functions ---
     if operand == "embed":
-        return await _handle_embed_jsonb(
+        return _handle_embed_jsonb(
             filter_dict,
             log_event_alias,
             session,
@@ -2456,7 +2456,7 @@ async def _handle_functions_jsonb(
         )
 
     if operand == "embed_image":
-        return await _handle_embed_image_jsonb(
+        return _handle_embed_image_jsonb(
             filter_dict,
             log_event_alias,
             session,
@@ -2469,7 +2469,7 @@ async def _handle_functions_jsonb(
         )
 
     if operand == "phash":
-        return await _handle_phash_jsonb(
+        return _handle_phash_jsonb(
             filter_dict,
             log_event_alias,
             session,
@@ -2483,7 +2483,7 @@ async def _handle_functions_jsonb(
 
     # zip function - handle locally for JSONB
     if operand == "zip":
-        return await _handle_zip_jsonb(
+        return _handle_zip_jsonb(
             filter_dict,
             log_event_alias,
             session,
@@ -2525,7 +2525,7 @@ async def _handle_functions_jsonb(
     raise NotImplementedError(f"JSONB support for function {operand} not implemented")
 
 
-async def _handle_date_function_jsonb(
+def _handle_date_function_jsonb(
     operand,
     filter_dict,
     log_event_alias,
@@ -2567,7 +2567,7 @@ async def _handle_date_function_jsonb(
         if not isinstance(rhs_dict, list) or len(rhs_dict) != 2:
             raise ValueError("round_timestamp requires exactly 2 arguments")
 
-        ts_expr = await _build_sql_query_jsonb(
+        ts_expr = _build_sql_query_jsonb(
             rhs_dict[0],
             log_event_alias,
             session,
@@ -2579,7 +2579,7 @@ async def _handle_date_function_jsonb(
             context_id=context_id,
             query_context=query_context,
         )
-        sec_expr = await _build_sql_query_jsonb(
+        sec_expr = _build_sql_query_jsonb(
             rhs_dict[1],
             log_event_alias,
             session,
@@ -2624,7 +2624,7 @@ async def _handle_date_function_jsonb(
         return _pg_round_timestamp(ts_expr, sec_expr)
 
     # For single-argument date/time functions
-    expr = await _build_sql_query_jsonb(
+    expr = _build_sql_query_jsonb(
         rhs_dict,
         log_event_alias,
         session,
@@ -2790,7 +2790,7 @@ def _is_jsonb_expression(expr) -> bool:
     return False
 
 
-async def _handle_list_comp_jsonb(
+def _handle_list_comp_jsonb(
     filter_dict,
     log_event_alias,
     session,
@@ -2812,7 +2812,7 @@ async def _handle_list_comp_jsonb(
     from .functions import _handle_list_comp
 
     # Build the iterable expression
-    iter_expr = await _build_sql_query_jsonb(
+    iter_expr = _build_sql_query_jsonb(
         filter_dict["iter"],
         log_event_alias,
         session,
@@ -2847,7 +2847,7 @@ async def _handle_list_comp_jsonb(
     modified_filter = {**filter_dict, "_jsonb_iter_subq": iter_expr}
 
     # Delegate to the shared handler which will use the wrapped subquery
-    return await _handle_list_comp(
+    return _handle_list_comp(
         modified_filter,
         log_event_alias,
         session,
@@ -2860,7 +2860,7 @@ async def _handle_list_comp_jsonb(
     )
 
 
-async def _handle_dict_comp_jsonb(
+def _handle_dict_comp_jsonb(
     filter_dict,
     log_event_alias,
     session,
@@ -2882,7 +2882,7 @@ async def _handle_dict_comp_jsonb(
     from .functions import _handle_dict_comp
 
     # Build the iterable expression
-    iter_expr = await _build_sql_query_jsonb(
+    iter_expr = _build_sql_query_jsonb(
         filter_dict["iter"],
         log_event_alias,
         session,
@@ -2917,7 +2917,7 @@ async def _handle_dict_comp_jsonb(
     modified_filter = {**filter_dict, "_jsonb_iter_subq": iter_expr}
 
     # Delegate to the shared handler with the wrapped subquery
-    return await _handle_dict_comp(
+    return _handle_dict_comp(
         modified_filter,
         log_event_alias,
         session,
@@ -2930,7 +2930,7 @@ async def _handle_dict_comp_jsonb(
     )
 
 
-async def _handle_if_expr_jsonb(
+def _handle_if_expr_jsonb(
     filter_dict,
     log_event_alias,
     session,
@@ -2954,7 +2954,7 @@ async def _handle_if_expr_jsonb(
     from .functions import _handle_if_expr
 
     # Build all three branches
-    test_expr = await _build_sql_query_jsonb(
+    test_expr = _build_sql_query_jsonb(
         filter_dict["test"],
         log_event_alias,
         session,
@@ -2967,7 +2967,7 @@ async def _handle_if_expr_jsonb(
         query_context=query_context,
     )
 
-    body_expr = await _build_sql_query_jsonb(
+    body_expr = _build_sql_query_jsonb(
         filter_dict["body"],
         log_event_alias,
         session,
@@ -2980,7 +2980,7 @@ async def _handle_if_expr_jsonb(
         query_context=query_context,
     )
 
-    else_expr = await _build_sql_query_jsonb(
+    else_expr = _build_sql_query_jsonb(
         filter_dict["orelse"],
         log_event_alias,
         session,
@@ -3020,7 +3020,7 @@ async def _handle_if_expr_jsonb(
         return case((test_bool, body_casted), else_=else_casted)
 
     # If any branch is a subquery, delegate to shared handler
-    return await _handle_if_expr(
+    return _handle_if_expr(
         filter_dict,
         log_event_alias,
         session,
@@ -3033,7 +3033,7 @@ async def _handle_if_expr_jsonb(
     )
 
 
-async def _handle_index_operator_jsonb(
+def _handle_index_operator_jsonb(
     filter_dict,
     log_event_alias,
     session,
@@ -3068,7 +3068,7 @@ async def _handle_index_operator_jsonb(
     rhs_node = filter_dict.get("rhs")
 
     # Build LHS and RHS expressions
-    lhs_expr = await _build_sql_query_jsonb(
+    lhs_expr = _build_sql_query_jsonb(
         lhs_node,
         log_event_alias,
         session,
@@ -3081,7 +3081,7 @@ async def _handle_index_operator_jsonb(
         query_context=query_context,
     )
 
-    rhs_expr = await _build_sql_query_jsonb(
+    rhs_expr = _build_sql_query_jsonb(
         rhs_node,
         log_event_alias,
         session,
@@ -3096,7 +3096,7 @@ async def _handle_index_operator_jsonb(
 
     # If LHS is a subquery, delegate to shared handler
     if isinstance(lhs_expr, Subquery):
-        return await _handle_index_operator(
+        return _handle_index_operator(
             filter_dict,
             log_event_alias,
             session,
@@ -3176,7 +3176,7 @@ async def _handle_index_operator_jsonb(
     return literal(None)
 
 
-async def _handle_slice_operator_jsonb(
+def _handle_slice_operator_jsonb(
     filter_dict,
     log_event_alias,
     session,
@@ -3214,7 +3214,7 @@ async def _handle_slice_operator_jsonb(
     lower, upper = rhs_bounds
 
     # Build LHS expression
-    lhs_expr = await _build_sql_query_jsonb(
+    lhs_expr = _build_sql_query_jsonb(
         lhs_node,
         log_event_alias,
         session,
@@ -3229,7 +3229,7 @@ async def _handle_slice_operator_jsonb(
 
     # If LHS is a subquery, delegate to shared handler
     if isinstance(lhs_expr, Subquery):
-        return await _handle_slice_operator(
+        return _handle_slice_operator(
             filter_dict,
             log_event_alias,
             session,
@@ -3375,7 +3375,7 @@ async def _handle_slice_operator_jsonb(
     raise ValueError("Slice operation is only supported on string or list values")
 
 
-async def _handle_dict_method_jsonb(
+def _handle_dict_method_jsonb(
     filter_dict,
     log_event_alias,
     session,
@@ -3403,7 +3403,7 @@ async def _handle_dict_method_jsonb(
 
     # Handle .get() specially
     if method in ("get", "setdefault"):
-        return await _handle_dict_get_jsonb(
+        return _handle_dict_get_jsonb(
             filter_dict,
             log_event_alias,
             session,
@@ -3417,7 +3417,7 @@ async def _handle_dict_method_jsonb(
         )
 
     # Build source expression
-    src_expr = await _build_sql_query_jsonb(
+    src_expr = _build_sql_query_jsonb(
         filter_dict["rhs"],
         log_event_alias,
         session,
@@ -3432,7 +3432,7 @@ async def _handle_dict_method_jsonb(
 
     # If source is already a subquery, delegate to shared handler
     if isinstance(src_expr, Subquery):
-        return await _handle_dict_method(
+        return _handle_dict_method(
             filter_dict,
             log_event_alias,
             session,
@@ -3467,7 +3467,7 @@ async def _handle_dict_method_jsonb(
     modified_filter = {**filter_dict, "_jsonb_src_subq": src_subq}
 
     # Delegate to shared handler with the wrapped subquery
-    return await _handle_dict_method(
+    return _handle_dict_method(
         modified_filter,
         log_event_alias,
         session,
@@ -3480,7 +3480,7 @@ async def _handle_dict_method_jsonb(
     )
 
 
-async def _handle_dict_get_jsonb(
+def _handle_dict_get_jsonb(
     filter_dict,
     log_event_alias,
     session,
@@ -3516,7 +3516,7 @@ async def _handle_dict_get_jsonb(
         default_supplied = filter_dict.get("default_supplied", False)
 
     # Build source expression
-    src_expr = await _build_sql_query_jsonb(
+    src_expr = _build_sql_query_jsonb(
         filter_dict["rhs"],
         log_event_alias,
         session,
@@ -3531,7 +3531,7 @@ async def _handle_dict_get_jsonb(
 
     # If source is a subquery, delegate to shared handler
     if isinstance(src_expr, Subquery):
-        return await _handle_dict_get(
+        return _handle_dict_get(
             filter_dict,
             log_event_alias,
             session,
@@ -3549,7 +3549,7 @@ async def _handle_dict_get_jsonb(
     default_expr = filter_dict.get("default")
 
     # Build key expression
-    key = await _build_sql_query_jsonb(
+    key = _build_sql_query_jsonb(
         key_expr,
         log_event_alias,
         session,
@@ -3592,7 +3592,7 @@ async def _handle_dict_get_jsonb(
         return extracted
 
     # Build default expression
-    default = await _build_sql_query_jsonb(
+    default = _build_sql_query_jsonb(
         default_expr,
         log_event_alias,
         session,
@@ -3625,7 +3625,7 @@ async def _handle_dict_get_jsonb(
     return func.coalesce(extracted_casted, default_casted)
 
 
-async def _handle_str_method_jsonb(
+def _handle_str_method_jsonb(
     filter_dict,
     log_event_alias,
     session,
@@ -3662,7 +3662,7 @@ async def _handle_str_method_jsonb(
     bool_methods = {"startswith", "endswith", "contains", "match"}
 
     # Build source expression
-    src_expr = await _build_sql_query_jsonb(
+    src_expr = _build_sql_query_jsonb(
         filter_dict["rhs"],
         log_event_alias,
         session,
@@ -3677,7 +3677,7 @@ async def _handle_str_method_jsonb(
 
     # If source is a subquery, delegate to shared handler
     if isinstance(src_expr, Subquery):
-        return await _handle_str_method(
+        return _handle_str_method(
             filter_dict,
             log_event_alias,
             session,
@@ -3801,7 +3801,7 @@ async def _handle_str_method_jsonb(
         raise ValueError(f"Unsupported string method in JSONB mode: {method}")
 
 
-async def _handle_zip_jsonb(
+def _handle_zip_jsonb(
     filter_dict,
     log_event_alias,
     session,
@@ -3829,7 +3829,7 @@ async def _handle_zip_jsonb(
     zipped_subqs = []
     for idx, arg in enumerate(filter_dict["rhs"]):
         # Build the expression
-        expr = await _build_sql_query_jsonb(
+        expr = _build_sql_query_jsonb(
             arg,
             log_event_alias,
             session,
@@ -3940,7 +3940,7 @@ async def _handle_zip_jsonb(
     return zipped
 
 
-async def _handle_embed_jsonb(
+def _handle_embed_jsonb(
     filter_dict,
     log_event_alias,
     session,
@@ -3979,7 +3979,7 @@ async def _handle_embed_jsonb(
         )
 
     # Build expressions for each argument
-    text_expr = await _build_sql_query_jsonb(
+    text_expr = _build_sql_query_jsonb(
         rhs_dict[0],
         log_event_alias,
         session,
@@ -3995,7 +3995,7 @@ async def _handle_embed_jsonb(
     # Process optional model parameter
     model = None
     if len(rhs_dict) >= 2:
-        model_expr = await _build_sql_query_jsonb(
+        model_expr = _build_sql_query_jsonb(
             rhs_dict[1],
             log_event_alias,
             session,
@@ -4019,7 +4019,7 @@ async def _handle_embed_jsonb(
     # Process optional dimensions parameter
     dimensions = None
     if len(rhs_dict) == 3:
-        dim_expr = await _build_sql_query_jsonb(
+        dim_expr = _build_sql_query_jsonb(
             rhs_dict[2],
             log_event_alias,
             session,
@@ -4049,8 +4049,8 @@ async def _handle_embed_jsonb(
         if not _embeddable(text):
             raise ValueError(f"embed() requires a valid embeddable string, got {text}")
 
-        # Get the embedding vector
-        embedding = await _get_embedding(text, model, dimensions)
+        # Get the embedding vector (sync wrapper for use in sync query builder)
+        embedding = _get_embedding_sync(text, model, dimensions)
 
         # Create a vector literal using pgvector
         return literal(embedding, type_=Vector(len(embedding)))
@@ -4108,10 +4108,10 @@ async def _handle_embed_jsonb(
                 key=key,
             )
         else:
-            # Generate embeddings immediately
-            from .helpers import _ensure_vectors_exist
+            # Sync: generate embeddings immediately (sync wrapper for use in sync query builder)
+            from .helpers import _ensure_vectors_exist_sync
 
-            await _ensure_vectors_exist(
+            _ensure_vectors_exist_sync(
                 session=session,
                 id_to_text=id_to_text,
                 model=model,
@@ -4146,7 +4146,7 @@ async def _handle_embed_jsonb(
     )
 
 
-async def _handle_embed_image_jsonb(
+def _handle_embed_image_jsonb(
     filter_dict,
     log_event_alias,
     session,
@@ -4176,7 +4176,7 @@ async def _handle_embed_image_jsonb(
     rhs_dict = filter_dict.get("rhs")
 
     # Build expression for the argument
-    image_expr = await _build_sql_query_jsonb(
+    image_expr = _build_sql_query_jsonb(
         rhs_dict,
         log_event_alias,
         session,
@@ -4190,13 +4190,14 @@ async def _handle_embed_image_jsonb(
     )
 
     # Helper to process rows and compute embeddings
-    async def _compute_embeddings_for_rows(rows):
+    def _compute_embeddings_for_rows(rows):
         if not rows:
             return None
 
         bucket_service = BucketService()
 
-        async def compute_image_embedding_async(log_event_id, image_url, bucket_svc):
+        def compute_image_embedding(args):
+            log_event_id, image_url, bucket_svc = args
             embedding_vector = None
             error_msg = None
 
@@ -4205,7 +4206,7 @@ async def _handle_embed_image_jsonb(
                 image_url = image_url.get("value")
 
             if image_url and isinstance(image_url, str):
-                embedding_vector = await _get_image_embedding_from_url(image_url, bucket_svc)
+                embedding_vector = _get_image_embedding_from_url(image_url, bucket_svc)
                 if embedding_vector is None:
                     error_msg = (
                         f"Failed to compute embedding for log_event_id={log_event_id}"
@@ -4216,9 +4217,10 @@ async def _handle_embed_image_jsonb(
                 "error": error_msg,
             }
 
-        results = await asyncio.gather(
-            *[
-                compute_image_embedding_async(log_event_id, image_url, bucket_service)
+        results = threaded_map(
+            compute_image_embedding,
+            [
+                (log_event_id, image_url, bucket_service)
                 for log_event_id, image_url in rows
             ],
         )
@@ -4256,7 +4258,7 @@ async def _handle_embed_image_jsonb(
         rows = session.execute(
             select(image_expr.c.log_event_id, image_expr.c.value),
         ).fetchall()
-        return await _compute_embeddings_for_rows(rows)
+        return _compute_embeddings_for_rows(rows)
 
     # Case 2: Handle BindParameter (literal base64 strings or GCS URLs)
     # Check BindParameter before _is_jsonb_expression (BindParameter returns True but needs special handling)
@@ -4301,7 +4303,7 @@ async def _handle_embed_image_jsonb(
         )
 
 
-async def _handle_phash_jsonb(
+def _handle_phash_jsonb(
     filter_dict,
     log_event_alias,
     session,
@@ -4331,7 +4333,7 @@ async def _handle_phash_jsonb(
     rhs_dict = filter_dict.get("rhs")
 
     # Build expression for the argument
-    image_expr = await _build_sql_query_jsonb(
+    image_expr = _build_sql_query_jsonb(
         rhs_dict,
         log_event_alias,
         session,
@@ -4345,13 +4347,14 @@ async def _handle_phash_jsonb(
     )
 
     # Helper to process rows and compute hashes
-    async def _compute_hashes_for_rows(rows):
+    def _compute_hashes_for_rows(rows):
         if not rows:
             return None
 
         bucket_service = BucketService()
 
-        async def compute_image_hash_async(log_event_id, image_url, bucket_svc):
+        def compute_image_hash(args):
+            log_event_id, image_url, bucket_svc = args
             phash_hex = None
             error_msg = None
 
@@ -4369,7 +4372,7 @@ async def _handle_phash_jsonb(
                     else:
                         # GCS URL - fetch with retry to handle eventual consistency
                         filename = image_url.split("/")[-1]
-                        base64_image = await fetch_media_with_retry(bucket_svc, filename)
+                        base64_image = fetch_media_with_retry(bucket_svc, filename)
                         if not base64_image:
                             error_msg = (
                                 f"Failed to fetch image for log_event_id={log_event_id}"
@@ -4394,9 +4397,10 @@ async def _handle_phash_jsonb(
                 "error": error_msg,
             }
 
-        results = await asyncio.gather(
-            *[
-                compute_image_hash_async(log_event_id, image_url, bucket_service)
+        results = threaded_map(
+            compute_image_hash,
+            [
+                (log_event_id, image_url, bucket_service)
                 for log_event_id, image_url in rows
             ],
         )
@@ -4434,7 +4438,7 @@ async def _handle_phash_jsonb(
         rows = session.execute(
             select(image_expr.c.log_event_id, image_expr.c.value),
         ).fetchall()
-        return await _compute_hashes_for_rows(rows)
+        return _compute_hashes_for_rows(rows)
 
     # Case 2: Handle BindParameter (literal URL or image dict)
     # Check BindParameter before _is_jsonb_expression (BindParameter returns True but needs special handling)
@@ -4483,7 +4487,7 @@ async def _handle_phash_jsonb(
             query = query.where(log_event_alias.id.in_(select(log_event_ids.c.id)))
 
         rows = session.execute(query).fetchall()
-        return await _compute_hashes_for_rows(rows)
+        return _compute_hashes_for_rows(rows)
 
     else:
         raise ValueError("phash() expects a string URL or a field reference")
@@ -4588,7 +4592,7 @@ def _vector_binary_op_jsonb(
     return expr
 
 
-async def _handle_l2_jsonb(
+def _handle_l2_jsonb(
     filter_dict,
     log_event_alias,
     session,
@@ -4603,7 +4607,7 @@ async def _handle_l2_jsonb(
     """Handle L2/Euclidean distance operator between two vectors: v1 <-> v2."""
     from .core import _build_sql_query_jsonb
 
-    lhs = await _build_sql_query_jsonb(
+    lhs = _build_sql_query_jsonb(
         filter_dict.get("lhs"),
         log_event_alias,
         session,
@@ -4615,7 +4619,7 @@ async def _handle_l2_jsonb(
         context_id=context_id,
         query_context=query_context,
     )
-    rhs = await _build_sql_query_jsonb(
+    rhs = _build_sql_query_jsonb(
         filter_dict.get("rhs"),
         log_event_alias,
         session,
@@ -4630,7 +4634,7 @@ async def _handle_l2_jsonb(
     return _vector_binary_op_jsonb(lhs, rhs, session, "<->", "float", "l2_distance")
 
 
-async def _handle_cosine_jsonb(
+def _handle_cosine_jsonb(
     filter_dict,
     log_event_alias,
     session,
@@ -4645,7 +4649,7 @@ async def _handle_cosine_jsonb(
     """Handle cosine similarity operator between two vectors: v1 <=> v2."""
     from .core import _build_sql_query_jsonb
 
-    lhs = await _build_sql_query_jsonb(
+    lhs = _build_sql_query_jsonb(
         filter_dict.get("lhs"),
         log_event_alias,
         session,
@@ -4657,7 +4661,7 @@ async def _handle_cosine_jsonb(
         context_id=context_id,
         query_context=query_context,
     )
-    rhs = await _build_sql_query_jsonb(
+    rhs = _build_sql_query_jsonb(
         filter_dict.get("rhs"),
         log_event_alias,
         session,
@@ -4679,7 +4683,7 @@ async def _handle_cosine_jsonb(
     )
 
 
-async def _handle_ip_jsonb(
+def _handle_ip_jsonb(
     filter_dict,
     log_event_alias,
     session,
@@ -4694,7 +4698,7 @@ async def _handle_ip_jsonb(
     """Handle inner product operator between two vectors: v1 <#> v2."""
     from .core import _build_sql_query_jsonb
 
-    lhs = await _build_sql_query_jsonb(
+    lhs = _build_sql_query_jsonb(
         filter_dict.get("lhs"),
         log_event_alias,
         session,
@@ -4706,7 +4710,7 @@ async def _handle_ip_jsonb(
         context_id=context_id,
         query_context=query_context,
     )
-    rhs = await _build_sql_query_jsonb(
+    rhs = _build_sql_query_jsonb(
         filter_dict.get("rhs"),
         log_event_alias,
         session,
@@ -4721,7 +4725,7 @@ async def _handle_ip_jsonb(
     return _vector_binary_op_jsonb(lhs, rhs, session, "<#>", "float", "inner_product")
 
 
-async def _handle_l1_jsonb(
+def _handle_l1_jsonb(
     filter_dict,
     log_event_alias,
     session,
@@ -4736,7 +4740,7 @@ async def _handle_l1_jsonb(
     """Handle L1/Manhattan distance operator between two vectors: v1 <+> v2."""
     from .core import _build_sql_query_jsonb
 
-    lhs = await _build_sql_query_jsonb(
+    lhs = _build_sql_query_jsonb(
         filter_dict.get("lhs"),
         log_event_alias,
         session,
@@ -4748,7 +4752,7 @@ async def _handle_l1_jsonb(
         context_id=context_id,
         query_context=query_context,
     )
-    rhs = await _build_sql_query_jsonb(
+    rhs = _build_sql_query_jsonb(
         filter_dict.get("rhs"),
         log_event_alias,
         session,
@@ -4763,7 +4767,7 @@ async def _handle_l1_jsonb(
     return _vector_binary_op_jsonb(lhs, rhs, session, "<+>", "float", "l1_distance")
 
 
-async def _handle_euclidean_distance_jsonb(
+def _handle_euclidean_distance_jsonb(
     filter_dict,
     log_event_alias,
     session,
@@ -4776,7 +4780,7 @@ async def _handle_euclidean_distance_jsonb(
     query_context=None,
 ):
     """Alias for L2 distance."""
-    return await _handle_l2_jsonb(
+    return _handle_l2_jsonb(
         filter_dict,
         log_event_alias,
         session,
@@ -4790,7 +4794,7 @@ async def _handle_euclidean_distance_jsonb(
     )
 
 
-async def _handle_jaccard_distance_jsonb(
+def _handle_jaccard_distance_jsonb(
     filter_dict,
     log_event_alias,
     session,
@@ -4805,7 +4809,7 @@ async def _handle_jaccard_distance_jsonb(
     """Handle Jaccard distance operator between two vectors: v1 <%> v2."""
     from .core import _build_sql_query_jsonb
 
-    lhs = await _build_sql_query_jsonb(
+    lhs = _build_sql_query_jsonb(
         filter_dict.get("lhs"),
         log_event_alias,
         session,
@@ -4817,7 +4821,7 @@ async def _handle_jaccard_distance_jsonb(
         context_id=context_id,
         query_context=query_context,
     )
-    rhs = await _build_sql_query_jsonb(
+    rhs = _build_sql_query_jsonb(
         filter_dict.get("rhs"),
         log_event_alias,
         session,
@@ -4839,7 +4843,7 @@ async def _handle_jaccard_distance_jsonb(
     )
 
 
-async def _handle_phash_distance_jsonb(
+def _handle_phash_distance_jsonb(
     filter_dict,
     log_event_alias,
     session,
@@ -4867,7 +4871,7 @@ async def _handle_phash_distance_jsonb(
     if lhs_phash is not None:
         lhs = literal(lhs_phash)
     else:
-        lhs = await _build_sql_query_jsonb(
+        lhs = _build_sql_query_jsonb(
             lhs_dict,
             log_event_alias,
             session,
@@ -4884,7 +4888,7 @@ async def _handle_phash_distance_jsonb(
     if rhs_phash is not None:
         rhs = literal(rhs_phash)
     else:
-        rhs = await _build_sql_query_jsonb(
+        rhs = _build_sql_query_jsonb(
             rhs_dict,
             log_event_alias,
             session,
