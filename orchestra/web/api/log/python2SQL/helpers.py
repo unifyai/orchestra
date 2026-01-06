@@ -122,15 +122,7 @@ def _get_async_client() -> AsyncOpenAI | None:
     if loop_id not in _async_clients:
         with _async_clients_lock:
             if loop_id not in _async_clients:
-                _async_clients[loop_id] = AsyncOpenAI(
-                    api_key=OPENAI_API_KEY,
-                    timeout=httpx.Timeout(
-                        connect=5.0,
-                        read=600.0,
-                        write=600.0,
-                        pool=600.0,
-                    ),
-                )
+                _async_clients[loop_id] = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
     return _async_clients[loop_id]
 
