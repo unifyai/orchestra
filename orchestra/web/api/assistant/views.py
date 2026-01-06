@@ -2552,7 +2552,7 @@ async def clone_voice(
             )
             new_voice_id = cartesia_response.get("id")
         elif provider == "elevenlabs":
-            elevenlabs_response = elevenlabs_service.clone_voice(
+            elevenlabs_response = await elevenlabs_service.clone_voice(
                 file_content=file_content,
                 file_name=file.filename or "audio_clip_default_name",
                 name=name,
@@ -2879,7 +2879,7 @@ async def generate_speech(
                 language=request_data.cartesia_language,
             )
         elif request_data.provider == "elevenlabs":
-            audio_bytes, content_type = elevenlabs_service.generate_speech(
+            audio_bytes, content_type = await elevenlabs_service.generate_speech(
                 text=request_data.text,
                 voice_id=request_data.voice_id,
                 model_id=request_data.model_id
@@ -2977,7 +2977,7 @@ async def design_voice_generate_previews_endpoint(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="A voice description is required. Provide 'voice_description' or 'bio'.",
             )
-        el_response_data = elevenlabs_service.design_voice_generate_previews(
+        el_response_data = await elevenlabs_service.design_voice_generate_previews(
             voice_description=final_voice_description,
             text_for_preview=request_data.text,
             auto_generate_text_flag=request_data.auto_generate_text,
@@ -3078,7 +3078,7 @@ async def design_voice_create_from_preview_endpoint(
                     )
 
         # Step 1: Call ElevenLabs to create the voice from the generated_voice_id
-        el_created_voice_data = elevenlabs_service.create_voice_from_generated_id(
+        el_created_voice_data = await elevenlabs_service.create_voice_from_generated_id(
             voice_name=request_data.voice_name,
             generated_voice_id=request_data.generated_voice_id,
             description=request_data.voice_description,
@@ -3135,7 +3135,7 @@ async def design_voice_create_from_preview_endpoint(
                 logging.warning(
                     f"Attempting to clean up orphaned ElevenLabs voice {new_el_voice_id} due to error: {e.detail}",
                 )
-                elevenlabs_service.delete_voice(new_el_voice_id)
+                await elevenlabs_service.delete_voice(new_el_voice_id)
             except Exception as e_cleanup:
                 logging.error(
                     f"Failed to cleanup orphaned ElevenLabs voice {new_el_voice_id}: {e_cleanup}",
@@ -3156,7 +3156,7 @@ async def design_voice_create_from_preview_endpoint(
                 f"DB IntegrityError for EL voice {new_el_voice_id}. Attempting EL cleanup.",
             )
             try:
-                elevenlabs_service.delete_voice(new_el_voice_id)
+                await elevenlabs_service.delete_voice(new_el_voice_id)
             except Exception as e_cleanup:
                 logging.error(
                     f"Failed to cleanup EL voice {new_el_voice_id} after DB integrity error: {e_cleanup}",
@@ -3174,7 +3174,7 @@ async def design_voice_create_from_preview_endpoint(
                 f"Generic error after EL voice {new_el_voice_id} might have been created. Attempting EL cleanup.",
             )
             try:
-                elevenlabs_service.delete_voice(new_el_voice_id)
+                await elevenlabs_service.delete_voice(new_el_voice_id)
             except Exception as e_cleanup:
                 logging.error(
                     f"Failed to cleanup EL voice {new_el_voice_id} after generic error: {e_cleanup}",
