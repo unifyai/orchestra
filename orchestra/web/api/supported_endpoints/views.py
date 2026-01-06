@@ -7,7 +7,6 @@ from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.web.api.utils.http_responses import overspecified_model_provider
-from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
 
@@ -26,7 +25,6 @@ router = APIRouter()
         },
     },
 )
-@handle_on_prem(endpoint="/providers", method="get")
 def list_providers(
     request_fastapi: Request,
     model: str = Query(
@@ -74,7 +72,6 @@ def list_providers(
         },
     },
 )
-@handle_on_prem(endpoint="/models", method="get")
 def list_models(
     request_fastapi: Request,
     provider: str = Query(
@@ -125,7 +122,6 @@ def list_models(
         },
     },
 )
-@handle_on_prem(endpoint="/endpoints", method="get")
 def list_endpoints(
     request_fastapi: Request,
     model: str = Query(

@@ -27,8 +27,11 @@ from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
+from orchestra.services.user_account_cleanup_service import UserAccountCleanupService
 from orchestra.settings import settings
 from orchestra.web.api.users.schema import (
+    AccountDeletionConfirmation,
+    AccountDeletionResponse,
     AccountRequest,
     AssistantHiringApprovalCreateLinkRequest,
     AssistantHiringApprovalResponse,
@@ -37,6 +40,8 @@ from orchestra.web.api.users.schema import (
     AssistantHiringOneTimeLinkResponse,
     BusinessAddress,
     BusinessVerificationRequest,
+    CanDeleteAccountResponse,
+    DeletionBlockerResponse,
     FreezeAccountByStripeIdRequest,
     FreezeAccountRequest,
     OnboardingStatusResponse,
@@ -349,14 +354,34 @@ async def update_user(
     return "User information updated successfully!"
 
 
-@admin_router.delete("/auth-user")
-async def delete_user(user_id: str, session: Session = Depends(get_db_session)):
-    auth_user_dao = AuthUserDAO(session)
-    user = auth_user_dao.filter(id=user_id)
-    if not user:
-        raise not_found("User")
-    auth_user_dao.delete(id=user_id)
-    return "User deleted successfully!"
+@admin_router.delete("/auth-user", response_model=AccountDeletionResponse)
+async def delete_user(
+    user_id: str,
+    force: bool = Query(
+        False,
+        description="Skip organization ownership check (use with caution)",
+    ),
+    session: Session = Depends(get_db_session),
+):
+    """
+    Delete a user account and all associated data (admin endpoint).
+
+    This performs a complete cleanup:
+    - All user data across all tables
+    - Billing records (recharges)
+    - Projects, API keys, queries, etc.
+    - Archives Stripe customer (preserves invoice history)
+
+    Blocked if user has pending bills unless resolved first.
+    Use force=True to skip organization ownership check.
+    """
+    cleanup_service = UserAccountCleanupService(session)
+    result = cleanup_service.delete_user_account(user_id, force_org_check=force)
+
+    if not result.success:
+        raise HTTPException(status_code=400, detail=result.message)
+
+    return AccountDeletionResponse(success=True, message=result.message)
 
 
 @admin_router.post("/account")
@@ -1552,3 +1577,67 @@ async def update_onboarding_status(
     session.commit()
 
     return {"message": "Onboarding status updated successfully"}
+
+
+# -- Account Deletion (Self-Service) --
+
+
+@router.get("/user/can-delete-account", response_model=CanDeleteAccountResponse)
+async def can_delete_account(
+    request: Request,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Pre-flight check for account deletion.
+
+    Returns whether the current user can delete their account,
+    and if not, the reasons why (pending bills, org ownership, etc.).
+    """
+    cleanup_service = UserAccountCleanupService(session)
+    blockers = cleanup_service.check_deletion_blockers(request.state.user_id)
+
+    blocker_responses = [
+        DeletionBlockerResponse(reason=b.reason, details=b.details) for b in blockers
+    ]
+
+    return CanDeleteAccountResponse(
+        can_delete=len(blockers) == 0,
+        blockers=blocker_responses,
+    )
+
+
+@router.delete("/user/delete-account", response_model=AccountDeletionResponse)
+async def delete_own_account(
+    request: Request,
+    body: AccountDeletionConfirmation,
+    session: Session = Depends(get_db_session),
+):
+    """
+    Delete the current user's account (self-service).
+
+    Requires email confirmation to prevent accidental deletion.
+    Permanently removes all user data - this action cannot be undone.
+
+    Blocked if:
+    - User has pending bills
+    - User owns organizations (must transfer ownership first)
+    """
+    auth_user_dao = AuthUserDAO(session)
+    user = auth_user_dao.get_by_id(request.state.user_id)
+
+    if not user:
+        raise not_found("User")
+
+    if user[0].email.lower() != body.confirm_email.lower():
+        raise HTTPException(
+            status_code=400,
+            detail="Email confirmation does not match account email",
+        )
+
+    cleanup_service = UserAccountCleanupService(session)
+    result = cleanup_service.delete_user_account(request.state.user_id)
+
+    if not result.success:
+        raise HTTPException(status_code=400, detail=result.message)
+
+    return AccountDeletionResponse(success=True, message=result.message)

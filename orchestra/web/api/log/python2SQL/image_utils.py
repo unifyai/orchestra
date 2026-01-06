@@ -118,7 +118,7 @@ def fetch_media_with_retry(
 
     With defaults of max_retries=5 and base_delay=1.0, this provides
     up to 1+2+4+8+16 = 31 seconds of retry time, which handles GCS
-    propagation delays in CI environments.
+    eventual consistency delays.
 
     Args:
         bucket_service: BucketService instance for fetching media

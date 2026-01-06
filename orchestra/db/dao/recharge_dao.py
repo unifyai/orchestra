@@ -1,9 +1,9 @@
 import datetime
 from datetime import date
 from decimal import Decimal
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.orm import Session
 
 from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
@@ -125,3 +125,33 @@ class RechargeDAO:
         )
 
         return raw_recharge.scalar()
+
+    def has_pending_bills(self, user_id: str) -> Tuple[bool, Decimal]:
+        """
+        Check if user has unpaid bills (PENDING_INVOICE or INVOICE_CREATED).
+
+        Uses optimized SQL with EXISTS for performance.
+
+        :param user_id: id of the user.
+        :return: Tuple of (has_pending_bills, total_pending_amount_usd).
+        """
+        result = self.session.execute(
+            text(
+                """
+                SELECT
+                    EXISTS(
+                        SELECT 1 FROM recharge
+                        WHERE user_id = :uid
+                        AND status IN ('PENDING_INVOICE', 'INVOICE_CREATED')
+                    ) as has_pending,
+                    COALESCE(
+                        (SELECT SUM(amount_usd) FROM recharge
+                         WHERE user_id = :uid
+                         AND status IN ('PENDING_INVOICE', 'INVOICE_CREATED')),
+                        0
+                    ) as total_pending
+            """,
+            ),
+            {"uid": user_id},
+        ).fetchone()
+        return (result.has_pending, Decimal(str(result.total_pending)))

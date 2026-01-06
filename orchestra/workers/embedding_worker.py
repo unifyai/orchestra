@@ -240,7 +240,7 @@ def process_embedding_batch(session: Session, batch: List[QueueItem]) -> int:
     """
     # Import models here to avoid circular imports at module level
     from orchestra.db.models.orchestra_models import Embedding, EmbeddingQueue
-    from orchestra.web.api.log.python2SQL.helpers import _get_embeddings_batch
+    from orchestra.web.api.log.python2SQL.helpers import _get_embeddings_batch_sync
 
     if not batch:
         return 0
@@ -255,8 +255,8 @@ def process_embedding_batch(session: Session, batch: List[QueueItem]) -> int:
 
         logger.info(f"Generating {len(texts)} embeddings for model {model}")
 
-        # Call OpenAI API
-        embeddings = _get_embeddings_batch(texts, model, dimensions)
+        # Call OpenAI API (using sync wrapper since worker runs in sync context)
+        embeddings = _get_embeddings_batch_sync(texts, model, dimensions)
 
         # Prepare embedding objects for bulk insert
         embedding_objects = [

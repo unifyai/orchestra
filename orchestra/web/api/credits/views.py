@@ -17,7 +17,6 @@ from orchestra.web.api.credits.schema import (
     DeductCreditsResponse,
 )
 from orchestra.web.api.utils.http_responses import not_found
-from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
 
@@ -41,7 +40,6 @@ logger.addHandler(handler)
         },
     },
 )
-@handle_on_prem(endpoint="/credits", method="none")
 def get_credits(
     request_fastapi: Request,
     session=Depends(get_db_session),
@@ -89,7 +87,6 @@ def get_credits(
         },
     },
 )
-@handle_on_prem(endpoint="/credits/deduct", method="none")
 def deduct_credits(
     request_fastapi: Request,
     request: DeductCreditsRequest,
@@ -156,7 +153,6 @@ def deduct_credits(
         },
     },
 )
-@handle_on_prem(endpoint="/promo", method="none")
 def promo_code(
     request_fastapi: Request,
     code: str = Query(

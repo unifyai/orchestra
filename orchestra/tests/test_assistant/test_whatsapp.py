@@ -1,5 +1,5 @@
 from typing import Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException, status
@@ -32,8 +32,10 @@ def mock_assistant_infra_calls(request):
 
     with patch(
         "orchestra.web.api.assistant.views.wake_up_assistant",
+        new_callable=AsyncMock,
     ) as mock_wake_up, patch(
         "orchestra.web.api.assistant.views.reawaken_assistant",
+        new_callable=AsyncMock,
     ) as mock_reawaken:
 
         mock_wake_up.return_value = MagicMock(status_code=200)
