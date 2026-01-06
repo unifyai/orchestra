@@ -109,7 +109,7 @@ async def test_project_interface_tab_icons_and_order(client: AsyncClient):
     # verify tree
     resp = await client.get("/v0/projects/tree", headers=HEADERS)
     assert resp.status_code == 200
-    proj_entry = next(p for p in resp.json() if p["project"] == project_name)
+    proj_entry = next(p for p in resp.json() if p["project_name"] == project_name)
     assert proj_entry["order"] == 5
     # interfaces are sorted by order; first should be if2 with order 0
     assert proj_entry["interfaces"][0]["name"] == "if2"

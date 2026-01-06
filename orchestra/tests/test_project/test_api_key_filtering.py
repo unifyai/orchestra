@@ -145,7 +145,7 @@ async def test_list_projects_tree_respects_api_key_context(
     response = await client.get("/v0/projects/tree", headers=owner["headers"])
     assert response.status_code == status.HTTP_200_OK
     personal_tree = response.json()
-    personal_names = [p["project"] for p in personal_tree]  # tree uses "project" key
+    personal_names = [p["project_name"] for p in personal_tree]
     assert "TreePersonal" in personal_names
     assert "TreeOrg" not in personal_names
 
@@ -153,7 +153,7 @@ async def test_list_projects_tree_respects_api_key_context(
     response = await client.get("/v0/projects/tree", headers=org_headers)
     assert response.status_code == status.HTTP_200_OK
     org_tree = response.json()
-    org_names = [p["project"] for p in org_tree]  # tree uses "project" key
+    org_names = [p["project_name"] for p in org_tree]
     assert "TreeOrg" in org_names
     assert "TreePersonal" not in org_names
 

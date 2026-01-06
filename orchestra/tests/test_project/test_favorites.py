@@ -29,7 +29,7 @@ async def test_create_favorite(client: AsyncClient):
     assert resp.status_code == 201, resp.text
     data = resp.json()
     assert "id" in data and isinstance(data["id"], int)
-    assert data["project"] == project_name
+    assert data["project_name"] == project_name
     assert data["position"] == 1
 
 
@@ -52,7 +52,7 @@ async def test_get_favorite_by_id(client: AsyncClient):
     assert get_resp.status_code == 200
     fav = get_resp.json()
     assert fav["id"] == fav_id
-    assert fav["project"] == project_name
+    assert fav["project_name"] == project_name
     assert fav["position"] == 2
 
 
