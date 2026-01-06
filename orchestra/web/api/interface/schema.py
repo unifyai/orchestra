@@ -288,7 +288,7 @@ class CreateInterfaceRequest(BaseInterfaceTemplateSchema):
     """Request to create an interface - inherits common fields from base template schema"""
 
     interface_id: Optional[str] = None
-    project: str
+    project_name: str
     context: Optional[str] = None
 
     class Config:
@@ -366,7 +366,7 @@ class LegacyInterfaceConfig(BaseModel):
 
     # Project and interface name are required for creation but optional for updates
     name: Optional[str] = None
-    project: Optional[str] = None
+    project_name: Optional[str] = None
     items: List[Item] = []
     new_counter: int = 0
     temporary: bool = False
@@ -446,7 +446,7 @@ class ExportInterfaceTemplateRequest(ExportTemplateRequest):
     """Request to export an interface template"""
 
     interface_id: Optional[str] = None
-    project: Optional[str] = None
+    project_name: Optional[str] = None
     interface_name: Optional[str] = None
     checkpoint: bool = False
 
@@ -472,7 +472,7 @@ class ExportTileTemplateRequest(ExportTemplateRequest):
 class ExportProjectTemplateRequest(ExportTemplateRequest):
     """Request to export a project template"""
 
-    project: str
+    project_name: str
     interface_names: Optional[List[str]] = None  # If None, export all interfaces
     checkpoint: bool = False
 
@@ -480,7 +480,7 @@ class ExportProjectTemplateRequest(ExportTemplateRequest):
 class ValidateTemplateRequest(BaseModel):
     """Request to validate a template against a project"""
 
-    project: str
+    project_name: str
     template: Union[
         ProjectTemplateSchema,
         InterfaceTemplateSchema,
@@ -493,7 +493,7 @@ class ValidateTemplateRequest(BaseModel):
 class SanitizeTemplateRequest(BaseModel):
     """Request to sanitize a template for a project"""
 
-    project: str
+    project_name: str
     template: Union[
         ProjectTemplateSchema,
         InterfaceTemplateSchema,
@@ -507,7 +507,7 @@ class SanitizeTemplateRequest(BaseModel):
 class ImportTemplateRequest(BaseModel):
     """Base request to import a template"""
 
-    project: str
+    project_name: str
     validate_first: bool = True
     auto_sanitize: bool = True
     overwrite_existing: bool = False  # Whether to overwrite if name conflicts

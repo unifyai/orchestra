@@ -385,12 +385,15 @@ def create_favorite(
     user_id = request_fastapi.state.user_id
 
     # Verify project exists and user has access
-    project = project_dao.get_by_user_and_name(user_id=user_id, name=favorite.project)
+    project = project_dao.get_by_user_and_name(
+        user_id=user_id,
+        name=favorite.project_name,
+    )
 
     if not project:
         raise HTTPException(
             status_code=404,
-            detail=f"Project '{favorite.project}' not found",
+            detail=f"Project '{favorite.project_name}' not found",
         )
 
     try:
@@ -412,7 +415,7 @@ def create_favorite(
 
         return FavoriteProjectOut(
             id=new_id,
-            project=favorite.project,
+            project_name=favorite.project_name,
             position=favorite.position,
         )
     except ValueError:
@@ -1584,12 +1587,12 @@ def export_project_template(
     # Get the project
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
-        name=request.project,
+        name=request.project_name,
     )
     if not project:
         raise HTTPException(
             status_code=404,
-            detail=f"Project {request.project} not found or you don't have access.",
+            detail=f"Project {request.project_name} not found or you don't have access.",
         )
 
     # Get interfaces to export
@@ -1647,8 +1650,8 @@ def export_project_template(
     metadata = {
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "exported_by": request_fastapi.state.user_id,
-        "source_project": request.project,
-        "template_name": request.template_name or f"{request.project}_template",
+        "source_project": request.project_name,
+        "template_name": request.template_name or f"{request.project_name}_template",
     }
 
     # Calculate export stats
@@ -1700,12 +1703,12 @@ def import_project_template(
     # Get target project
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
-        name=request.project,
+        name=request.project_name,
     )
     if not project:
         raise HTTPException(
             status_code=404,
-            detail=f"Project {request.project} not found or you don't have access.",
+            detail=f"Project {request.project_name} not found or you don't have access.",
         )
 
     validation_result = None
@@ -1719,7 +1722,7 @@ def import_project_template(
         validator = TemplateValidator(session)
         validation_schema = validator.get_project_validation_schema(
             user_id=request_fastapi.state.user_id,
-            project_name=request.project,
+            project_name=request.project_name,
             organization_id=organization_id,
         )
 

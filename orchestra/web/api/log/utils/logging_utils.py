@@ -869,7 +869,7 @@ def _prefetch_json_values(session, paginated_ids_subq):
 
 def _get_logs_query(
     request_fastapi: Request,
-    project: str,
+    project_name: str,
     column_context: Optional[str],
     context: Optional[str],
     filter_expr: Optional[str],
@@ -898,12 +898,12 @@ def _get_logs_query(
     # 1) Validate the project
     try:
         project_id = project_dao.get_by_user_and_name(
-            name=project,
+            name=project_name,
             user_id=user_id,
             organization_id=organization_id,
         ).id
     except (IndexError, AttributeError):
-        raise not_found(f"Project {project}")
+        raise not_found(f"Project {project_name}")
 
     # Filtering, sorting, pagination, etc.
     log_event_query = session.query(LogEvent.id).filter(
@@ -1514,7 +1514,7 @@ def _get_logs_query(
 
 def _get_logs_query_jsonb(
     request_fastapi: Request,
-    project: str,
+    project_name: str,
     context: Optional[str],
     filter_expr: Optional[str],
     sorting: Optional[str],
@@ -1585,12 +1585,12 @@ def _get_logs_query_jsonb(
     # =========================================================================
     try:
         project_id = project_dao.get_by_user_and_name(
-            name=project,
+            name=project_name,
             user_id=user_id,
             organization_id=organization_id,
         ).id
     except (IndexError, AttributeError):
-        raise not_found(f"Project {project}")
+        raise not_found(f"Project {project_name}")
 
     # =========================================================================
     # STEP 2: Build base query (SELECT id, data, key_order, created_at FROM log_event)
@@ -4129,7 +4129,7 @@ def _build_log_subquery(
     # Get filtered log event IDs as a subquery
     event_ids_subq, _ = _get_all_filtered_log_event_ids(
         request_fastapi=request_fastapi,
-        project=project_name,
+        project_name=project_name,
         context=context,
         filter_expr=filter_expr,
         from_ids=from_ids,
@@ -4299,7 +4299,7 @@ def _build_log_subquery_jsonb(
     # Get filtered log event IDs as a subquery
     event_ids_subq, _ = _get_all_filtered_log_event_ids(
         request_fastapi=request_fastapi,
-        project=project_name,
+        project_name=project_name,
         context=context,
         filter_expr=filter_expr,
         from_ids=from_ids,

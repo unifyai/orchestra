@@ -370,7 +370,7 @@ class FileWriteRequest(BaseModel):
     """
 
     user_id: str
-    project: str
+    project_name: str
     files: dict[str, str]
     staging: bool = False
 
@@ -380,14 +380,14 @@ class FileUploadUrlRequest(BaseModel):
 
     Attributes:
         user_id: Owner of the project.
-        project: Project name.
+        project_name: Project name.
         path: Relative file path within the project (no leading slash).
         content_type: Optional MIME type to set on the object.
         staging: Whether to use the staging bucket.
     """
 
     user_id: str
-    project: str
+    project_name: str
     path: str
     content_type: Optional[str] = None
     staging: bool = False

@@ -609,7 +609,7 @@ def apply_group_threshold(
 
 def _get_all_filtered_log_event_ids(
     request_fastapi: Request,
-    project: str,
+    project_name: str,
     context: Optional[str],
     filter_expr: Optional[str],
     from_ids: Optional[str],
@@ -633,13 +633,16 @@ def _get_all_filtered_log_event_ids(
     # Validate project
     try:
         project_obj = project_dao.get_by_user_and_name(
-            name=project,
+            name=project_name,
             user_id=user_id,
             organization_id=organization_id,
         )
         project_id = project_obj.id
     except (IndexError, AttributeError):
-        raise HTTPException(status_code=404, detail=f"Project {project} not found.")
+        raise HTTPException(
+            status_code=404,
+            detail=f"Project {project_name} not found.",
+        )
 
     # Start from LogEvent table
     log_event_query = session.query(LogEvent.id).filter(
