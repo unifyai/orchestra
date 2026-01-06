@@ -410,7 +410,7 @@ async def unlink_account(account: AccountRequest):  # TODO, when would this be u
 ### Not related to next-auth
 
 
-async def generate_key(size=32):
+def generate_key(size=32):
     buffer = secrets.token_bytes(size)
     key = base64.b64encode(buffer).decode("utf-8")
     # Replace forward slashes with hyphens to avoid issues with URL encoding

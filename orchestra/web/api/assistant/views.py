@@ -18,7 +18,7 @@ from fastapi import (
     status,
 )
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1152,14 +1152,13 @@ async def delete_assistant(
             ASSISTANTS_PROJECT_NAME = "Assistants"
             if organization_id is not None:
                 # Org context: lookup directly by org_id + name (no user access check needed)
-                assistants_project = (
-                    session.query(Project)
-                    .filter(
+                result = await session.execute(
+                    select(Project).where(
                         Project.organization_id == organization_id,
                         Project.name == ASSISTANTS_PROJECT_NAME,
                     )
-                    .first()
                 )
+                assistants_project = result.scalars().first()
             else:
                 # Personal context: use user access check
                 assistants_project = await project_dao.get_by_user_and_name(
@@ -1173,9 +1172,8 @@ async def delete_assistant(
                 # Supports both old 2-tier and new 3-tier context structures:
                 # - 2-tier: "AdaLovelace", "AdaLovelace/Transcripts"
                 # - 3-tier: "User/AdaLovelace", "User/AdaLovelace/Transcripts"
-                contexts_to_delete = (
-                    session.query(Context)
-                    .filter(
+                result = await session.execute(
+                    select(Context).where(
                         Context.project_id == assistants_project.id,
                         or_(
                             # Old 2-tier patterns
@@ -1186,8 +1184,8 @@ async def delete_assistant(
                             Context.name.like(f"%/{assistant_context_prefix}/%"),
                         ),
                     )
-                    .all()
                 )
+                contexts_to_delete = result.scalars().all()
                 if contexts_to_delete:
                     for context_to_del in contexts_to_delete:
                         await context_dao.delete(context_to_del.id)
@@ -1868,9 +1866,8 @@ async def transfer_assistant_to_org(
             if personal_project and org_project:
                 assistant_context_prefix = f"{assistant.first_name}{assistant.surname}"
                 # Find all contexts related to the assistant
-                contexts_to_transfer = (
-                    session.query(Context)
-                    .filter(
+                result = await session.execute(
+                    select(Context).where(
                         Context.project_id == personal_project.id,
                         or_(
                             Context.name == assistant_context_prefix,
@@ -1879,20 +1876,18 @@ async def transfer_assistant_to_org(
                             Context.name.like(f"%/{assistant_context_prefix}/%"),
                         ),
                     )
-                    .all()
                 )
+                contexts_to_transfer = result.scalars().all()
                 for ctx in contexts_to_transfer:
                     # Update LogEvent.project_id for all log events in this context
                     # This is required because logs are queried by LogEvent.project_id
-                    session.query(LogEvent).filter(
-                        LogEvent.id.in_(
-                            session.query(LogEventContext.log_event_id).filter(
-                                LogEventContext.context_id == ctx.id,
-                            ),
-                        ),
-                    ).update(
-                        {LogEvent.project_id: org_project.id},
-                        synchronize_session=False,
+                    subquery = select(LogEventContext.log_event_id).where(
+                        LogEventContext.context_id == ctx.id
+                    )
+                    await session.execute(
+                        update(LogEvent)
+                        .where(LogEvent.id.in_(subquery))
+                        .values(project_id=org_project.id)
                     )
                     # Update the context's project_id
                     ctx.project_id = org_project.id
@@ -1904,37 +1899,33 @@ async def transfer_assistant_to_org(
                 # These contexts may contain logs from multiple assistants,
                 # so we only transfer logs where _assistant_id matches
                 # =========================================================
-                shared_contexts = (
-                    session.query(Context)
-                    .filter(
+                result = await session.execute(
+                    select(Context).where(
                         Context.project_id == personal_project.id,
                         or_(
                             Context.name.like("All/%"),  # Tier 1: All/*
                             Context.name.like("%/All/%"),  # Tier 2: User/All/*
                         ),
                     )
-                    .all()
                 )
+                shared_contexts = result.scalars().all()
 
                 shared_logs_transferred = False
                 for shared_ctx in shared_contexts:
                     # Find logs belonging to this assistant in the shared context
-                    assistant_log_ids = [
-                        row[0]
-                        for row in (
-                            session.query(LogEventContext.log_event_id)
-                            .join(
-                                LogEvent,
-                                LogEvent.id == LogEventContext.log_event_id,
-                            )
-                            .filter(
-                                LogEventContext.context_id == shared_ctx.id,
-                                LogEvent.data["_assistant_id"].astext
-                                == str(assistant_id),
-                            )
-                            .all()
+                    result = await session.execute(
+                        select(LogEventContext.log_event_id)
+                        .join(
+                            LogEvent,
+                            LogEvent.id == LogEventContext.log_event_id,
                         )
-                    ]
+                        .where(
+                            LogEventContext.context_id == shared_ctx.id,
+                            LogEvent.data["_assistant_id"].astext
+                            == str(assistant_id),
+                        )
+                    )
+                    assistant_log_ids = [row[0] for row in result.all()]
 
                     if not assistant_log_ids:
                         continue
@@ -1942,14 +1933,13 @@ async def transfer_assistant_to_org(
                     shared_logs_transferred = True
 
                     # Check if shared context exists in org project
-                    org_shared_ctx = (
-                        session.query(Context)
-                        .filter(
+                    result = await session.execute(
+                        select(Context).where(
                             Context.project_id == org_project.id,
                             Context.name == shared_ctx.name,
                         )
-                        .first()
                     )
+                    org_shared_ctx = result.scalars().first()
 
                     if org_shared_ctx:
                         target_ctx_id = org_shared_ctx.id
@@ -1960,24 +1950,24 @@ async def transfer_assistant_to_org(
                             name=shared_ctx.name,
                         )
                         session.add(new_ctx)
-                        session.flush()
+                        await session.flush()
                         target_ctx_id = new_ctx.id
 
                     # Move logs to org project
-                    session.query(LogEvent).filter(
-                        LogEvent.id.in_(assistant_log_ids),
-                    ).update(
-                        {LogEvent.project_id: org_project.id},
-                        synchronize_session=False,
+                    await session.execute(
+                        update(LogEvent)
+                        .where(LogEvent.id.in_(assistant_log_ids))
+                        .values(project_id=org_project.id)
                     )
 
                     # Update context links to point to org's context
-                    session.query(LogEventContext).filter(
-                        LogEventContext.log_event_id.in_(assistant_log_ids),
-                        LogEventContext.context_id == shared_ctx.id,
-                    ).update(
-                        {LogEventContext.context_id: target_ctx_id},
-                        synchronize_session=False,
+                    await session.execute(
+                        update(LogEventContext)
+                        .where(
+                            LogEventContext.log_event_id.in_(assistant_log_ids),
+                            LogEventContext.context_id == shared_ctx.id,
+                        )
+                        .values(context_id=target_ctx_id)
                     )
 
                 logs_transferred = (
@@ -2113,9 +2103,8 @@ async def transfer_assistant_to_personal(
             org_project = org_projects[0][0] if org_projects else None
             if org_project:
                 assistant_context_prefix = f"{assistant.first_name}{assistant.surname}"
-                contexts_to_delete = (
-                    session.query(Context)
-                    .filter(
+                result = await session.execute(
+                    select(Context).where(
                         Context.project_id == org_project.id,
                         or_(
                             Context.name == assistant_context_prefix,
@@ -2124,8 +2113,8 @@ async def transfer_assistant_to_personal(
                             Context.name.like(f"%/{assistant_context_prefix}/%"),
                         ),
                     )
-                    .all()
                 )
+                contexts_to_delete = result.scalars().all()
                 for ctx in contexts_to_delete:
                     # await context_dao.delete() handles sibling cleanup automatically
                     # for Assistants projects (removes logs from All/* and User/All/*)

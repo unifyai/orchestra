@@ -488,7 +488,7 @@ class Router(Base):
 class AuthUser(Base):
     __tablename__ = "auth_user"
 
-    id = Column(String, primary_key=True, default=uuid.uuid4)
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     email = Column(String, unique=True, index=True, nullable=False)
     name = Column(String)
     last_name = Column(String)
@@ -597,7 +597,7 @@ class AuthUser(Base):
 class Account(Base):
     __tablename__ = "account"
 
-    id = Column(String, primary_key=True, default=uuid.uuid4)
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(String, ForeignKey("auth_user.id", ondelete="CASCADE"))
     provider = Column(String, nullable=False)  # OAuth provider name
     provider_type = Column(String, nullable=False)
@@ -1581,7 +1581,7 @@ class FieldType(Base):
 class TempInterface(Base):
     __tablename__ = "temp_interface"
 
-    id = Column(String, primary_key=True, default=uuid.uuid4)
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
     user_id = Column(
         String,
         ForeignKey("auth_user.id", ondelete="CASCADE"),
