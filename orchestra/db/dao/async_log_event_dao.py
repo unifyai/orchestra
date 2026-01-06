@@ -1,0 +1,253 @@
+"""Async version of log_event_dao for use with AsyncSession."""
+
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional, Union
+
+from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from orchestra.db.dao.context_dao import ContextDAO
+from orchestra.db.dao.log_dao import LogDAO
+from orchestra.db.models.orchestra_models import (
+    Context,
+    Log,
+    LogEvent,
+    LogEventContext,
+    LogEventLog,
+    Project,
+)
+
+
+class AsyncLogEventDAO:
+    def __init__(self, session: AsyncSession):
+        self.session = session
+
+    async def bulk_create(
+        self,
+        project_id: int,
+        count: int,
+        context_id: Optional[int] = None,
+        return_row_ids: bool = False,
+        provided_unique_ids: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[List[int], tuple[List[int], List[Any]]]:
+        """Create multiple LogEvent instances in one operation.
+
+        Uses single INSERT with RETURNING clause to get all IDs in one database
+        roundtrip instead of N separate ORM operations.
+        """
+        ts = datetime.now(timezone.utc)
+
+        # Build list of row dictionaries for bulk INSERT
+        # Both created_at and updated_at are set to same timestamp on creation
+        # updated_at will be updated on subsequent modifications
+        rows_to_insert = [
+            {
+                "project_id": project_id,
+                "created_at": ts,
+                "updated_at": ts,
+                "data": {},  # Initialize empty JSONB
+            }
+            for _ in range(count)
+        ]
+
+        # Execute single INSERT with RETURNING to get all IDs in one statement
+        stmt = pg_insert(LogEvent).values(rows_to_insert).returning(LogEvent.id)
+        result = await self.session.execute(stmt)
+        log_event_ids = [row[0] for row in result.fetchall()]
+        row_ids: List[Any] = [None] * count
+
+        if context_id:
+            # Associate logs with context
+            associations = [
+                LogEventContext(
+                    log_event_id=log_event_id,
+                    context_id=context_id,
+                )
+                for log_event_id in log_event_ids
+            ]
+            self.session.add_all(associations)
+
+            # Check if this context needs composite unique keys or auto-counting
+            context = (
+                (await self.session.execute(select(Context).filter_by(id=context_id)))
+                .scalars()
+                .one()
+            )
+            if context.unique_keys or context.auto_counting:
+                log_dao = LogDAO(self.session, ContextDAO(self.session))
+                unique_keys = context.unique_keys
+
+                # Generate composite key values
+                if provided_unique_ids is None:
+                    provided_unique_ids = [{} for _ in range(count)]
+
+                try:
+                    row_ids = log_dao.get_next_composite_ids(
+                        project_id=project_id,
+                        context_id=context_id,
+                        unique_keys=unique_keys or {},
+                        provided_values=provided_unique_ids,
+                    )
+                except ValueError as e:
+                    # Convert ValueError to a more user-friendly error
+                    from fastapi import HTTPException
+
+                    raise HTTPException(status_code=400, detail=str(e))
+
+                # Create log entries for all composite key columns AND auto-counting columns
+                all_key_logs = []
+                for i, log_event_id in enumerate(log_event_ids):
+                    key_values = row_ids[i]
+                    for col_name, col_value in key_values.items():
+                        # Determine the type - either from unique_keys or default to "int" for auto-counting
+                        col_type = unique_keys.get(col_name, "int")
+
+                        # Use the type directly (no more "counting" type)
+                        explicit_type = col_type
+
+                        all_key_logs.append(
+                            {
+                                "project_id": project_id,
+                                "log_event_id": log_event_id,
+                                "key": col_name,
+                                "value": col_value,
+                                "context_id": context_id,
+                                "explicit_types": {col_name: {"type": explicit_type}},
+                            },
+                        )
+                if all_key_logs:
+                    log_dao.bulk_create(all_key_logs)
+
+        await self.session.flush()
+        if return_row_ids:
+            return (log_event_ids, row_ids)
+        else:
+            return log_event_ids
+
+    async def filter(
+        self,
+        id: Optional[int] = None,
+        project_id: Optional[int] = None,
+        context_id: Optional[int] = None,
+        offset: int = 0,
+        limit: Optional[int] = None,
+    ) -> List[LogEvent]:
+        query = select(LogEvent).distinct()
+
+        if id:
+            query = query.where(LogEvent.id == id)
+        if project_id:
+            query = query.where(LogEvent.project_id == project_id)
+        if context_id:
+            query = query.join(LogEventContext).where(
+                LogEventContext.context_id == context_id,
+            )
+
+        query = query.offset(offset)
+        if limit is not None:
+            query = query.limit(limit)
+        query = query.order_by(LogEvent.created_at)
+
+        rows = await self.session.execute(query)
+        return rows.fetchall()
+
+    async def update(
+        self,
+        id: int,
+        project_id: Optional[int] = None,
+    ) -> None:
+        query = select(LogEvent)
+        query = query.where(LogEvent.id == id)
+        raw = await self.session.execute(query)
+        entry = raw.scalars().first()
+        if entry is not None:
+            if project_id:
+                setattr(entry, "project_id", project_id)
+
+    async def delete(self, id: Union[int, List[int]]):
+        ids = id if isinstance(id, list) else [id]
+        if not ids:
+            return
+
+        try:
+            # Delete associated GCS media BEFORE deleting DB records
+            log_dao = LogDAO(self.session, ContextDAO(self.session))
+            logs_to_delete_query = (
+                self.session.query(Log)
+                .join(
+                    LogEventLog,
+                    LogEventLog.log_id == Log.id,
+                )
+                .filter(
+                    LogEventLog.log_event_id.in_(ids),
+                )
+            )
+            log_dao._bulk_delete_gcs_media(logs_to_delete_query)
+
+            # First, delete the association rows referencing these log events
+            self.session.query(LogEventContext).filter(
+                LogEventContext.log_event_id.in_(ids),
+            ).delete(synchronize_session=False)
+
+            # Then, delete the log event(s) themselves (which cascades to Log and JSONLog in the DB)
+            self.session.query(LogEvent).filter(
+                LogEvent.id.in_(ids),
+            ).delete(synchronize_session=False)
+
+            await self.session.commit()
+        except Exception as e:
+            await self.session.rollback()
+            raise ValueError(f"Failed to delete log events: {e}")
+
+    async def get_ts(self, id: int) -> Optional[datetime]:
+        query = (
+            select(Project.created_at)
+            .join(LogEvent, Project.id == LogEvent.project_id)
+            .where(LogEvent.id == id)
+        )
+        rows = await self.session.execute(query).fetchone()
+        return rows[0] if rows is not None else None
+
+    async def get_user_id(self, id: int) -> Optional[str]:
+        query = (
+            select(Project.user_id)
+            .join(LogEvent, Project.id == LogEvent.project_id)
+            .where(LogEvent.id == id)
+        )
+        rows = await self.session.execute(query).fetchone()
+        return rows[0] if rows is not None else None
+
+    async def get_user_and_project_id(self, id: int) -> Optional[str]:
+        query = (
+            select(Project.user_id, Project.id)
+            .join(LogEvent, Project.id == LogEvent.project_id)
+            .where(LogEvent.id == id)
+        )
+        rows = await self.session.execute(query).fetchone()
+        return rows if rows is not None else (None, None)
+
+    async def get_user_and_project_ids_batch(
+        self,
+        ids: List[int],
+    ) -> Dict[int, tuple]:
+        """
+        Batch fetch user_id and project_id for multiple log_event IDs.
+
+        Args:
+            ids: List of log_event IDs to fetch
+
+        Returns:
+            Dictionary mapping log_event_id -> (user_id, project_id)
+            Missing IDs are excluded from the result (caller checks for missing keys)
+        """
+        if not ids:
+            return {}
+
+        query = (
+            select(LogEvent.id, Project.user_id, Project.id)
+            .join(Project, Project.id == LogEvent.project_id)
+            .where(LogEvent.id.in_(ids))
+        )
+        rows = await self.session.execute(query).fetchall()
+        return {row[0]: (row[1], row[2]) for row in rows}
