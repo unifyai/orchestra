@@ -1726,12 +1726,12 @@ def write_files(
     # Admin endpoint - use any context lookup
     project = project_dao.get_by_user_and_name_any_context(
         user_id=request.user_id,
-        name=request.project,
+        name=request.project_name,
     )
     if not project:
         raise HTTPException(
             status_code=404,
-            detail=f"Project {request.project} not found.",
+            detail=f"Project {request.project_name} not found.",
         )
 
     try:
@@ -1793,7 +1793,7 @@ def write_files(
 )
 def get_files(
     user_id: str,
-    project: str,
+    project_name: str,
     staging: bool = False,
     session=Depends(get_db_session),
 ):
@@ -1807,12 +1807,12 @@ def get_files(
     # Admin endpoint - use any context lookup
     project_obj = project_dao.get_by_user_and_name_any_context(
         user_id=user_id,
-        name=project,
+        name=project_name,
     )
     if not project_obj:
         raise HTTPException(
             status_code=404,
-            detail=f"Project {project} not found.",
+            detail=f"Project {project_name} not found.",
         )
 
     try:
@@ -1884,7 +1884,7 @@ def get_files(
 )
 def get_file_contents(
     user_id: str,
-    project: str,
+    project_name: str,
     path: str,
     staging: bool = False,
     session=Depends(get_db_session),
@@ -1898,12 +1898,12 @@ def get_file_contents(
     # Admin endpoint - use any context lookup
     project_obj = project_dao.get_by_user_and_name_any_context(
         user_id=user_id,
-        name=project,
+        name=project_name,
     )
     if not project_obj:
         raise HTTPException(
             status_code=404,
-            detail=f"Project {project} not found.",
+            detail=f"Project {project_name} not found.",
         )
 
     try:
@@ -1971,7 +1971,7 @@ def get_file_contents(
 )
 def delete_file_or_folder(
     user_id: str,
-    project: str,
+    project_name: str,
     path: str,
     staging: bool = False,
     session=Depends(get_db_session),
@@ -1986,12 +1986,12 @@ def delete_file_or_folder(
     # Admin endpoint - use any context lookup
     project_obj = project_dao.get_by_user_and_name_any_context(
         user_id=user_id,
-        name=project,
+        name=project_name,
     )
     if not project_obj:
         raise HTTPException(
             status_code=404,
-            detail=f"Project {project} not found.",
+            detail=f"Project {project_name} not found.",
         )
 
     try:
@@ -2069,12 +2069,12 @@ def create_upload_url(
     # Admin endpoint - use any context lookup
     project = project_dao.get_by_user_and_name_any_context(
         user_id=request.user_id,
-        name=request.project,
+        name=request.project_name,
     )
     if not project:
         raise HTTPException(
             status_code=404,
-            detail=f"Project {request.project} not found.",
+            detail=f"Project {request.project_name} not found.",
         )
 
     # Basic path validation: no traversal, no leading slash
@@ -2139,7 +2139,7 @@ def create_upload_url(
 )
 def create_download_url(
     user_id: str,
-    project: str,
+    project_name: str,
     path: str,
     staging: bool = False,
     expires_in: int = 3600,
@@ -2155,12 +2155,12 @@ def create_download_url(
     # Admin endpoint - use any context lookup
     project_obj = project_dao.get_by_user_and_name_any_context(
         user_id=user_id,
-        name=project,
+        name=project_name,
     )
     if not project_obj:
         raise HTTPException(
             status_code=404,
-            detail=f"Project {project} not found.",
+            detail=f"Project {project_name} not found.",
         )
 
     if path.startswith("/") or ".." in path:
