@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import logging
 from email.mime.text import MIMEText
@@ -22,34 +23,16 @@ DELEGATED_USER_EMAIL = (
 SCOPES = ["https://www.googleapis.com/auth/gmail.send"]
 
 
-async def send_email_async(
+def _send_email_sync(
     to_email: str,
     email_subject: str,
     email_body: str,
-    from_email: str | None = None,
+    sender_email: str,
 ) -> bool:
     """
-    Sends an email using Gmail API with OAuth 2.0 (Service Account with Domain-Wide Delegation).
-
-    Args:
-        to_email: Recipient email address.
-        email_subject: Email subject line.
-        email_body: HTML email body.
-        from_email: Sender email address. Defaults to ONBOARDING_EMAIL env var if not specified.
+    Synchronous implementation of email sending via Gmail API.
+    This is called via run_in_executor to avoid blocking the event loop.
     """
-    if not SERVICE_ACCOUNT_FILE:
-        logger.error(
-            "Google Service Account Key Path not configured. Cannot send email via OAuth.",
-        )
-        return False
-
-    sender_email = from_email or DELEGATED_USER_EMAIL
-    if not sender_email:
-        logger.error(
-            "No sender email configured. Set ONBOARDING_EMAIL env var or pass from_email.",
-        )
-        return False
-
     try:
         # Create credentials from the service account file, impersonating the user
         creds = Credentials.from_service_account_file(
@@ -64,7 +47,7 @@ async def send_email_async(
             "v1",
             credentials=creds,
             cache_discovery=False,
-        )  # Added cache_discovery=False
+        )
 
         # Create the email message
         message = MIMEText(email_body, "html")
@@ -85,7 +68,8 @@ async def send_email_async(
             .execute()
         )
         logger.info(
-            f"Email successfully sent from {sender_email} to {to_email} via Gmail API. Message ID: {send_message.get('id')}",
+            f"Email successfully sent from {sender_email} to {to_email} via Gmail API. "
+            f"Message ID: {send_message.get('id')}",
         )
         return True
 
@@ -101,3 +85,45 @@ async def send_email_async(
             exc_info=True,
         )
         return False
+
+
+async def send_email_async(
+    to_email: str,
+    email_subject: str,
+    email_body: str,
+    from_email: str | None = None,
+) -> bool:
+    """
+    Sends an email using Gmail API with OAuth 2.0 (Service Account with Domain-Wide Delegation).
+
+    The Gmail API client is synchronous, so this function runs the blocking I/O
+    in a thread pool executor to avoid blocking the async event loop.
+
+    Args:
+        to_email: Recipient email address.
+        email_subject: Email subject line.
+        email_body: HTML email body.
+        from_email: Sender email address. Defaults to DELEGATED_USER_EMAIL if not specified.
+    """
+    if not SERVICE_ACCOUNT_FILE:
+        logger.error(
+            "Google Service Account Key Path not configured. Cannot send email via OAuth.",
+        )
+        return False
+
+    sender_email = from_email or DELEGATED_USER_EMAIL
+    if not sender_email:
+        logger.error(
+            "No sender email configured. Set ONBOARDING_EMAIL env var or pass from_email.",
+        )
+        return False
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        None,  # Use the default thread pool executor
+        _send_email_sync,
+        to_email,
+        email_subject,
+        email_body,
+        sender_email,
+    )
