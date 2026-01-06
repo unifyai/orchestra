@@ -88,7 +88,15 @@ __all__ = [
 
 # Initialize async OpenAI client if API key is available
 OPENAI_API_KEY = os.getenv("ORCHESTRA_OPENAI_API_KEY")
-_async_client = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
+# Large embedding batches (hundreds of items) can take several minutes to process
+_async_client = (
+    AsyncOpenAI(
+        api_key=OPENAI_API_KEY,
+        timeout=httpx.Timeout(300.0, connect=30.0),  # 5 min total, 30s connect
+    )
+    if OPENAI_API_KEY
+    else None
+)
 
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
 DEFAULT_IMAGE_EMBEDDING_MODEL = "multimodalembedding@001"
@@ -392,9 +400,8 @@ async def _get_embeddings_batch(
 
 
 # =============================================================================
-# Sync wrappers for backward compatibility
-# These run the async functions in a new event loop for callers that cannot
-# use async/await (e.g., background workers, sync endpoints).
+# Sync wrappers for callers in sync contexts (e.g., background workers,
+# sync route handlers). These create a new event loop to run the async function.
 # =============================================================================
 
 
