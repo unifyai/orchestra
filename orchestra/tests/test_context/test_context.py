@@ -517,7 +517,7 @@ async def test_get_logs_by_context(client: AsyncClient):
 
     # Get logs by context (only one log should be returned)
     response = await client.get(
-        f"/v0/logs?project={project_name}&context=different-context",
+        f"/v0/logs?project_name={project_name}&context=different-context",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -567,7 +567,7 @@ async def test_context_as_string(client: AsyncClient):
 
     # Get logs by context string
     response = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}",
+        f"/v0/logs?project_name={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -613,7 +613,7 @@ async def test_get_logs_no_context(client: AsyncClient):
 
     # Get logs without context (should return 0 logs)
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -658,7 +658,7 @@ async def test_get_fields_no_context(client: AsyncClient):
 
     # Get fields with context
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}&context={context_name}",
+        f"/v0/logs/fields?project_name={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -668,7 +668,7 @@ async def test_get_fields_no_context(client: AsyncClient):
 
     # Get fields without context (should return 0 fields)
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -724,7 +724,7 @@ async def test_add_log_to_multiple_contexts(client: AsyncClient):
     # Verify that log appears in both contexts
     for context in contexts:
         response = await client.get(
-            f"/v0/logs?project={project_name}&context={context}",
+            f"/v0/logs?project_name={project_name}&context={context}",
             headers=HEADERS,
         )
         assert response.status_code == 200
@@ -873,7 +873,7 @@ async def test_implicit_field_creation(client: AsyncClient):
 
     # Check that field types were created for the context
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}&context={context_name}",
+        f"/v0/logs/fields?project_name={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -907,7 +907,7 @@ async def test_implicit_field_creation(client: AsyncClient):
 
     # Check that only new field types were created
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}&context={context_name}",
+        f"/v0/logs/fields?project_name={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1351,7 +1351,7 @@ async def test_add_logs_with_copy_false(client: AsyncClient):
 
     # Verify the logs in the context have the same IDs as the original logs
     response = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}&return_ids_only=true",
+        f"/v0/logs?project_name={project_name}&context={context_name}&return_ids_only=true",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1409,7 +1409,7 @@ async def test_add_logs_with_copy_true(client: AsyncClient):
 
     # Verify the logs in the context have different IDs than the original logs
     response = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}&return_ids_only=true",
+        f"/v0/logs?project_name={project_name}&context={context_name}&return_ids_only=true",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1419,7 +1419,7 @@ async def test_add_logs_with_copy_true(client: AsyncClient):
 
     # Verify the content of the copied log is the same as the original
     response = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}",
+        f"/v0/logs?project_name={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1479,7 +1479,7 @@ async def test_add_logs_via_arguments(client: AsyncClient):
 
     # Verify only logs with metric > 0.9 were added to the context
     response = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}",
+        f"/v0/logs?project_name={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1524,7 +1524,7 @@ async def test_add_logs_via_arguments_with_copy(client: AsyncClient):
 
     # Get all logs to compare IDs later
     response = await client.get(
-        f"/v0/logs?project={project_name}&return_ids_only=true",
+        f"/v0/logs?project_name={project_name}&return_ids_only=true",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1547,7 +1547,7 @@ async def test_add_logs_via_arguments_with_copy(client: AsyncClient):
 
     # Verify logs in the context have different IDs than the original logs
     response = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}&return_ids_only=true",
+        f"/v0/logs?project_name={project_name}&context={context_name}&return_ids_only=true",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1561,7 +1561,7 @@ async def test_add_logs_via_arguments_with_copy(client: AsyncClient):
 
     # Verify the content of the copied logs
     response = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}",
+        f"/v0/logs?project_name={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -2191,7 +2191,7 @@ async def test_composite_key_mixed_types(client: AsyncClient):
 
     # Verify we can retrieve all logs
     response = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}",
+        f"/v0/logs?project_name={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -2466,7 +2466,7 @@ async def test_independent_auto_counting(client: AsyncClient):
 
     # Get logs to verify all fields
     response = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}",
+        f"/v0/logs?project_name={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -2492,7 +2492,7 @@ async def test_independent_auto_counting(client: AsyncClient):
 
     # Get logs to verify all fields
     response = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}",
+        f"/v0/logs?project_name={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
