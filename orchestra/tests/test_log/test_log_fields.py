@@ -210,7 +210,7 @@ async def test_rename_field_basic(client: AsyncClient, use_jsonb_mode):
     rename_response = await client.patch(
         "/v0/logs/rename_field",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "old_field_name": "old_field_name",
             "new_field_name": "new_field_name",
         },
@@ -270,7 +270,7 @@ async def test_rename_field_edge_cases(client: AsyncClient, use_jsonb_mode):
     response = await client.patch(
         "/v0/logs/rename_field",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "old_field_name": "nonexistent_field",
             "new_field_name": "new_field",
         },
@@ -283,7 +283,7 @@ async def test_rename_field_edge_cases(client: AsyncClient, use_jsonb_mode):
     response = await client.patch(
         "/v0/logs/rename_field",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "old_field_name": "existing_field",
             "new_field_name": "other_field",
         },
@@ -296,7 +296,7 @@ async def test_rename_field_edge_cases(client: AsyncClient, use_jsonb_mode):
     response = await client.patch(
         "/v0/logs/rename_field",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "old_field_name": "existing_field",
             "new_field_name": "",  # Empty string
         },
@@ -471,7 +471,7 @@ async def test_rename_field_preserves_order(client: AsyncClient, use_jsonb_mode)
     rename_response = await client.patch(
         "/v0/logs/rename_field",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "old_field_name": "field_b",
             "new_field_name": "field_b_renamed",
         },
@@ -538,7 +538,7 @@ async def test_create_fields_happy_path(client: AsyncClient, use_jsonb_mode):
 
     # Create fields with explicit and untyped fields
     fields_data = {
-        "project": project_name,
+        "project_name": project_name,
         "context": context_name,
         "fields": {
             "accuracy": "float",  # Explicit type
@@ -595,7 +595,7 @@ async def test_create_fields_invalid_type(client: AsyncClient, use_jsonb_mode):
 
     # Try to create a field with an invalid type
     fields_data = {
-        "project": project_name,
+        "project_name": project_name,
         "context": context_name,
         "fields": {"badfield": "string"},  # Invalid type (should be str)
     }
@@ -660,7 +660,7 @@ async def test_delete_fields_endpoint(client: AsyncClient, use_jsonb_mode):
     delete_response = await client.request(
         "DELETE",
         "/v0/logs/fields",
-        json={"project": project_name, "fields": ["col1", "col2"]},
+        json={"project_name": project_name, "fields": ["col1", "col2"]},
         headers=HEADERS,
     )
     assert delete_response.status_code == 200, delete_response.json()
@@ -761,7 +761,7 @@ async def test_delete_fields_preserves_log_events(client: AsyncClient, use_jsonb
     delete_response = await client.request(
         "DELETE",
         "/v0/logs/fields",
-        json={"project": project_name, "fields": ["field_to_delete"]},
+        json={"project_name": project_name, "fields": ["field_to_delete"]},
         headers=HEADERS,
     )
     assert delete_response.status_code == 200
@@ -832,7 +832,7 @@ async def test_delete_all_fields_preserves_empty_log_events(
     delete_response = await client.request(
         "DELETE",
         "/v0/logs/fields",
-        json={"project": project_name, "fields": ["field1", "field2"]},
+        json={"project_name": project_name, "fields": ["field1", "field2"]},
         headers=HEADERS,
     )
     assert delete_response.status_code == 200
@@ -893,7 +893,7 @@ async def test_create_fields_with_backfill_default(client: AsyncClient, use_json
     fields_response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "new_field1": "str",
                 "new_field2": "int",
@@ -959,7 +959,7 @@ async def test_create_fields_without_backfill(client: AsyncClient, use_jsonb_mod
     fields_response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "new_field1": "str",
                 "new_field2": "int",
@@ -1043,7 +1043,7 @@ async def test_create_fields_backfill_with_existing_values(
     fields_response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "new_field1": "str",
                 "new_field2": "int",
@@ -1093,7 +1093,7 @@ async def test_create_fields_backfill_empty_context(
     fields_response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "field1": "str",
                 "field2": "int",
@@ -1154,7 +1154,7 @@ async def test_create_fields_backfill_respects_derived_logs(
     fields_response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "computed_field": "int",  # This already exists as derived
                 "new_field": "str",  # This is new
@@ -1197,7 +1197,7 @@ async def test_unique_field_constraint(client: AsyncClient, use_jsonb_mode):
 
     # Create a field with a unique constraint via the /fields endpoint
     fields_data = {
-        "project": project_name,
+        "project_name": project_name,
         "fields": {"email": {"type": "str", "unique": True}},
     }
     response = await client.post(
@@ -1288,7 +1288,7 @@ async def test_unique_field_constraint_on_update(client: AsyncClient, use_jsonb_
         "/v0/logs",
         json={
             "logs": [log_id_to_update],
-            "project": project_name,
+            "project_name": project_name,
             "entries": {"email": "unique@example.com"},
             "overwrite": True,
         },
@@ -1302,7 +1302,7 @@ async def test_unique_field_constraint_on_update(client: AsyncClient, use_jsonb_
         "/v0/logs",
         json={
             "logs": [log_id_to_update],
-            "project": project_name,
+            "project_name": project_name,
             "entries": {"email": "newunique@example.com"},
             "overwrite": True,
         },
@@ -1319,7 +1319,7 @@ async def test_field_description_crud(client: AsyncClient, use_jsonb_mode):
 
     # Create fields with and without descriptions via POST /logs/fields
     fields_data = {
-        "project": project_name,
+        "project_name": project_name,
         "fields": {
             "field_with_description": {
                 "type": "str",
@@ -1372,7 +1372,7 @@ async def test_explicit_nested_type_in_get_fields(client: AsyncClient, use_jsonb
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "values": [1, 2, 3],
                 "metrics": {"acc": 0.9, "loss": 0.1},
@@ -1411,7 +1411,7 @@ async def test_explicit_type_overrides_in_fields(client: AsyncClient, use_jsonb_
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "recording_url": "",
                 "explicit_types": {
@@ -1468,7 +1468,7 @@ async def test_get_fields_all_contexts_with_wildcard(
     resp_ctx1 = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": context_name_1,
             "fields": {
                 "accuracy_ctx1": "float",
@@ -1482,7 +1482,7 @@ async def test_get_fields_all_contexts_with_wildcard(
     resp_ctx2 = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": context_name_2,
             "fields": {
                 "accuracy_ctx2": "float",

@@ -46,7 +46,7 @@ async def test_inner_join_logs(client: AsyncClient, use_jsonb_mode):
     )
 
     join_payload = {
-        "project": project_name,
+        "project_name": project_name,
         "pair_of_args": [{"context": context_a}, {"context": context_b}],
         "join_expr": "A.user_id == B.user_id",
         "mode": "inner",
@@ -99,7 +99,7 @@ async def test_no_match_join_logs(client: AsyncClient, use_jsonb_mode):
     )
 
     join_payload = {
-        "project": project_name,
+        "project_name": project_name,
         "pair_of_args": [{"context": context_a}, {"context": context_b}],
         "join_expr": "A.user_id == B.user_id",
         "mode": "inner",
@@ -152,7 +152,7 @@ async def test_left_join_logs(client: AsyncClient, use_jsonb_mode):
     )
 
     join_payload = {
-        "project": project_name,
+        "project_name": project_name,
         "pair_of_args": [{"context": context_a}, {"context": context_b}],
         "join_expr": "A.user_id == B.user_id",
         "mode": "left",
@@ -218,7 +218,7 @@ async def test_right_join_logs(client: AsyncClient, use_jsonb_mode):
     )
 
     join_payload = {
-        "project": project_name,
+        "project_name": project_name,
         "pair_of_args": [{"context": context_a}, {"context": context_b}],
         "join_expr": "A.user_id == B.user_id",
         "mode": "right",
@@ -296,7 +296,7 @@ async def test_outer_join_logs(client: AsyncClient, use_jsonb_mode):
     )
 
     join_payload = {
-        "project": project_name,
+        "project_name": project_name,
         "pair_of_args": [{"context": context_a}, {"context": context_b}],
         "join_expr": "A.user_id == B.user_id",
         "mode": "outer",
@@ -407,7 +407,7 @@ async def test_complex_join_expression(client: AsyncClient, use_jsonb_mode):
 
     # Join when A.user_id equals B.user_id AND meA.new_field > 15
     join_payload = {
-        "project": project_name,
+        "project_name": project_name,
         "pair_of_args": [{"context": context_a}, {"context": context_b}],
         "join_expr": "A.user_id == B.user_id and mean(A.new_field) > 3",
         "mode": "inner",
@@ -466,7 +466,7 @@ async def test_two_column_equality_join(client: AsyncClient, use_jsonb_mode):
     )  # Should not match
 
     payload = {
-        "project": project_name,
+        "project_name": project_name,
         "pair_of_args": [{"context": context_a}, {"context": context_b}],
         "join_expr": "A.x == B.x and A.y == B.y",
         "mode": "inner",
@@ -502,7 +502,7 @@ async def test_duplicate_field_names(client: AsyncClient, use_jsonb_mode):
     await _create_log(client, project_name, context=context_b, entries={"score": 0.9})
 
     payload = {
-        "project": project_name,
+        "project_name": project_name,
         "pair_of_args": [{"context": context_a}, {"context": context_b}],
         "join_expr": "True",  # Cross-join to ensure one result row
         "mode": "inner",
@@ -541,7 +541,7 @@ async def test_invalid_column_name_returns_400(client: AsyncClient, use_jsonb_mo
     await _create_log(client, project_name, context=context_b, entries={"k": 1})
 
     payload = {
-        "project": project_name,
+        "project_name": project_name,
         "pair_of_args": [{"context": context_a}, {"context": context_b}],
         "join_expr": "A.k == B.k",
         "mode": "inner",
@@ -588,7 +588,7 @@ async def test_join_logs_pass_by_reference(client: AsyncClient, enable_eav_mode)
 
     # Perform join with copy=False (pass by reference)
     join_payload = {
-        "project": project_name,
+        "project_name": project_name,
         "pair_of_args": [{"context": context_a}, {"context": context_b}],
         "join_expr": "A.user_id == B.user_id",
         "mode": "inner",
@@ -684,7 +684,7 @@ async def test_join_logs_pass_by_reference_fails_in_jsonb_mode(
 
     # Attempt join with copy=False in JSONB mode - should fail
     join_payload = {
-        "project": project_name,
+        "project_name": project_name,
         "pair_of_args": [{"context": context_a}, {"context": context_b}],
         "join_expr": "A.user_id == B.user_id",
         "mode": "inner",
@@ -729,7 +729,7 @@ async def test_join_logs_with_copy(client: AsyncClient, use_jsonb_mode):
 
     # Perform join with copy=True (default behavior)
     join_payload = {
-        "project": project_name,
+        "project_name": project_name,
         "pair_of_args": [{"context": context_a}, {"context": context_b}],
         "join_expr": "A.user_id == B.user_id",
         "mode": "inner",
@@ -827,7 +827,7 @@ async def test_join_logs_reference_with_dict_columns_fails(
 
     # Try to join with copy=False and dictionary columns (should fail)
     join_payload = {
-        "project": project_name,
+        "project_name": project_name,
         "pair_of_args": [{"context": context_a}, {"context": context_b}],
         "join_expr": "A.user_id == B.user_id",
         "mode": "inner",
@@ -894,7 +894,7 @@ async def _setup_contexts_with_embeddings(
     response = await client.post(
         "/v0/logs/derived",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": context_a,
             "key": "_description_emb",
             "equation": "embed({lg:description}, model='text-embedding-3-small')",
@@ -910,7 +910,7 @@ async def _setup_contexts_with_embeddings(
     response = await client.post(
         "/v0/logs/derived",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": context_b,
             "key": "_title_emb",
             "equation": "embed({lg:title}, model='text-embedding-3-small')",
@@ -1005,7 +1005,7 @@ async def test_join_with_derived_embedding_columns(
         ]
 
     join_payload = {
-        "project": project_name,
+        "project_name": project_name,
         "pair_of_args": [
             {"context": context_a},
             {"context": context_b},
@@ -1088,7 +1088,7 @@ async def test_join_with_derived_cosine_similarity(client: AsyncClient, use_json
     }
 
     join_payload = {
-        "project": project_name,
+        "project_name": project_name,
         "pair_of_args": [
             {"context": context_a},
             {"context": context_b},
@@ -1127,7 +1127,7 @@ async def test_join_with_derived_cosine_similarity(client: AsyncClient, use_json
     response = await client.post(
         "/v0/logs/derived",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": joined_context,
             "key": "_sum_cos",
             "equation": cosine_equation,
@@ -1204,7 +1204,7 @@ async def test_join_with_derived_cosine_similarity_copy_false(
     ]
 
     join_payload = {
-        "project": project_name,
+        "project_name": project_name,
         "pair_of_args": [
             {"context": context_a},
             {"context": context_b},
@@ -1241,7 +1241,7 @@ async def test_join_with_derived_cosine_similarity_copy_false(
     response = await client.post(
         "/v0/logs/derived",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": joined_context,
             "key": "_sum_cos",
             "equation": cosine_equation,
@@ -1383,7 +1383,7 @@ async def test_join_transcripts_contacts_with_embeddings(
     resp_ft = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {**contacts_fields, **transcripts_fields},
         },
         headers=HEADERS,
@@ -1636,7 +1636,7 @@ async def test_join_transcripts_contacts_with_embeddings(
     resp_d1 = await client.post(
         "/v0/logs/derived",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": transcripts_context,
             "key": "_medium_emb",
             "equation": "embed({lg:medium}, model='text-embedding-3-small')",
@@ -1649,7 +1649,7 @@ async def test_join_transcripts_contacts_with_embeddings(
     resp_d2 = await client.post(
         "/v0/logs/derived",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": contacts_context,
             "key": "_first_name_emb",
             "equation": "embed({lg:first_name}, model='text-embedding-3-small')",
@@ -1660,7 +1660,7 @@ async def test_join_transcripts_contacts_with_embeddings(
     assert resp_d2.status_code == 200, resp_d2.text
 
     join_payload = {
-        "project": project_name,
+        "project_name": project_name,
         "pair_of_args": [
             {"context": transcripts_context},
             {"context": contacts_context},

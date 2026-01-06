@@ -617,7 +617,7 @@ async def test_transfer_preserves_logs_and_contexts(client: AsyncClient, dbsessi
     log_response = await client.post(
         "/v0/logs",
         json={
-            "project": "Logs_Preserve_Project",
+            "project_name": "Logs_Preserve_Project",
             "context": "TestContext",
             "entries": [
                 {"field1": "value1", "field2": 123},
@@ -639,7 +639,7 @@ async def test_transfer_preserves_logs_and_contexts(client: AsyncClient, dbsessi
     # Verify logs exist before transfer
     query_response = await client.post(
         "/v0/logs/query",
-        json={"project": "Logs_Preserve_Project", "context": "TestContext"},
+        json={"project_name": "Logs_Preserve_Project", "context": "TestContext"},
         headers=user["headers"],
     )
     assert query_response.status_code == status.HTTP_200_OK
@@ -664,7 +664,7 @@ async def test_transfer_preserves_logs_and_contexts(client: AsyncClient, dbsessi
     org_headers = {"Authorization": f"Bearer {org_api_key}"}
     query_response_after = await client.post(
         "/v0/logs/query",
-        json={"project": "Logs_Preserve_Project", "context": "TestContext"},
+        json={"project_name": "Logs_Preserve_Project", "context": "TestContext"},
         headers=org_headers,
     )
     assert query_response_after.status_code == status.HTTP_200_OK
@@ -705,7 +705,7 @@ async def test_transfer_preserves_field_types(client: AsyncClient, dbsession):
     log_response = await client.post(
         "/v0/logs",
         json={
-            "project": "FieldTypes_Project",
+            "project_name": "FieldTypes_Project",
             "context": "TypedContext",
             "entries": [
                 {"string_field": "hello", "int_field": 42, "float_field": 3.14},
@@ -784,7 +784,7 @@ async def test_transfer_preserves_interfaces(client: AsyncClient, dbsession):
     interface_response = await client.post(
         "/v0/interfaces/",
         json={
-            "project": "Interfaces_Project",
+            "project_name": "Interfaces_Project",
             "name": "TestInterface",
             "icon": "test-icon",
         },

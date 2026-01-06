@@ -194,7 +194,7 @@ async def test_get_logs_w_timestamp_sorting(client: AsyncClient, use_jsonb_mode)
         response = await client.post(
             "/v0/logs",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "params": {"a/b/param1": f"test_{i}"},
                 "entries": entries,
             },
@@ -273,7 +273,7 @@ async def test_get_logs_w_date_sorting(client: AsyncClient, use_jsonb_mode):
         response = await client.post(
             "/v0/logs",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "params": {"a/b/param1": f"test_{i}"},
                 "entries": entries,
             },

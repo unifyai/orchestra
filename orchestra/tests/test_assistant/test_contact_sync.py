@@ -78,7 +78,7 @@ async def test_user_timezone_sync_updates_contact_log(
 
     # Create a Contact log with email_address and is_system=True
     log_payload = {
-        "project": "Assistants",
+        "project_name": "Assistants",
         "context": "All/Contacts",
         "entries": [
             {
@@ -136,7 +136,7 @@ async def test_user_timezone_sync_to_multiple_projects(
     await client.post(
         "/v0/logs",
         json={
-            "project": "Assistants",
+            "project_name": "Assistants",
             "context": "All/Contacts",
             "entries": [
                 {
@@ -169,7 +169,7 @@ async def test_user_timezone_sync_to_multiple_projects(
     await client.post(
         "/v0/logs",
         json={
-            "project": "Assistants",
+            "project_name": "Assistants",
             "context": "All/Contacts",
             "entries": [
                 {
@@ -249,7 +249,7 @@ async def test_user_timezone_sync_no_matching_logs(
     await client.post(
         "/v0/logs",
         json={
-            "project": "Assistants",
+            "project_name": "Assistants",
             "context": "All/Contacts",
             "entries": [
                 {
@@ -307,7 +307,7 @@ async def test_user_bio_sync_updates_contact_log(
     await client.post(
         "/v0/logs",
         json={
-            "project": "Assistants",
+            "project_name": "Assistants",
             "context": "All/Contacts",
             "entries": [
                 {
@@ -361,7 +361,7 @@ async def test_user_bio_and_timezone_sync_together(
     await client.post(
         "/v0/logs",
         json={
-            "project": "Assistants",
+            "project_name": "Assistants",
             "context": "All/Contacts",
             "entries": [
                 {
@@ -433,7 +433,7 @@ async def test_assistant_timezone_sync_updates_contact_log(
     await client.post(
         "/v0/logs",
         json={
-            "project": "Assistants",
+            "project_name": "Assistants",
             "context": "All/Contacts",
             "entries": [
                 {
@@ -501,7 +501,7 @@ async def test_assistant_timezone_sync_filters_by_contact_id_zero(
     await client.post(
         "/v0/logs",
         json={
-            "project": "Assistants",
+            "project_name": "Assistants",
             "context": "All/Contacts",
             "entries": [
                 {"_assistant": "FilterBot", "contact_id": 0, "timezone": "UTC"},
@@ -567,7 +567,7 @@ async def test_assistant_bio_sync_updates_contact_log(
     await client.post(
         "/v0/logs",
         json={
-            "project": "Assistants",
+            "project_name": "Assistants",
             "context": "All/Contacts",
             "entries": [
                 {"_assistant": "BioBot", "contact_id": 0, "bio": "Original bio"},
@@ -629,7 +629,7 @@ async def test_assistant_bio_and_timezone_sync_together(
     await client.post(
         "/v0/logs",
         json={
-            "project": "Assistants",
+            "project_name": "Assistants",
             "context": "All/Contacts",
             "entries": [
                 {
@@ -723,7 +723,7 @@ async def test_org_assistant_timezone_sync(client: AsyncClient, dbsession: Sessi
     log_create_resp = await client.post(
         "/v0/logs",
         json={
-            "project": "Assistants",
+            "project_name": "Assistants",
             "context": "All/Contacts",
             "entries": [{"_assistant": "OrgBot", "contact_id": 0, "timezone": "UTC"}],
         },
@@ -840,7 +840,7 @@ async def test_org_member_contact_syncs_to_org_assistants_project(
     await client.post(
         "/v0/logs",
         json={
-            "project": "Assistants",
+            "project_name": "Assistants",
             "context": "All/Contacts",
             "entries": [
                 {
@@ -976,7 +976,7 @@ async def test_sync_with_null_name_fields(
     await client.post(
         "/v0/logs",
         json={
-            "project": "Assistants",
+            "project_name": "Assistants",
             "context": "All/Contacts",
             "entries": [
                 {
@@ -1050,7 +1050,7 @@ async def test_sync_sets_null_timezone(
     await client.post(
         "/v0/logs",
         json={
-            "project": "Assistants",
+            "project_name": "Assistants",
             "context": "All/Contacts",
             "entries": [
                 {
@@ -1118,7 +1118,7 @@ async def test_sync_only_affects_is_system_true_logs(
     await client.post(
         "/v0/logs",
         json={
-            "project": "Assistants",
+            "project_name": "Assistants",
             "context": "All/Contacts",
             "entries": [
                 {

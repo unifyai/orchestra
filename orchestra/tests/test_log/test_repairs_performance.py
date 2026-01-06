@@ -78,7 +78,7 @@ async def test_basic_retrieval_1000(
         repairs_jsonb_project,
     )
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "limit": 1000,
     }
@@ -109,7 +109,7 @@ async def test_basic_retrieval_small(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "limit": 50,
     }
@@ -137,7 +137,7 @@ async def test_project_scoped_retrieval(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "limit": 500,
     }
 
@@ -170,7 +170,7 @@ async def test_filter_closed_jobs(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "WorksOrderStatusDescription == 'Closed' and (FirstTimeFix == 'Yes' or WorksOrderPriorityDescription == 'Routine')",
         "limit": 20,
@@ -200,7 +200,7 @@ async def test_filter_issued_jobs(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "WorksOrderStatusDescription == 'Issued' and (WorksOrderPriorityDescription == 'Emergency' or (NoAccess is not None and NoAccess != 'None'))",
         "limit": 20,
@@ -230,7 +230,7 @@ async def test_filter_multiple_statuses(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "(WorksOrderStatusDescription in ['Closed', 'Issued', 'Cancelled']) and (WorksOrderPriorityDescription in ['Emergency', 'Routine']) and (FirstTimeFix == 'Yes' or FollowOn == 'No')",
         "limit": 20,
@@ -260,7 +260,7 @@ async def test_filter_not_closed(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "WorksOrderStatusDescription != 'Closed' and ((WorksOrderPriorityDescription == 'Emergency' or WorksOrderPriorityDescription in ['D&m Stage 1', 'D&m Stage 2']) and (FirstTimeFix == 'No' or FollowOn == 'Yes'))",
         "limit": 20,
@@ -295,7 +295,7 @@ async def test_filter_emergency_jobs(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "WorksOrderPriorityDescription == 'Emergency' and ((WorksOrderStatusDescription == 'Closed' and FirstTimeFix == 'Yes') or (WorksOrderStatusDescription == 'Issued' and (NoAccess is None or NoAccess == 'None')))",
         "limit": 20,
@@ -325,7 +325,7 @@ async def test_filter_routine_jobs(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "WorksOrderPriorityDescription == 'Routine' and ((WorksOrderStatusDescription == 'Closed' and (FirstTimeFix == 'Yes' or SecondTimeFix == 'Yes')) or (WorksOrderStatusDescription == 'Issued' and ArrivedOnSite is not None and ArrivedOnSite != 'NULL'))",
         "limit": 20,
@@ -355,7 +355,7 @@ async def test_filter_damp_mould_priorities(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "(WorksOrderPriorityDescription in ['D&m Stage 1', 'D&m Stage 2', 'D & M Survey']) and (('mould' in WorksOrderDescription or 'damp' in WorksOrderDescription or 'condensation' in WorksOrderDescription) or (WorksOrderStatusDescription == 'Closed' and FollowOn == 'No'))",
         "limit": 20,
@@ -385,7 +385,7 @@ async def test_filter_high_priority_or(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "((WorksOrderPriorityDescription == 'Emergency' or WorksOrderPriorityDescription == 'D&m Stage 1') and ((WorksOrderStatusDescription == 'Closed' and FirstTimeFix == 'Yes') or (WorksOrderStatusDescription == 'Issued' and ArrivedOnSite is not None))) or (WorksOrderPriorityDescription == 'D&m Stage 2' and FollowOn == 'Yes')",
         "limit": 20,
@@ -420,7 +420,7 @@ async def test_filter_first_time_fix_yes(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "FirstTimeFix == 'Yes' and WorksOrderStatusDescription == 'Closed' and FollowOn == 'No' and (ArrivedOnSite is not None and ArrivedOnSite != 'NULL') and (CompletedVisit is not None and CompletedVisit != 'NULL')",
         "limit": 20,
@@ -450,7 +450,7 @@ async def test_filter_failed_first_fix(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "FirstTimeFix == 'No' and ((SecondTimeFix == 'Yes' and WorksOrderStatusDescription == 'Closed') or (FollowOn == 'Yes' and WorksOrderStatusDescription in ['Issued', 'Closed']) or (NoAccess is not None and NoAccess != 'None'))",
         "limit": 20,
@@ -480,7 +480,7 @@ async def test_filter_needs_follow_on(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "FollowOn == 'Yes' and ((WorksOrderPriorityDescription in ['Emergency', 'D&m Stage 1', 'D&m Stage 2'] and WorksOrderStatusDescription != 'Closed') or (FirstTimeFix == 'No' and SecondTimeFix == 'No' and ArrivedOnSite is not None))",
         "limit": 20,
@@ -510,7 +510,7 @@ async def test_filter_second_time_fix(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "SecondTimeFix == 'Yes' and FirstTimeFix == 'No' and WorksOrderStatusDescription == 'Closed' and ((WorksOrderPriorityDescription == 'Routine' and FollowOn == 'No') or (WorksOrderPriorityDescription in ['Emergency', 'D&m Stage 1'] and CompletedVisit is not None))",
         "limit": 20,
@@ -540,7 +540,7 @@ async def test_filter_problematic_jobs(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "FirstTimeFix == 'No' and FollowOn == 'Yes' and ((WorksOrderStatusDescription != 'Closed' and (WorksOrderPriorityDescription == 'Emergency' or WorksOrderPriorityDescription in ['D&m Stage 1', 'D&m Stage 2'])) or (SecondTimeFix == 'No' and ArrivedOnSite is not None and ArrivedOnSite != 'NULL'))",
         "limit": 20,
@@ -575,7 +575,7 @@ async def test_search_electric_jobs(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "('electric' in WorksOrderDescription or 'socket' in WorksOrderDescription or 'wiring' in WorksOrderDescription) and ((WorksOrderPriorityDescription == 'Emergency' and WorksOrderStatusDescription == 'Closed') or (FirstTimeFix == 'Yes' and NoAccess is None))",
         "limit": 20,
@@ -605,7 +605,7 @@ async def test_search_leak_jobs(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "('leak' in WorksOrderDescription or 'leaking' in WorksOrderDescription or 'water damage' in WorksOrderDescription) and ((WorksOrderPriorityDescription == 'Emergency' and ArrivedOnSite is not None and ArrivedOnSite != 'NULL') or (WorksOrderStatusDescription == 'Closed' and FirstTimeFix == 'Yes' and FollowOn == 'No'))",
         "limit": 20,
@@ -635,7 +635,7 @@ async def test_search_door_jobs(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "('door' in WorksOrderDescription or 'lock' in WorksOrderDescription or 'entry' in WorksOrderDescription) and ((WorksOrderPriorityDescription == 'Emergency' and (FirstTimeFix == 'Yes' or SecondTimeFix == 'Yes')) or (WorksOrderPriorityDescription == 'Routine' and WorksOrderStatusDescription == 'Closed' and FollowOn == 'No'))",
         "limit": 20,
@@ -665,7 +665,7 @@ async def test_search_mould_damp_jobs(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "(('mould' in WorksOrderDescription or 'damp' in WorksOrderDescription or 'condensation' in WorksOrderDescription or 'ventilation' in WorksOrderDescription) and (WorksOrderPriorityDescription in ['D&m Stage 1', 'D&m Stage 2', 'D & M Survey'])) or (('black spot' in WorksOrderDescription or 'fungus' in WorksOrderDescription) and WorksOrderStatusDescription != 'Cancelled')",
         "limit": 20,
@@ -695,7 +695,7 @@ async def test_search_plumbing_jobs(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "(('sink' in WorksOrderDescription or 'toilet' in WorksOrderDescription or 'pipe' in WorksOrderDescription or 'tap' in WorksOrderDescription or 'drain' in WorksOrderDescription or 'cistern' in WorksOrderDescription) and ((WorksOrderPriorityDescription == 'Emergency' and (FirstTimeFix == 'Yes' or ArrivedOnSite is not None)) or (WorksOrderPriorityDescription == 'Routine' and WorksOrderStatusDescription == 'Closed'))) or (('blocked' in WorksOrderDescription or 'overflow' in WorksOrderDescription) and FollowOn == 'No')",
         "limit": 20,
@@ -725,7 +725,7 @@ async def test_search_heating_jobs(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "(('heating' in WorksOrderDescription or 'boiler' in WorksOrderDescription or 'radiator' in WorksOrderDescription or 'thermostat' in WorksOrderDescription or 'no hot water' in WorksOrderDescription) and ((WorksOrderPriorityDescription == 'Emergency' and WorksOrderStatusDescription in ['Closed', 'Issued']) or (FirstTimeFix == 'Yes' and CompletedVisit is not None and CompletedVisit != 'NULL'))) or (('gas' in WorksOrderDescription and 'smell' in WorksOrderDescription) and WorksOrderPriorityDescription == 'Emergency')",
         "limit": 20,
@@ -760,7 +760,7 @@ async def test_filter_no_access_issues(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "(NoAccess is not None and NoAccess != 'None') and ((WorksOrderPriorityDescription == 'Emergency' and (WorksOrderStatusDescription == 'Issued' or FollowOn == 'Yes')) or (WorksOrderPriorityDescription == 'Routine' and ArrivedOnSite is not None and FirstTimeFix == 'No') or (NoAccess == 'CUSTOMER NOT AT HOME' and WorksOrderStatusDescription != 'Closed'))",
         "limit": 20,
@@ -790,7 +790,7 @@ async def test_filter_customer_not_home(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "NoAccess == 'CUSTOMER NOT AT HOME' and ((WorksOrderPriorityDescription in ['Emergency', 'D&m Stage 1'] and (FollowOn == 'Yes' or WorksOrderStatusDescription == 'Issued')) or (WorksOrderPriorityDescription == 'Routine' and FirstTimeFix == 'No' and ArrivedOnSite is not None and ArrivedOnSite != 'NULL') or (SecondTimeFix == 'Yes' and WorksOrderStatusDescription == 'Closed'))",
         "limit": 20,
@@ -820,7 +820,7 @@ async def test_filter_successful_access(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "(NoAccess is None or NoAccess == 'None') and ArrivedOnSite is not None and ArrivedOnSite != 'NULL' and ((WorksOrderStatusDescription == 'Closed' and (FirstTimeFix == 'Yes' or SecondTimeFix == 'Yes') and CompletedVisit is not None) or (WorksOrderStatusDescription == 'Issued' and WorksOrderPriorityDescription == 'Emergency' and FollowOn == 'Yes'))",
         "limit": 20,
@@ -855,7 +855,7 @@ async def test_filter_arrived_on_site(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "(ArrivedOnSite is not None and ArrivedOnSite != 'NULL') and ((WorksOrderStatusDescription == 'Closed' and FirstTimeFix == 'Yes' and (NoAccess is None or NoAccess == 'None')) or (WorksOrderPriorityDescription == 'Emergency' and (CompletedVisit is not None and CompletedVisit != 'NULL')) or (WorksOrderPriorityDescription in ['D&m Stage 1', 'D&m Stage 2'] and FollowOn == 'Yes'))",
         "limit": 20,
@@ -885,7 +885,7 @@ async def test_filter_completed_visits(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "(CompletedVisit is not None and CompletedVisit != 'NULL') and ArrivedOnSite is not None and ((WorksOrderStatusDescription == 'Closed' and (FirstTimeFix == 'Yes' or SecondTimeFix == 'Yes') and FollowOn == 'No') or (WorksOrderPriorityDescription == 'Emergency' and NoAccess is None and FirstTimeFix == 'Yes') or (WorksOrderPriorityDescription in ['Routine', 'D&m Stage 1'] and WorksOrderStatusDescription == 'Closed'))",
         "limit": 20,
@@ -915,7 +915,7 @@ async def test_filter_date_range_september(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "(WorksOrderRaisedDate >= '2025-09-01' and WorksOrderRaisedDate < '2025-10-01') and ((WorksOrderPriorityDescription == 'Emergency' and (WorksOrderStatusDescription == 'Closed' or ArrivedOnSite is not None)) or (WorksOrderPriorityDescription == 'Routine' and FirstTimeFix == 'Yes' and FollowOn == 'No') or (WorksOrderPriorityDescription in ['D&m Stage 1', 'D&m Stage 2'] and CompletedVisit is not None))",
         "limit": 20,
@@ -945,7 +945,7 @@ async def test_filter_jobs_not_started(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "(ArrivedOnSite is None or ArrivedOnSite == 'NULL') and WorksOrderStatusDescription == 'Issued' and ((WorksOrderPriorityDescription == 'Emergency' and (NoAccess is None or NoAccess == 'None')) or (WorksOrderPriorityDescription in ['D&m Stage 1', 'D&m Stage 2'] and ('mould' in WorksOrderDescription or 'damp' in WorksOrderDescription)) or (WorksOrderPriorityDescription == 'Routine' and FollowOn == 'No'))",
         "limit": 20,
@@ -980,7 +980,7 @@ async def test_filter_specific_operative(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "OperativeName == 'Adrian Hall' and ((WorksOrderStatusDescription == 'Closed' and FirstTimeFix == 'Yes' and FollowOn == 'No') or (WorksOrderPriorityDescription == 'Emergency' and ArrivedOnSite is not None and ArrivedOnSite != 'NULL') or (OperativeName == OperativeWhoCompletedJob and CompletedVisit is not None))",
         "limit": 20,
@@ -1010,7 +1010,7 @@ async def test_filter_multiple_operatives(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "(OperativeName in ['Adrian Hall', 'Gary Simmons', 'Robert Barker', 'Andrew Cherrington']) and ((FirstTimeFix == 'Yes' and WorksOrderStatusDescription == 'Closed' and FollowOn == 'No') or (WorksOrderPriorityDescription == 'Emergency' and (ArrivedOnSite is not None or NoAccess is not None)) or (OperativeName != OperativeWhoCompletedJob and SecondTimeFix == 'Yes'))",
         "limit": 20,
@@ -1040,7 +1040,7 @@ async def test_filter_operative_completed_job(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "OperativeName != OperativeWhoCompletedJob and ((WorksOrderStatusDescription == 'Closed' and (FirstTimeFix == 'No' or SecondTimeFix == 'Yes')) or (WorksOrderPriorityDescription == 'Emergency' and ArrivedOnSite is not None and CompletedVisit is not None) or (FollowOn == 'Yes' and NoAccess is None and WorksOrderStatusDescription in ['Closed', 'Issued']))",
         "limit": 20,
@@ -1075,7 +1075,7 @@ async def test_filter_scheme_startswith(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "(SchemeName.startswith('COCHRANE') or SchemeName.startswith('ASHFORD')) and ((WorksOrderStatusDescription == 'Closed' and FirstTimeFix == 'Yes') or (WorksOrderPriorityDescription == 'Emergency' and ArrivedOnSite is not None and ArrivedOnSite != 'NULL') or (WorksOrderPriorityDescription in ['D&m Stage 1', 'D&m Stage 2'] and ('mould' in WorksOrderDescription or 'damp' in WorksOrderDescription)))",
         "limit": 20,
@@ -1105,7 +1105,7 @@ async def test_filter_scheme_contains(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "(('SPEC ACCOM' in SchemeName or 'SHELTERED' in SchemeName or 'ELDERLY' in SchemeName) and ((WorksOrderPriorityDescription == 'Emergency' and FirstTimeFix == 'Yes') or (WorksOrderStatusDescription == 'Closed' and FollowOn == 'No' and CompletedVisit is not None))) or (('VULNERABLE' in SchemeName or 'SUPPORT' in SchemeName) and ArrivedOnSite is not None and NoAccess is None)",
         "limit": 20,
@@ -1140,7 +1140,7 @@ async def test_complex_successful_emergency_repairs(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "WorksOrderPriorityDescription == 'Emergency' and FirstTimeFix == 'Yes' and WorksOrderStatusDescription == 'Closed' and FollowOn == 'No' and (NoAccess is None or NoAccess == 'None') and ArrivedOnSite is not None and ArrivedOnSite != 'NULL' and CompletedVisit is not None and CompletedVisit != 'NULL' and OperativeName == OperativeWhoCompletedJob",
         "limit": 20,
@@ -1170,7 +1170,7 @@ async def test_complex_failed_routine_repairs(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "WorksOrderPriorityDescription == 'Routine' and FirstTimeFix == 'No' and FollowOn == 'Yes' and ((SecondTimeFix == 'Yes' and WorksOrderStatusDescription == 'Closed' and CompletedVisit is not None) or (SecondTimeFix == 'No' and WorksOrderStatusDescription == 'Issued' and ArrivedOnSite is not None) or (NoAccess is not None and NoAccess != 'None' and OperativeName != OperativeWhoCompletedJob))",
         "limit": 20,
@@ -1200,7 +1200,7 @@ async def test_complex_emergency_leak_repairs(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "WorksOrderPriorityDescription == 'Emergency' and ('leak' in WorksOrderDescription or 'burst' in WorksOrderDescription or 'flooding' in WorksOrderDescription) and ((FirstTimeFix == 'Yes' and WorksOrderStatusDescription == 'Closed' and NoAccess is None and ArrivedOnSite is not None) or (FirstTimeFix == 'No' and FollowOn == 'Yes' and SecondTimeFix == 'Yes') or (WorksOrderStatusDescription == 'Issued' and ArrivedOnSite is not None and CompletedVisit is None))",
         "limit": 20,
@@ -1230,7 +1230,7 @@ async def test_complex_damp_mould_investigation(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "(WorksOrderPriorityDescription in ['D&m Stage 1', 'D&m Stage 2', 'D & M Survey'] and ('mould' in WorksOrderDescription or 'damp' in WorksOrderDescription or 'condensation' in WorksOrderDescription or 'ventilation' in WorksOrderDescription)) and ((WorksOrderStatusDescription == 'Closed' and (FirstTimeFix == 'Yes' or (FollowOn == 'Yes' and SecondTimeFix == 'Yes'))) or (WorksOrderStatusDescription == 'Issued' and ArrivedOnSite is not None and NoAccess is None) or (CompletedVisit is not None and OperativeName == OperativeWhoCompletedJob))",
         "limit": 20,
@@ -1260,7 +1260,7 @@ async def test_complex_access_denied_emergency(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "WorksOrderPriorityDescription == 'Emergency' and NoAccess is not None and NoAccess != 'None' and ((FollowOn == 'Yes' and (SecondTimeFix == 'Yes' or WorksOrderStatusDescription == 'Issued')) or (NoAccess == 'CUSTOMER NOT AT HOME' and ArrivedOnSite is not None) or (WorksOrderStatusDescription == 'Closed' and OperativeName != OperativeWhoCompletedJob))",
         "limit": 20,
@@ -1290,7 +1290,7 @@ async def test_complex_pending_high_priority(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "WorksOrderStatusDescription == 'Issued' and ((WorksOrderPriorityDescription == 'Emergency' and (NoAccess is None or NoAccess == 'None') and (ArrivedOnSite is None or ArrivedOnSite == 'NULL')) or (WorksOrderPriorityDescription in ['D&m Stage 1', 'D&m Stage 2'] and ('mould' in WorksOrderDescription or 'damp' in WorksOrderDescription)) or (FollowOn == 'Yes' and FirstTimeFix == 'No' and SecondTimeFix == 'No'))",
         "limit": 20,
@@ -1320,7 +1320,7 @@ async def test_complex_multiple_visit_analysis(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "FirstTimeFix == 'No' and SecondTimeFix == 'No' and FollowOn == 'Yes' and ((WorksOrderPriorityDescription in ['Emergency', 'D&m Stage 1'] and WorksOrderStatusDescription != 'Cancelled') or (OperativeName != OperativeWhoCompletedJob and ArrivedOnSite is not None and CompletedVisit is not None) or (NoAccess is not None and NoAccess != 'None' and WorksOrderStatusDescription == 'Issued'))",
         "limit": 20,
@@ -1350,7 +1350,7 @@ async def test_complex_electrical_emergency_closed(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "WorksOrderPriorityDescription == 'Emergency' and ('electric' in WorksOrderDescription or 'socket' in WorksOrderDescription or 'power' in WorksOrderDescription or 'wiring' in WorksOrderDescription) and WorksOrderStatusDescription == 'Closed' and FirstTimeFix == 'Yes' and FollowOn == 'No' and (NoAccess is None or NoAccess == 'None') and ArrivedOnSite is not None and ArrivedOnSite != 'NULL' and CompletedVisit is not None and OperativeName == OperativeWhoCompletedJob",
         "limit": 20,
@@ -1385,7 +1385,7 @@ async def test_sort_by_row_id_desc(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "sorting": json.dumps({"row_id": "descending"}),
         "limit": 500,
@@ -1415,7 +1415,7 @@ async def test_sort_by_raised_date_desc(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "sorting": json.dumps({"WorksOrderRaisedDate": "descending"}),
         "limit": 500,
@@ -1445,7 +1445,7 @@ async def test_sort_by_operative_name_asc(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "sorting": json.dumps({"OperativeName": "ascending"}),
         "limit": 500,
@@ -1475,7 +1475,7 @@ async def test_sort_multi_field(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "sorting": json.dumps(
             {
@@ -1510,7 +1510,7 @@ async def test_sort_filtered_results(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "WorksOrderPriorityDescription == 'Emergency'",
         "sorting": json.dumps({"WorksOrderRaisedDate": "descending"}),
@@ -1541,7 +1541,7 @@ async def test_sort_by_scheme_name(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "sorting": json.dumps({"SchemeName": "ascending"}),
         "limit": 500,
@@ -1579,7 +1579,7 @@ async def test_sort_by_cosine_leak_similarity(
     sort_expr = "cosine(_WorksOrderDescription_emb, embed('water leak under kitchen sink pipes dripping', model='text-embedding-3-small'))"
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "_WorksOrderDescription_emb is not None",
         "sorting": json.dumps({sort_expr: "descending"}),
@@ -1612,7 +1612,7 @@ async def test_sort_by_cosine_electrical_similarity(
     sort_expr = "cosine(_WorksOrderDescription_emb, embed('electrical socket not working power outlet faulty', model='text-embedding-3-small'))"
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "_WorksOrderDescription_emb is not None",
         "sorting": json.dumps({sort_expr: "descending"}),
@@ -1645,7 +1645,7 @@ async def test_sort_by_cosine_mould_similarity(
     sort_expr = "cosine(_WorksOrderDescription_emb, embed('black mould on bathroom ceiling damp condensation', model='text-embedding-3-small'))"
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "_WorksOrderDescription_emb is not None",
         "sorting": json.dumps({sort_expr: "descending"}),
@@ -1681,7 +1681,7 @@ async def test_pagination_first_page(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "limit": 100,
         "offset": 0,
@@ -1711,7 +1711,7 @@ async def test_pagination_deep_offset(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "limit": 100,
         "offset": 5000,
@@ -1741,7 +1741,7 @@ async def test_pagination_with_filter_and_sort(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "filter_expr": "WorksOrderStatusDescription == 'Closed'",
         "sorting": json.dumps({"WorksOrderRaisedDate": "descending"}),
@@ -1778,7 +1778,7 @@ async def test_fields_listing(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
     }
 
@@ -1813,7 +1813,7 @@ async def test_grouped_metric_count_by_status(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "key": "row_id",
         "group_by": "entries/WorksOrderStatusDescription",
@@ -1847,7 +1847,7 @@ async def test_grouped_metric_count_by_priority(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "key": "row_id",
         "group_by": "entries/WorksOrderPriorityDescription",
@@ -1881,7 +1881,7 @@ async def test_grouped_metric_mean_by_status(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "key": "row_id",
         "group_by": "entries/WorksOrderStatusDescription",
@@ -1916,7 +1916,7 @@ async def test_grouped_metric_min_max_by_priority(
 
     # Test min metric
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "key": "row_id",
         "group_by": "entries/WorksOrderPriorityDescription",
@@ -1950,7 +1950,7 @@ async def test_grouped_metric_multi_level(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "key": "row_id",
         "group_by": json.dumps(
@@ -1989,7 +1989,7 @@ async def test_grouped_metric_with_filter(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "key": "row_id",
         "group_by": "entries/WorksOrderStatusDescription",
@@ -2024,7 +2024,7 @@ async def test_grouped_metric_by_operative(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "key": "row_id",
         "group_by": "entries/OperativeName",
@@ -2063,7 +2063,7 @@ async def test_group_logs_by_status(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/WorksOrderStatusDescription"]),
         "limit": 100,
@@ -2093,7 +2093,7 @@ async def test_group_logs_by_priority(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/WorksOrderPriorityDescription"]),
         "limit": 100,
@@ -2123,7 +2123,7 @@ async def test_group_logs_by_first_time_fix(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/FirstTimeFix"]),
         "limit": 100,
@@ -2153,7 +2153,7 @@ async def test_group_logs_by_operative(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/OperativeName"]),
         "limit": 50,
@@ -2183,7 +2183,7 @@ async def test_group_logs_by_follow_on(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/FollowOn"]),
         "limit": 100,
@@ -2213,7 +2213,7 @@ async def test_group_logs_by_second_time_fix(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/SecondTimeFix"]),
         "limit": 100,
@@ -2248,7 +2248,7 @@ async def test_multi_level_group_status_priority(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(
             [
@@ -2283,7 +2283,7 @@ async def test_multi_level_group_status_firstfix(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(
             ["entries/WorksOrderStatusDescription", "entries/FirstTimeFix"],
@@ -2315,7 +2315,7 @@ async def test_multi_level_group_priority_followon(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(
             ["entries/WorksOrderPriorityDescription", "entries/FollowOn"],
@@ -2347,7 +2347,7 @@ async def test_multi_level_group_three_levels(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(
             [
@@ -2383,7 +2383,7 @@ async def test_multi_level_group_fix_outcome(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/FirstTimeFix", "entries/SecondTimeFix"]),
         "limit": 50,
@@ -2418,7 +2418,7 @@ async def test_group_pagination_first_page(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/WorksOrderPriorityDescription"]),
         "group_offset": 0,
@@ -2450,7 +2450,7 @@ async def test_group_pagination_second_page(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/WorksOrderPriorityDescription"]),
         "group_offset": 3,
@@ -2482,7 +2482,7 @@ async def test_group_pagination_operative_groups(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/OperativeName"]),
         "group_offset": 0,
@@ -2514,7 +2514,7 @@ async def test_group_pagination_deep_offset(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/OperativeName"]),
         "group_offset": 50,
@@ -2551,7 +2551,7 @@ async def test_group_depth_zero(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(
             [
@@ -2586,7 +2586,7 @@ async def test_group_depth_one(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(
             [
@@ -2621,7 +2621,7 @@ async def test_group_depth_two(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(
             [
@@ -2658,7 +2658,7 @@ async def test_group_depth_full(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(
             [
@@ -2708,7 +2708,7 @@ async def test_group_sorting_by_count_desc(
     }
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/WorksOrderStatusDescription"]),
         "group_sorting": json.dumps(group_sorting),
@@ -2747,7 +2747,7 @@ async def test_group_sorting_by_count_asc(
     }
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/WorksOrderPriorityDescription"]),
         "group_sorting": json.dumps(group_sorting),
@@ -2786,7 +2786,7 @@ async def test_group_sorting_by_mean_row_id(
     }
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/WorksOrderStatusDescription"]),
         "group_sorting": json.dumps(group_sorting),
@@ -2830,7 +2830,7 @@ async def test_group_sorting_multi_level(
     }
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(
             [
@@ -2874,7 +2874,7 @@ async def test_group_sorting_operative_by_jobs(
     }
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/OperativeName"]),
         "group_sorting": json.dumps(group_sorting),
@@ -2911,7 +2911,7 @@ async def test_sorting_within_groups_by_row_id(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/WorksOrderStatusDescription"]),
         "sorting": json.dumps({"row_id": "descending"}),
@@ -2942,7 +2942,7 @@ async def test_sorting_within_groups_by_date(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/WorksOrderPriorityDescription"]),
         "sorting": json.dumps({"WorksOrderRaisedDate": "ascending"}),
@@ -2973,7 +2973,7 @@ async def test_sorting_within_groups_by_operative(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/WorksOrderStatusDescription"]),
         "sorting": json.dumps({"OperativeName": "ascending"}),
@@ -3012,7 +3012,7 @@ async def test_sorting_and_group_sorting_combined(
     }
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/WorksOrderStatusDescription"]),
         "group_sorting": json.dumps(group_sorting),
@@ -3049,7 +3049,7 @@ async def test_group_with_status_filter(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/WorksOrderPriorityDescription"]),
         "filter_expr": "WorksOrderStatusDescription == 'Closed'",
@@ -3080,7 +3080,7 @@ async def test_group_with_first_time_fix_filter(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/WorksOrderStatusDescription"]),
         "filter_expr": "FirstTimeFix == 'Yes'",
@@ -3111,7 +3111,7 @@ async def test_group_with_complex_filter(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/OperativeName"]),
         "filter_expr": "WorksOrderPriorityDescription == 'Emergency' and WorksOrderStatusDescription == 'Closed' and FirstTimeFix == 'Yes'",
@@ -3142,7 +3142,7 @@ async def test_group_with_substring_filter(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/WorksOrderStatusDescription"]),
         "filter_expr": "'leak' in WorksOrderDescription",
@@ -3181,7 +3181,7 @@ async def test_group_with_multi_filter_and_sort(
     }
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/WorksOrderPriorityDescription"]),
         "filter_expr": "WorksOrderStatusDescription == 'Closed'",
@@ -3214,7 +3214,7 @@ async def test_group_multi_level_with_filter(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(
             [
@@ -3255,7 +3255,7 @@ async def test_groups_only_by_status(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/WorksOrderStatusDescription"]),
         "groups_only": "true",
@@ -3285,7 +3285,7 @@ async def test_groups_only_by_priority(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/WorksOrderPriorityDescription"]),
         "groups_only": "true",
@@ -3315,7 +3315,7 @@ async def test_groups_only_with_timestamps(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(["entries/WorksOrderStatusDescription"]),
         "groups_only": "true",
@@ -3346,7 +3346,7 @@ async def test_groups_only_multi_level(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "group_by": json.dumps(
             [
@@ -3386,7 +3386,7 @@ async def test_metric_sum_row_id(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "key": "row_id",
     }
@@ -3419,7 +3419,7 @@ async def test_metric_mean_row_id(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "key": "row_id",
     }
@@ -3452,7 +3452,7 @@ async def test_metric_min_row_id(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "key": "row_id",
     }
@@ -3485,7 +3485,7 @@ async def test_metric_max_row_id(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "key": "row_id",
     }
@@ -3518,7 +3518,7 @@ async def test_metric_median_row_id(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "key": "row_id",
     }
@@ -3551,7 +3551,7 @@ async def test_metric_std_row_id(
     )
 
     params = {
-        "project": project,
+        "project_name": project,
         "context": repairs_context,
         "key": "row_id",
     }

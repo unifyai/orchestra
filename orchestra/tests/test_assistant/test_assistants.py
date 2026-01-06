@@ -1199,7 +1199,7 @@ async def test_delete_assistant_deletes_contexts(
     # The "Assistants" project is created automatically on first assistant creation
     # Create a log with _user and _assistant fields in the user/assistant context
     log_payload = {
-        "project": project_name,
+        "project_name": project_name,
         "context": user_assistant_context,
         "entries": [
             {

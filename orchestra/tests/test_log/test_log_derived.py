@@ -73,7 +73,7 @@ async def test_derived_over_nested_containers(client: AsyncClient, use_jsonb_mod
 
     resp = await client.get(
         "/v0/logs",
-        params={"project": project, "from_ids": str(log_id)},
+        params={"project_name": project, "from_ids": str(log_id)},
         headers=HEADERS,
     )
     assert resp.status_code == 200
@@ -105,7 +105,7 @@ async def test_derived_creation_batched_counts_not_cumulative(
         ]
         resp = await client.post(
             "/v0/logs",
-            json={"project": project_name, "entries": entries},
+            json={"project_name": project_name, "entries": entries},
             headers=HEADERS,
         )
         assert resp.status_code == 200, resp.text
@@ -172,7 +172,7 @@ async def test_update_derived_entry_with_referenced_logs(
     for temp in temps:
         resp = await client.post(
             "/v0/logs",
-            json={"project": project_name, "entries": {"temperature": temp}},
+            json={"project_name": project_name, "entries": {"temperature": temp}},
             headers=HEADERS,
         )
         assert resp.status_code == 200
@@ -215,7 +215,7 @@ async def test_update_derived_entry_with_referenced_logs(
     resp = await client.put(
         "/v0/logs/derived",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "target_derived_logs": {"from_fields": "temp_plus_10"},
             "key": "temp_plus_10",
             "equation": "{t:temperature} + 20",  # Modified equation
@@ -259,7 +259,7 @@ async def test_update_derived_entry_with_filter(client: AsyncClient, use_jsonb_m
     for temp in temps:
         resp = await client.post(
             "/v0/logs",
-            json={"project": project_name, "entries": {"temperature": temp}},
+            json={"project_name": project_name, "entries": {"temperature": temp}},
             headers=HEADERS,
         )
         assert resp.status_code == 200
@@ -294,7 +294,7 @@ async def test_update_derived_entry_with_filter(client: AsyncClient, use_jsonb_m
     resp = await client.put(
         "/v0/logs/derived",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "target_derived_logs": {"from_fields": "temp_plus_10"},
             "key": "temp_plus_10",
             "equation": "{t:temperature} * 3",
@@ -400,7 +400,7 @@ async def test_get_logs_including_derived(client: AsyncClient, use_jsonb_mode):
     # 4) Test retrieving logs *without* any filtering or sorting
     resp = await client.get(
         "/v0/logs",
-        params={"project": project_name},
+        params={"project_name": project_name},
         headers=HEADERS,
     )
     assert resp.status_code == 200, resp.json()
@@ -424,7 +424,7 @@ async def test_get_logs_including_derived(client: AsyncClient, use_jsonb_mode):
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "column_context": "_/",
         },
         headers=HEADERS,
@@ -442,7 +442,7 @@ async def test_get_logs_including_derived(client: AsyncClient, use_jsonb_mode):
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": filter_expr,
         },
         headers=HEADERS,
@@ -463,7 +463,7 @@ async def test_get_logs_including_derived(client: AsyncClient, use_jsonb_mode):
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "exclude_ids": "3",
         },
         headers=HEADERS,
@@ -480,7 +480,7 @@ async def test_get_logs_including_derived(client: AsyncClient, use_jsonb_mode):
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "sorting": sorting_param,
         },
         headers=HEADERS,
@@ -546,7 +546,7 @@ async def test_update_logs_and_derived_logs_are_updated(
 
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name},
+        params={"project_name": project_name},
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -704,7 +704,7 @@ async def test_derived_entry_datetime_arithmetic(client: AsyncClient, use_jsonb_
     for log_data in logs_data:
         response = await client.post(
             "/v0/logs",
-            json={"project": project_name, "entries": log_data["entries"]},
+            json={"project_name": project_name, "entries": log_data["entries"]},
             headers=HEADERS,
         )
         assert response.status_code == 200, response.text
@@ -893,7 +893,7 @@ async def test_derived_entry_datetime_arithmetic(client: AsyncClient, use_jsonb_
     response = await client.put(
         "/v0/logs/derived",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "target_derived_logs": {"from_fields": "timestamp_plus_1hour"},
             "equation": "{log:dt/timestamp} + 'PT2H'",  # Change from +1h to +2h
             "referenced_logs": {"log": [log_ids[0]]},
@@ -1171,7 +1171,7 @@ async def test_create_static_entries_with_flag(client: AsyncClient, use_jsonb_mo
     response = await client.post(
         "/v0/logs/derived",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "key": key,
             "equation": equation,
             "referenced_logs": referenced_logs,
@@ -1443,7 +1443,7 @@ async def test_derived_embedding_and_filtering(client: AsyncClient, use_jsonb_mo
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project,
+            "project_name": project,
             "filter_expr": filter_expr,
         },
         headers=HEADERS,
@@ -1548,7 +1548,7 @@ async def test_derived_image_embedding_and_filtering(
     fetch_response = await client.get(
         "/v0/logs",
         params={
-            "project": project,
+            "project_name": project,
             "context": context,
             "from_fields": "screenshot_embedding",
         },
@@ -1592,7 +1592,7 @@ async def test_derived_image_embedding_and_filtering(
     query_response = await client.post(
         "/v0/logs/query",
         json={
-            "project": project,
+            "project_name": project,
             "context": context,
             "filter_expr": filter_expr,
             "sorting": sorting,  # Sort by similarity
@@ -1784,7 +1784,7 @@ async def test_create_static_entries_with_correct_id_alignment(
     response = await client.post(
         "/v0/logs/derived",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "key": key,
             "equation": equation,
             "referenced_logs": referenced_logs,
@@ -1936,7 +1936,7 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project,
+            "project_name": project,
             "filter_expr": filter_expr,
         },
         headers=HEADERS,
@@ -1966,7 +1966,7 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project,
+            "project_name": project,
             "filter_expr": filter_expr_strict,
         },
         headers=HEADERS,
@@ -2180,7 +2180,7 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient, use_jsonb_mode):
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "context": context_name,
             "filter_expr": "type == 'animal'",  # Filter down to relevant images first
             "sorting": f'{{"{sorting_expression}": "ascending"}}',  # Sort by distance
@@ -2280,7 +2280,7 @@ async def test_phash_distance_with_raw_image_literal(
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "context": context_name,
             "filter_expr": filter_expr,
         },
@@ -2541,7 +2541,7 @@ async def test_referenced_keys_updated_on_template_update(
     response = await client.put(
         "/v0/logs/derived",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "target_derived_logs": {"from_fields": "computed"},
             "key": "computed",
             "equation": updated_equation,
@@ -2853,7 +2853,7 @@ async def test_derived_embedding_filtering_and_sorting_jsonb(
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": filter_expr,
         },
         headers=HEADERS,
@@ -2884,7 +2884,7 @@ async def test_derived_embedding_filtering_and_sorting_jsonb(
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "sorting": sorting,
         },
         headers=HEADERS,
@@ -2915,7 +2915,7 @@ async def test_derived_embedding_filtering_and_sorting_jsonb(
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": filter_expr_animals,
             "sorting": sorting_dog,
         },
@@ -2939,7 +2939,7 @@ async def test_derived_embedding_filtering_and_sorting_jsonb(
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "sorting": sorting_desc,
         },
         headers=HEADERS,
@@ -3039,7 +3039,7 @@ async def test_update_derived_entry_both_modes(client: AsyncClient, use_jsonb_mo
     response = await client.put(
         "/v0/logs/derived",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "target_derived_logs": {"from_fields": key},
             "key": key,
             "equation": "{log:num} * 3",  # Changed multiplier

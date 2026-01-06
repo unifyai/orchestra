@@ -640,7 +640,7 @@ async def test_get_logs_metric_batched_with_grouping(
     response = await client.get(
         "/v0/logs/metric/mean",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "key": json.dumps(["_/temperature", "derived_temp", "state_len"]),
             "group_by": "entries/_/state",
         },
@@ -711,7 +711,7 @@ async def test_get_logs_metric_batched_with_grouping(
     response = await client.get(
         "/v0/logs/metric/mean",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "key": json.dumps(["_/temperature", "derived_temp"]),
             "group_by": json.dumps(["entries/_/state", "entries/_/safe"]),
         },
@@ -1792,7 +1792,7 @@ async def test_metrics_count_matches_rows_and_resets_on_context_delete(
         resp = await client.post(
             "/v0/logs/fields",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "context": ctx,
                 "fields": {
                     "row_id": {"type": "int"},
@@ -1840,7 +1840,7 @@ async def test_metrics_count_matches_rows_and_resets_on_context_delete(
         resp = await client.get(
             "/v0/logs/metric/count",
             params={
-                "project": project_name,
+                "project_name": project_name,
                 "key": "row_id",
                 "context": ctx,
             },
@@ -1863,7 +1863,7 @@ async def test_metrics_count_matches_rows_and_resets_on_context_delete(
         # 4) Verify get_logs(...) returns 3 rows and metric count == 3
         rows_resp = await client.get(
             "/v0/logs",
-            params={"project": project_name, "context": ctx},
+            params={"project_name": project_name, "context": ctx},
             headers=HEADERS,
         )
         assert rows_resp.status_code == 200, rows_resp.text
@@ -1872,7 +1872,7 @@ async def test_metrics_count_matches_rows_and_resets_on_context_delete(
         metric_resp = await client.get(
             "/v0/logs/metric/count",
             params={
-                "project": project_name,
+                "project_name": project_name,
                 "key": "row_id",
                 "context": ctx,
             },
@@ -1898,7 +1898,7 @@ async def test_metrics_count_matches_rows_and_resets_on_context_delete(
         metric_reset_resp = await client.get(
             "/v0/logs/metric/count",
             params={
-                "project": project_name,
+                "project_name": project_name,
                 "key": "row_id",
                 "context": ctx,
             },
@@ -1956,7 +1956,7 @@ async def test_metrics_max_matches_row_ids_and_resets_on_context_delete(
         resp = await client.post(
             "/v0/logs/fields",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "context": ctx,
                 "fields": {
                     "row_id": {"type": "int"},
@@ -2002,7 +2002,7 @@ async def test_metrics_max_matches_row_ids_and_resets_on_context_delete(
         resp = await client.get(
             "/v0/logs/metric/max",
             params={
-                "project": project_name,
+                "project_name": project_name,
                 "key": "row_id",
                 "context": ctx,
             },
@@ -2034,7 +2034,7 @@ async def test_metrics_max_matches_row_ids_and_resets_on_context_delete(
         # Read back the rows and compute max(row_id)
         rows_resp = await client.get(
             "/v0/logs",
-            params={"project": project_name, "context": ctx},
+            params={"project_name": project_name, "context": ctx},
             headers=HEADERS,
         )
         assert rows_resp.status_code == 200, rows_resp.text
@@ -2059,7 +2059,7 @@ async def test_metrics_max_matches_row_ids_and_resets_on_context_delete(
         metric_resp = await client.get(
             "/v0/logs/metric/max",
             params={
-                "project": project_name,
+                "project_name": project_name,
                 "key": "row_id",
                 "context": ctx,
             },
@@ -2084,7 +2084,7 @@ async def test_metrics_max_matches_row_ids_and_resets_on_context_delete(
         metric_reset_resp = await client.get(
             "/v0/logs/metric/max",
             params={
-                "project": project_name,
+                "project_name": project_name,
                 "key": "row_id",
                 "context": ctx,
             },
