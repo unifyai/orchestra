@@ -19,6 +19,7 @@ from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 from opentelemetry.trace import get_tracer_provider, set_tracer_provider
 from sqlalchemy import create_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from orchestra.db.dao.context_dao import ContextDAO
@@ -29,6 +30,7 @@ logger = logging.getLogger(__name__)
 
 # Global variable to store the engine instance
 _engine = None
+_async_engine = None
 
 # Track if OTel TracerProvider has been initialized (for idempotent setup)
 # This allows setup_opentelemetry to be called multiple times (e.g., in tests)
@@ -46,7 +48,7 @@ def _setup_db(app: FastAPI) -> None:  # pragma: no cover
 
     :param app: fastAPI application.
     """
-    global _engine
+    global _engine, _async_engine
 
     # Use standard SQLAlchemy connection if not using Cloud SQL
     if not settings.use_cloud_sql:
@@ -55,6 +57,26 @@ def _setup_db(app: FastAPI) -> None:  # pragma: no cover
             echo=settings.db_echo,
             pool_size=50,
             max_overflow=100,  # noqa: WPS432, E501
+            pool_pre_ping=True,
+        )
+
+        # Create async engine with asyncpg driver
+        async_db_url = (
+            str(settings.db_url)
+            .replace(
+                "postgresql://",
+                "postgresql+asyncpg://",
+            )
+            .replace(
+                "postgresql+psycopg2://",
+                "postgresql+asyncpg://",
+            )
+        )
+        async_engine = create_async_engine(
+            async_db_url,
+            echo=settings.db_echo,
+            pool_size=50,
+            max_overflow=100,
             pool_pre_ping=True,
         )
     else:
@@ -90,17 +112,41 @@ def _setup_db(app: FastAPI) -> None:  # pragma: no cover
             creator=get_conn,
         )
 
+        # For Cloud SQL async, use asyncpg with IAM auth
+        async def get_async_conn():
+            return await connector.connect_async(
+                instance_connection_name,
+                "asyncpg",
+                user=db_user,
+                password=db_pass,
+                db=db_name,
+            )
+
+        async_engine = create_async_engine(
+            "postgresql+asyncpg://",
+            async_creator=get_async_conn,
+        )
+
     session_factory = sessionmaker(
         engine,
+        expire_on_commit=False,
+    )
+
+    async_session_factory = async_sessionmaker(
+        async_engine,
+        class_=AsyncSession,
         expire_on_commit=False,
     )
 
     # Store engine and session_factory in app state
     app.state.db_engine = engine
     app.state.db_session_factory = session_factory
+    app.state.async_db_engine = async_engine
+    app.state.async_session_factory = async_session_factory
 
     # Store engine in global variable for access from other modules
     _engine = engine
+    _async_engine = async_engine
 
 
 def get_engine():
@@ -119,6 +165,24 @@ def get_engine():
         raise RuntimeError("Database engine not initialized")
 
     return _engine
+
+
+def get_async_engine():
+    """
+    Get the async SQLAlchemy engine.
+
+    This function returns the global async engine instance that was created
+    during application startup.
+
+    Returns:
+        The async SQLAlchemy engine instance.
+    """
+    global _async_engine
+
+    if _async_engine is None:
+        raise RuntimeError("Async database engine not initialized")
+
+    return _async_engine
 
 
 def _create_tracer_provider() -> TracerProvider:
@@ -497,8 +561,12 @@ def register_shutdown_event(
     """
 
     @app.on_event("shutdown")
-    def _shutdown() -> None:  # noqa: WPS430
+    async def _shutdown() -> None:  # noqa: WPS430
         app.state.db_engine.dispose()
+
+        # Dispose async engine
+        if hasattr(app.state, "async_db_engine") and app.state.async_db_engine:
+            await app.state.async_db_engine.dispose()
 
         stop_opentelemetry(app)
         pass  # noqa: WPS420

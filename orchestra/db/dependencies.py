@@ -4,11 +4,12 @@ import logging
 import re
 import time
 from collections import defaultdict
-from typing import Any, Dict, Generator
+from typing import Any, AsyncGenerator, Dict, Generator
 
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind
 from sqlalchemy import event
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
@@ -437,6 +438,25 @@ def get_db_session(request: Request) -> Generator[Session, None, None]:
         raise e
     finally:
         session.close()
+
+
+async def get_async_db_session(
+    request: Request,
+) -> AsyncGenerator[AsyncSession, None]:
+    """
+    Create and get async database session.
+
+    :param request: current request.
+    :yield: async database session.
+    """
+    async_session_factory = request.app.state.async_session_factory
+    async with async_session_factory() as session:
+        try:
+            yield session
+            await session.commit()
+        except Exception as e:
+            await session.rollback()
+            raise e
 
 
 def _fingerprint_query(statement: str) -> str:
