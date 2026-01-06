@@ -507,7 +507,7 @@ def log_chat_completion_event(
         # Create the log config
         at = datetime.now(timezone.utc)
         config = CreateLogConfig(
-            project=settings.chat_completions_project_name,
+            project_name=settings.chat_completions_project_name,
             entries={**kwargs, "user_id": user_id, "at": at.isoformat()},
             params={},
         )
@@ -1210,7 +1210,7 @@ def _get_logs_query(
         context_obj = context_dao.filter(name="", project_id=project_id)
         if not context_obj:
             if latest_timestamp:
-                project_obj = project_dao.filter(name=project, user_id=user_id)
+                project_obj = project_dao.filter(name=project_name, user_id=user_id)
                 return project_obj[0][0].created_at.isoformat()
             else:
                 return [], 0, 0
@@ -1546,7 +1546,7 @@ def _get_logs_query_jsonb(
 
     Args:
         request_fastapi: The FastAPI request object containing user info
-        project: Project name to filter logs for
+        project_name: Project name to filter logs for
         context: Optional context name to filter logs within
         filter_expr: Optional filter expression string (Python-like syntax)
         sorting: Optional JSON string specifying sort order, e.g. '{"field": "ascending"}'

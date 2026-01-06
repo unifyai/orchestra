@@ -24,7 +24,7 @@ async def test_get_logs_groups_project_not_found(client: AsyncClient, use_jsonb_
 
     # This should return 404 as the project does not exist
     response = await client.get(
-        f"/v0/logs/groups?project={project_name}&key=input",
+        f"/v0/logs/groups?project_name={project_name}&key=input",
         headers=HEADERS,
     )
 
@@ -107,7 +107,7 @@ async def test_get_logs_with_group_threshold(client: AsyncClient, use_jsonb_mode
 
     # Test without group_threshold (default behavior)
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -117,7 +117,7 @@ async def test_get_logs_with_group_threshold(client: AsyncClient, use_jsonb_mode
 
     # Test with group_threshold=1 (should group all values)
     response = await client.get(
-        f"/v0/logs?project={project_name}&group_threshold=1",
+        f"/v0/logs?project_name={project_name}&group_threshold=1",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -137,7 +137,7 @@ async def test_get_logs_with_group_threshold(client: AsyncClient, use_jsonb_mode
 
     # Test with group_threshold=2 (should group values appearing twice or more)
     response = await client.get(
-        f"/v0/logs?project={project_name}&group_threshold=2",
+        f"/v0/logs?project_name={project_name}&group_threshold=2",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -158,7 +158,7 @@ async def test_get_logs_with_group_threshold(client: AsyncClient, use_jsonb_mode
 
     # Test with group_threshold=4 (should only group values appearing in all logs)
     response = await client.get(
-        f"/v0/logs?project={project_name}&group_threshold=4",
+        f"/v0/logs?project_name={project_name}&group_threshold=4",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -175,7 +175,7 @@ async def test_get_logs_with_group_threshold(client: AsyncClient, use_jsonb_mode
 
     # Test with group_threshold exceeding number of logs (no grouping)
     response = await client.get(
-        f"/v0/logs?project={project_name}&group_threshold=5",
+        f"/v0/logs?project_name={project_name}&group_threshold=5",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -189,7 +189,7 @@ async def test_get_logs_with_group_threshold(client: AsyncClient, use_jsonb_mode
     # Test with empty logs
     _ = await _delete_logs(client, [([1, 2, 3, 4], None)], project_name=project_name)
     response = await client.get(
-        f"/v0/logs?project={project_name}&group_threshold=1",
+        f"/v0/logs?project_name={project_name}&group_threshold=1",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -213,7 +213,7 @@ async def test_get_log_groups(client: AsyncClient, use_jsonb_mode):
 
     # fetch log groups for a given key (system_prompt in entries)
     response = await client.get(
-        f"/v0/logs/groups?project={project_name}&key=system_prompt",
+        f"/v0/logs/groups?project_name={project_name}&key=system_prompt",
         headers=HEADERS,
     )
 
@@ -229,7 +229,7 @@ async def test_get_log_groups(client: AsyncClient, use_jsonb_mode):
 
     # fetch log groups for a given key (entries)
     response = await client.get(
-        f"/v0/logs/groups?project={project_name}&key=a/input",
+        f"/v0/logs/groups?project_name={project_name}&key=a/input",
         headers=HEADERS,
     )
 
@@ -259,7 +259,7 @@ async def test_get_log_groups_combined(client: AsyncClient, use_jsonb_mode):
 
     # Test filtering by system_prompt
     response = await client.get(
-        f"/v0/logs/groups?project={project_name}&key=system_prompt&filter_expr=len(a/input) > 10",
+        f"/v0/logs/groups?project_name={project_name}&key=system_prompt&filter_expr=len(a/input) > 10",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -274,7 +274,7 @@ async def test_get_log_groups_combined(client: AsyncClient, use_jsonb_mode):
 
     # Test with no matching logs after filtering
     response = await client.get(
-        f"/v0/logs/groups?project={project_name}&key=system_prompt&filter_expr=a/input == 'nonexistent'",
+        f"/v0/logs/groups?project_name={project_name}&key=system_prompt&filter_expr=a/input == 'nonexistent'",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -284,7 +284,7 @@ async def test_get_log_groups_combined(client: AsyncClient, use_jsonb_mode):
 
     # Get log IDs
     response = await client.get(
-        f"/v0/logs?project={project_name}&return_ids_only=true",
+        f"/v0/logs?project_name={project_name}&return_ids_only=true",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -293,7 +293,7 @@ async def test_get_log_groups_combined(client: AsyncClient, use_jsonb_mode):
     # Test with subset of log IDs
     selected_ids = log_ids[:2]
     response = await client.get(
-        f"/v0/logs/groups?project={project_name}",
+        f"/v0/logs/groups?project_name={project_name}",
         params={
             "key": "system_prompt",
             "from_ids": "&".join([str(i) for i in selected_ids]),
@@ -310,7 +310,7 @@ async def test_get_log_groups_combined(client: AsyncClient, use_jsonb_mode):
     # Test excluding some log IDs
     exclude_ids = log_ids[:2]
     response = await client.get(
-        f"/v0/logs/groups?project={project_name}",
+        f"/v0/logs/groups?project_name={project_name}",
         params={
             "key": "system_prompt",
             "exclude_ids": "&".join([str(i) for i in exclude_ids]),
@@ -419,7 +419,7 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient, use_jsonb_mo
     # ==========  SCENARIO 1: Single-level grouping by "entries/_/state"  ==========
     #
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={
             "group_by": ["entries/_/state"],
         },
@@ -497,7 +497,7 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient, use_jsonb_mo
     # ==========  SCENARIO 2: Single-level grouping by "entries/_/category"  ==========
     #
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"group_by": ["entries/_/category"]},
         headers=HEADERS,
     )
@@ -549,7 +549,7 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient, use_jsonb_mo
     # ==========  SCENARIO 3: Multi-level grouping by "entries/_/version" and "entries/_/state"  ==========
     #
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"group_by": ["entries/_/version", "entries/_/state"]},
         headers=HEADERS,
     )
@@ -621,7 +621,7 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient, use_jsonb_mo
     # We'll do it on the "entries/_/state" grouping, which we know has at least 5 distinct states.
     # Example: group_limit=2, group_offset=1 => we skip the first group, only show the next 2
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={
             "group_by": ["entries/_/state"],
             "group_limit": 2,
@@ -678,7 +678,7 @@ async def test_get_logs_grouping_all_scenarios(client: AsyncClient, use_jsonb_mo
     #
     for depth in [0, 1, 2, 3, 4]:
         response = await client.get(
-            f"/v0/logs?project={project_name}",
+            f"/v0/logs?project_name={project_name}",
             params={
                 "group_by": ["entries/_/version", "entries/_/state", "entries/_/safe"],
                 "group_depth": depth,
@@ -3359,7 +3359,7 @@ async def test_get_logs_group_by_nested_groups_false(
 
     # Query with group_by and nested_groups=False
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={
             "group_by": ["x"],
             "nested_groups": False,

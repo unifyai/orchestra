@@ -5175,7 +5175,7 @@ def query_logs_post(
             # JSONB query path
             rows, total_count = _get_logs_query_jsonb(
                 request_fastapi,
-                project=body.project_name,
+                project_name=body.project_name,
                 context=body.context,
                 filter_expr=body.filter_expr,
                 sorting=body.sorting,
@@ -5243,7 +5243,7 @@ def query_logs_post(
             # EAV query path (original code)
             all_rows, context_len, total_count = _get_logs_query(
                 request_fastapi,
-                project=body.project_name,
+                project_name=body.project_name,
                 column_context=body.column_context,
                 context=body.context,
                 filter_expr=body.filter_expr,
@@ -5295,7 +5295,7 @@ def query_logs_post(
         # Handle grouped case - similar to GET /logs grouped logic
         all_rows, context_len, total_count = _get_all_filtered_log_event_ids(
             request_fastapi=request_fastapi,
-            project=body.project_name,
+            project_name=body.project_name,
             column_context=body.column_context,
             context=body.context,
             filter_expr=body.filter_expr,
@@ -5317,7 +5317,7 @@ def query_logs_post(
             group_by=body.group_by,
             all_log_event_ids=all_rows,
             request_fastapi=request_fastapi,
-            project=body.project_name,
+            project_name=body.project_name,
             column_context=body.column_context,
             context=body.context,
             filter_expr=body.filter_expr,
@@ -6181,7 +6181,7 @@ def join_logs(
         mode: Type of join to perform ('inner', 'left', 'right', or 'outer')
         new_context: Name for the new context where joined logs will be stored
         columns: Optional list of column names to include in the joined result
-        project: Name of the project containing the logs
+        project_name: Name of the project containing the logs
 
     Returns:
         JSON response with info about the join operation
@@ -7438,7 +7438,7 @@ async def process_traffic_logs(
                     context_id=context_id,
                     request=CreateLogConfig(
                         entries=entries,
-                        project=PROJ_NAME,
+                        project_name=PROJ_NAME,
                         context=None,
                     ),
                     project_dao=project_dao,

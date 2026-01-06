@@ -68,7 +68,7 @@ async def _get_interface(
         )
     elif project and name:
         return await client.get(
-            f"/v0/interfaces/?project={project}&name={name}",
+            f"/v0/interfaces/?project_name={project}&name={name}",
             headers=HEADERS,
         )
     else:
@@ -79,7 +79,7 @@ async def _list_interfaces(client: AsyncClient, project=None):
     """List interfaces for a project"""
     if project:
         return await client.get(
-            f"/v0/interfaces/list?project={project}",
+            f"/v0/interfaces/list?project_name={project}",
             headers=HEADERS,
         )
     else:
@@ -105,7 +105,7 @@ async def _update_interface(
         )
     elif project and name:
         return await client.put(
-            f"/v0/interfaces/?project={project}&name={name}",
+            f"/v0/interfaces/?project_name={project}&name={name}",
             headers=HEADERS,
             json=update_data,
         )
@@ -127,7 +127,7 @@ async def _delete_interface(
         )
     elif project and name:
         return await client.delete(
-            f"/v0/interfaces/?project={project}&name={name}",
+            f"/v0/interfaces/?project_name={project}&name={name}",
             headers=HEADERS,
         )
     else:
@@ -148,7 +148,7 @@ async def _create_interface_checkpoint(
         )
     elif project and name:
         return await client.post(
-            f"/v0/interfaces/checkpoint?project={project}&name={name}",
+            f"/v0/interfaces/checkpoint?project_name={project}&name={name}",
             headers=HEADERS,
         )
     else:
@@ -169,7 +169,7 @@ async def _get_interface_checkpoint(
         )
     elif project and name:
         return await client.get(
-            f"/v0/interfaces/checkpoint?project={project}&name={name}",
+            f"/v0/interfaces/checkpoint?project_name={project}&name={name}",
             headers=HEADERS,
         )
     else:

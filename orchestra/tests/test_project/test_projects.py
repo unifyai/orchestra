@@ -1057,7 +1057,7 @@ async def test_duplicate_project(client: AsyncClient):
     )
     target_interfaces_response.headers = target_headers  # Use target user headers
     target_interfaces_response = await client.get(
-        f"/v0/interfaces/list?project={target_project_name}",
+        f"/v0/interfaces/list?project_name={target_project_name}",
         headers=target_headers,
     )
     assert (
@@ -1342,7 +1342,7 @@ async def test_import_project_template_with_valid_schema(client: AsyncClient):
 
     # Verify the interface was created
     interfaces_response = await client.get(
-        f"/v0/interfaces/list?project={target_project}",
+        f"/v0/interfaces/list?project_name={target_project}",
         headers=HEADERS,
     )
     assert interfaces_response.status_code == 200
@@ -1397,7 +1397,7 @@ async def test_import_project_template_with_valid_schema_name_prefix(
 
     # Verify interface was created with prefix
     interfaces_response = await client.get(
-        f"/v0/interfaces/list?project={target_project}",
+        f"/v0/interfaces/list?project_name={target_project}",
         headers=HEADERS,
     )
     interfaces = interfaces_response.json()
@@ -1549,7 +1549,7 @@ async def test_import_project_template_with_valid_schema_multiple_interfaces(
 
     # Verify both interfaces were created
     interfaces_response = await client.get(
-        f"/v0/interfaces/list?project={target_project}",
+        f"/v0/interfaces/list?project_name={target_project}",
         headers=HEADERS,
     )
     interfaces = interfaces_response.json()
@@ -1674,7 +1674,7 @@ async def test_export_import_project_template_with_valid_schema_roundtrip(
 
     # Verify the imported structure matches
     target_interfaces_response = await client.get(
-        f"/v0/interfaces/list?project={target_project}",
+        f"/v0/interfaces/list?project_name={target_project}",
         headers=HEADERS,
     )
     target_interfaces = target_interfaces_response.json()

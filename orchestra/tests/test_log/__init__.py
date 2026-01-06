@@ -361,7 +361,7 @@ async def fetch_logs(client, project_name, **query_params):
 def _get_log(client, project_name, log_id, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
     return client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"from_ids": f"{log_id}"},
         headers=_headers,
     )

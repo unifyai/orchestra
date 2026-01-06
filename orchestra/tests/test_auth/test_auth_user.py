@@ -507,7 +507,7 @@ async def test_default_unity_resources_on_user_creation(client: AsyncClient):
 
     # 2. Verify the Unity interface exists
     response = await client.get(
-        "/v0/interfaces/list?project=Unity",
+        "/v0/interfaces/list?project_name=Unity",
         headers=user_headers,
     )
     assert response.status_code == 200, response.json()

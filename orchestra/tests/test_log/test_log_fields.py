@@ -21,7 +21,7 @@ async def test_get_fields_with_derived_entries(client: AsyncClient, use_jsonb_mo
 
     # Implicit fields have types inferred from values
     resp_fields_implicit = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert resp_fields_implicit.status_code == 200
@@ -65,7 +65,7 @@ async def test_get_fields_with_derived_entries(client: AsyncClient, use_jsonb_mo
 
     # Get field types and verify response after implicit creation
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -133,7 +133,7 @@ async def test_get_fields_with_derived_entries(client: AsyncClient, use_jsonb_mo
     assert response_explicit.status_code == 200
 
     fields_after = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert fields_after.status_code == 200
@@ -168,7 +168,7 @@ async def test_get_fields_with_derived_entries(client: AsyncClient, use_jsonb_mo
 
     # Verify explicit derived entries in get_fields
     fields_resp_exp = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert fields_resp_exp.status_code == 200
@@ -220,7 +220,7 @@ async def test_rename_field_basic(client: AsyncClient, use_jsonb_mode):
 
     # Verify field types are updated
     field_types_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200, field_types_response.json()
@@ -234,7 +234,7 @@ async def test_rename_field_basic(client: AsyncClient, use_jsonb_mode):
 
     # Verify logs are updated
     logs_response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert logs_response.status_code == 200, logs_response.json()
@@ -337,7 +337,7 @@ async def test_field_type_constraints_and_mutability(
 
     # Verify field type and mutability in field types
     field_types_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
@@ -446,7 +446,7 @@ async def test_rename_field_preserves_order(client: AsyncClient, use_jsonb_mode)
 
     # Get initial field order
     fields_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert fields_response.status_code == 200
@@ -457,7 +457,7 @@ async def test_rename_field_preserves_order(client: AsyncClient, use_jsonb_mode)
 
     # Get initial log entries and their order
     logs_response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert logs_response.status_code == 200
@@ -481,7 +481,7 @@ async def test_rename_field_preserves_order(client: AsyncClient, use_jsonb_mode)
 
     # Get new field order after renaming
     fields_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert fields_response.status_code == 200
@@ -499,7 +499,7 @@ async def test_rename_field_preserves_order(client: AsyncClient, use_jsonb_mode)
 
     # Get logs after renaming and verify entry order is preserved
     logs_response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert logs_response.status_code == 200
@@ -555,7 +555,7 @@ async def test_create_fields_happy_path(client: AsyncClient, use_jsonb_mode):
 
     # Verify the fields were created with correct types
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}&context={context_name}",
+        f"/v0/logs/fields?project_name={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -648,7 +648,7 @@ async def test_delete_fields_endpoint(client: AsyncClient, use_jsonb_mode):
 
     # Verify the fields exist
     fields_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert fields_response.status_code == 200
@@ -668,7 +668,7 @@ async def test_delete_fields_endpoint(client: AsyncClient, use_jsonb_mode):
 
     # Verify the columns no longer exist
     fields_response_after = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert fields_response_after.status_code == 200
@@ -678,7 +678,7 @@ async def test_delete_fields_endpoint(client: AsyncClient, use_jsonb_mode):
 
     # Verify the columns are removed from all logs
     logs_response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert logs_response.status_code == 200
@@ -744,7 +744,7 @@ async def test_delete_fields_preserves_log_events(client: AsyncClient, use_jsonb
 
     # Verify logs exist and have all fields
     logs_response_before = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert logs_response_before.status_code == 200
@@ -769,7 +769,7 @@ async def test_delete_fields_preserves_log_events(client: AsyncClient, use_jsonb
 
     # Verify logs STILL exist but without the deleted field
     logs_response_after = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert logs_response_after.status_code == 200
@@ -840,7 +840,7 @@ async def test_delete_all_fields_preserves_empty_log_events(
 
     # Verify log still exists but with empty entries
     logs_response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert logs_response.status_code == 200
@@ -907,7 +907,7 @@ async def test_create_fields_with_backfill_default(client: AsyncClient, use_json
 
     # Verify logs now have the new fields with None values
     logs_response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert logs_response.status_code == 200
@@ -973,7 +973,7 @@ async def test_create_fields_without_backfill(client: AsyncClient, use_jsonb_mod
 
     # Verify logs do NOT have the new fields
     logs_response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert logs_response.status_code == 200
@@ -987,7 +987,7 @@ async def test_create_fields_without_backfill(client: AsyncClient, use_jsonb_mod
 
     # But the field types should exist
     fields_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert fields_response.status_code == 200
@@ -1057,7 +1057,7 @@ async def test_create_fields_backfill_with_existing_values(
 
     # Verify the existing value was not overwritten
     logs_response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert logs_response.status_code == 200
@@ -1106,7 +1106,7 @@ async def test_create_fields_backfill_empty_context(
 
     # Fields should be created
     fields_list_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert fields_list_response.status_code == 200
@@ -1168,7 +1168,7 @@ async def test_create_fields_backfill_respects_derived_logs(
 
     # Verify the log has the new field but NOT a Log entry for computed_field
     logs_response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert logs_response.status_code == 200
@@ -1342,7 +1342,7 @@ async def test_field_description_crud(client: AsyncClient, use_jsonb_mode):
 
     # Fetch fields via GET /logs/fields and verify descriptions
     fields_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert fields_response.status_code == 200, fields_response.json()
@@ -1388,7 +1388,7 @@ async def test_explicit_nested_type_in_get_fields(client: AsyncClient, use_jsonb
 
     # Get fields and verify they return the explicit types
     fields_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert fields_response.status_code == 200
@@ -1425,7 +1425,7 @@ async def test_explicit_type_overrides_in_fields(client: AsyncClient, use_jsonb_
 
     # Get fields and verify explicit type is returned
     fields_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert fields_response.status_code == 200
@@ -1495,7 +1495,7 @@ async def test_get_fields_all_contexts_with_wildcard(
 
     # Fetch fields across all contexts using the wildcard
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}&context=*",
+        f"/v0/logs/fields?project_name={project_name}&context=*",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()

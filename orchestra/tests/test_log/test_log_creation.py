@@ -54,7 +54,10 @@ async def test_batch_create_partial_success_with_failed_logs(
     assert any(f.get("index") == 1 for f in failed)  # second item failed
 
     # Verify the two valid logs exist and the bad one does not
-    logs_resp = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    logs_resp = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS,
+    )
     assert logs_resp.status_code == 200, logs_resp.json()
     logs = logs_resp.json()["logs"]
     # Extract names for sanity
@@ -155,7 +158,7 @@ async def test_batch_create_partial_success(client: AsyncClient, use_jsonb_mode)
 
     # Verify only two logs are actually stored
     all_logs = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert all_logs.status_code == 200, all_logs.text
@@ -197,7 +200,7 @@ async def test_create_log_w_image(client: AsyncClient, use_jsonb_mode):
     assert response_implicit.status_code == 200, response_implicit.json()
 
     fields_resp = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert fields_resp.status_code == 200
@@ -225,7 +228,7 @@ async def test_create_log_w_image(client: AsyncClient, use_jsonb_mode):
 
     # Verify explicit types were respected
     field_types_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
@@ -264,7 +267,7 @@ async def test_create_log_w_audio(client: AsyncClient, use_jsonb_mode):
     assert resp_implicit.status_code == 200, resp_implicit.json()
 
     fields_resp1 = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert fields_resp1.status_code == 200, fields_resp1.json()
@@ -292,7 +295,7 @@ async def test_create_log_w_audio(client: AsyncClient, use_jsonb_mode):
 
     # Verify field types
     field_types_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200, field_types_response.json()
@@ -1070,7 +1073,7 @@ async def test_create_log_with_explicit_nested_list_type(
 
     # Verify the field type is stored correctly
     field_types_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
@@ -1083,7 +1086,7 @@ async def test_create_log_with_explicit_nested_list_type(
 
     # Verify the log was created with the correct value
     logs_response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert logs_response.status_code == 200
@@ -1120,7 +1123,7 @@ async def test_create_log_with_explicit_nested_dict_type(
 
     # Verify the field type
     field_types_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
@@ -1161,7 +1164,7 @@ async def test_create_log_explicit_type_overrides_field_name_inference(
 
     # Verify all are stored as str, not audio/image
     field_types_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
@@ -1203,7 +1206,7 @@ async def test_create_log_explicit_type_overrides_value_inference(
 
     # Verify all are stored as str
     field_types_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
@@ -1251,7 +1254,7 @@ async def test_batch_create_logs_with_nested_types(client: AsyncClient, use_json
 
     # Verify field types
     field_types_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
@@ -1309,7 +1312,7 @@ async def test_create_field_then_log_with_matching_base_types(
 
     # Step 3: Verify log was created successfully
     logs_response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert logs_response.status_code == 200
@@ -1398,7 +1401,7 @@ async def test_create_field_then_log_with_matching_nested_types(
 
     # Verify
     logs_response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert logs_response.status_code == 200, logs_response.json()
@@ -1469,7 +1472,7 @@ async def test_implicit_then_explicit_nested_type_creation(
 
     # Verify it got inferred type "List[int]" (from analyzing list contents)
     fields_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert fields_response.status_code == 200
@@ -1494,7 +1497,7 @@ async def test_implicit_then_explicit_nested_type_creation(
 
     # Verify explicit type was set
     fields_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert fields_response.status_code == 200
@@ -1529,7 +1532,7 @@ async def test_heterogeneous_list_types(client: AsyncClient, use_jsonb_mode):
 
     # Verify field type
     fields_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert fields_response.status_code == 200, fields_response.json()
@@ -1573,7 +1576,7 @@ async def test_deeply_nested_types(client: AsyncClient, use_jsonb_mode):
 
     # Verify
     logs_response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert logs_response.status_code == 200, logs_response.json()
@@ -1616,7 +1619,7 @@ async def test_create_with_pydantic_schema(client: AsyncClient, use_jsonb_mode):
 
     # Verify field was created with correct normalized type
     fields_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert fields_response.status_code == 200, fields_response.json()
@@ -1628,7 +1631,7 @@ async def test_create_with_pydantic_schema(client: AsyncClient, use_jsonb_mode):
 
     # Verify the stored log inferred type is a dict-like simple type
     logs_response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert logs_response.status_code == 200, logs_response.json()
@@ -1740,7 +1743,7 @@ async def test_create_with_nested_pydantic_schema_and_nullable_fields(
 
     # Verify
     logs_response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert logs_response.status_code == 200, logs_response.json()
@@ -1753,7 +1756,7 @@ async def test_create_with_nested_pydantic_schema_and_nullable_fields(
 
     # Verify field type normalization for nested schema
     fields_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert fields_response.status_code == 200, fields_response.json()

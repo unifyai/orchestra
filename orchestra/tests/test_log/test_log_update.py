@@ -311,7 +311,7 @@ async def test_update_logs_with_context_string(client: AsyncClient, use_jsonb_mo
 
     # Verify update
     response = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}",
+        f"/v0/logs?project_name={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -349,7 +349,7 @@ async def test_update_logs_with_context_list(client: AsyncClient, use_jsonb_mode
     # Verify update in both contexts
     for context_name in context_names:
         response = await client.get(
-            f"/v0/logs?project={project_name}&context={context_name}",
+            f"/v0/logs?project_name={project_name}&context={context_name}",
             headers=HEADERS,
         )
         assert response.status_code == 200, response.json()
@@ -708,7 +708,7 @@ async def test_update_log_with_explicit_nested_type(
 
     # Verify the update
     logs_response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert logs_response.status_code == 200
@@ -718,7 +718,7 @@ async def test_update_log_with_explicit_nested_type(
 
     # Verify type is still "List[int]"
     field_types_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
@@ -762,7 +762,7 @@ async def test_update_adds_field_with_explicit_type(
 
     # Verify the new field has the correct type
     field_types_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
@@ -817,7 +817,7 @@ async def test_batch_update_with_nested_types(client: AsyncClient, use_jsonb_mod
 
     # Verify both logs were updated
     logs_response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert logs_response.status_code == 200
@@ -894,7 +894,7 @@ async def test_update_log_matching_base_types(client: AsyncClient, use_jsonb_mod
 
     # Verify update
     logs_response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     logs = logs_response.json()["logs"]
@@ -1007,7 +1007,7 @@ async def test_update_log_matching_nested_types(client: AsyncClient, use_jsonb_m
 
     # Verify update
     logs_response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     logs = logs_response.json()["logs"]
@@ -1116,7 +1116,7 @@ async def test_update_with_pydantic_schema_matching(
 
     # Verify update
     logs_response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     logs = logs_response.json()["logs"]
@@ -1125,7 +1125,7 @@ async def test_update_with_pydantic_schema_matching(
 
     # Field type should be normalized to Dict[str, Any] or dict
     fields_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert fields_response.status_code == 200, fields_response.json()
@@ -1175,7 +1175,7 @@ async def test_update_with_pydantic_schema_mismatching(
     # Get fields
     # Field type should remain a dict-like simple type
     fields_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert fields_response.status_code == 200, fields_response.json()
@@ -1322,7 +1322,7 @@ async def test_update_nested_pydantic_schema(client: AsyncClient, use_jsonb_mode
 
     # Verify update
     logs_response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     logs = logs_response.json()["logs"]
@@ -1331,7 +1331,7 @@ async def test_update_nested_pydantic_schema(client: AsyncClient, use_jsonb_mode
 
     # Field type should remain a dict-like simple type
     fields_response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert fields_response.status_code == 200, fields_response.json()
@@ -1452,7 +1452,7 @@ async def test_update_list_of_dicts(client: AsyncClient, use_jsonb_mode):
 
     # Verify
     logs_response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     logs = logs_response.json()["logs"]

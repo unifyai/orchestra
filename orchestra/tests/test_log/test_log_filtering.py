@@ -2465,7 +2465,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # temperature == -210.0
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "_/temperature == -210.0"},
         headers=HEADERS,
     )
@@ -2483,7 +2483,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # temperature != -210.0
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "_/temperature != -210.0"},
         headers=HEADERS,
     )
@@ -2501,7 +2501,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # temperature > 0.
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "_/temperature > 0."},
         headers=HEADERS,
     )
@@ -2527,7 +2527,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # timestamp later than 23/03/1993
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": '_/timestamp > "1993-03-23"'},
         headers=HEADERS,
     )
@@ -2553,7 +2553,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # timestamp earlier than 23/03/1993
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": '_/timestamp < "1993-03-23"'},
         headers=HEADERS,
     )
@@ -2591,7 +2591,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # timestamp is 23/03/1993
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": '_/timestamp == "1993-03-23"'},
         headers=HEADERS,
     )
@@ -2601,7 +2601,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # is earlier than or later than 23/03/1993
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={
             "filter_expr": '_/timestamp < "1993-03-23" or _/timestamp > "1993-03-23"',
         },
@@ -2613,7 +2613,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # liquid not in state
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "'liquid' not in _/state"},
         headers=HEADERS,
     )
@@ -2629,7 +2629,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
     }
 
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "_/description == 'boiling water'"},
         headers=HEADERS,
     )
@@ -2640,7 +2640,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # check multiple conditions
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "('liquid' not in _/state) or (_/temperature == 0)"},
         headers=HEADERS,
     )
@@ -2680,7 +2680,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # Now test filtering for logs where updated_at > created_at
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "updated_at > created_at"},
         headers=HEADERS,
     )
@@ -2693,7 +2693,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # Test filtering for logs where updated_at = created_at
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "updated_at == created_at"},
         headers=HEADERS,
     )
@@ -2705,7 +2705,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
     assert log_ids_found == [7, 6, 5, 4, 3]
     # Test combining timestamp filters with other fields
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={
             "filter_expr": "updated_at > created_at and _/state == 'gas->liquid'",
         },
@@ -2719,7 +2719,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # Test filtering by updated_at range
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={
             "filter_expr": f'updated_at >= "{initial_time.isoformat()}"',
         },
@@ -2733,7 +2733,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # check exists
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "exists(_/state)"},
         headers=HEADERS,
     )
@@ -2743,7 +2743,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # check not exists
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "not exists(_/temperature)"},
         headers=HEADERS,
     )
@@ -2753,7 +2753,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # Test log_id equality filtering
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "log_id == 1"},
         headers=HEADERS,
     )
@@ -2764,7 +2764,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # Test log_id inequality filtering
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "log_id != 1"},
         headers=HEADERS,
     )
@@ -2775,7 +2775,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # Test log_id in operator
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "log_id in [1, 2, 3]"},
         headers=HEADERS,
     )
@@ -2786,7 +2786,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # Test log_id not in operator
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "log_id not in [1, 2, 3]"},
         headers=HEADERS,
     )
@@ -2797,7 +2797,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # Test nested conditions with log_id
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "log_id > 2 and _/temperature > 0"},
         headers=HEADERS,
     )
@@ -2810,7 +2810,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # Test non-existent log_id
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "log_id == 9999"},
         headers=HEADERS,
     )
@@ -2820,7 +2820,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # Test log_id with complex nested conditions
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={
             "filter_expr": "(log_id > 1 and log_id < 4) and (_/temperature > 0 or _/safe is True)",
         },
@@ -2838,7 +2838,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # check len
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "len(_/description) < 10"},
         headers=HEADERS,
     )
@@ -2848,7 +2848,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
     assert result["logs"][1]["entries"]["_/description"] == "lava"
 
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "len(_/_data) > 2"},
         headers=HEADERS,
     )
@@ -2859,7 +2859,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # check in
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "'lava' in _/description"},
         headers=HEADERS,
     )
@@ -2871,7 +2871,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
     # check version (EAV-specific: param versioning not supported in JSONB mode)
     if not use_jsonb_mode:
         response = await client.get(
-            f"/v0/logs?project={project_name}",
+            f"/v0/logs?project_name={project_name}",
             params={"filter_expr": "version(a/b/param1) == 1"},
             headers=HEADERS,
         )
@@ -2882,7 +2882,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # check is <val>
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "_/safe is True"},
         headers=HEADERS,
     )
@@ -2906,7 +2906,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
     )
     assert response.status_code == 200, response.json()
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "_/description is None"},
         headers=HEADERS,
     )
@@ -2922,7 +2922,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # num_tokens derived behavior sanity
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "num_tokens(_/description) >= 1"},
         headers=HEADERS,
     )
@@ -3427,7 +3427,7 @@ async def test_get_logs_w_str_filtering(client: AsyncClient, use_jsonb_mode):
     _ = await _create_several_logs(client, project_name)
 
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "'2' in str(_/_data)"},
         headers=HEADERS,
     )
@@ -3436,7 +3436,7 @@ async def test_get_logs_w_str_filtering(client: AsyncClient, use_jsonb_mode):
     assert len(result["logs"]) == 2
 
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "str('2') in str(_/_data)"},
         headers=HEADERS,
     )
@@ -3445,7 +3445,7 @@ async def test_get_logs_w_str_filtering(client: AsyncClient, use_jsonb_mode):
     assert len(result["logs"]) == 2
 
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": """'{"a": 2' in str(_/_data)"""},
         headers=HEADERS,
     )
@@ -3454,7 +3454,7 @@ async def test_get_logs_w_str_filtering(client: AsyncClient, use_jsonb_mode):
     assert len(result["logs"]) == 1
 
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": """str('{"a": 2') in str(_/_data)"""},
         headers=HEADERS,
     )
@@ -4160,7 +4160,7 @@ async def test_filter_with_vector_function_on_uncomputed_base_field(
 
     # 4. Verify the derived entry was created correctly
     response = await client.get(
-        f"/v0/logs?project={project_name}&from_ids={log_id}",
+        f"/v0/logs?project_name={project_name}&from_ids={log_id}",
         headers=HEADERS,
     )
     assert response.status_code == 200

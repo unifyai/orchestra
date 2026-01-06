@@ -867,7 +867,7 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
     # Verify log exists in all three contexts
     for ctx in [tier1_context, tier2_context, tier3_context]:
         logs_resp = await client.get(
-            f"/v0/logs?project=Assistants&context={ctx}",
+            f"/v0/logs?project_name=Assistants&context={ctx}",
             headers=org_headers,
         )
         assert logs_resp.status_code == 200
@@ -889,7 +889,7 @@ async def test_member_removal_deletes_assistant_logs(client: AsyncClient, dbsess
     # Verify log is removed from ALL three contexts via sibling cleanup
     for ctx in [tier1_context, tier2_context, tier3_context]:
         logs_resp = await client.get(
-            f"/v0/logs?project=Assistants&context={ctx}",
+            f"/v0/logs?project_name=Assistants&context={ctx}",
             headers=org_headers,
         )
         if logs_resp.status_code == 200:
@@ -1069,7 +1069,7 @@ async def test_member_removal_preserves_other_assistant_logs(
     # Verify both logs exist in shared contexts
     for ctx in [tier1_context, tier2_context]:
         logs_resp = await client.get(
-            f"/v0/logs?project=Assistants&context={ctx}",
+            f"/v0/logs?project_name=Assistants&context={ctx}",
             headers=org_headers,
         )
         assert logs_resp.status_code == 200
@@ -1094,7 +1094,7 @@ async def test_member_removal_preserves_other_assistant_logs(
     # Verify log A is removed from shared contexts, but log B remains
     for ctx in [tier1_context, tier2_context]:
         logs_resp = await client.get(
-            f"/v0/logs?project=Assistants&context={ctx}",
+            f"/v0/logs?project_name=Assistants&context={ctx}",
             headers=org_headers,
         )
         assert logs_resp.status_code == 200
@@ -1104,7 +1104,7 @@ async def test_member_removal_preserves_other_assistant_logs(
 
     # Verify Assistant B's Tier 3 context is untouched
     logs_resp_b = await client.get(
-        f"/v0/logs?project=Assistants&context={tier3_b}",
+        f"/v0/logs?project_name=Assistants&context={tier3_b}",
         headers=org_headers,
     )
     assert logs_resp_b.status_code == 200
@@ -1179,7 +1179,7 @@ async def test_member_removal_sets_contact_is_system_false(
 
     # Verify Contact exists with is_system=True
     contacts_resp = await client.get(
-        "/v0/logs?project=Assistants&context=All/Contacts",
+        "/v0/logs?project_name=Assistants&context=All/Contacts",
         headers=org_headers,
     )
     assert contacts_resp.status_code == 200
@@ -1205,7 +1205,7 @@ async def test_member_removal_sets_contact_is_system_false(
 
     # Verify Contact now has is_system=False
     contacts_resp = await client.get(
-        "/v0/logs?project=Assistants&context=All/Contacts",
+        "/v0/logs?project_name=Assistants&context=All/Contacts",
         headers=org_headers,
     )
     assert contacts_resp.status_code == 200

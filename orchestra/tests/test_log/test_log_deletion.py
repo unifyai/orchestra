@@ -106,7 +106,10 @@ async def test_delete_field_for_all_logs(client: AsyncClient, use_jsonb_mode):
     log_id3 = response3.json()["log_event_ids"][0]
 
     # Verify logs were created with the common field
-    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS,
+    )
     assert response.status_code == 200, response.json()
     logs = response.json()["logs"]
     assert len(logs) == 3
@@ -125,7 +128,10 @@ async def test_delete_field_for_all_logs(client: AsyncClient, use_jsonb_mode):
     assert response.json()["info"] == "Logs and fields deleted successfully!"
 
     # Verify the field was removed from all logs
-    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS,
+    )
     assert response.status_code == 200, response.json()
     logs = response.json()["logs"]
     assert len(logs) == 3
@@ -142,7 +148,7 @@ async def test_delete_field_for_all_logs(client: AsyncClient, use_jsonb_mode):
 
     # Check field types to verify the field type was removed
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -211,7 +217,7 @@ async def test_field_cascaded_delete(client: AsyncClient, use_jsonb_mode):
 
     # Check that the field type was removed
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -268,7 +274,10 @@ async def test_delete_log_fields_from_logs(client: AsyncClient, use_jsonb_mode):
     assert response.status_code == 200, response.json()
     assert response.json()["info"] == "Logs and fields deleted successfully!"
 
-    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS,
+    )
     assert response.status_code == 200, response.json()
     result = response.json()
     assert len(result["logs"]) == 1
@@ -320,7 +329,7 @@ async def test_delete_logs_from_specific_context(client: AsyncClient, use_jsonb_
 
     # Verify log is in both contexts
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"context": context1},
         headers=HEADERS,
     )
@@ -328,7 +337,7 @@ async def test_delete_logs_from_specific_context(client: AsyncClient, use_jsonb_
     assert log_id in [log["id"] for log in response.json()["logs"]]
 
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"context": context2},
         headers=HEADERS,
     )
@@ -348,7 +357,7 @@ async def test_delete_logs_from_specific_context(client: AsyncClient, use_jsonb_
 
     # Verify log is removed from first context
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"context": context1},
         headers=HEADERS,
     )
@@ -357,7 +366,7 @@ async def test_delete_logs_from_specific_context(client: AsyncClient, use_jsonb_
 
     # Verify log is still in second context
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"context": context2},
         headers=HEADERS,
     )
@@ -376,7 +385,7 @@ async def test_delete_logs_from_specific_context(client: AsyncClient, use_jsonb_
 
     # Verify log is also removed from second context
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"context": context2},
         headers=HEADERS,
     )
@@ -454,7 +463,10 @@ async def test_delete_logs_by_value_filter(client: AsyncClient, use_jsonb_mode):
     remove_log_id = response_remove.json()["log_event_ids"][0]
 
     # Verify both logs exist
-    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS,
+    )
     assert response.status_code == 200, response.json()
     logs = response.json()["logs"]
     assert len(logs) == 2
@@ -469,7 +481,10 @@ async def test_delete_logs_by_value_filter(client: AsyncClient, use_jsonb_mode):
     assert response.json()["info"] == "Logs and fields deleted successfully!"
 
     # Verify only the "keep" log remains
-    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS,
+    )
     assert response.status_code == 200, response.json()
     logs = response.json()["logs"]
     assert len(logs) == 1
@@ -521,7 +536,10 @@ async def test_delete_empty_fields_flag(client: AsyncClient, use_jsonb_mode):
     log_id2 = response2.json()["log_event_ids"][0]
 
     # Verify logs were created with the shared column
-    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS,
+    )
     assert response.status_code == 200, response.json()
     logs = response.json()["logs"]
     assert len(logs) == 2
@@ -541,7 +559,10 @@ async def test_delete_empty_fields_flag(client: AsyncClient, use_jsonb_mode):
     assert response.json()["info"] == "Logs and fields deleted successfully!"
 
     # Verify the field was removed from logs but still exists in fields list
-    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS,
+    )
     assert response.status_code == 200, response.json()
     logs = response.json()["logs"]
 
@@ -550,7 +571,7 @@ async def test_delete_empty_fields_flag(client: AsyncClient, use_jsonb_mode):
 
     # Check that the column still exists in the columns list
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -570,7 +591,10 @@ async def test_delete_empty_fields_flag(client: AsyncClient, use_jsonb_mode):
     )
 
     # Verify logs again have the shared column
-    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS,
+    )
     assert response.status_code == 200, response.json()
     logs = response.json()["logs"]
 
@@ -589,7 +613,10 @@ async def test_delete_empty_fields_flag(client: AsyncClient, use_jsonb_mode):
     assert response.json()["info"] == "Logs and fields deleted successfully!"
 
     # Verify the column was removed from logs AND from columns list
-    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS,
+    )
     assert response.status_code == 200, response.json()
     logs = response.json()["logs"]
 
@@ -598,7 +625,7 @@ async def test_delete_empty_fields_flag(client: AsyncClient, use_jsonb_mode):
 
     # Check that the column no longer exists in the columns list
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -639,14 +666,17 @@ async def test_delete_all_logs_removes_all_fields_when_empty(
         log_ids.append(response.json()["log_event_ids"][0])
 
     # Verify logs were created
-    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS,
+    )
     assert response.status_code == 200, response.json()
     original_logs = response.json()["logs"]
     assert len(original_logs) == num_logs
 
     # Verify fields were created
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -668,14 +698,17 @@ async def test_delete_all_logs_removes_all_fields_when_empty(
     assert response.json()["info"] == "Logs and fields deleted successfully!"
 
     # Verify all logs were deleted
-    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS,
+    )
     assert response.status_code == 200, response.json()
     remaining_logs = response.json()["logs"]
     assert len(remaining_logs) == 0
 
     # Verify all fields were deleted since no logs remain
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -744,7 +777,7 @@ async def test_delete_some_logs_keeps_fields_used_by_remaining_logs(
 
     # Verify all fields were created
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -771,7 +804,10 @@ async def test_delete_some_logs_keeps_fields_used_by_remaining_logs(
     assert response.json()["info"] == "Logs and fields deleted successfully!"
 
     # Verify log3 was deleted
-    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS,
+    )
     assert response.status_code == 200, response.json()
     remaining_logs = response.json()["logs"]
     assert len(remaining_logs) == 2
@@ -782,7 +818,7 @@ async def test_delete_some_logs_keeps_fields_used_by_remaining_logs(
 
     # Verify field deletion behavior
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -882,7 +918,7 @@ async def test_delete_logs_keeps_fields_used_by_other_contexts(
 
     # Verify all fields exist
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}&context={context1}",
+        f"/v0/logs/fields?project_name={project_name}&context={context1}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -892,7 +928,7 @@ async def test_delete_logs_keeps_fields_used_by_other_contexts(
         assert field in ctx1_fields
 
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}&context={context2}",
+        f"/v0/logs/fields?project_name={project_name}&context={context2}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -920,7 +956,7 @@ async def test_delete_logs_keeps_fields_used_by_other_contexts(
 
     # Verify logs were deleted from context1
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"context": context1},
         headers=HEADERS,
     )
@@ -930,7 +966,7 @@ async def test_delete_logs_keeps_fields_used_by_other_contexts(
 
     # Verify logs still exist in context2
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"context": context2},
         headers=HEADERS,
     )
@@ -941,7 +977,7 @@ async def test_delete_logs_keeps_fields_used_by_other_contexts(
 
     # Verify field deletion behavior across contexts
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}&context={context2}",
+        f"/v0/logs/fields?project_name={project_name}&context={context2}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -956,7 +992,7 @@ async def test_delete_logs_keeps_fields_used_by_other_contexts(
 
     # These fields should be deleted (only used by deleted context1 logs)
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}&context={context1}",
+        f"/v0/logs/fields?project_name={project_name}&context={context1}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -1033,7 +1069,7 @@ async def test_assistants_3tier_delete_from_global_all_context(
     # Verify log is in all three contexts
     for ctx in [global_all_context, user_all_context, user_assistant_context]:
         response = await client.get(
-            f"/v0/logs?project={project_name}",
+            f"/v0/logs?project_name={project_name}",
             params={"context": ctx},
             headers=HEADERS,
         )
@@ -1054,7 +1090,7 @@ async def test_assistants_3tier_delete_from_global_all_context(
     # Verify log is removed from ALL three contexts (3-tier removal)
     for ctx in [global_all_context, user_all_context, user_assistant_context]:
         response = await client.get(
-            f"/v0/logs?project={project_name}",
+            f"/v0/logs?project_name={project_name}",
             params={"context": ctx},
             headers=HEADERS,
         )
@@ -1122,7 +1158,7 @@ async def test_assistants_3tier_delete_from_user_assistant_context(
     # Verify log is in all three contexts
     for ctx in [global_all_context, user_all_context, user_assistant_context]:
         response = await client.get(
-            f"/v0/logs?project={project_name}",
+            f"/v0/logs?project_name={project_name}",
             params={"context": ctx},
             headers=HEADERS,
         )
@@ -1142,7 +1178,7 @@ async def test_assistants_3tier_delete_from_user_assistant_context(
     # Verify log is removed from ALL three contexts
     for ctx in [global_all_context, user_all_context, user_assistant_context]:
         response = await client.get(
-            f"/v0/logs?project={project_name}",
+            f"/v0/logs?project_name={project_name}",
             params={"context": ctx},
             headers=HEADERS,
         )
@@ -1231,7 +1267,7 @@ async def test_assistants_3tier_preserves_unrelated_context(
     # Verify log is removed from all 3-tier contexts
     for ctx in [global_all_context, user_all_context, user_assistant_context]:
         response = await client.get(
-            f"/v0/logs?project={project_name}",
+            f"/v0/logs?project_name={project_name}",
             params={"context": ctx},
             headers=HEADERS,
         )
@@ -1240,7 +1276,7 @@ async def test_assistants_3tier_preserves_unrelated_context(
 
     # Verify log is PRESERVED in Archive/OldLogs (unrelated context)
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"context": archive_context},
         headers=HEADERS,
     )
@@ -1302,7 +1338,7 @@ async def test_assistants_3tier_partial_siblings_exist(
 
     # Verify log is removed
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"context": global_all_context},
         headers=HEADERS,
     )
@@ -1370,7 +1406,7 @@ async def test_assistants_3tier_delete_from_user_all_context(
     # Verify log exists in all contexts
     for ctx in [global_all_context, user_all_context, user_assistant_context]:
         response = await client.get(
-            f"/v0/logs?project={project_name}",
+            f"/v0/logs?project_name={project_name}",
             params={"context": ctx},
             headers=HEADERS,
         )
@@ -1390,7 +1426,7 @@ async def test_assistants_3tier_delete_from_user_all_context(
     # Verify removed from ALL three contexts
     for ctx in [global_all_context, user_all_context, user_assistant_context]:
         response = await client.get(
-            f"/v0/logs?project={project_name}",
+            f"/v0/logs?project_name={project_name}",
             params={"context": ctx},
             headers=HEADERS,
         )
@@ -1456,7 +1492,7 @@ async def test_non_assistants_project_normal_behavior(
 
     # Verify log is removed from all_context
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"context": all_context},
         headers=HEADERS,
     )
@@ -1465,7 +1501,7 @@ async def test_non_assistants_project_normal_behavior(
 
     # Verify log is STILL in specific_context (no dual-context behavior)
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"context": specific_context},
         headers=HEADERS,
     )
@@ -1531,7 +1567,7 @@ async def test_assistants_context_without_slash_normal_behavior(
 
     # Verify log is removed from simple_context
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"context": simple_context},
         headers=HEADERS,
     )
@@ -1540,7 +1576,7 @@ async def test_assistants_context_without_slash_normal_behavior(
 
     # Verify log is STILL in another_context (no dual-context for simple names)
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"context": another_context},
         headers=HEADERS,
     )
@@ -1617,7 +1653,7 @@ async def test_assistants_3tier_delete_fields_preserves_system_fields(
     # Verify log STILL EXISTS in all contexts (not empty because _user/_assistant remain)
     for ctx in [global_all_context, user_all_context, user_assistant_context]:
         response = await client.get(
-            f"/v0/logs?project={project_name}",
+            f"/v0/logs?project_name={project_name}",
             params={"context": ctx},
             headers=HEADERS,
         )
@@ -1702,7 +1738,7 @@ async def test_assistants_3tier_nested_subcontext(
     # Verify removed from all three nested contexts
     for ctx in [global_all_context, user_all_context, user_assistant_context]:
         response = await client.get(
-            f"/v0/logs?project={project_name}",
+            f"/v0/logs?project_name={project_name}",
             params={"context": ctx},
             headers=HEADERS,
         )
@@ -1770,7 +1806,7 @@ async def test_unitytests_3tier_delete_from_global_all_context(
     # Verify log is in all three contexts
     for ctx in [global_all_context, user_all_context, user_assistant_context]:
         response = await client.get(
-            f"/v0/logs?project={project_name}",
+            f"/v0/logs?project_name={project_name}",
             params={"context": ctx},
             headers=HEADERS,
         )
@@ -1791,7 +1827,7 @@ async def test_unitytests_3tier_delete_from_global_all_context(
     # Verify log is removed from ALL three contexts (3-tier removal)
     for ctx in [global_all_context, user_all_context, user_assistant_context]:
         response = await client.get(
-            f"/v0/logs?project={project_name}",
+            f"/v0/logs?project_name={project_name}",
             params={"context": ctx},
             headers=HEADERS,
         )
@@ -1863,7 +1899,7 @@ async def test_assistants_3tier_with_prefix(
     # Verify log is in all three contexts
     for ctx in [global_all_context, user_all_context, user_assistant_context]:
         response = await client.get(
-            f"/v0/logs?project={project_name}",
+            f"/v0/logs?project_name={project_name}",
             params={"context": ctx},
             headers=HEADERS,
         )
@@ -1885,7 +1921,7 @@ async def test_assistants_3tier_with_prefix(
     # Verify log is removed from ALL three contexts
     for ctx in [global_all_context, user_all_context, user_assistant_context]:
         response = await client.get(
-            f"/v0/logs?project={project_name}",
+            f"/v0/logs?project_name={project_name}",
             params={"context": ctx},
             headers=HEADERS,
         )
@@ -1967,7 +2003,7 @@ async def test_assistants_3tier_with_prefix_and_nested_subcontext(
     # Verify log is removed from ALL three contexts
     for ctx in [global_all_context, user_all_context, user_assistant_context]:
         response = await client.get(
-            f"/v0/logs?project={project_name}",
+            f"/v0/logs?project_name={project_name}",
             params={"context": ctx},
             headers=HEADERS,
         )

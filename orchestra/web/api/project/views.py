@@ -323,7 +323,7 @@ def get_favorites(
         result.append(
             FavoriteProjectOut(
                 id=fav.id,
-                project=project_name,
+                project_name=project_name,
                 position=fav.position,
             ),
         )
@@ -489,7 +489,7 @@ def get_favorite(
     # Return as response model
     return FavoriteProjectOut(
         id=favorite.id,
-        project=project_name,
+        project_name=project_name,
         position=favorite.position,
     )
 
@@ -571,7 +571,7 @@ def update_favorite(
         # Return updated favorite
         return FavoriteProjectOut(
             id=updated_favorite.id,
-            project=project_name,
+            project_name=project_name,
             position=updated_favorite.position,
         )
     except Exception as e:
@@ -1510,7 +1510,7 @@ async def list_projects_tree(
         fav_entry = fav_map.get(proj.id)
         items.append(
             ProjectTreeItem(
-                project=proj.name,
+                project_name=proj.name,
                 icon=proj.icon,
                 order=proj.order,
                 interfaces=interface_items,
