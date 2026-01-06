@@ -87,7 +87,16 @@ def mock_tts_services_factory(fastapi_app):
     cartesia_mock.list_voices = AsyncMock()
     cartesia_mock.get_voice = AsyncMock()
 
+    # ElevenLabsService methods are async, so use AsyncMock
     elevenlabs_mock = MagicMock(spec=OriginalElevenLabsService)
+    elevenlabs_mock.clone_voice = AsyncMock()
+    elevenlabs_mock.delete_voice = AsyncMock()
+    elevenlabs_mock.generate_speech = AsyncMock()
+    elevenlabs_mock.list_voices = AsyncMock()
+    elevenlabs_mock.get_voice = AsyncMock()
+    elevenlabs_mock.design_voice_generate_previews = AsyncMock()
+    elevenlabs_mock.create_voice_from_generated_id = AsyncMock()
+
     deepgram_mock = MagicMock(spec=OriginalDeepgramService)
     openai_mock = MagicMock(spec=OriginalOpenAIService)
 
