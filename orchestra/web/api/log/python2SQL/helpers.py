@@ -88,11 +88,12 @@ __all__ = [
 
 # Initialize async OpenAI client if API key is available
 OPENAI_API_KEY = os.getenv("ORCHESTRA_OPENAI_API_KEY")
+# Match OpenAI's default timeouts: 5s connect, 600s read/write (10 min)
 # Large embedding batches (hundreds of items) can take several minutes to process
 _async_client = (
     AsyncOpenAI(
         api_key=OPENAI_API_KEY,
-        timeout=httpx.Timeout(300.0, connect=30.0),  # 5 min total, 30s connect
+        timeout=httpx.Timeout(connect=5.0, read=600.0, write=600.0, pool=600.0),
     )
     if OPENAI_API_KEY
     else None
