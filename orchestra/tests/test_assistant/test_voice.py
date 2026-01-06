@@ -1,6 +1,6 @@
 import base64
 from pathlib import Path
-from unittest.mock import ANY, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import status
@@ -79,7 +79,14 @@ def mock_tts_services_factory(fastapi_app):
     Provides mock provider instances and overrides the dependencies for FastAPI.
     Yields the mock instances for tests to customize.
     """
+    # CartesiaService methods are async, so use AsyncMock
     cartesia_mock = MagicMock(spec=OriginalCartesiaService)
+    cartesia_mock.clone_voice = AsyncMock()
+    cartesia_mock.delete_voice = AsyncMock()
+    cartesia_mock.generate_speech = AsyncMock()
+    cartesia_mock.list_voices = AsyncMock()
+    cartesia_mock.get_voice = AsyncMock()
+
     elevenlabs_mock = MagicMock(spec=OriginalElevenLabsService)
     deepgram_mock = MagicMock(spec=OriginalDeepgramService)
     openai_mock = MagicMock(spec=OriginalOpenAIService)
