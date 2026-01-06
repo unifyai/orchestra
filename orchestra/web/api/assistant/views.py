@@ -2527,7 +2527,7 @@ async def clone_voice(
         file_content = await file.read()
         if not voice_language:
             try:
-                detected_language = deepgram_service.detect_language_from_audio(
+                detected_language = await deepgram_service.detect_language_from_audio(
                     file_content,
                     user_id,
                     file.content_type,
@@ -3039,10 +3039,12 @@ async def design_voice_create_from_preview_endpoint(
                     audio_content = base64.b64decode(request_data.audio_base_64)
                     # Assume MP3 if media_type is not provided
                     media_type = request_data.media_type or "audio/mpeg"
-                    detected_language = deepgram_service.detect_language_from_audio(
-                        audio_content=audio_content,
-                        user_id=user_id,
-                        content_type=media_type,
+                    detected_language = (
+                        await deepgram_service.detect_language_from_audio(
+                            audio_content=audio_content,
+                            user_id=user_id,
+                            content_type=media_type,
+                        )
                     )
                     voice_language = detected_language or "en"
                 except DeepgramAPIError as e:

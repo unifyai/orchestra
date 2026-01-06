@@ -97,7 +97,10 @@ def mock_tts_services_factory(fastapi_app):
     elevenlabs_mock.design_voice_generate_previews = AsyncMock()
     elevenlabs_mock.create_voice_from_generated_id = AsyncMock()
 
+    # DeepgramService methods are async, so use AsyncMock
     deepgram_mock = MagicMock(spec=OriginalDeepgramService)
+    deepgram_mock.detect_language_from_audio = AsyncMock()
+
     openai_mock = MagicMock(spec=OriginalOpenAIService)
 
     # Generate speech endpoint data
