@@ -65,3 +65,20 @@ class AsyncAuthUserDAO:
         """Return a single AuthUser object or None given an email."""
         found = await self.filter(email=email)
         return found[0] if found else None
+
+    async def update(
+        self,
+        id: str,
+        queries_enabled: Optional[bool] = ...,
+        onboarded: Optional[bool] = ...,
+    ) -> None:
+        """Update an AuthUser record with the provided fields."""
+        query = select(AuthUser).where(AuthUser.id == id)
+        result = await self.session.execute(query)
+        entry = result.scalars().first()
+
+        if entry is not None:
+            if queries_enabled is not ...:
+                entry.queries_enabled = queries_enabled
+            if onboarded is not ...:
+                entry.onboarded = onboarded

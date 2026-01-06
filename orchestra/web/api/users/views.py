@@ -6,6 +6,7 @@ import secrets
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
 from orchestra.db.dao.account_dao import AccountDAO
@@ -13,6 +14,7 @@ from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_hiring_one_time_approval_link_dao import (
     AssistantHiringOneTimeApprovalLinkDAO,
 )
+from orchestra.db.dao.async_auth_user_dao import AsyncAuthUserDAO
 from orchestra.db.dao.auth_user_dao import (
     ASSISTANT_HIRING_APPROVAL_STATUSES,
     AuthUser,
@@ -25,7 +27,7 @@ from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dao.resource_access_dao import ResourceAccessDAO
 from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.db.dependencies import get_db_session
+from orchestra.db.dependencies import get_async_db_session, get_db_session
 from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
 from orchestra.services.user_account_cleanup_service import UserAccountCleanupService
 from orchestra.settings import settings
@@ -845,27 +847,27 @@ async def update_organization_member_role(
 @router.get("/user/query-logging")
 async def get_query_logging_status(
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """Get the current query logging status for the authenticated user."""
-    auth_user_dao = AuthUserDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
     user_id = request.state.user_id
-    user = auth_user_dao.get_by_id(user_id)
+    user = await auth_user_dao.get_by_id(user_id)
     if not user:
         raise not_found("User")
 
-    return QueryLoggingStatus(enabled=user.queries_enabled)
+    return QueryLoggingStatus(enabled=user[0].queries_enabled)
 
 
 @router.get("/user/basic-info")
 async def get_user_basic_info(
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """Get basic information for the authenticated user."""
-    auth_user_dao = AuthUserDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
     user_id = request.state.user_id
-    user_row = auth_user_dao.get_by_id(user_id)
+    user_row = await auth_user_dao.get_by_id(user_id)
 
     if not user_row:
         raise not_found("User")
@@ -888,16 +890,16 @@ async def get_user_basic_info(
 async def update_query_logging_status(
     request: Request,
     body: UpdateQueryLoggingRequest,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """Update the query logging status for the authenticated user."""
-    auth_user_dao = AuthUserDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
     user_id = request.state.user_id
-    user = auth_user_dao.get_by_id(user_id)
+    user = await auth_user_dao.get_by_id(user_id)
     if not user:
         raise not_found("User")
 
-    auth_user_dao.update(id=user_id, queries_enabled=body.enabled)
+    await auth_user_dao.update(id=user_id, queries_enabled=body.enabled)
 
     return QueryLoggingStatus(enabled=body.enabled)
 
@@ -1549,11 +1551,11 @@ async def get_supported_tax_countries():
 @router.get("/user/onboarding-status", response_model=OnboardingStatusResponse)
 async def get_onboarding_status(
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """Get the current user's onboarding status."""
-    auth_user_dao = AuthUserDAO(session)
-    user_row = auth_user_dao.get_by_id(request.state.user_id)
+    auth_user_dao = AsyncAuthUserDAO(session)
+    user_row = await auth_user_dao.get_by_id(request.state.user_id)
     if not user_row:
         raise not_found("User")
 
@@ -1565,16 +1567,15 @@ async def get_onboarding_status(
 async def update_onboarding_status(
     request: Request,
     body: UpdateOnboardingStatusRequest,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """Update the current user's onboarding status."""
-    auth_user_dao = AuthUserDAO(session)
-    user_row = auth_user_dao.get_by_id(request.state.user_id)
+    auth_user_dao = AsyncAuthUserDAO(session)
+    user_row = await auth_user_dao.get_by_id(request.state.user_id)
     if not user_row:
         raise not_found("User")
 
-    auth_user_dao.update(id=request.state.user_id, onboarded=body.onboarded)
-    session.commit()
+    await auth_user_dao.update(id=request.state.user_id, onboarded=body.onboarded)
 
     return {"message": "Onboarding status updated successfully"}
 
