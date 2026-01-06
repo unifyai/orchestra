@@ -401,8 +401,33 @@ async def _get_embeddings_batch(
 
 # =============================================================================
 # Sync wrappers for callers in sync contexts (e.g., background workers,
-# sync route handlers). These create a new event loop to run the async function.
+# sync route handlers). These detect whether an event loop is already running
+# and handle both cases appropriately:
+# - If no loop is running: use asyncio.run() (creates new loop)
+# - If loop is running: use thread pool to avoid "cannot be called from running event loop" error
 # =============================================================================
+
+
+def _run_async_in_sync(coro):
+    """
+    Run an async coroutine from sync code, handling both cases:
+    - No event loop running: use asyncio.run()
+    - Event loop running: use thread pool executor to run in separate thread
+    """
+    import asyncio
+    import concurrent.futures
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop - safe to use asyncio.run()
+        return asyncio.run(coro)
+
+    # There's a running loop - we can't use asyncio.run() from here
+    # Use a thread pool to run the coroutine in a new thread with its own event loop
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(asyncio.run, coro)
+        return future.result()
 
 
 def _get_embedding_sync(
@@ -412,11 +437,9 @@ def _get_embedding_sync(
 ) -> list[float]:
     """
     Sync wrapper for _get_embedding.
-    Creates a new event loop to run the async function.
+    Handles both sync contexts (no event loop) and async contexts (running event loop).
     """
-    import asyncio
-
-    return asyncio.run(_get_embedding(text, model, dimensions))
+    return _run_async_in_sync(_get_embedding(text, model, dimensions))
 
 
 def _get_embeddings_batch_sync(
@@ -426,11 +449,9 @@ def _get_embeddings_batch_sync(
 ) -> list[list[float]]:
     """
     Sync wrapper for _get_embeddings_batch.
-    Creates a new event loop to run the async function.
+    Handles both sync contexts (no event loop) and async contexts (running event loop).
     """
-    import asyncio
-
-    return asyncio.run(_get_embeddings_batch(texts, model, dimensions))
+    return _run_async_in_sync(_get_embeddings_batch(texts, model, dimensions))
 
 
 def _ensure_vectors_exist_sync(
@@ -442,11 +463,9 @@ def _ensure_vectors_exist_sync(
 ) -> None:
     """
     Sync wrapper for _ensure_vectors_exist.
-    Creates a new event loop to run the async function.
+    Handles both sync contexts (no event loop) and async contexts (running event loop).
     """
-    import asyncio
-
-    return asyncio.run(
+    return _run_async_in_sync(
         _ensure_vectors_exist(session, id_to_text, model, dimensions, key),
     )
 
