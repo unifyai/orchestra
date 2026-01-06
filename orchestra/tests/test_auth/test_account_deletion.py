@@ -150,7 +150,7 @@ async def test_delete_user_force_bypasses_org_check(client: AsyncClient):
 async def test_can_delete_account_no_blockers(client: AsyncClient):
     """can-delete-account returns true when no blockers."""
     user = await create_test_user(client, "can_delete@test.com")
-    user_headers = {"Authorization": f"Bearer {user['apiKey']}"}
+    user_headers = {"Authorization": f"Bearer {user['api_key']}"}
 
     response = await client.get(
         "/v0/user/can-delete-account",
@@ -170,7 +170,7 @@ async def test_can_delete_account_with_pending_bills(client: AsyncClient, dbsess
 
     user = await create_test_user(client, "can_delete_bills@test.com")
     user_id = user["id"]
-    user_headers = {"Authorization": f"Bearer {user['apiKey']}"}
+    user_headers = {"Authorization": f"Bearer {user['api_key']}"}
 
     recharge_dao = RechargeDAO(dbsession)
     recharge_dao.create_recharge(
@@ -198,7 +198,7 @@ async def test_can_delete_account_with_pending_bills(client: AsyncClient, dbsess
 async def test_self_service_delete_requires_email_confirmation(client: AsyncClient):
     """Self-service deletion fails if email doesn't match."""
     user = await create_test_user(client, "confirm_email@test.com")
-    user_headers = {"Authorization": f"Bearer {user['apiKey']}"}
+    user_headers = {"Authorization": f"Bearer {user['api_key']}"}
 
     response = await client.request(
         "DELETE",
@@ -216,7 +216,7 @@ async def test_self_service_delete_success(client: AsyncClient):
     email = "self_delete@test.com"
     user = await create_test_user(client, email)
     user_id = user["id"]
-    user_headers = {"Authorization": f"Bearer {user['apiKey']}"}
+    user_headers = {"Authorization": f"Bearer {user['api_key']}"}
 
     response = await client.request(
         "DELETE",
@@ -240,7 +240,7 @@ async def test_delete_user_removes_projects(client: AsyncClient):
     """Verify that user's projects are deleted via CASCADE."""
     user = await create_test_user(client, "delete_projects@test.com")
     user_id = user["id"]
-    user_headers = {"Authorization": f"Bearer {user['apiKey']}"}
+    user_headers = {"Authorization": f"Bearer {user['api_key']}"}
 
     response = await client.post(
         "/v0/project",
@@ -270,7 +270,7 @@ async def test_delete_user_removes_api_keys(client: AsyncClient, dbsession):
 
     user = await create_test_user(client, "delete_apikeys@test.com")
     user_id = user["id"]
-    api_key = user["apiKey"]
+    api_key = user["api_key"]
 
     key_exists = dbsession.execute(
         select(ApiKey).where(ApiKey.key == api_key),
@@ -364,7 +364,7 @@ async def test_self_service_delete_case_insensitive_email(client: AsyncClient):
     """Email confirmation is case-insensitive."""
     email = "CaseSensitive@Test.com"
     user = await create_test_user(client, email)
-    user_headers = {"Authorization": f"Bearer {user['apiKey']}"}
+    user_headers = {"Authorization": f"Bearer {user['api_key']}"}
 
     response = await client.request(
         "DELETE",
