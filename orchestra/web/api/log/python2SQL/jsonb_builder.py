@@ -43,7 +43,7 @@ from . import alias_utils
 from .ast_utils import get_identifier_value, is_identifier_node, parse_base_params
 from .helpers import (
     _embeddable,
-    _get_embedding,
+    _get_embedding_sync,
     _get_field_type_from_db,
     _get_image_embedding_from_url,
     _infer_expression_type,
@@ -4049,8 +4049,8 @@ def _handle_embed_jsonb(
         if not _embeddable(text):
             raise ValueError(f"embed() requires a valid embeddable string, got {text}")
 
-        # Get the embedding vector
-        embedding = _get_embedding(text, model, dimensions)
+        # Get the embedding vector (sync wrapper for use in sync query builder)
+        embedding = _get_embedding_sync(text, model, dimensions)
 
         # Create a vector literal using pgvector
         return literal(embedding, type_=Vector(len(embedding)))
@@ -4108,10 +4108,10 @@ def _handle_embed_jsonb(
                 key=key,
             )
         else:
-            # Sync: generate embeddings immediately
-            from .helpers import _ensure_vectors_exist
+            # Sync: generate embeddings immediately (sync wrapper for use in sync query builder)
+            from .helpers import _ensure_vectors_exist_sync
 
-            _ensure_vectors_exist(
+            _ensure_vectors_exist_sync(
                 session=session,
                 id_to_text=id_to_text,
                 model=model,
