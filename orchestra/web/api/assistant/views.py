@@ -2543,7 +2543,7 @@ async def clone_voice(
                 )
 
         if provider == "cartesia":
-            cartesia_response = cartesia_service.clone_voice(
+            cartesia_response = await cartesia_service.clone_voice(
                 file_content=file_content,
                 file_name=file.filename or "audio_clip_default_name",
                 name=name,
@@ -2618,7 +2618,7 @@ async def clone_voice(
             elif provider == "elevenlabs":
                 provider_service = elevenlabs_service
             try:
-                provider_service.delete_voice(new_voice_id)
+                await provider_service.delete_voice(new_voice_id)
             except Exception as e_voice_cleanup:
                 logging.error(
                     f"Failed to cleanup {provider} voice {new_voice_id} after DB integrity error: {e_voice_cleanup}",
@@ -2635,7 +2635,7 @@ async def clone_voice(
             elif provider == "elevenlabs":
                 provider_service = elevenlabs_service
             try:
-                cartesia_service.delete_voice(new_voice_id)
+                await provider_service.delete_voice(new_voice_id)
             except Exception:
                 pass
         raise HTTPException(
@@ -2748,7 +2748,7 @@ def list_voices(
     },
     tags=["Voices"],
 )
-def delete_voice(
+async def delete_voice(
     voice_id: str,
     request: Request,
     provider: str = Query(..., description="The provider of the voice to delete"),
@@ -2787,7 +2787,7 @@ def delete_voice(
 
             if provider_service:
                 try:
-                    provider_service.delete_voice(voice_id)
+                    await provider_service.delete_voice(voice_id)
                 except (CartesiaAPIError, ElevenLabsAPIError) as e_provider:
                     # If the provider says "not found," it's a non-critical error.
                     # We can proceed since our goal is to have it deleted.
@@ -2869,7 +2869,7 @@ async def generate_speech(
 
     try:
         if request_data.provider == "cartesia":
-            audio_bytes, content_type = cartesia_service.generate_speech(
+            audio_bytes, content_type = await cartesia_service.generate_speech(
                 transcript=request_data.text,
                 voice_id=request_data.voice_id,
                 model_id=request_data.model_id or "sonic-2",  # Default Cartesia model
