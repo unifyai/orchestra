@@ -1794,7 +1794,7 @@ async def test_projects_tree(client: AsyncClient):
     assert resp.status_code == 200
     data = resp.json()
 
-    match = next((p for p in data if p["project"] == project_name), None)
+    match = next((p for p in data if p["project_name"] == project_name), None)
     assert match is not None
     assert match["icon"] == "folder"
 

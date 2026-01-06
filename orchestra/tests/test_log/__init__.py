@@ -396,7 +396,7 @@ def _delete_logs(
     if source_type:
         json_data["source_type"] = source_type
     if project_name:
-        json_data["project"] = project_name
+        json_data["project_name"] = project_name
     if context:
         json_data["context"] = context
     if delete_empty_fields:
