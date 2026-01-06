@@ -13,31 +13,36 @@ from google.cloud.storage import Client
 from google.oauth2.service_account import Credentials
 from sqlalchemy import select
 
-from orchestra.db.dao.api_key_dao import ApiKeyDAO
-from orchestra.db.dao.assistant_dao import AssistantDAO
-from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
-from orchestra.db.dao.auth_user_dao import AuthUserDAO
-from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
+# Async imports for migration
+from sqlalchemy.ext.asyncio import AsyncSession
+
+# Async DB session
+from orchestra.db.dao.async_api_key_dao import AsyncApiKeyDAO
+from orchestra.db.dao.async_assistant_dao import AsyncAssistantDAO
+from orchestra.db.dao.async_assistant_secret_dao import AsyncAssistantSecretDAO
+from orchestra.db.dao.async_auth_user_dao import AsyncAuthUserDAO
+from orchestra.db.dao.async_benchmark_run_dao import AsyncBenchmarkRunDAO
+from orchestra.db.dao.async_context_dao import AsyncContextDAO
+from orchestra.db.dao.async_credit_card_fingerprint import AsyncCreditCardFingerprintDAO
+from orchestra.db.dao.async_custom_router_dao import AsyncCustomRouterDAO
+from orchestra.db.dao.async_datapoint_dao import AsyncDatapointDAO
+from orchestra.db.dao.async_endpoint_dao import AsyncEndpointDAO
+from orchestra.db.dao.async_log_event_dao import AsyncLogEventDAO
+from orchestra.db.dao.async_metric_dao import AsyncMetricDAO
+from orchestra.db.dao.async_modality_dao import AsyncModalityDAO
+from orchestra.db.dao.async_model_dao import AsyncModelDAO
+from orchestra.db.dao.async_organization_invite_dao import AsyncOrganizationInviteDAO
+from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
+from orchestra.db.dao.async_provider_dao import AsyncProviderDAO
+from orchestra.db.dao.async_recharge_dao import AsyncRechargeDAO
+from orchestra.db.dao.async_recharge_type_dao import AsyncRechargeTypeDAO
+from orchestra.db.dao.async_task_dao import AsyncTaskDAO
+from orchestra.db.dao.async_users_dao import AsyncUsersDAO
+from orchestra.db.dao.async_voice_dao import AsyncVoiceDAO
 from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.credit_card_fingerprint import CreditCardFingerprintDAO
-from orchestra.db.dao.custom_router_dao import CustomRouterDAO
-from orchestra.db.dao.datapoint_dao import DatapointDAO
-from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.log_dao import LogDAO
-from orchestra.db.dao.log_event_dao import LogEventDAO
-from orchestra.db.dao.metric_dao import MetricDAO
-from orchestra.db.dao.modality_dao import ModalityDAO
-from orchestra.db.dao.model_dao import ModelDAO
-from orchestra.db.dao.organization_invite_dao import OrganizationInviteDAO
-from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
-from orchestra.db.dao.provider_dao import ProviderDAO
-from orchestra.db.dao.recharge_dao import RechargeDAO
-from orchestra.db.dao.recharge_type_dao import RechargeTypeDAO
-from orchestra.db.dao.task_dao import TaskDAO
-from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.db.dao.voice_dao import VoiceDAO
-from orchestra.db.dependencies import get_db_session
+from orchestra.db.dependencies import get_async_db_session
 from orchestra.db.models.orchestra_models import (
     BenchmarkRun,
     Context,
@@ -93,8 +98,8 @@ router = APIRouter()
 
 
 @router.get("/get_all_users", response_model=List[UsersModelResponse])
-def get_all_users_models(
-    session=Depends(get_db_session),
+async def get_all_users_models(
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[Users]:
     """
     Retrieve all users objects from the database.
@@ -102,7 +107,7 @@ def get_all_users_models(
     :param users_dao: DAO for users models.
     :return: list of users objects from database.
     """
-    users_dao = UsersDAO(session)
+    users_dao = AsyncUsersDAO(session)
     return users_dao.get_all_users()
 
 
@@ -112,11 +117,11 @@ def get_all_users_models(
     summary="Admin: List all organizations",
     description="Retrieve all organizations with pagination support.",
 )
-def admin_list_organizations(
+async def admin_list_organizations(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     name: Optional[str] = Query(None, description="Filter by name (partial match)"),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> OrganizationListResponse:
     """
     List all organizations in the system with pagination.
@@ -130,13 +135,13 @@ def admin_list_organizations(
     from orchestra.db.dao.organization_dao import OrganizationDAO
 
     org_dao = OrganizationDAO(session)
-    member_dao = OrganizationMemberDAO(session)
+    member_dao = AsyncOrganizationMemberDAO(session)
 
-    orgs = org_dao.list_all(limit=limit, offset=offset, name_filter=name)
+    orgs = await org_dao.list_all(limit=limit, offset=offset, name_filter=name)
 
     items = []
     for org in orgs:
-        member_count = member_dao.count_members(org.id)
+        member_count = await member_dao.count_members(org.id)
         items.append(
             OrganizationListItem(
                 id=org.id,
@@ -156,9 +161,9 @@ def admin_list_organizations(
 
 
 @router.get("/get_user", response_model=List[UsersModelResponse])
-def get_user(
+async def get_user(
     id: str,  # noqa: WPS125
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[Users]:
     """
     Retrieve specific users object from the database.
@@ -167,15 +172,15 @@ def get_user(
     :param users_dao: DAO for users models.
     :return: list of users objects from database.
     """
-    users_dao = UsersDAO(session)
-    return users_dao.filter(id=id)
+    users_dao = AsyncUsersDAO(session)
+    return await users_dao.filter(id=id)
 
 
 @router.get("/get_all_recharge_types", response_model=List[RechargeTypeModelResponse])
-def get_recharge_type_models(
+async def get_recharge_type_models(
     limit: int = 10,
     offset: int = 0,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[RechargeType]:
     """
     Retrieve all recharge_type objects from the database.
@@ -185,14 +190,14 @@ def get_recharge_type_models(
     :param recharge_type_dao: DAO for recharge_type models.
     :return: list of recharge_type objects from database.
     """
-    recharge_type_dao = RechargeTypeDAO(session)
+    recharge_type_dao = AsyncRechargeTypeDAO(session)
     return recharge_type_dao.get_all_recharge_types(limit=limit, offset=offset)
 
 
 @router.get("/get_recharge_type", response_model=List[RechargeTypeModelResponse])
-def get_recharge_type(
+async def get_recharge_type(
     type: str,  # noqa: WPS125
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[RechargeType]:
     """
     Retrieve specific recharge_type object from the database.
@@ -201,15 +206,15 @@ def get_recharge_type(
     :param recharge_type_dao: DAO for recharge_type models.
     :return: recharge_type object from database.
     """
-    recharge_type_dao = RechargeTypeDAO(session)
-    return recharge_type_dao.filter(type=type)
+    recharge_type_dao = AsyncRechargeTypeDAO(session)
+    return await recharge_type_dao.filter(type=type)
 
 
 @router.get("/get_all_recharges", response_model=List[RechargeModelResponse])
-def get_recharge_models(
+async def get_recharge_models(
     limit: int = 10,
     offset: int = 0,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[Recharge]:
     """
     Retrieve all recharge objects from the database.
@@ -219,18 +224,18 @@ def get_recharge_models(
     :param recharge_dao: DAO for recharge models.
     :return: list of recharge objects from database.
     """
-    recharge_dao = RechargeDAO(session)
+    recharge_dao = AsyncRechargeDAO(session)
     return recharge_dao.get_all_recharges(limit=limit, offset=offset)
 
 
 @router.get("/get_recharge", response_model=List[RechargeModelResponse])
-def get_recharge(  # noqa: WPS211
+async def get_recharge(  # noqa: WPS211
     id: Optional[int] = None,  # noqa: WPS125
     at: Optional[datetime] = None,
     user_id: Optional[str] = None,
     quantity: Optional[int] = None,
     type: Optional[str] = None,  # noqa: WPS125
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[Recharge]:
     """
     Retrieve specific recharge object from the database.
@@ -243,8 +248,8 @@ def get_recharge(  # noqa: WPS211
     :param recharge_dao: DAO for recharge models.
     :return: list of recharge objects from database.
     """
-    recharge_dao = RechargeDAO(session)
-    return recharge_dao.filter(
+    recharge_dao = AsyncRechargeDAO(session)
+    return await recharge_dao.filter(
         id=id,
         at=at,
         user_id=user_id,
@@ -254,10 +259,10 @@ def get_recharge(  # noqa: WPS211
 
 
 @router.get("/get_all_benchmark_runs", response_model=List[BenchmarkRunModelResponse])
-def get_benchmark_run_models(
+async def get_benchmark_run_models(
     limit: int = 10,
     offset: int = 0,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[BenchmarkRun]:
     """
     Retrieve all benchmark_run objects from the database.
@@ -267,19 +272,19 @@ def get_benchmark_run_models(
     :param benchmark_run_dao: DAO for benchmark_run models.
     :return: list of benchmark_run objects from database.
     """
-    benchmark_run_dao = BenchmarkRunDAO(session)
+    benchmark_run_dao = AsyncBenchmarkRunDAO(session)
     return benchmark_run_dao.get_all_benchmark_runs(limit=limit, offset=offset)
 
 
 @router.get("/get_benchmark_run", response_model=List[BenchmarkRunModelResponse])
-def get_benchmark_run(  # noqa: WPS211
+async def get_benchmark_run(  # noqa: WPS211
     id: Optional[int] = None,  # noqa: WPS125
     endpoint_id: Optional[int] = None,
     regime: Optional[str] = None,
     region: Optional[str] = None,
     seq_len: Optional[str] = None,
     measured_at: Optional[datetime] = None,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[BenchmarkRun]:
     """
     Retrieve specific benchmark_run object from the database.
@@ -293,8 +298,8 @@ def get_benchmark_run(  # noqa: WPS211
     :param benchmark_run_dao: DAO for benchmark_run models.
     :return: benchmark_run object from database.
     """
-    benchmark_run_dao = BenchmarkRunDAO(session)
-    return benchmark_run_dao.filter(
+    benchmark_run_dao = AsyncBenchmarkRunDAO(session)
+    return await benchmark_run_dao.filter(
         id=id,
         endpoint_id=endpoint_id,
         regime=regime,
@@ -305,10 +310,10 @@ def get_benchmark_run(  # noqa: WPS211
 
 
 @router.get("/get_all_datapoints", response_model=List[DatapointModelResponse])
-def get_datapoint_models(
+async def get_datapoint_models(
     limit: int = 10,
     offset: int = 0,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[Datapoint]:
     """
     Retrieve all datapoint objects from the database.
@@ -318,18 +323,18 @@ def get_datapoint_models(
     :param datapoint_dao: DAO for datapoint models.
     :return: list of datapoint objects from database.
     """
-    datapoint_dao = DatapointDAO(session)
+    datapoint_dao = AsyncDatapointDAO(session)
     return datapoint_dao.get_all_datapoints(limit=limit, offset=offset)
 
 
 @router.get("/get_datapoint", response_model=List[DatapointModelResponse])
-def get_datapoint(  # noqa: WPS211
+async def get_datapoint(  # noqa: WPS211
     id: Optional[int] = None,  # noqa: WPS125
     benchmark_run_id: Optional[int] = None,
     metric_name: Optional[str] = None,
     value: Optional[float] = None,
     measured_at: Optional[datetime] = None,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[Datapoint]:
     """
     Retrieve specific datapoint object from the database.
@@ -342,8 +347,8 @@ def get_datapoint(  # noqa: WPS211
     :param datapoint_dao: DAO for datapoint models.
     :return: datapoint object from database.
     """
-    datapoint_dao = DatapointDAO(session)
-    return datapoint_dao.filter(
+    datapoint_dao = AsyncDatapointDAO(session)
+    return await datapoint_dao.filter(
         id=id,
         benchmark_run_id=benchmark_run_id,
         metric_name=metric_name,
@@ -353,10 +358,10 @@ def get_datapoint(  # noqa: WPS211
 
 
 @router.get("/get_all_endpoints_raw", response_model=List[EndpointModelResponse])
-def get_endpoint_models(
+async def get_endpoint_models(
     limit: int = 10,
     offset: int = 0,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[Endpoint]:
     """
     Retrieve all endpoint objects from the database.
@@ -366,17 +371,17 @@ def get_endpoint_models(
     :param endpoint_dao: DAO for endpoint models.
     :return: list of endpoint objects from database.
     """
-    endpoint_dao = EndpointDAO(session)
+    endpoint_dao = AsyncEndpointDAO(session)
     return endpoint_dao.get_all_endpoints_raw(limit=limit, offset=offset)
 
 
 @router.get("/get_endpoint", response_model=List[EndpointModelResponse])
-def get_endpoint(
+async def get_endpoint(
     id: Optional[int] = None,  # noqa: WPS125
     mdl_id: Optional[int] = None,
     provider_id: Optional[int] = None,
     created_at: Optional[datetime] = None,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[Endpoint]:
     """
     Retrieve specific endpoint object from the database.
@@ -388,8 +393,8 @@ def get_endpoint(
     :param endpoint_dao: DAO for endpoint models.
     :return: endpoint object from database.
     """
-    endpoint_dao = EndpointDAO(session)
-    return endpoint_dao.filter(
+    endpoint_dao = AsyncEndpointDAO(session)
+    return await endpoint_dao.filter(
         id=id,
         mdl_id=mdl_id,
         provider_id=provider_id,
@@ -398,10 +403,10 @@ def get_endpoint(
 
 
 @router.get("/get_all_metrics", response_model=List[MetricModelResponse])
-def get_metric_models(
+async def get_metric_models(
     limit: int = 10,
     offset: int = 0,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[Metric]:
     """
     Retrieve all metric objects from the database.
@@ -411,19 +416,19 @@ def get_metric_models(
     :param metric_dao: DAO for metric models.
     :return: list of metric objects from database.
     """
-    metric_dao = MetricDAO(session)
+    metric_dao = AsyncMetricDAO(session)
     return metric_dao.get_all_metrics(limit=limit, offset=offset)
 
 
 @router.get("/get_metric", response_model=List[MetricModelResponse])
-def get_metric(  # noqa: WPS211
+async def get_metric(  # noqa: WPS211
     name: str,
     units: str,
     display_name: str,
     tooltip: str,
     priority: int,
     plottable: bool,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[Metric]:
     """
     Retrieve specific metric object from the database.
@@ -437,8 +442,8 @@ def get_metric(  # noqa: WPS211
     :param metric_dao: DAO for metric models.
     :return: list of metric objects from database.
     """
-    metric_dao = MetricDAO(session)
-    return metric_dao.filter(
+    metric_dao = AsyncMetricDAO(session)
+    return await metric_dao.filter(
         name=name,
         units=units,
         display_name=display_name,
@@ -449,10 +454,10 @@ def get_metric(  # noqa: WPS211
 
 
 @router.get("/get_all_modalities", response_model=List[ModalityModelResponse])
-def get_modality_models(
+async def get_modality_models(
     limit: int = 10,
     offset: int = 0,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[Modality]:
     """
     Retrieve all modality objects from the database.
@@ -462,14 +467,14 @@ def get_modality_models(
     :param modality_dao: DAO for modality models.
     :return: list of modality objects from database.
     """
-    modality_dao = ModalityDAO(session)
+    modality_dao = AsyncModalityDAO(session)
     return modality_dao.get_all_modalities(limit=limit, offset=offset)
 
 
 @router.get("/get_modality", response_model=List[ModalityModelResponse])
-def get_modality(
+async def get_modality(
     name: str,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[Modality]:
     """
     Retrieve specific modality object from the database.
@@ -478,15 +483,15 @@ def get_modality(
     :param modality_dao: DAO for modality models.
     :return: modality object from database.
     """
-    modality_dao = ModalityDAO(session)
-    return modality_dao.filter(name=name)
+    modality_dao = AsyncModalityDAO(session)
+    return await modality_dao.filter(name=name)
 
 
 @router.get("/get_all_tasks", response_model=List[TaskModelResponse])
-def get_task_models(
+async def get_task_models(
     limit: int = 10,
     offset: int = 0,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[Task]:
     """
     Retrieve all task objects from the database.
@@ -496,14 +501,14 @@ def get_task_models(
     :param task_dao: DAO for task models.
     :return: list of task objects from database.
     """
-    task_dao = TaskDAO(session)
+    task_dao = AsyncTaskDAO(session)
     return task_dao.get_all_tasks(limit=limit, offset=offset)
 
 
 @router.get("/get_task", response_model=List[TaskModelResponse])
-def get_task(
+async def get_task(
     name: str,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[Task]:
     """
     Retrieve specific task object from the database.
@@ -512,8 +517,8 @@ def get_task(
     :param task_dao: DAO for task models.
     :return: task object from database.
     """
-    task_dao = TaskDAO(session)
-    return task_dao.filter(name=name)
+    task_dao = AsyncTaskDAO(session)
+    return await task_dao.filter(name=name)
 
 
 @router.get(
@@ -522,7 +527,7 @@ def get_task(
     summary="Admin: list all assistants",
     description="Retrieve every assistant in the system, optionally filtered by phone or email.",
 )
-def admin_list_assistants(
+async def admin_list_assistants(
     phone: Optional[str] = Query(
         None,
         description="Only return assistants whose phone number matches this E.164-style value (leading '+' is URL-encoded).",
@@ -547,7 +552,7 @@ def admin_list_assistants(
         None,
         description="Only return assistants whose agent_id matches this value.",
     ),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> InfoResponse[List[AssistantRead]]:
     """
     List all assistants in the system with optional filtering by phone or email.
@@ -557,11 +562,11 @@ def admin_list_assistants(
     user_phone = normalize_phone_parameter(user_phone)
     user_whatsapp_number = normalize_phone_parameter(user_whatsapp_number)
     assistant_whatsapp_number = normalize_phone_parameter(assistant_whatsapp_number)
-    assistant_dao = AssistantDAO(session)
-    voice_dao = VoiceDAO(session)
-    api_key_dao = ApiKeyDAO(session)
-    auth_user_dao = AuthUserDAO(session)
-    secret_dao = AssistantSecretDAO(session)
+    assistant_dao = AsyncAssistantDAO(session)
+    voice_dao = AsyncVoiceDAO(session)
+    api_key_dao = AsyncApiKeyDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
+    secret_dao = AsyncAssistantSecretDAO(session)
     try:
         assistants = assistant_dao.list_all_assistants(
             phone=phone,
@@ -573,17 +578,19 @@ def admin_list_assistants(
         )
 
         # Get API key based on assistant type (personal vs organizational)
-        def get_api_key_for_assistant(assistant):
+        async def get_api_key_for_assistant(assistant):
             if assistant.organization_id is None:
                 # Personal assistant - get user's personal API key
                 keys = api_key_dao.get_personal_keys(assistant.user_id)
             else:
                 # Org assistant - get org API key
-                keys = api_key_dao.filter(organization_id=assistant.organization_id)
+                keys = await api_key_dao.filter(
+                    organization_id=assistant.organization_id,
+                )
             return keys[0][0].key if keys else None
 
         # Get secrets for each assistant
-        def get_secrets_for_assistant(assistant):
+        async def get_secrets_for_assistant(assistant):
             secrets = secret_dao.list_secrets(
                 assistant.user_id,
                 assistant.agent_id,
@@ -646,7 +653,7 @@ def admin_list_assistants(
     summary="Admin: update assistant",
     description="Update a single assistant based on unique filter parameters.",
 )
-def admin_update_assistant(
+async def admin_update_assistant(
     phone: Optional[str] = Query(
         None,
         description="Filter: assistant phone number",
@@ -675,7 +682,7 @@ def admin_update_assistant(
         None,
         description="New WhatsApp number for the user",
     ),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> InfoResponse[AssistantRead]:
     """
     Update a single assistant based on filter parameters.
@@ -693,9 +700,9 @@ def admin_update_assistant(
     )
 
     # Find the assistant to update
-    dao = AssistantDAO(session)
-    api_key_dao = ApiKeyDAO(session)
-    secret_dao = AssistantSecretDAO(session)
+    dao = AsyncAssistantDAO(session)
+    api_key_dao = AsyncApiKeyDAO(session)
+    secret_dao = AsyncAssistantSecretDAO(session)
     assistants = dao.list_all_assistants(
         phone=phone,
         user_phone=user_phone,
@@ -723,13 +730,13 @@ def admin_update_assistant(
         agent_id=a.agent_id,
         update_data=update_data,
     )
-    session.commit()
+    await session.commit()
 
     # Get API key based on assistant type (personal vs organizational)
     if updated.organization_id is None:
         keys = api_key_dao.get_personal_keys(updated.user_id)
     else:
-        keys = api_key_dao.filter(organization_id=updated.organization_id)
+        keys = await api_key_dao.filter(organization_id=updated.organization_id)
     api_key = keys[0][0].key if keys else None
 
     # Get secrets for the assistant
@@ -779,7 +786,7 @@ def admin_update_assistant(
     summary="Admin: list all assistants for a user",
     description="Retrieve all assistants for the specified user_id, optionally filtered by phone, email, or WhatsApp numbers.",
 )
-def admin_list_assistants_for_user(
+async def admin_list_assistants_for_user(
     user_id: str,
     phone: Optional[str] = Query(
         None,
@@ -801,16 +808,16 @@ def admin_list_assistants_for_user(
         None,
         description="Only return assistants whose assistant WhatsApp number matches this value.",
     ),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> InfoResponse[List[AssistantRead]]:
     """List all assistants belonging to a given user, with optional filtering."""
     # Normalize phone parameter to handle URL-decoded '+' characters
     phone = normalize_phone_parameter(phone)
     user_whatsapp_number = normalize_phone_parameter(user_whatsapp_number)
     assistant_whatsapp_number = normalize_phone_parameter(assistant_whatsapp_number)
-    dao = AssistantDAO(session)
-    api_key_dao = ApiKeyDAO(session)
-    secret_dao = AssistantSecretDAO(session)
+    dao = AsyncAssistantDAO(session)
+    api_key_dao = AsyncApiKeyDAO(session)
+    secret_dao = AsyncAssistantSecretDAO(session)
     try:
         assistants = dao.list_assistants_for_user(
             user_id=user_id,
@@ -822,15 +829,17 @@ def admin_list_assistants_for_user(
         )
 
         # Get API key based on assistant type (personal vs organizational)
-        def get_api_key_for_assistant(assistant):
+        async def get_api_key_for_assistant(assistant):
             if assistant.organization_id is None:
                 keys = api_key_dao.get_personal_keys(assistant.user_id)
             else:
-                keys = api_key_dao.filter(organization_id=assistant.organization_id)
+                keys = await api_key_dao.filter(
+                    organization_id=assistant.organization_id,
+                )
             return keys[0][0].key if keys else None
 
         # Get secrets for each assistant
-        def get_secrets_for_assistant(assistant):
+        async def get_secrets_for_assistant(assistant):
             secrets = secret_dao.list_secrets(
                 assistant.user_id,
                 assistant.agent_id,
@@ -888,14 +897,14 @@ def admin_list_assistants_for_user(
     response_model=List[Contact],
     description="List all contact-context logs, optionally filtered by email, phone, or WhatsApp number",
 )
-def admin_list_contacts(
+async def admin_list_contacts(
     email_address: Optional[str] = Query(None, description="Filter by email_address"),
     phone_number: Optional[str] = Query(None, description="Filter by phone_number"),
     whatsapp_number: Optional[str] = Query(
         None,
         description="Filter by whatsapp_number",
     ),
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[Contact]:
     """
     Retrieve all contact logs stored in any context containing "Contacts" (case-sensitive). Supports optional filtering on email, phone, or WhatsApp number.
@@ -919,7 +928,7 @@ def admin_list_contacts(
         filters["whatsapp_number"] = normalize_phone_parameter(whatsapp_number)
 
     # 5) Retrieve matching log_event IDs
-    log_event_dao = LogEventDAO(session)
+    log_event_dao = AsyncLogEventDAO(session)
     log_dao = LogDAO(session, ContextDAO(session))
     if filters:
         event_ids = log_dao.get_ids_by_filter(
@@ -930,7 +939,7 @@ def admin_list_contacts(
     else:
         event_ids = []
         for cid in ctx_ids:
-            rows = log_event_dao.filter(context_id=cid)
+            rows = await log_event_dao.filter(context_id=cid)
             for r in rows:
                 evt = r[0]
                 event_ids.append(evt.id)
@@ -992,9 +1001,9 @@ def admin_list_contacts(
 
 
 @router.put("/create_datapoint")
-def create_datapoint_model(
+async def create_datapoint_model(
     new_datapoint_object: DatapointModelRequest,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Creates datapoint model in the database.
@@ -1002,7 +1011,7 @@ def create_datapoint_model(
     :param new_datapoint_object: new datapoint model item.
     :param datapoint_dao: DAO for datapoint models.
     """
-    datapoint_dao = DatapointDAO(session)
+    datapoint_dao = AsyncDatapointDAO(session)
     datapoint_dao.create_datapoint(
         benchmark_run_id=new_datapoint_object.benchmark_run_id,
         measured_at=new_datapoint_object.measured_at,
@@ -1013,9 +1022,9 @@ def create_datapoint_model(
 
 
 @router.put("/create_endpoint")
-def create_endpoint_model(
+async def create_endpoint_model(
     new_endpoint_object: EndpointModelRequest,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Creates endpoint model in the database.
@@ -1024,7 +1033,7 @@ def create_endpoint_model(
     :param endpoint_dao: DAO for endpoint models.
     """
     created_at = datetime.now(timezone.utc)
-    endpoint_dao = EndpointDAO(session)
+    endpoint_dao = AsyncEndpointDAO(session)
     endpoint_dao.create_endpoint(
         mdl_id=new_endpoint_object.mdl_id,
         provider_id=new_endpoint_object.provider_id,
@@ -1033,9 +1042,9 @@ def create_endpoint_model(
 
 
 @router.put("/create_metric")
-def create_metric_model(
+async def create_metric_model(
     new_metric_object: MetricModelRequest,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Creates metric model in the database.
@@ -1043,7 +1052,7 @@ def create_metric_model(
     :param new_metric_object: new metric model item.
     :param metric_dao: DAO for metric models.
     """
-    metric_dao = MetricDAO(session)
+    metric_dao = AsyncMetricDAO(session)
     metric_dao.create_metric(
         name=new_metric_object.name,
         units=new_metric_object.units,
@@ -1055,9 +1064,9 @@ def create_metric_model(
 
 
 @router.put("/create_modality")
-def create_modality_model(
+async def create_modality_model(
     new_modality_object: ModalityModelRequest,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Creates modality model in the database.
@@ -1065,16 +1074,16 @@ def create_modality_model(
     :param new_modality_object: new modality model item.
     :param modality_dao: DAO for modality models.
     """
-    modality_dao = ModalityDAO(session)
+    modality_dao = AsyncModalityDAO(session)
     modality_dao.create_modality(
         name=new_modality_object.name,
     )
 
 
 @router.put("/create_model")
-def create_model(
+async def create_model(
     new_model_object: ModelRequest,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Creates model model in the database.
@@ -1083,7 +1092,7 @@ def create_model(
     :param model_dao: DAO for model models.
     """
     uploaded_at = datetime.now(timezone.utc)
-    model_dao = ModelDAO(session)
+    model_dao = AsyncModelDAO(session)
     model_dao.create_model(
         mdl_code=new_model_object.mdl_code,
         uploaded_at=uploaded_at,
@@ -1093,13 +1102,13 @@ def create_model(
 
 
 @router.put("/update_model")
-def update_model(  # noqa: WPS211
+async def update_model(  # noqa: WPS211
     id: int,  # noqa: WPS125
     mdl_code: Optional[str] = None,
     uploaded_at: Optional[datetime] = None,
     task: Optional[str] = None,
     active: Optional[bool] = None,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Update specific model model.
@@ -1111,7 +1120,7 @@ def update_model(  # noqa: WPS211
     :param active: is model instance active.
     :param model_dao: DAO for model models.
     """
-    model_dao = ModelDAO(session)
+    model_dao = AsyncModelDAO(session)
     model_dao.update_model(
         id=id,
         mdl_code=mdl_code,
@@ -1122,9 +1131,9 @@ def update_model(  # noqa: WPS211
 
 
 @router.put("/create_provider")
-def create_provider_model(
+async def create_provider_model(
     new_provider_object: ProviderModelRequest,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Creates provider model in the database.
@@ -1132,7 +1141,7 @@ def create_provider_model(
     :param new_provider_object: new provider model item.
     :param provider_dao: DAO for provider models.
     """
-    provider_dao = ProviderDAO(session)
+    provider_dao = AsyncProviderDAO(session)
     provider_dao.create_provider(
         name=new_provider_object.name,
         image_url=new_provider_object.image_url,
@@ -1141,9 +1150,9 @@ def create_provider_model(
 
 
 @router.post("/create_recharge")
-def create_recharge_model(
+async def create_recharge_model(
     new_recharge_object: RechargeModelRequest,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Creates recharge model in the database.
@@ -1163,8 +1172,8 @@ def create_recharge_model(
         f"Quantity: {new_recharge_object.quantity}",
     )
 
-    recharge_dao = RechargeDAO(session)
-    user_dao = UsersDAO(session)
+    recharge_dao = AsyncRechargeDAO(session)
+    user_dao = AsyncUsersDAO(session)
     if (
         new_recharge_object.type == "payment"
         and new_recharge_object.transaction_id is None
@@ -1218,7 +1227,7 @@ def create_recharge_model(
         logger.info(f"Processing auto recharge for user {new_recharge_object.user_id}")
 
         # Get user to check for Stripe customer ID
-        user = user_dao.filter(id=new_recharge_object.user_id)
+        user = await user_dao.filter(id=new_recharge_object.user_id)
         logger.info(f"User lookup result: {len(user) if user else 0} users found")
 
         if user and len(user) > 0:
@@ -1342,9 +1351,9 @@ def create_recharge_model(
 
 
 @router.put("/create_recharge_type")
-def create_recharge_type_model(
+async def create_recharge_type_model(
     new_recharge_type_object: RechargeTypeModelRequest,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Creates recharge_type model in the database.
@@ -1352,16 +1361,16 @@ def create_recharge_type_model(
     :param new_recharge_type_object: new recharge_type model item.
     :param recharge_type_dao: DAO for recharge_type models.
     """
-    recharge_type_dao = RechargeTypeDAO(session)
+    recharge_type_dao = AsyncRechargeTypeDAO(session)
     recharge_type_dao.create_recharge_type(
         type=new_recharge_type_object.type,
     )
 
 
 @router.put("/create_task")
-def create_task_model(
+async def create_task_model(
     new_task_object: TaskModelRequest,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Create new task model in the database.
@@ -1369,21 +1378,21 @@ def create_task_model(
     :param new_task_object: new task model item.
     :param task_dao: DAO for task models.
     """
-    task_dao = TaskDAO(session)
+    task_dao = AsyncTaskDAO(session)
     task_dao.create_task_model(
         name=new_task_object.name,
     )
 
 
 @router.put("/update_benchmark_run")
-def update_benchmark_run(  # noqa: WPS211
+async def update_benchmark_run(  # noqa: WPS211
     id: int,  # noqa: WPS125
     endpoint_id: Optional[int] = None,
     regime: Optional[str] = None,
     region: Optional[str] = None,
     seq_len: Optional[str] = None,
     measured_at: Optional[datetime] = None,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Update specific benchmark_run model.
@@ -1396,7 +1405,7 @@ def update_benchmark_run(  # noqa: WPS211
     :param measured_at: measured_at of benchmark_run instance.
     :param benchmark_run_dao: DAO for benchmark_run models.
     """
-    benchmark_run_dao = BenchmarkRunDAO(session)
+    benchmark_run_dao = AsyncBenchmarkRunDAO(session)
     benchmark_run_dao.update_benchmark_run(
         id=id,
         endpoint_id=endpoint_id,
@@ -1408,14 +1417,14 @@ def update_benchmark_run(  # noqa: WPS211
 
 
 @router.put("/update_datapoint")
-def update_datapoint(  # noqa: WPS211
+async def update_datapoint(  # noqa: WPS211
     id: int,  # noqa: WPS125
     benchmark_run_id: Optional[int] = None,
     metric_name: Optional[str] = None,
     value: Optional[float] = None,
     tooltip: Optional[str] = None,
     measured_at: Optional[datetime] = None,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Update specific datapoint model.
@@ -1428,7 +1437,7 @@ def update_datapoint(  # noqa: WPS211
     :param measured_at: measured_at of datapoint instance.
     :param datapoint_dao: DAO for datapoint models.
     """
-    datapoint_dao = DatapointDAO(session)
+    datapoint_dao = AsyncDatapointDAO(session)
     datapoint_dao.update_datapoint(
         id=id,
         benchmark_run_id=benchmark_run_id,
@@ -1440,10 +1449,10 @@ def update_datapoint(  # noqa: WPS211
 
 
 @router.put("/stripe_customer_id")
-def update_user_stripe_customer_id(  # noqa: WPS211
+async def update_user_stripe_customer_id(  # noqa: WPS211
     id: str,  # noqa: WPS125
     stripe_customer_id: str,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Update the stripe customer id of a user.
@@ -1452,16 +1461,16 @@ def update_user_stripe_customer_id(  # noqa: WPS211
     :param stripe_customer_id: stripe customer id.
     :param users_dao: DAO for users models.
     """
-    users_dao = UsersDAO(session)
+    users_dao = AsyncUsersDAO(session)
     users_dao.set_stripe_customer_id(user_id=id, stripe_id=stripe_customer_id)
     users_dao.session.commit()
 
 
 @router.put("/enable_autorecharge")
-def update_user_autorecharge(  # noqa: WPS211
+async def update_user_autorecharge(  # noqa: WPS211
     id: str,  # noqa: WPS125
     enable: bool,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Update the autorecharge status of a user.
@@ -1470,7 +1479,7 @@ def update_user_autorecharge(  # noqa: WPS211
     :param enable: whether to enable or disable autorecharge.
     :param users_dao: DAO for users models.
     """
-    users_dao = UsersDAO(session)
+    users_dao = AsyncUsersDAO(session)
     try:
         users_dao.enable_autorecharge(user_id=id, enable=enable)
         users_dao.session.commit()
@@ -1482,10 +1491,10 @@ def update_user_autorecharge(  # noqa: WPS211
 
 
 @router.put("/autorecharge_threshold")
-def update_user_autorecharge_threshold(  # noqa: WPS211
+async def update_user_autorecharge_threshold(  # noqa: WPS211
     id: str,  # noqa: WPS125
     threshold: float,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Update the autorecharge threshold of a user.
@@ -1494,16 +1503,16 @@ def update_user_autorecharge_threshold(  # noqa: WPS211
     :param threshold: new autorecharge threshold.
     :param users_dao: DAO for users models.
     """
-    users_dao = UsersDAO(session)
+    users_dao = AsyncUsersDAO(session)
     users_dao.set_autorecharge_threshold(user_id=id, threshold=threshold)
     users_dao.session.commit()
 
 
 @router.put("/autorecharge_qty")
-def update_user_autorecharge_qty(  # noqa: WPS211
+async def update_user_autorecharge_qty(  # noqa: WPS211
     id: str,  # noqa: WPS125
     qty: float,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Update the autorecharge quantity of a user.
@@ -1512,7 +1521,7 @@ def update_user_autorecharge_qty(  # noqa: WPS211
     :param qty: new autorecharge quantity.
     :param users_dao: DAO for users models.
     """
-    users_dao = UsersDAO(session)
+    users_dao = AsyncUsersDAO(session)
     try:
         users_dao.set_autorecharge_qty(user_id=id, qty=qty)
         users_dao.session.commit()
@@ -1524,14 +1533,14 @@ def update_user_autorecharge_qty(  # noqa: WPS211
 
 
 @router.put("/create_custom_router")
-def create_custom_router(
+async def create_custom_router(
     custom_router_object: CustomRouterRequest,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Creates a custom router in the database.
     """
-    custom_router_dao = CustomRouterDAO(session)
+    custom_router_dao = AsyncCustomRouterDAO(session)
     custom_router_dao.create_custom_router(
         user_id=custom_router_object.user_id,
         router_name=custom_router_object.router_name,
@@ -1540,54 +1549,54 @@ def create_custom_router(
 
 
 @router.put("/update_user_prompt_telemetry")
-def update_user_prompt_telemetry(
+async def update_user_prompt_telemetry(
     user_id: str,
     activated: bool,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Updates database evaluation model in the database.
     """
-    users_dao = UsersDAO(session)
+    users_dao = AsyncUsersDAO(session)
     users_dao.set_prompt_telemetry(user_id, activated)
 
 
 @router.get("/user_prompt_telemetry")
-def get_user_prompt_telemetry(
+async def get_user_prompt_telemetry(
     user_id: str,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> bool:
     """
     Returns state of the store prompts attr for a given user.
     """
-    users_dao = UsersDAO(session)
+    users_dao = AsyncUsersDAO(session)
     return users_dao.is_telemetry_activated(user_id)
 
 
 @router.post("/credit_card_fingerprint")
-def create_credit_card_fingerprint(
+async def create_credit_card_fingerprint(
     user_id: str,
     fingerprint: str,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Creates a credit card fingerprint entry in the database.
     """
-    credit_card_fingerprint_dao = CreditCardFingerprintDAO(session)
-    credit_card_fingerprint_dao.create(user_id, fingerprint)
+    credit_card_fingerprint_dao = AsyncCreditCardFingerprintDAO(session)
+    await credit_card_fingerprint_dao.create(user_id, fingerprint)
 
 
 @router.get("/duplicated_credit_card_fingerprint")
-def duplicated_credit_card_fingerprint(
+async def duplicated_credit_card_fingerprint(
     user_id: str,
     fingerprint: str,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> bool:
     """
     Creates a credit card fingerprint entry in the database.
     """
-    credit_card_fingerprint_dao = CreditCardFingerprintDAO(session)
-    results = credit_card_fingerprint_dao.filter(fingerprint=fingerprint)
+    credit_card_fingerprint_dao = AsyncCreditCardFingerprintDAO(session)
+    results = await credit_card_fingerprint_dao.filter(fingerprint=fingerprint)
     results = [r for r in results if r.user_id != user_id]
     if len(results) > 0:
         return True
@@ -1598,27 +1607,27 @@ def duplicated_credit_card_fingerprint(
     "/credit_card_fingerprint",
     response_model=List[CreditCardFingerprintModelResponse],
 )
-def get_credit_card_fingerprint(
+async def get_credit_card_fingerprint(
     user_id: str,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> List[CreditCardFingerprint]:
     """
     Returns the credit card fingerprints entry in the database matching a user id.
     """
-    credit_card_fingerprint_dao = CreditCardFingerprintDAO(session)
-    return credit_card_fingerprint_dao.filter(user_id=user_id)
+    credit_card_fingerprint_dao = AsyncCreditCardFingerprintDAO(session)
+    return await credit_card_fingerprint_dao.filter(user_id=user_id)
 
 
 @router.post("/run_demo")
-def run_demo(
+async def run_demo(
     demo_object: DemoModelRequest,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> None:
     """
     Run a given demo for the user in an isolated process.
     """
-    api_key_dao = ApiKeyDAO(session)
-    api_key = api_key_dao.filter(user_id=demo_object.user_id)
+    api_key_dao = AsyncApiKeyDAO(session)
+    api_key = await api_key_dao.filter(user_id=demo_object.user_id)
     if not api_key:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
@@ -1712,16 +1721,16 @@ def run_demo(
         },
     },
 )
-def write_files(
+async def write_files(
     request: FileWriteRequest,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Write/Update files to the Google Cloud Storage bucket.
     The files will be stored at <user-id>/<project>/<path>
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     # Admin endpoint - use any context lookup
     project = project_dao.get_by_user_and_name_any_context(
@@ -1791,18 +1800,18 @@ def write_files(
         },
     },
 )
-def get_files(
+async def get_files(
     user_id: str,
     project: str,
     staging: bool = False,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Get all files in a user's project folder in the bucket.
     Returns a flat list of file paths mapped to base64-encoded contents.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     # Admin endpoint - use any context lookup
     project_obj = project_dao.get_by_user_and_name_any_context(
@@ -1882,18 +1891,18 @@ def get_files(
         },
     },
 )
-def get_file_contents(
+async def get_file_contents(
     user_id: str,
     project: str,
     path: str,
     staging: bool = False,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Get the contents of a specific file in the bucket.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     # Admin endpoint - use any context lookup
     project_obj = project_dao.get_by_user_and_name_any_context(
@@ -1969,19 +1978,19 @@ def get_file_contents(
         },
     },
 )
-def delete_file_or_folder(
+async def delete_file_or_folder(
     user_id: str,
     project: str,
     path: str,
     staging: bool = False,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Delete a file or folder from the user's project directory.
     If the path points to a folder, all contents will be deleted recursively.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     # Admin endpoint - use any context lookup
     project_obj = project_dao.get_by_user_and_name_any_context(
@@ -2055,16 +2064,16 @@ def delete_file_or_folder(
         },
     },
 )
-def create_upload_url(
+async def create_upload_url(
     request: FileUploadUrlRequest,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Create a signed URL for a GCS resumable upload session.
     Clients should upload the file directly to this URL using the resumable protocol.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     # Admin endpoint - use any context lookup
     project = project_dao.get_by_user_and_name_any_context(
@@ -2137,20 +2146,20 @@ def create_upload_url(
         },
     },
 )
-def create_download_url(
+async def create_download_url(
     user_id: str,
     project: str,
     path: str,
     staging: bool = False,
     expires_in: int = 3600,
     as_prefix: bool = False,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """
     Create a time-bound signed URL for downloading a file from GCS.
     """
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     # Admin endpoint - use any context lookup
     project_obj = project_dao.get_by_user_and_name_any_context(
@@ -2231,10 +2240,10 @@ def create_download_url(
 
 
 @router.post("/billing/invoice-month")
-def trigger_monthly_invoicing(
+async def trigger_monthly_invoicing(
     year: Optional[int] = None,
     month: Optional[int] = None,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> dict:
     """
     Trigger monthly invoicing for the specified period.
@@ -2265,8 +2274,8 @@ def trigger_monthly_invoicing(
 
 
 @router.post("/billing/suspend-past-due")
-def trigger_billing_guard(
-    session=Depends(get_db_session),
+async def trigger_billing_guard(
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> dict:
     """
     Trigger billing guard to suspend past-due users with zero credits.
@@ -2290,9 +2299,9 @@ def trigger_billing_guard(
 
 
 @router.get("/user_billing_eligibility")
-def get_user_billing_eligibility(
+async def get_user_billing_eligibility(
     user_id: str,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> dict:
     """
     Get billing eligibility information for a specific user.
@@ -2303,7 +2312,7 @@ def get_user_billing_eligibility(
     :param session: Database session
     :return: Dictionary with eligibility information
     """
-    users_dao = UsersDAO(session)
+    users_dao = AsyncUsersDAO(session)
 
     try:
         user = users_dao.get_user_with_id(user_id)
@@ -2325,8 +2334,8 @@ def get_user_billing_eligibility(
 
 
 @router.post("/billing/migrate-users")
-def migrate_users_to_billing_compliance(
-    session=Depends(get_db_session),
+async def migrate_users_to_billing_compliance(
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> dict:
     """
     Migrate all users to comply with new billing requirements.
@@ -2338,7 +2347,7 @@ def migrate_users_to_billing_compliance(
     :param session: Database session
     :return: Dictionary with migration results
     """
-    users_dao = UsersDAO(session)
+    users_dao = AsyncUsersDAO(session)
 
     # Get all users with autorecharge enabled or with low autorecharge amounts
     all_users = users_dao.get_all_users()
@@ -2426,7 +2435,7 @@ def migrate_users_to_billing_compliance(
 
     # Commit all changes
     try:
-        session.commit()
+        await session.commit()
         results["status"] = "success"
         results[
             "message"
@@ -2441,10 +2450,10 @@ def migrate_users_to_billing_compliance(
 
 
 @router.post("/billing/test-auto-recharge")
-def test_queue_auto_recharge(
+async def test_queue_auto_recharge(
     user_id: str,
     credits: int = 50,
-    session=Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> dict:
     """
     Test endpoint to manually trigger auto-recharge for a user.
@@ -2462,7 +2471,7 @@ def test_queue_auto_recharge(
     from orchestra.lib.billing import queue_auto_recharge
 
     logger = logging.getLogger(__name__)
-    users_dao = UsersDAO(session)
+    users_dao = AsyncUsersDAO(session)
 
     try:
         # Get the user
@@ -2482,14 +2491,14 @@ def test_queue_auto_recharge(
 
         # Also credit the user immediately (like the real auto-recharge flow does)
         users_dao.recharge_credit(user_id, credits)
-        session.commit()
+        await session.commit()
 
         # Get updated user state
         updated_user = users_dao.get_user_with_id(user_id)
 
         # Check if a recharge record was created
-        recharge_dao = RechargeDAO(session)
-        recent_recharges = recharge_dao.filter(
+        recharge_dao = AsyncRechargeDAO(session)
+        recent_recharges = await recharge_dao.filter(
             user_id=user_id,
             type="auto",
         )
@@ -2560,8 +2569,8 @@ def test_queue_auto_recharge(
     description="Delete all expired pending organization invites. "
     "Called by scheduled cleanup job.",
 )
-def admin_cleanup_expired_invites(
-    session=Depends(get_db_session),
+async def admin_cleanup_expired_invites(
+    session: AsyncSession = Depends(get_async_db_session),
 ) -> dict:
     """
     Clean up expired organization invites.
@@ -2572,11 +2581,11 @@ def admin_cleanup_expired_invites(
     :param session: Database session.
     :return: Count of deleted invites and timestamp.
     """
-    invite_dao = OrganizationInviteDAO(session)
+    invite_dao = AsyncOrganizationInviteDAO(session)
 
     try:
         deleted_count = invite_dao.cleanup_expired_invites()
-        session.commit()
+        await session.commit()
 
         return {
             "deleted_count": deleted_count,

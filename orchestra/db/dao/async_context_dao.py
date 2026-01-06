@@ -27,7 +27,7 @@ from orchestra.db.utils import FKPathParser, PathSegment
 from orchestra.settings import settings
 
 
-async def delete_orphaned_log_events(session: Session, project_id: int) -> None:
+async def delete_orphaned_log_events(session: AsyncSession, project_id: int) -> None:
     # Using a scoped delete for the specific project.
     # This statement deletes log events that have no association rows in log_event_context.
     orphaned_log_event_ids = session.execute(

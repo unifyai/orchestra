@@ -1,11 +1,11 @@
 """Async version of project_dao for use with AsyncSession."""
-
 import hashlib
 import logging
 from datetime import datetime, timezone
 from typing import List, Optional
 
 from sqlalchemy import and_, or_, select, update
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.log_dao import LogDAO
@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 class AsyncProjectDAO:
     def __init__(
         self,
-        session: Session,
+        session: AsyncSession,
         organization_member_dao: OrganizationMemberDAO,
         context_dao: ContextDAO,
     ):

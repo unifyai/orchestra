@@ -1,4 +1,5 @@
 """
+from sqlalchemy.ext.asyncio import AsyncSession
 Shared sibling context cleanup logic for Assistants/UnityTests projects.
 
 Handles the 3-tier context hierarchy used in Assistants projects:
@@ -26,7 +27,7 @@ if TYPE_CHECKING:
 
 
 async def get_assistants_sibling_context_info(
-    session: Session,
+    session: AsyncSession,
     project_id: int,
     context_id: int,
     context_name: str,
@@ -245,7 +246,7 @@ async def get_assistants_sibling_context_info(
 
 
 async def remove_logs_from_sibling_contexts(
-    session: Session,
+    session: AsyncSession,
     sibling_context_map: Dict[int, List[int]],
 ) -> int:
     """

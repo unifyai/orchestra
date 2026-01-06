@@ -202,7 +202,7 @@ class AsyncDerivedLogDAO:
         self,
         logs_to_recompute: List[DerivedLog],
         json_encoder: json.JSONEncoder,
-        session: Session,
+        session: AsyncSession,
     ) -> None:
         """
         Recompute the 'value' (and optionally type) for each derived log in logs_to_recompute,

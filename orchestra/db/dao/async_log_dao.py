@@ -1,5 +1,4 @@
 """Async version of log_dao for use with AsyncSession."""
-
 import base64
 import copy
 import logging
@@ -11,6 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy import alias, and_, cast, func, literal, or_, select, text, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.query import Query
 
 from orchestra.db.dao.context_dao import ContextDAO
@@ -40,7 +40,7 @@ class ImmutableFieldError(Exception):
 class AsyncLogDAO:
     def __init__(
         self,
-        session: Session,
+        session: AsyncSession,
         context_dao: ContextDAO,
     ):
         self.session = session
