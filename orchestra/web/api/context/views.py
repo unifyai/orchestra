@@ -677,7 +677,7 @@ async def add_logs_to_context(
     context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = AsyncFieldTypeDAO(session)
-    log_dao = LogDAO(session, context_dao)
+    log_dao = AsyncLogDAO(session, context_dao)
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
         project = project_dao.get_by_user_and_name(

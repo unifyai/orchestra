@@ -67,7 +67,7 @@ async def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS23
     :raises HTTPException: when user has insufficient credits.
     """
     custom_endpoint_dao = AsyncCustomEndpointDAO(session)
-    custom_api_key_dao = AsyncCustomApiKeyDAO(session)
+    custom_api_key_dao = AsyncCustomAsyncApiKeyDAO(session)
 
     if isinstance(request, list):
         request_priority_list = request

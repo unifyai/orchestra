@@ -262,13 +262,13 @@ async def create_logs(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = AsyncFieldTypeDAO(session)
     log_event_dao = AsyncLogEventDAO(session)
-    log_dao = LogDAO(session, context_dao)
+    log_dao = AsyncLogDAO(session, context_dao)
 
     # check if the project exists
     try:
         user_id = request_fastapi.state.user_id
         organization_id = getattr(request_fastapi.state, "organization_id", None)
-        project = project_dao.get_by_user_and_name(
+        project = await project_dao.get_by_user_and_name(
             user_id=user_id,
             name=request.project,
             organization_id=organization_id,
@@ -280,7 +280,7 @@ async def create_logs(
     # Check write permission for org projects with explicit grants
     if organization_id is not None:
         resource_access_dao = AsyncResourceAccessDAO(session)
-        has_write = resource_access_dao.check_user_permission(
+        has_write = await resource_access_dao.check_user_permission(
             user_id=user_id,
             resource_type="project",
             resource_id=project_id,
@@ -590,14 +590,14 @@ async def create_from_logs(
     context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = AsyncFieldTypeDAO(session)
-    log_dao = LogDAO(session, context_dao)
+    log_dao = AsyncLogDAO(session, context_dao)
 
     user_id = request_fastapi.state.user_id
     organization_id = getattr(request_fastapi.state, "organization_id", None)
 
     # 1) Validate the project
     try:
-        project_obj = project_dao.get_by_user_and_name(
+        project_obj = await project_dao.get_by_user_and_name(
             name=body.project,
             user_id=user_id,
             organization_id=organization_id,
@@ -654,7 +654,7 @@ async def create_from_logs(
                 body.equation,
                 resolved_ids,
             )
-            field_types = field_type_dao.get_field_types(
+            field_types = await field_type_dao.get_field_types(
                 project_obj.id,
                 context_id=context_id,
             )
@@ -701,13 +701,13 @@ async def create_from_logs(
             # 5) Perform bulk update - use JSONB or EAV method based on mode
             if updates:
                 if settings.use_jsonb_queries:
-                    log_dao.bulk_update_jsonb(
+                    await log_dao.bulk_update_jsonb(
                         updates,
                         overwrite=True,
                         field_types=field_types,
                     )
                 else:
-                    log_dao.bulk_update(
+                    await log_dao.bulk_update(
                         updates,
                         overwrite=True,
                         field_types=field_types,
@@ -715,7 +715,7 @@ async def create_from_logs(
 
                 # 6) Create or update field type record
                 # Use infer_type=True to infer type from value (no explicit_types here)
-                field_type_dao.create_field_type_if_absent(
+                await field_type_dao.create_field_type_if_absent(
                     project_id=project_obj.id,
                     field_name=body.key,
                     value=non_null_val,
@@ -758,7 +758,7 @@ async def create_from_logs(
                     resolved_ids,
                 )
 
-                field_types = field_type_dao.get_field_types(
+                field_types = await field_type_dao.get_field_types(
                     project_obj.id,
                     context_id=context_id,
                 )
@@ -884,7 +884,7 @@ async def create_from_logs(
 
                 # Execute bulk update using JSONB method
                 if updates:
-                    log_dao.bulk_update_jsonb(
+                    await log_dao.bulk_update_jsonb(
                         updates,
                         field_types=field_types,
                         overwrite=True,
@@ -942,7 +942,7 @@ async def create_from_logs(
                 # from the list of floats (which would incorrectly infer as "List[float]")
                 is_embedding = len(embedding_objects) > 0
                 field_category = "derived_entry" if body.derived else "entry"
-                field_type_dao.create_field_type_if_absent(
+                await field_type_dao.create_field_type_if_absent(
                     project_id=project_obj.id,
                     field_name=body.key,
                     value=non_null_val,
@@ -982,7 +982,7 @@ async def create_from_logs(
                 body.equation,
                 resolved_ids,
             )
-            field_types = field_type_dao.get_field_types(
+            field_types = await field_type_dao.get_field_types(
                 project_obj.id,
                 context_id=context_id,
             )
@@ -1174,7 +1174,7 @@ async def create_from_logs(
             # For embeddings, explicitly set field_type="vector" instead of inferring
             # from the list of floats (which would incorrectly infer as "List[float]")
             is_embedding = inferred_type == "vector"
-            field_type_dao.create_field_type_if_absent(
+            await field_type_dao.create_field_type_if_absent(
                 project_id=project_obj.id,
                 field_name=body.key,
                 value=non_null_val,
@@ -1250,14 +1250,14 @@ async def update_derived_log(
     context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = AsyncFieldTypeDAO(session)
-    derived_log_dao = DerivedLogDAO(session)
+    derived_log_dao = AsyncDerivedLogDAO(session)
 
     user_id = request_fastapi.state.user_id
     organization_id = getattr(request_fastapi.state, "organization_id", None)
 
     # 1) Validate the project
     try:
-        project_obj = project_dao.get_by_user_and_name(
+        project_obj = await project_dao.get_by_user_and_name(
             name=body.project,
             user_id=user_id,
             organization_id=organization_id,
@@ -1403,7 +1403,7 @@ async def update_derived_log(
 
                 if log_ids:
                     try:
-                        count = derived_log_dao.recompute_derived_logs_jsonb(
+                        count = await derived_log_dao.recompute_derived_logs_jsonb(
                             template=template,
                             log_ids=log_ids,
                             json_encoder=CustomEncoder,
@@ -1469,7 +1469,7 @@ async def update_derived_log(
         except ValueError as ve:
             raise HTTPException(status_code=400, detail=str(ve))
         # recompute
-        derived_log_dao.recompute_derived_logs(
+        await derived_log_dao.recompute_derived_logs(
             logs_to_recompute=existing_derived_logs,
             session=session,
             json_encoder=CustomEncoder,
@@ -1515,7 +1515,7 @@ async def update_derived_log(
             ).delete(synchronize_session=False)
 
         # Also delete the field type records for these derived logs
-        field_type_dao.delete_field_type(
+        await field_type_dao.delete_field_type(
             project_id=project_id,
             field_name=valid_logs.key,
             context_id=context_id,
@@ -1555,7 +1555,7 @@ async def update_derived_log(
         )
 
         # 2. Get field types for the project
-        field_types = field_type_dao.get_field_types(
+        field_types = await field_type_dao.get_field_types(
             project_id,
             context_id=context_id,
         )
@@ -1645,7 +1645,7 @@ async def update_derived_log(
 
         # Update the field type record for the derived entry
         # Use infer_type=True to infer type from value (no explicit_types here)
-        field_type_dao.create_field_type_if_absent(
+        await field_type_dao.create_field_type_if_absent(
             project_id=project_id,
             context_id=context_id,
             field_name=final_key,
@@ -1715,8 +1715,8 @@ async def update_logs(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = AsyncFieldTypeDAO(session)
     log_event_dao = AsyncLogEventDAO(session)
-    log_dao = LogDAO(session, context_dao)
-    derived_log_dao = DerivedLogDAO(session)
+    log_dao = AsyncLogDAO(session, context_dao)
+    derived_log_dao = AsyncDerivedLogDAO(session)
 
     # JSONB Mode: When use_jsonb_queries is enabled, use the new JSONB-based update path
     if settings.use_jsonb_queries:
@@ -1752,7 +1752,7 @@ async def update_logs(
             # Get project ID first for filtering
             organization_id = getattr(request_fastapi.state, "organization_id", None)
             try:
-                project_obj = project_dao.get_by_user_and_name(
+                project_obj = await project_dao.get_by_user_and_name(
                     name=body.project,
                     user_id=user_id,
                     organization_id=organization_id,
@@ -1790,7 +1790,7 @@ async def update_logs(
                     # get the default context
                     context_ids = [context_dao.get_or_create(project_id, name="")]
                 # Use log_dao.get_ids_by_filter to get matching log IDs
-                ids_to_update = log_dao.get_ids_by_filter(
+                ids_to_update = await log_dao.get_ids_by_filter(
                     project_id=project_id,
                     filters=body.logs,
                     context_ids=context_ids,
@@ -1823,14 +1823,14 @@ async def update_logs(
 
     for log_id in ids_to_update:
         try:
-            project_user_id, project_id = log_event_dao.get_user_and_project_id(
+            project_user_id, project_id = await log_event_dao.get_user_and_project_id(
                 id=log_id,
             )
             if (
                 project_user_id != request_fastapi.state.user_id
             ):  # user is not the owner of the project
                 # check if the user is a member of the organization this project belongs to
-                project_obj = project_dao.filter_by_user_access(
+                project_obj = await project_dao.filter_by_user_access(
                     user_id=request_fastapi.state.user_id,
                     id=project_id,
                 )
@@ -1917,7 +1917,7 @@ async def update_logs(
 
     # Fetch field types once
     try:
-        field_types = field_type_dao.get_field_types(
+        field_types = await field_type_dao.get_field_types(
             project_id,
             return_mutable=True,
             context_id=ctx_id,
@@ -2014,7 +2014,7 @@ async def update_logs(
                     if isinstance(body.entries, dict):
                         new_values.update(body.entries)
 
-                context_dao.apply_fk_actions(
+                await context_dao.apply_fk_actions(
                     project_id=project_id,
                     context_id=ctx_id,
                     columns_values=columns_values_map,
@@ -2061,7 +2061,7 @@ async def update_logs(
                 for k, v in explicit_types.items():
                     mutable_setting = v.get("mutable", False)
                     try:
-                        field_type_dao.update_field_mutability(
+                        await field_type_dao.update_field_mutability(
                             project_id,
                             k,
                             mutable=mutable_setting,
@@ -2087,7 +2087,7 @@ async def update_logs(
 
                     # Process nested field update with type enforcement
                     try:
-                        field_result = log_dao.check_field_update(
+                        field_result = await log_dao.check_field_update(
                             field_key=base_key,
                             field_types=field_types,
                             explicit_types_dict=explicit_types,
@@ -2152,7 +2152,7 @@ async def update_logs(
             for k, v in flat_data.items():
                 # Process flat field update with type enforcement
                 try:
-                    field_result = log_dao.check_field_update(
+                    field_result = await log_dao.check_field_update(
                         field_key=k,
                         field_types=field_types,
                         explicit_types_dict=explicit_types,
@@ -2222,7 +2222,7 @@ async def update_logs(
                     if existing:
                         param_version = existing[0][0].param_version
                     else:
-                        param_version = log_dao.get_next_param_version(
+                        param_version = await log_dao.get_next_param_version(
                             project_id,
                             ctx_id,
                             k,
@@ -2263,7 +2263,7 @@ async def update_logs(
 
     # Bulk create any new field types
     if new_field_types:
-        field_type_dao.bulk_create_field_types(new_field_types)
+        await field_type_dao.bulk_create_field_types(new_field_types)
 
     successful_update_ids: set[int] = set()
 
@@ -2271,7 +2271,7 @@ async def update_logs(
     if all_flat_updates:
         try:
             # Call bulk_update once with all updates
-            bulk_result = log_dao.bulk_update(
+            bulk_result = await log_dao.bulk_update(
                 all_flat_updates,
                 field_types=field_types,
                 overwrite=body.overwrite,
@@ -2292,7 +2292,7 @@ async def update_logs(
                                 .first()
                             )
                             if ctx_obj and not ctx_obj.allow_duplicates:
-                                duplicate = context_dao.check_for_duplicates_subset(
+                                duplicate = await context_dao.check_for_duplicates_subset(
                                     context_id=context_id,
                                     log_event_id=le_id,
                                     keys_to_check=list(updated_entry_keys),
@@ -2311,7 +2311,7 @@ async def update_logs(
                         context_dao.session.query(Context).filter_by(id=ctx_id).first()
                     )
                     if ctx_obj and not ctx_obj.allow_duplicates:
-                        duplicate = context_dao.check_for_duplicates_subset(
+                        duplicate = await context_dao.check_for_duplicates_subset(
                             context_id=ctx_id,
                             log_event_id=le_id,
                             keys_to_check=list(updated_entry_keys),
@@ -2365,7 +2365,7 @@ async def update_logs(
 
         for (le_id, _base), group in ngroups.items():
             try:
-                log_dao.apply_jsonb_patch(
+                await log_dao.apply_jsonb_patch(
                     group,
                     field_types=field_types,
                 )
@@ -2380,7 +2380,7 @@ async def update_logs(
                                 .first()
                             )
                             if ctx_obj and not ctx_obj.allow_duplicates:
-                                duplicate = context_dao.check_for_duplicates_subset(
+                                duplicate = await context_dao.check_for_duplicates_subset(
                                     context_id=context_id,
                                     log_event_id=le_id,
                                     keys_to_check=list(updated_entry_keys),
@@ -2398,7 +2398,7 @@ async def update_logs(
                         context_dao.session.query(Context).filter_by(id=ctx_id).first()
                     )
                     if ctx_obj and not ctx_obj.allow_duplicates:
-                        duplicate = context_dao.check_for_duplicates_subset(
+                        duplicate = await context_dao.check_for_duplicates_subset(
                             context_id=ctx_id,
                             log_event_id=le_id,
                             keys_to_check=list(updated_entry_keys),
@@ -2488,7 +2488,7 @@ async def update_logs(
                 .all()
             )
             if derived_logs_to_recompute:
-                derived_log_dao.recompute_derived_logs(
+                await derived_log_dao.recompute_derived_logs(
                     logs_to_recompute=derived_logs_to_recompute,
                     session=session,
                     json_encoder=CustomEncoder,
@@ -2561,7 +2561,7 @@ async def _update_logs_jsonb(
 
             # Get project ID first for filtering
             try:
-                project_obj = project_dao.get_by_user_and_name(
+                project_obj = await project_dao.get_by_user_and_name(
                     name=body.project,
                     user_id=user_id,
                 )
@@ -2598,7 +2598,7 @@ async def _update_logs_jsonb(
                     # get the default context
                     context_ids = [context_dao.get_or_create(project_id, name="")]
                 # Use log_dao.get_ids_by_filter to get matching log IDs
-                ids_to_update = log_dao.get_ids_by_filter(
+                ids_to_update = await log_dao.get_ids_by_filter(
                     project_id=project_id,
                     filters=body.logs,
                     context_ids=context_ids,
@@ -2631,7 +2631,7 @@ async def _update_logs_jsonb(
 
     # Batch fetch all permissions in a single query
     try:
-        log_id_permissions = log_event_dao.get_user_and_project_ids_batch(ids_to_update)
+        log_id_permissions = await log_event_dao.get_user_and_project_ids_batch(ids_to_update)
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -2652,7 +2652,7 @@ async def _update_logs_jsonb(
         if project_user_id != request_fastapi.state.user_id:
             # Check cache first for project access
             if project_id not in project_access_cache:
-                project_obj = project_dao.filter_by_user_access(
+                project_obj = await project_dao.filter_by_user_access(
                     user_id=request_fastapi.state.user_id,
                     id=project_id,
                 )
@@ -2730,7 +2730,7 @@ async def _update_logs_jsonb(
 
     # Fetch field types once
     try:
-        field_types = field_type_dao.get_field_types(
+        field_types = await field_type_dao.get_field_types(
             project_id,
             return_mutable=True,
             context_id=ctx_id,
@@ -2801,7 +2801,7 @@ async def _update_logs_jsonb(
 
                     # Process nested field update with type enforcement
                     try:
-                        field_result = log_dao.check_field_update(
+                        field_result = await log_dao.check_field_update(
                             field_key=base_key,
                             field_types=field_types,
                             explicit_types_dict=explicit_types,
@@ -2861,7 +2861,7 @@ async def _update_logs_jsonb(
             for k, v in flat_data.items():
                 # Process flat field update with type enforcement
                 try:
-                    field_result = log_dao.check_field_update(
+                    field_result = await log_dao.check_field_update(
                         field_key=k,
                         field_types=field_types,
                         explicit_types_dict=explicit_types,
@@ -2936,12 +2936,12 @@ async def _update_logs_jsonb(
 
     # Bulk create any new field types
     if new_field_types:
-        field_type_dao.bulk_create_field_types(new_field_types)
+        await field_type_dao.bulk_create_field_types(new_field_types)
 
     # Batch update mutability for all accumulated fields (single query)
     if pending_mutability_updates:
         try:
-            field_type_dao.bulk_update_mutability(
+            await field_type_dao.bulk_update_mutability(
                 project_id=project_id,
                 context_id=ctx_id,
                 field_mutability_map=pending_mutability_updates,
@@ -2981,7 +2981,7 @@ async def _update_logs_jsonb(
                 if isinstance(body.entries, dict):
                     new_values.update(body.entries)
 
-            context_dao.apply_fk_actions(
+            await context_dao.apply_fk_actions(
                 project_id=project_id,
                 context_id=ctx_id,
                 columns_values=columns_values_map,
@@ -2993,7 +2993,7 @@ async def _update_logs_jsonb(
     if all_flat_updates:
         try:
             # Call bulk_update_jsonb with all updates
-            bulk_result = log_dao.bulk_update_jsonb(
+            bulk_result = await log_dao.bulk_update_jsonb(
                 all_flat_updates,
                 field_types=field_types,
                 overwrite=body.overwrite,
@@ -3009,7 +3009,7 @@ async def _update_logs_jsonb(
                 and bulk_result["successful_update_ids"]
             ):
                 # Batch duplicate check - O(1) query instead of O(N)
-                duplicate_ids = context_dao.check_for_duplicates_subset_batch(
+                duplicate_ids = await context_dao.check_for_duplicates_subset_batch(
                     context_id=ctx_id,
                     log_event_ids=bulk_result["successful_update_ids"],
                     keys_to_check=list(updated_entry_keys),
@@ -3048,7 +3048,7 @@ async def _update_logs_jsonb(
     if all_nested_updates:
         # Call apply_jsonb_patch_jsonb once with all patches - O(1) SELECT/UPDATE
         # The method now handles grouping internally and returns results
-        nested_result = log_dao.apply_jsonb_patch_jsonb(
+        nested_result = await log_dao.apply_jsonb_patch_jsonb(
             all_nested_updates,
             field_types=field_types,
         )
@@ -3062,7 +3062,7 @@ async def _update_logs_jsonb(
         # Batch duplicate check for all successful nested updates (single query)
         if nested_successful_ids:
             if ctx_obj_cache and not ctx_obj_cache.allow_duplicates:
-                duplicate_ids = context_dao.check_for_duplicates_subset_batch(
+                duplicate_ids = await context_dao.check_for_duplicates_subset_batch(
                     context_id=ctx_id,
                     log_event_ids=nested_successful_ids,
                     keys_to_check=list(updated_entry_keys),
@@ -3174,7 +3174,7 @@ async def _update_logs_jsonb(
                     .all()
                 )
                 if derived_logs_to_recompute:
-                    derived_log_dao.recompute_derived_logs(
+                    await derived_log_dao.recompute_derived_logs(
                         logs_to_recompute=derived_logs_to_recompute,
                         session=session,
                         json_encoder=CustomEncoder,
@@ -3324,7 +3324,7 @@ async def _delete_logs_jsonb(
 
         # Apply FK actions (CASCADE DELETE, SET NULL)
         if columns_values_to_delete:
-            context_dao.apply_fk_actions(
+            await context_dao.apply_fk_actions(
                 project_id=project_id,
                 context_id=context_id,
                 columns_values=columns_values_to_delete,
@@ -3500,7 +3500,7 @@ async def _delete_logs_jsonb(
 
             # Apply FK actions (CASCADE DELETE, SET NULL)
             if columns_values_to_delete:
-                context_dao.apply_fk_actions(
+                await context_dao.apply_fk_actions(
                     project_id=project_id,
                     context_id=context_id,
                     columns_values=columns_values_to_delete,
@@ -3582,7 +3582,7 @@ async def _delete_logs_jsonb(
 
             # Apply FK actions (CASCADE DELETE, SET NULL)
             if columns_values_to_delete:
-                context_dao.apply_fk_actions(
+                await context_dao.apply_fk_actions(
                     project_id=project_id,
                     context_id=context_id,
                     columns_values=columns_values_to_delete,
@@ -3724,7 +3724,7 @@ async def _delete_logs_jsonb(
         if fields_to_delete:
             for field in fields_to_delete:
                 try:
-                    field_type_dao.delete_field_type(
+                    await field_type_dao.delete_field_type(
                         project_id=project_id,
                         field_name=field,
                         context_id=context_id,
@@ -3787,7 +3787,7 @@ async def delete_logs(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = AsyncFieldTypeDAO(session)
     log_event_dao = AsyncLogEventDAO(session)
-    log_dao = LogDAO(session, context_dao)
+    log_dao = AsyncLogDAO(session, context_dao)
 
     if body.source_type not in ("all", "base", "derived"):
         raise HTTPException(
@@ -3803,7 +3803,7 @@ async def delete_logs(
     user_id = request_fastapi.state.user_id
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
-        project_id = project_dao.get_by_user_and_name(
+        project_id = await project_dao.get_by_user_and_name(
             user_id=user_id,
             name=body.project,
             organization_id=organization_id,
@@ -3840,7 +3840,7 @@ async def delete_logs(
         if isinstance(id_spec, dict):
             try:
                 # Use log_dao.get_ids_by_filter to get matching log IDs
-                matching_ids = log_dao.get_ids_by_filter(
+                matching_ids = await log_dao.get_ids_by_filter(
                     project_id=project_id,
                     filters=id_spec,
                     context_ids=[context_id] if context_id else None,
@@ -3959,7 +3959,7 @@ async def delete_logs(
 
         # Apply CASCADE and SET NULL actions
         if columns_values_to_delete:
-            context_dao.apply_fk_actions(
+            await context_dao.apply_fk_actions(
                 project_id=project_id,
                 context_id=context_id,
                 columns_values=columns_values_to_delete,
@@ -4512,7 +4512,7 @@ async def delete_logs(
         if fields_to_delete:
             for field in fields_to_delete:
                 try:
-                    field_type_dao.delete_field_type(
+                    await field_type_dao.delete_field_type(
                         project_id=project_id,
                         field_name=field,
                         context_id=context_id,
@@ -4724,7 +4724,7 @@ async def get_logs(
 
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
-        project_id = project_dao.get_by_user_and_name(
+        project_id = await project_dao.get_by_user_and_name(
             name=project,
             user_id=request_fastapi.state.user_id,
             organization_id=organization_id,
@@ -4779,7 +4779,7 @@ async def get_logs(
                     ]  # Extract IDs from (id, data, created_at) tuples
 
                 # Get field metadata for formatting
-                field_types = field_type_dao.get_field_types(
+                field_types = await field_type_dao.get_field_types(
                     project_id,
                     context_id=context_id,
                     return_mutable=True,
@@ -4930,7 +4930,7 @@ async def get_logs(
             project_id,
             context_id=context_id,
         )
-        field_map = field_type_dao.get_field_types(
+        field_map = await field_type_dao.get_field_types(
             project_id,
             context_id=context_id,
         )
@@ -5159,7 +5159,7 @@ async def query_logs_post(
     # Validate project
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
-        project_id = project_dao.get_by_user_and_name(
+        project_id = await project_dao.get_by_user_and_name(
             name=body.project,
             user_id=request_fastapi.state.user_id,
             organization_id=organization_id,
@@ -5212,7 +5212,7 @@ async def query_logs_post(
                 }
 
             # Get field metadata for formatting
-            field_types = field_type_dao.get_field_types(
+            field_types = await field_type_dao.get_field_types(
                 project_id,
                 context_id=context_id,
                 return_mutable=True,
@@ -5647,7 +5647,7 @@ async def get_logs_metric(
     try:
         user_id = request_fastapi.state.user_id
         organization_id = getattr(request_fastapi.state, "organization_id", None)
-        project_obj = project_dao.get_by_user_and_name(
+        project_obj = await project_dao.get_by_user_and_name(
             name=project,
             user_id=user_id,
             organization_id=organization_id,
@@ -5659,7 +5659,7 @@ async def get_logs_metric(
     context_name = request.context or ""
     context_obj = await context_dao.filter(name=context_name, project_id=project_obj.id)
     context_id = context_obj[0][0].id if context_obj else None
-    field_types = field_type_dao.get_field_types(project_obj.id, context_id=context_id)
+    field_types = await field_type_dao.get_field_types(project_obj.id, context_id=context_id)
 
     if isinstance(request.from_ids, str) and isinstance(request.exclude_ids, str):
         raise HTTPException(
@@ -6034,7 +6034,7 @@ async def rename_field(
     context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = AsyncFieldTypeDAO(session)
-    log_dao = LogDAO(session, context_dao)
+    log_dao = AsyncLogDAO(session, context_dao)
 
     try:
         # Check if this is the protected Unity/Tasks context
@@ -6047,7 +6047,7 @@ async def rename_field(
         # Validate project and permissions
         user_id = request_fastapi.state.user_id
         organization_id = getattr(request_fastapi.state, "organization_id", None)
-        project = project_dao.get_by_user_and_name(
+        project = await project_dao.get_by_user_and_name(
             user_id=user_id,
             name=request.project,
             organization_id=organization_id,
@@ -6208,7 +6208,7 @@ async def join_logs(
     # Validate project
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
-        project_obj = project_dao.get_by_user_and_name(
+        project_obj = await project_dao.get_by_user_and_name(
             user_id=user_id,
             name=request.project,
             organization_id=organization_id,
@@ -6375,7 +6375,7 @@ async def get_fields(
     try:
         user_id = request_fastapi.state.user_id
         organization_id = getattr(request_fastapi.state, "organization_id", None)
-        project_obj = project_dao.get_by_user_and_name(
+        project_obj = await project_dao.get_by_user_and_name(
             name=project,
             user_id=user_id,
             organization_id=organization_id,
@@ -6420,7 +6420,7 @@ async def get_fields(
             ctx_id = ctx.id
             ctx_name = ctx.name
 
-            types = field_type_dao.get_field_types(
+            types = await field_type_dao.get_field_types(
                 project_obj.id,
                 context_id=ctx_id,
                 return_mutable=True,
@@ -6468,7 +6468,7 @@ async def get_fields(
     context_id = context_obj[0][0].id
 
     # Get all field types with mutability info
-    types = field_type_dao.get_field_types(
+    types = await field_type_dao.get_field_types(
         project_obj.id,
         context_id=context_id,
         return_mutable=True,
@@ -6540,7 +6540,7 @@ async def create_fields(
     try:
         user_id = request_fastapi.state.user_id
         organization_id = getattr(request_fastapi.state, "organization_id", None)
-        project = project_dao.get_by_user_and_name(
+        project = await project_dao.get_by_user_and_name(
             user_id=user_id,
             name=request.project,
             organization_id=organization_id,
@@ -6670,7 +6670,7 @@ async def create_fields(
 
                 if entries_to_create:
                     # Create LogDAO instance for bulk_create
-                    log_dao = LogDAO(session, context_dao)
+                    log_dao = AsyncLogDAO(session, context_dao)
                     log_dao.bulk_create(entries_to_create)
 
                     # JSONB Mode: Also update LogEvent.data JSONB column with the new fields
@@ -6769,7 +6769,7 @@ async def delete_fields(
     context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = AsyncFieldTypeDAO(session)
-    log_dao = LogDAO(session, context_dao)
+    log_dao = AsyncLogDAO(session, context_dao)
 
     # Check if this is the protected Unity/Tasks context
     if request.project == "Unity" and request.context == "Tasks":
@@ -6782,7 +6782,7 @@ async def delete_fields(
     try:
         user_id = request_fastapi.state.user_id
         organization_id = getattr(request_fastapi.state, "organization_id", None)
-        project = project_dao.get_by_user_and_name(
+        project = await project_dao.get_by_user_and_name(
             user_id=user_id,
             name=request.project,
             organization_id=organization_id,
@@ -6938,7 +6938,7 @@ async def delete_fields(
                     )
 
             # Delete field type record
-            field_type_dao.delete_field_type(
+            await field_type_dao.delete_field_type(
                 project_id=project_id,
                 field_name=field_name,
                 context_id=context_id,
@@ -7018,7 +7018,7 @@ async def update_active_derived_logs(
 
         # Materialize active derived log templates
         if settings.use_jsonb_queries:
-            derived_log_dao = DerivedLogDAO(session)
+            derived_log_dao = AsyncDerivedLogDAO(session)
             total_derived_logs_created = 0
 
             for template in active_templates:
@@ -7045,7 +7045,7 @@ async def update_active_derived_logs(
 
                     # Apply filter expression if present
                     if template.filter_expression:
-                        field_types = field_type_dao.get_field_types(
+                        field_types = await field_type_dao.get_field_types(
                             template.project_id,
                             context_id=template.context_id,
                         )
@@ -7102,7 +7102,7 @@ async def update_active_derived_logs(
                         continue
 
                     # Recompute derived values for these log events
-                    count = derived_log_dao.recompute_derived_logs_jsonb(
+                    count = await derived_log_dao.recompute_derived_logs_jsonb(
                         template=template,
                         log_ids=matching_log_event_ids,
                         json_encoder=CustomEncoder,
@@ -7128,7 +7128,7 @@ async def update_active_derived_logs(
         # Process each template
         for template in active_templates:
             # Get field types for the project
-            field_types = field_type_dao.get_field_types(
+            field_types = await field_type_dao.get_field_types(
                 template.project_id,
                 context_id=template.context_id,
             )
@@ -7372,7 +7372,7 @@ async def process_traffic_logs(
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = AsyncFieldTypeDAO(session)
     log_event_dao = AsyncLogEventDAO(session)
-    log_dao = LogDAO(session, context_dao)
+    log_dao = AsyncLogDAO(session, context_dao)
     try:
         from google.cloud import pubsub_v1
 

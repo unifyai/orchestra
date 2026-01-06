@@ -134,7 +134,7 @@ async def admin_list_organizations(
     """
     from orchestra.db.dao.organization_dao import OrganizationDAO
 
-    org_dao = OrganizationDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
     member_dao = AsyncOrganizationMemberDAO(session)
 
     orgs = await org_dao.list_all(limit=limit, offset=offset, name_filter=name)
@@ -581,7 +581,7 @@ async def admin_list_assistants(
         async def get_api_key_for_assistant(assistant):
             if assistant.organization_id is None:
                 # Personal assistant - get user's personal API key
-                keys = api_key_dao.get_personal_keys(assistant.user_id)
+                keys = await api_key_dao.get_personal_keys(assistant.user_id)
             else:
                 # Org assistant - get org API key
                 keys = await api_key_dao.filter(
@@ -734,7 +734,7 @@ async def admin_update_assistant(
 
     # Get API key based on assistant type (personal vs organizational)
     if updated.organization_id is None:
-        keys = api_key_dao.get_personal_keys(updated.user_id)
+        keys = await api_key_dao.get_personal_keys(updated.user_id)
     else:
         keys = await api_key_dao.filter(organization_id=updated.organization_id)
     api_key = keys[0][0].key if keys else None
@@ -831,7 +831,7 @@ async def admin_list_assistants_for_user(
         # Get API key based on assistant type (personal vs organizational)
         async def get_api_key_for_assistant(assistant):
             if assistant.organization_id is None:
-                keys = api_key_dao.get_personal_keys(assistant.user_id)
+                keys = await api_key_dao.get_personal_keys(assistant.user_id)
             else:
                 keys = await api_key_dao.filter(
                     organization_id=assistant.organization_id,
@@ -927,9 +927,9 @@ async def admin_list_contacts(
 
     # 5) Retrieve matching log_event IDs
     log_event_dao = AsyncLogEventDAO(session)
-    log_dao = LogDAO(session, ContextDAO(session))
+    log_dao = AsyncLogDAO(session, AsyncContextDAO(session))
     if filters:
-        event_ids = log_dao.get_ids_by_filter(
+        event_ids = await log_dao.get_ids_by_filter(
             project_id=None,
             filters=filters,
             context_ids=ctx_ids,

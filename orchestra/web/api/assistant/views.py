@@ -18,7 +18,7 @@ from fastapi import (
     status,
 )
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import or_
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
@@ -132,7 +132,9 @@ async def check_assistant_hiring_approval(
     session: AsyncSession = Depends(get_async_db_session),
 ):
     user_id = request.state.user_id
-    user = session.query(AuthUser).filter(AuthUser.id == user_id).one_or_none()
+    query = select(AuthUser).where(AuthUser.id == user_id)
+    result = await session.execute(query)
+    user = result.scalars().one_or_none()
 
     if not user:
         raise HTTPException(
@@ -241,7 +243,7 @@ async def create_assistant(
     context_dao = AsyncContextDAO(session)
     project_dao = ProjectDAO(session, organization_member_dao, context_dao)
     log_event_dao = AsyncLogEventDAO(session)
-    log_dao = LogDAO(session, context_dao)
+    log_dao = AsyncLogDAO(session, context_dao)
     api_keys = await api_key_dao.filter(user_id=user_id)
     if not api_keys:
         raise HTTPException(
@@ -286,7 +288,7 @@ async def create_assistant(
 
         # For org context, check assistant:write permission
         if organization_id is not None:
-            has_permission = resource_access_dao.check_org_member_permission(
+            has_permission = await resource_access_dao.check_org_member_permission(
                 user_id,
                 organization_id,
                 "assistant:write",
@@ -298,7 +300,7 @@ async def create_assistant(
                 )
 
         if not settings.is_staging:
-            user = users_dao.get_user_with_id(user_id)
+            user = await users_dao.get_user_with_id(user_id)
 
             if user.credits < total_creation_cost:
                 raise HTTPException(
@@ -312,7 +314,7 @@ async def create_assistant(
             else None
         )
 
-        assistant = assistant_dao.create_assistant(
+        assistant = await assistant_dao.create_assistant(
             user_id=user_id,
             first_name=assistant_in.first_name,
             surname=assistant_in.surname,
@@ -338,9 +340,9 @@ async def create_assistant(
 
         # For org assistants, grant Owner role to creator
         if organization_id is not None:
-            owner_role = role_dao.get_by_name("Owner", organization_id=None)
+            owner_role = await role_dao.get_by_name("Owner", organization_id=None)
             if owner_role:
-                resource_access_dao.grant_access(
+                await resource_access_dao.grant_access(
                     resource_type="assistant",
                     resource_id=assistant.agent_id,
                     role_id=owner_role.id,
@@ -379,9 +381,9 @@ async def create_assistant(
 
                 # Grant Owner role to creator
                 if assistants_project:
-                    owner_role = role_dao.get_by_name("Owner", organization_id=None)
+                    owner_role = await role_dao.get_by_name("Owner", organization_id=None)
                     if owner_role:
-                        resource_access_dao.grant_access(
+                        await resource_access_dao.grant_access(
                             resource_type="project",
                             resource_id=assistants_project.id,
                             role_id=owner_role.id,
@@ -393,12 +395,12 @@ async def create_assistant(
                     org_members = await organization_member_dao.filter(
                         organization_id=organization_id,
                     )
-                    member_role = role_dao.get_by_name("Member", organization_id=None)
+                    member_role = await role_dao.get_by_name("Member", organization_id=None)
                     if member_role:
                         for member_row in org_members:
                             member = member_row[0]
                             if member.user_id != user_id:
-                                resource_access_dao.grant_access(
+                                await resource_access_dao.grant_access(
                                     resource_type="project",
                                     resource_id=assistants_project.id,
                                     role_id=member_role.id,
@@ -407,7 +409,7 @@ async def create_assistant(
                                 )
             else:
                 # Project exists - check if user already has access
-                has_access = resource_access_dao.check_user_permission(
+                has_access = await resource_access_dao.check_user_permission(
                     user_id,
                     "project",
                     assistants_project.id,
@@ -415,9 +417,9 @@ async def create_assistant(
                 )
                 if not has_access:
                     # Grant Member role to user
-                    member_role = role_dao.get_by_name("Member", organization_id=None)
+                    member_role = await role_dao.get_by_name("Member", organization_id=None)
                     if member_role:
-                        resource_access_dao.grant_access(
+                        await resource_access_dao.grant_access(
                             resource_type="project",
                             resource_id=assistants_project.id,
                             role_id=member_role.id,
@@ -426,7 +428,7 @@ async def create_assistant(
                         )
         else:
             # Personal API key - check user access
-            assistants_project = project_dao.get_by_user_and_name(
+            assistants_project = await project_dao.get_by_user_and_name(
                 user_id=user_id,
                 name=ASSISTANTS_PROJECT_NAME,
                 organization_id=None,
@@ -540,7 +542,7 @@ async def create_assistant(
                     "user_whatsapp_number": assistant_in.user_whatsapp_number,
                     "assistant_whatsapp_number": assigned_whatsapp,
                 }
-                assistant_dao.update_assistant(
+                await assistant_dao.update_assistant(
                     user_id=user_id,
                     agent_id=assistant_id,
                     update_data=update_data,
@@ -550,7 +552,7 @@ async def create_assistant(
                 print(f"ASSISTANT UPDATED: {assistant_id}")
 
                 # Retrieve the updated assistant for the final response
-                assistant = assistant_dao.get_assistant_by_id(
+                assistant = await assistant_dao.get_assistant_by_id(
                     user_id=user_id,
                     agent_id=assistant_id,
                     organization_id=organization_id,
@@ -611,7 +613,7 @@ async def create_assistant(
                     if assistant_in.pre_hire_chat:
                         try:
                             context_name = f"{assistant_in.first_name}{assistant_in.surname}/Transcripts"
-                            assistants_project = project_dao.get_by_user_and_name(
+                            assistants_project = await project_dao.get_by_user_and_name(
                                 user_id=user_id,
                                 name="Assistants",
                                 organization_id=None,
@@ -630,7 +632,7 @@ async def create_assistant(
                             rollback_errors.append(
                                 f"Failed to delete chat context: {str(e_ctx_del)}",
                             )
-                    assistant_dao.delete_assistant(
+                    await assistant_dao.delete_assistant(
                         user_id=user_id,
                         agent_id=assistant_id,
                     )
@@ -673,7 +675,7 @@ async def create_assistant(
     if not settings.is_staging:
         try:
             # Refresh session before credit operation to ensure connection is valid
-            users_dao.recharge_credit(
+            await users_dao.recharge_credit(
                 user_id=user_id,
                 quantity=-float(total_creation_cost),
             )
@@ -859,7 +861,7 @@ async def list_assistants(
             # Org context with list_all_org=True: list all org assistants
             # Check if user has assistant:read permission
             resource_access_dao = AsyncResourceAccessDAO(session)
-            has_permission = resource_access_dao.check_org_member_permission(
+            has_permission = await resource_access_dao.check_org_member_permission(
                 user_id,
                 organization_id,
                 "assistant:read",
@@ -869,14 +871,14 @@ async def list_assistants(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="You do not have permission to view all assistants in this organization.",
                 )
-            assistants = assistant_dao.list_all_org_assistants(
+            assistants = await assistant_dao.list_all_org_assistants(
                 organization_id=organization_id,
                 phone=phone,
                 email=email,
             )
         else:
             # Personal context OR org context with list_all_org=False
-            assistants = assistant_dao.list_assistants_for_user(
+            assistants = await assistant_dao.list_assistants_for_user(
                 user_id,
                 organization_id=organization_id,
                 phone=phone,
@@ -965,7 +967,7 @@ async def delete_assistant_contact(
     organization_id = getattr(request.state, "organization_id", None)
     assistant_dao = AsyncAssistantDAO(session)
 
-    assistant = assistant_dao.get_assistant_by_id(
+    assistant = await assistant_dao.get_assistant_by_id(
         user_id=user_id,
         agent_id=assistant_id,
         organization_id=organization_id,
@@ -980,7 +982,7 @@ async def delete_assistant_contact(
     # For org assistants, check assistant:write permission
     if organization_id is not None:
         resource_access_dao = AsyncResourceAccessDAO(session)
-        has_permission = resource_access_dao.check_user_permission(
+        has_permission = await resource_access_dao.check_user_permission(
             user_id,
             "assistant",
             assistant_id,
@@ -1132,7 +1134,7 @@ async def delete_assistant(
         # For org assistants, check assistant:delete permission
         if organization_id is not None:
             resource_access_dao = AsyncResourceAccessDAO(session)
-            has_permission = resource_access_dao.check_user_permission(
+            has_permission = await resource_access_dao.check_user_permission(
                 request.state.user_id,
                 "assistant",
                 assistant_id,
@@ -1167,7 +1169,7 @@ async def delete_assistant(
                 )
             else:
                 # Personal context: use user access check
-                assistants_project = project_dao.get_by_user_and_name(
+                assistants_project = await project_dao.get_by_user_and_name(
                     user_id=request.state.user_id,
                     name=ASSISTANTS_PROJECT_NAME,
                     organization_id=None,
@@ -1406,7 +1408,7 @@ async def update_assistant_config(
     )
 
     # Check assistant existence before any updates
-    existing_assistant = assistant_dao.get_assistant_by_id(
+    existing_assistant = await assistant_dao.get_assistant_by_id(
         user_id=request.state.user_id,
         agent_id=assistant_id,
         organization_id=organization_id,
@@ -1420,7 +1422,7 @@ async def update_assistant_config(
     # For org assistants, check assistant:write permission
     if organization_id is not None:
         resource_access_dao = AsyncResourceAccessDAO(session)
-        has_permission = resource_access_dao.check_user_permission(
+        has_permission = await resource_access_dao.check_user_permission(
             user_id,
             "assistant",
             assistant_id,
@@ -1554,14 +1556,14 @@ async def update_assistant_config(
                             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                             detail=f"Failed to fetch or process social platform costs. Details: {str(e_costs)}",
                         )
-                    user = users_dao.get_user_with_id(user_id)
+                    user = await users_dao.get_user_with_id(user_id)
                     decimal_cost = Decimal(cost)
                     if user.credits < decimal_cost:
                         raise HTTPException(
                             status_code=status.HTTP_402_PAYMENT_REQUIRED,
                             detail="Insufficient credits to add a WhatsApp number.",
                         )
-                    users_dao.recharge_credit(
+                    await users_dao.recharge_credit(
                         user_id=user_id,
                         quantity=-float(decimal_cost),
                     )
@@ -1585,7 +1587,7 @@ async def update_assistant_config(
         if assistant_whatsapp_number:
             update_data["assistant_whatsapp_number"] = assistant_whatsapp_number
 
-        updated = assistant_dao.update_assistant(
+        updated = await assistant_dao.update_assistant(
             user_id=request.state.user_id,
             agent_id=assistant_id,
             update_data=update_data,
@@ -1755,7 +1757,7 @@ async def transfer_assistant_to_org(
         )
 
     # Get the personal assistant
-    assistant = assistant_dao.get_assistant_by_id(
+    assistant = await assistant_dao.get_assistant_by_id(
         user_id=user_id,
         agent_id=assistant_id,
         organization_id=None,
@@ -1767,7 +1769,7 @@ async def transfer_assistant_to_org(
         )
 
     # Check user has assistant:write permission in target org
-    has_permission = resource_access_dao.check_org_member_permission(
+    has_permission = await resource_access_dao.check_org_member_permission(
         user_id,
         target_org_id,
         "assistant:write",
@@ -1784,7 +1786,7 @@ async def transfer_assistant_to_org(
         if transfer_request.transfer_logs:
             ASSISTANTS_PROJECT_NAME = "Assistants"
             # Get personal Assistants project
-            personal_project = project_dao.get_by_user_and_name(
+            personal_project = await project_dao.get_by_user_and_name(
                 user_id=user_id,
                 name=ASSISTANTS_PROJECT_NAME,
                 organization_id=None,
@@ -1816,11 +1818,11 @@ async def transfer_assistant_to_org(
 
             # Grant access to the Assistants project for the transferring user
             if org_project:
-                owner_role = role_dao.get_by_name("Owner", organization_id=None)
+                owner_role = await role_dao.get_by_name("Owner", organization_id=None)
                 if project_created:
                     # Creator gets Owner role
                     if owner_role:
-                        resource_access_dao.grant_access(
+                        await resource_access_dao.grant_access(
                             resource_type="project",
                             resource_id=org_project.id,
                             role_id=owner_role.id,
@@ -1832,12 +1834,12 @@ async def transfer_assistant_to_org(
                     org_members = await organization_member_dao.filter(
                         organization_id=target_org_id,
                     )
-                    member_role = role_dao.get_by_name("Member", organization_id=None)
+                    member_role = await role_dao.get_by_name("Member", organization_id=None)
                     if member_role:
                         for member_row in org_members:
                             member = member_row[0]
                             if member.user_id != user_id:
-                                resource_access_dao.grant_access(
+                                await resource_access_dao.grant_access(
                                     resource_type="project",
                                     resource_id=org_project.id,
                                     role_id=member_role.id,
@@ -1846,7 +1848,7 @@ async def transfer_assistant_to_org(
                                 )
                 else:
                     # Project exists - check if user already has access
-                    has_access = resource_access_dao.check_user_permission(
+                    has_access = await resource_access_dao.check_user_permission(
                         user_id,
                         "project",
                         org_project.id,
@@ -1854,12 +1856,12 @@ async def transfer_assistant_to_org(
                     )
                     if not has_access:
                         # Grant Member role to user
-                        member_role = role_dao.get_by_name(
+                        member_role = await role_dao.get_by_name(
                             "Member",
                             organization_id=None,
                         )
                         if member_role:
-                            resource_access_dao.grant_access(
+                            await resource_access_dao.grant_access(
                                 resource_type="project",
                                 resource_id=org_project.id,
                                 role_id=member_role.id,
@@ -1987,7 +1989,7 @@ async def transfer_assistant_to_org(
                 )
 
         # Transfer the assistant to org
-        transferred = assistant_dao.transfer_to_organization(
+        transferred = await assistant_dao.transfer_to_organization(
             agent_id=assistant_id,
             user_id=user_id,
             organization_id=target_org_id,
@@ -1999,9 +2001,9 @@ async def transfer_assistant_to_org(
             )
 
         # Grant Owner role to the user on this assistant
-        owner_role = role_dao.get_by_name("Owner", organization_id=None)
+        owner_role = await role_dao.get_by_name("Owner", organization_id=None)
         if owner_role:
-            resource_access_dao.grant_access(
+            await resource_access_dao.grant_access(
                 resource_type="assistant",
                 resource_id=assistant_id,
                 role_id=owner_role.id,
@@ -2077,7 +2079,7 @@ async def transfer_assistant_to_personal(
         )
 
     # Get the org assistant
-    assistant = assistant_dao.get_assistant_by_id(
+    assistant = await assistant_dao.get_assistant_by_id(
         user_id=user_id,
         agent_id=assistant_id,
         organization_id=organization_id,
@@ -2089,7 +2091,7 @@ async def transfer_assistant_to_personal(
         )
 
     # Check user has assistant:delete permission on this assistant
-    has_permission = resource_access_dao.check_user_permission(
+    has_permission = await resource_access_dao.check_user_permission(
         user_id,
         "assistant",
         assistant_id,
@@ -2136,12 +2138,12 @@ async def transfer_assistant_to_personal(
                 logs_deleted = len(contexts_to_delete) > 0
 
         # Remove all RBAC grants on this assistant
-        existing_grants = resource_access_dao.get_resource_access(
+        existing_grants = await resource_access_dao.get_resource_access(
             resource_type="assistant",
             resource_id=assistant_id,
         )
         for grant in existing_grants:
-            resource_access_dao.revoke_access(
+            await resource_access_dao.revoke_access(
                 resource_type="assistant",
                 resource_id=assistant_id,
                 grantee_type=grant.grantee_type,
@@ -2149,7 +2151,7 @@ async def transfer_assistant_to_personal(
             )
 
         # Transfer the assistant to personal
-        transferred = assistant_dao.transfer_to_personal(
+        transferred = await assistant_dao.transfer_to_personal(
             agent_id=assistant_id,
             organization_id=organization_id,
             new_owner_user_id=user_id,
@@ -2318,7 +2320,7 @@ async def list_recordings(
     recording_dao = AsyncRecordingDAO(session)
     try:
         # Verify assistant exists and belongs to user
-        assistant = assistant_dao.get_assistant_by_id(
+        assistant = await assistant_dao.get_assistant_by_id(
             user_id=request.state.user_id,
             agent_id=assistant_id,
         )
@@ -2328,7 +2330,7 @@ async def list_recordings(
                 detail="Assistant not found.",
             )
 
-        recordings = recording_dao.list_recordings(agent_id=assistant_id)
+        recordings = await recording_dao.list_recordings(agent_id=assistant_id)
 
         return InfoResponse(
             info=[
@@ -2388,7 +2390,7 @@ async def delete_recording(
     recording_dao = AsyncRecordingDAO(session)
     try:
         # Verify assistant exists and belongs to user
-        assistant = assistant_dao.get_assistant_by_id(
+        assistant = await assistant_dao.get_assistant_by_id(
             user_id=request.state.user_id,
             agent_id=assistant_id,
         )
@@ -2399,7 +2401,7 @@ async def delete_recording(
             )
 
         # Delete the recording
-        success = recording_dao.delete_recording(
+        success = await recording_dao.delete_recording(
             recording_id=recording_id,
             agent_id=assistant_id,
         )
@@ -2593,7 +2595,7 @@ async def clone_voice(
                 detail=f"{provider.capitalize()} did not return a voice ID after cloning.",
             )
 
-        db_voice = voice_dao.create_voice(
+        db_voice = await voice_dao.create_voice(
             user_id=user_id,
             voice_id=new_voice_id,
             name=name,
@@ -2786,7 +2788,7 @@ async def delete_voice(
     voice_dao = AsyncVoiceDAO(session)
 
     # First, get the voice to check its existence and preset status.
-    voice_to_delete = voice_dao.get_voice_by_id(
+    voice_to_delete = await voice_dao.get_voice_by_id(
         user_id=user_id,
         voice_id=voice_id,
         provider=provider,
@@ -2800,7 +2802,7 @@ async def delete_voice(
     try:
         # Attempt to delete from our DB first. The DAO method contains the
         # "in-use" validation and will raise a 409 Conflict if necessary.
-        voice_dao.delete_voice(user_id=user_id, voice_id=voice_id, provider=provider)
+        await voice_dao.delete_voice(user_id=user_id, voice_id=voice_id, provider=provider)
 
         # If the voice is not a preset, also delete it from the provider.
         if not voice_to_delete.is_preset:
@@ -3120,7 +3122,7 @@ async def design_voice_create_from_preview_endpoint(
             )
 
         # Step 2: Save the new voice to our database
-        db_voice = voice_dao.create_voice(
+        db_voice = await voice_dao.create_voice(
             user_id=user_id,
             voice_id=new_el_voice_id,
             name=request_data.voice_name,
@@ -3245,7 +3247,7 @@ async def create_secret(
     secret_dao = AsyncAssistantSecretDAO(session)
 
     # Verify access to the assistant
-    assistant = assistant_dao.get_assistant_by_id(
+    assistant = await assistant_dao.get_assistant_by_id(
         user_id,
         assistant_id,
         organization_id,
@@ -3257,7 +3259,7 @@ async def create_secret(
         )
 
     try:
-        secret = secret_dao.create_secret(
+        secret = await secret_dao.create_secret(
             user_id=user_id,
             agent_id=assistant_id,
             secret_name=secret_in.secret_name,
@@ -3312,7 +3314,7 @@ async def update_secret(
     secret_dao = AsyncAssistantSecretDAO(session)
 
     # Verify access to the assistant
-    assistant = assistant_dao.get_assistant_by_id(
+    assistant = await assistant_dao.get_assistant_by_id(
         user_id,
         assistant_id,
         organization_id,
@@ -3323,7 +3325,7 @@ async def update_secret(
             detail="Assistant not found.",
         )
 
-    secret = secret_dao.update_secret(
+    secret = await secret_dao.update_secret(
         user_id=user_id,
         agent_id=assistant_id,
         secret_name=secret_name,
@@ -3371,7 +3373,7 @@ async def delete_secret(
     secret_dao = AsyncAssistantSecretDAO(session)
 
     # Verify access to the assistant
-    assistant = assistant_dao.get_assistant_by_id(
+    assistant = await assistant_dao.get_assistant_by_id(
         user_id,
         assistant_id,
         organization_id,
@@ -3383,7 +3385,7 @@ async def delete_secret(
         )
 
     try:
-        secret_dao.delete_secret(user_id, assistant_id, secret_name)
+        await secret_dao.delete_secret(user_id, assistant_id, secret_name)
         await session.commit()
         return InfoResponse(
             info={"message": f"Secret '{secret_name}' deleted successfully."},
@@ -3559,7 +3561,7 @@ async def generate_assistant_photo(
 
     # 2. Pre-check credits if not in staging
     if not settings.is_staging:
-        user = users_dao.get_user_with_id(user_id)
+        user = await users_dao.get_user_with_id(user_id)
         if user.credits < settings.photo_generation_cost:
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
@@ -3579,7 +3581,7 @@ async def generate_assistant_photo(
 
         # 4. Deduct credits after successful generation if not in staging
         if not settings.is_staging:
-            users_dao.recharge_credit(
+            await users_dao.recharge_credit(
                 user_id=user_id,
                 quantity=-float(settings.photo_generation_cost),
             )
@@ -3712,7 +3714,7 @@ async def edit_assistant_photo(
 
         # 2. Pre-check credits if not in staging
         if not settings.is_staging:
-            user = users_dao.get_user_with_id(user_id)
+            user = await users_dao.get_user_with_id(user_id)
             if user.credits < settings.photo_generation_cost:
                 raise HTTPException(
                     status_code=status.HTTP_402_PAYMENT_REQUIRED,
@@ -3730,7 +3732,7 @@ async def edit_assistant_photo(
 
         # 4. Deduct credits after successful edit if not in staging
         if not settings.is_staging:
-            users_dao.recharge_credit(
+            await users_dao.recharge_credit(
                 user_id=user_id,
                 quantity=-float(settings.photo_generation_cost),
             )
@@ -3921,7 +3923,7 @@ async def animate_video_endpoint(
 
         # Pre-check credits (assuming video_generation_cost is defined in settings)
         if not settings.is_staging:
-            user = users_dao.get_user_with_id(user_id)
+            user = await users_dao.get_user_with_id(user_id)
             if user.credits < settings.video_generation_cost * (
                 duration if duration is not None else settings.default_video_duration
             ):
@@ -3941,7 +3943,7 @@ async def animate_video_endpoint(
 
         # Deduct credits after successful generation
         if not settings.is_staging:
-            users_dao.recharge_credit(
+            await users_dao.recharge_credit(
                 user_id=user_id,
                 quantity=-float(settings.video_generation_cost),
             )
@@ -4166,7 +4168,7 @@ async def admin_update_user_by_assistant(
     org_member_dao = AsyncOrganizationMemberDAO(session)
 
     # Get assistant without user/org context (admin bypass)
-    assistant = assistant_dao.get_assistant_by_agent_id(request_body.assistant_id)
+    assistant = await assistant_dao.get_assistant_by_agent_id(request_body.assistant_id)
     if not assistant:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -4293,7 +4295,7 @@ async def admin_update_assistant(
     assistant_dao = AsyncAssistantDAO(session)
 
     # Get assistant without user/org context (admin bypass)
-    assistant = assistant_dao.get_assistant_by_agent_id(assistant_id)
+    assistant = await assistant_dao.get_assistant_by_agent_id(assistant_id)
     if not assistant:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

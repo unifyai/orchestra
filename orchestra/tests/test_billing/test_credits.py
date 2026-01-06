@@ -8,7 +8,6 @@ from starlette import status
 
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.tests.utils import ADMIN_HEADERS, HEADERS
-from orchestra.web.api.admin.views import get_user
 
 
 # TODO: amount has to be stored in the user
@@ -23,16 +22,16 @@ def test_positive_recharge(dbsession, worker_id) -> None:
     dbsession.commit()
 
     # user1
-    simple = get_user("user1", dbsession)[0]
+    simple = users_dao.get_user_with_id("user1")
     assert math.isclose(simple.credits, 3.5)  # 1 + 2.5 = 3.5
     # user2
-    recharge_limited = get_user("user2", session=dbsession)[0]
+    recharge_limited = users_dao.get_user_with_id("user2")
     assert math.isclose(recharge_limited.credits, 12.49)  # 9.99 + 2.5 = 12.49
     # user3
-    recharge_not_needed_a = get_user("user3", session=dbsession)[0]
+    recharge_not_needed_a = users_dao.get_user_with_id("user3")
     assert math.isclose(recharge_not_needed_a.credits, 12.5)  # 10 + 2.5 = 12.5
     # user4
-    recharge_not_needed_b = get_user("user4", session=dbsession)[0]
+    recharge_not_needed_b = users_dao.get_user_with_id("user4")
     assert math.isclose(recharge_not_needed_b.credits, 22.5)  # 20 + 2.5 = 22.5
 
 
@@ -48,16 +47,16 @@ def test_negative_recharge(dbsession, worker_id) -> None:
     dbsession.commit()
 
     # user1
-    simple = get_user("user1", session=dbsession)[0]
+    simple = users_dao.get_user_with_id("user1")
     assert math.isclose(simple.credits, 0.5)  # 1 - 0.5 = 0.5
     # user2
-    recharge_limited = get_user("user2", session=dbsession)[0]
+    recharge_limited = users_dao.get_user_with_id("user2")
     assert math.isclose(recharge_limited.credits, 9.49)  # 9.99 - 0.5 = 9.49
     # user3
-    recharge_not_needed_a = get_user("user3", session=dbsession)[0]
+    recharge_not_needed_a = users_dao.get_user_with_id("user3")
     assert math.isclose(recharge_not_needed_a.credits, 9.5)  # 10 - 0.5 = 9.5
     # user4
-    recharge_not_needed_b = get_user("user4", session=dbsession)[0]
+    recharge_not_needed_b = users_dao.get_user_with_id("user4")
     assert math.isclose(recharge_not_needed_b.credits, 19.5)  # 20 - 0.5 = 19.5
 
 

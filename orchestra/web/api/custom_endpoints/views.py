@@ -90,7 +90,7 @@ async def create_custom_endpoint(
 
     """
     custom_endpoint_dao = CustomEndpointDAO(session)
-    custom_api_key_dao = AsyncCustomApiKeyDAO(session)
+    custom_api_key_dao = AsyncCustomAsyncApiKeyDAO(session)
     user_id = request_fastapi.state.user_id
     if "@" not in name:
         raise HTTPException(

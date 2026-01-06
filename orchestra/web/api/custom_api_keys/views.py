@@ -48,7 +48,7 @@ async def create_custom_api_key(
 
     """
     user_id = request_fastapi.state.user_id
-    custom_api_key_dao = AsyncCustomApiKeyDAO(session)
+    custom_api_key_dao = AsyncCustomAsyncApiKeyDAO(session)
     custom_api_key_dao.create_custom_api_key(
         user_id=user_id,
         key=name,
@@ -94,7 +94,7 @@ async def get_custom_api_key(
     Returns the value of the key for the specified custom API key name.
     """
     user_id = request_fastapi.state.user_id
-    custom_api_key_dao = AsyncCustomApiKeyDAO(session)
+    custom_api_key_dao = AsyncCustomAsyncApiKeyDAO(session)
     all_keys = custom_api_key_dao.get_user_keys(user_id=user_id)
     for api_key in all_keys:
         if api_key.key == name:
@@ -136,7 +136,7 @@ async def delete_custom_api_key(
 
     """
     user_id = request_fastapi.state.user_id
-    custom_api_key_dao = AsyncCustomApiKeyDAO(session)
+    custom_api_key_dao = AsyncCustomAsyncApiKeyDAO(session)
     existing_key = await custom_api_key_dao.filter(user_id=user_id, key=name)
     if not existing_key:
         raise not_found("Custom API Key")
@@ -186,7 +186,7 @@ async def rename_custom_api_key(
 
     """
     user_id = request_fastapi.state.user_id
-    custom_api_key_dao = AsyncCustomApiKeyDAO(session)
+    custom_api_key_dao = AsyncCustomAsyncApiKeyDAO(session)
     existing_key = await custom_api_key_dao.filter(user_id=user_id, key=name)
     if not existing_key:
         raise not_found("Custom API Key")
@@ -224,7 +224,7 @@ async def list_custom_api_keys(
     Returns a list of the names for all custom API keys in your account.
     """
     user_id = request_fastapi.state.user_id
-    custom_api_key_dao = AsyncCustomApiKeyDAO(session)
+    custom_api_key_dao = AsyncCustomAsyncApiKeyDAO(session)
     raw_response = custom_api_key_dao.get_user_keys(user_id=user_id)
     return [
         CustomApiKeyModelResponse(name=rr.key, value=rr.value) for rr in raw_response

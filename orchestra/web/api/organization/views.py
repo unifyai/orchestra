@@ -501,7 +501,7 @@ async def add_organization_member(
         )
 
         # Grant Member access to Assistants project if it exists
-        context_dao = ContextDAO(session)
+        context_dao = AsyncContextDAO(session)
         project_dao = ProjectDAO(session, org_member_dao, context_dao)
         assistants_projects = await project_dao.filter(
             organization_id=organization_id,
@@ -1445,7 +1445,7 @@ async def accept_invite(
         )
 
         # Grant Member access to Assistants project if it exists
-        context_dao = ContextDAO(session)
+        context_dao = AsyncContextDAO(session)
         project_dao = ProjectDAO(session, org_member_dao, context_dao)
         role_dao = AsyncRoleDAO(session)
         resource_access_dao = AsyncResourceAccessDAO(session)

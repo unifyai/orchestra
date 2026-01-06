@@ -23,11 +23,11 @@ async def list_api_keys(
     grouped by organization.
     """
     user_id = request_fastapi.state.user_id
-    api_key_dao = ApiKeyDAO(session)
-    org_dao = OrganizationDAO(session)
+    api_key_dao = AsyncApiKeyDAO(session)
+    org_dao = AsyncOrganizationDAO(session)
 
     # Get personal keys
-    personal_keys_rows = api_key_dao.get_personal_keys(user_id)
+    personal_keys_rows = await api_key_dao.get_personal_keys(user_id)
     personal_keys = [
         ApiKeyResponse(
             id=key[0].id,
@@ -41,13 +41,13 @@ async def list_api_keys(
     ]
 
     # Get organization keys
-    org_keys_rows = api_key_dao.get_organization_keys(user_id)
+    org_keys_rows = await api_key_dao.get_organization_keys(user_id)
 
     # Group by organization
     org_keys_dict = {}
     for key_row in org_keys_rows:
         key = key_row[0]
-        org = org_dao.get(key.organization_id)
+        org = await org_dao.get(key.organization_id)
         if org:
             org_name = org.name
             if org_name not in org_keys_dict:
@@ -83,10 +83,10 @@ async def revoke_api_key(
     if the user is still a member of that organization.
     """
     user_id = request_fastapi.state.user_id
-    api_key_dao = ApiKeyDAO(session)
+    api_key_dao = AsyncApiKeyDAO(session)
 
     # Get the key
-    keys = api_key_dao.filter(id=key_id)
+    keys = await api_key_dao.filter(id=key_id)
     if not keys:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -104,7 +104,7 @@ async def revoke_api_key(
 
     # Delete the key
     try:
-        api_key_dao.delete(key_id)
+        await api_key_dao.delete(key_id)
         return None
     except Exception as e:
         session.rollback()

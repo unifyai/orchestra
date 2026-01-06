@@ -94,7 +94,7 @@ async def create_user(
     user: UserRequest,
     session: AsyncSession = Depends(get_async_db_session),
 ):
-    auth_user_dao = AuthUserDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
     api_key_dao = AsyncApiKeyDAO(session)
     user_dao = AsyncUsersDAO(session)
 
@@ -136,7 +136,7 @@ async def get_user(
     user_id: str,
     session: AsyncSession = Depends(get_async_db_session),
 ):
-    auth_user_dao = AuthUserDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
     api_key_dao = AsyncApiKeyDAO(session)
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     organization_dao = AsyncOrganizationDAO(session)
@@ -214,7 +214,7 @@ async def get_user_by_email(
     email: str,
     session: AsyncSession = Depends(get_async_db_session),
 ):
-    auth_user_dao = AuthUserDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
     api_key_dao = AsyncApiKeyDAO(session)
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     organization_dao = AsyncOrganizationDAO(session)
@@ -294,7 +294,7 @@ async def get_user_by_account(
     session: AsyncSession = Depends(get_async_db_session),
 ):
     account_dao = AsyncAccountDAO(session)
-    auth_user_dao = AuthUserDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
     api_key_dao = AsyncApiKeyDAO(session)
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     organization_dao = AsyncOrganizationDAO(session)
@@ -351,7 +351,7 @@ async def update_user(
     updated_user: UserRequest,
     session: AsyncSession = Depends(get_async_db_session),
 ):
-    auth_user_dao = AuthUserDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
     user = await auth_user_dao.filter(id=updated_user.user_id)
     if not user:
         raise not_found("User")
@@ -436,7 +436,7 @@ async def set_user_tier(
     tier: str,
     session: AsyncSession = Depends(get_async_db_session),
 ):
-    auth_user_dao = AuthUserDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
     user = await auth_user_dao.filter(id=user_id)
     if not user:
         raise not_found("User ID")
@@ -454,7 +454,7 @@ async def reset_user_quotas(
     user_id: str,
     session: AsyncSession = Depends(get_async_db_session),
 ):
-    auth_user_dao = AuthUserDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
     user = await auth_user_dao.filter(id=user_id)
     if not user:
         raise not_found("User ID")
@@ -466,7 +466,7 @@ async def reset_user_quotas(
 async def reset_all_user_quotas(
     session: AsyncSession = Depends(get_async_db_session),
 ):
-    auth_user_dao = AuthUserDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
     users = await auth_user_dao.filter()
     for user in users:
         await auth_user_dao.update(
@@ -767,7 +767,7 @@ async def add_organization_member(
     role_id: Optional[int] = None,
     session: AsyncSession = Depends(get_async_db_session),
 ):
-    auth_user_dao = AuthUserDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
     organization_dao = AsyncOrganizationDAO(session)
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     role_dao = AsyncRoleDAO(session)
@@ -822,7 +822,7 @@ async def update_organization_member_role(
     role_id: int,
     session: AsyncSession = Depends(get_async_db_session),
 ):
-    auth_user_dao = AuthUserDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
     organization_dao = AsyncOrganizationDAO(session)
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     role_dao = AsyncRoleDAO(session)
@@ -974,12 +974,12 @@ async def update_user_account_type(
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication required")
 
-    auth_user_dao = AuthUserDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
 
     try:
         if body.account_type == "business" and body.business_info:
             # Update to business account with business information
-            auth_user_dao.update_account_type(
+            await auth_user_dao.update_account_type(
                 user_id=user_id,
                 account_type=body.account_type,
                 business_name=body.business_info.business_name,
@@ -995,7 +995,7 @@ async def update_user_account_type(
             )
         else:
             # Update to individual account (clears business info)
-            auth_user_dao.update_account_type(
+            await auth_user_dao.update_account_type(
                 user_id=user_id,
                 account_type=body.account_type,
             )
@@ -1017,10 +1017,10 @@ async def update_user_business_info(
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication required")
 
-    auth_user_dao = AuthUserDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
 
     try:
-        auth_user_dao.update_business_info(
+        await auth_user_dao.update_business_info(
             user_id=user_id,
             business_name=body.business_name,
             tax_id=body.tax_id,
@@ -1056,7 +1056,7 @@ async def verify_business_account(
     session: AsyncSession = Depends(get_async_db_session),
 ):
     """Admin endpoint to verify a business account."""
-    auth_user_dao = AuthUserDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
 
     try:
         # TODO: Add actual business verification logic here
@@ -1065,7 +1065,7 @@ async def verify_business_account(
         # - Business registration verification
         # - Address verification
 
-        auth_user_dao.set_business_verified(
+        await auth_user_dao.set_business_verified(
             user_id=body.user_id,
             verified=True,
             tax_jurisdiction="Determined by verification process",  # Replace with actual logic
@@ -1085,16 +1085,16 @@ async def list_business_accounts(
     session: AsyncSession = Depends(get_async_db_session),
 ):
     """Admin endpoint to list business accounts."""
-    auth_user_dao = AuthUserDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
 
     if verified is not None:
-        users = auth_user_dao.get_business_users_by_verification_status(
+        users = await auth_user_dao.get_business_users_by_verification_status(
             verified=verified,
             limit=limit,
             offset=offset,
         )
     else:
-        users = auth_user_dao.get_users_by_account_type(
+        users = await auth_user_dao.get_users_by_account_type(
             account_type="business",
             limit=limit,
             offset=offset,
@@ -1120,7 +1120,7 @@ async def create_user_with_business_info(
     session: AsyncSession = Depends(get_async_db_session),
 ):
     """Create a new user with business classification (for signup flow)."""
-    auth_user_dao = AuthUserDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
 
     # Check if user already exists
     existing_user = await auth_user_dao.filter(email=body.email)
@@ -1178,7 +1178,7 @@ async def request_assistant_hiring_approval(
     request: Request,
     session: AsyncSession = Depends(get_async_db_session),
 ):
-    auth_user_dao = AuthUserDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
     user_id = request.state.user_id
     user_row_proxy = await auth_user_dao.get_by_id(user_id)  # This returns a RowProxy
     if not user_row_proxy:
@@ -1198,7 +1198,7 @@ async def request_assistant_hiring_approval(
             assistant_hiring_approval=current_status,
         )
 
-    if auth_user_dao.set_assistant_hiring_approval(user_instance.id, "pending"):
+    if await auth_user_dao.set_assistant_hiring_approval(user_instance.id, "pending"):
         await session.commit()
         return AssistantHiringApprovalResponse(
             message="Request for assistant hiring submitted. You've been added to the waitlist.",
@@ -1227,13 +1227,13 @@ async def set_user_assistant_hiring_status(
             detail=f"Invalid status. Must be one of {', '.join(s for s in ASSISTANT_HIRING_APPROVAL_STATUSES if s is not None)}.",
         )
 
-    auth_user_dao = AuthUserDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
     user = await auth_user_dao.get_by_id(target_user_id)
     if not user:
         raise not_found(f"User ID: {target_user_id}")
 
     user_instance = user[0]
-    if auth_user_dao.set_assistant_hiring_approval(target_user_id, status):
+    if await auth_user_dao.set_assistant_hiring_approval(target_user_id, status):
         await session.commit()
         if status == "approved":
             try:
@@ -1298,7 +1298,7 @@ async def list_users_by_assistant_hiring_approval(
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_async_db_session),
 ):
-    auth_user_dao = AuthUserDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
 
     users_to_return: List[AuthUser] = []  # This will hold AuthUser ORM instances
 
@@ -1326,7 +1326,7 @@ async def list_users_by_assistant_hiring_approval(
                 detail=f"Invalid status filter. Must be one of {', '.join(valid_statuses_for_direct_filter)}, 'none', or 'all'.",
             )
         # get_users_by_assistant_hiring_approval already returns List[AuthUser] (ORM instances)
-        users_to_return = auth_user_dao.get_users_by_assistant_hiring_approval(
+        users_to_return = await auth_user_dao.get_users_by_assistant_hiring_approval(
             status_filter,
             limit=limit,
             offset=offset,
@@ -1355,7 +1355,7 @@ async def claim_assistant_hiring_one_time_link(
     payload: AssistantHiringOneTimeLinkClaimTokenRequest,
     session: AsyncSession = Depends(get_async_db_session),
 ):
-    auth_user_dao = AuthUserDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
     user_id = request.state.user_id
     user_row_proxy = await auth_user_dao.get_by_id(user_id)
     if not user_row_proxy:
@@ -1377,7 +1377,7 @@ async def claim_assistant_hiring_one_time_link(
 
         was_re_activated = False
         if original_approval_status in ["revoked", "rejected", None, "pending"]:
-            if not auth_user_dao.set_assistant_hiring_approval(
+            if not await auth_user_dao.set_assistant_hiring_approval(
                 user_instance.id,
                 "approved",
             ):
@@ -1430,7 +1430,7 @@ async def claim_assistant_hiring_one_time_link(
                 detail="Failed to claim approval link. It might be invalid, expired or already claimed by another.",
             )
 
-        if not auth_user_dao.set_assistant_hiring_approval(
+        if not await auth_user_dao.set_assistant_hiring_approval(
             user_instance.id,
             "approved",
         ):
@@ -1634,7 +1634,7 @@ async def delete_own_account(
     - User has pending bills
     - User owns organizations (must transfer ownership first)
     """
-    auth_user_dao = AuthUserDAO(session)
+    auth_user_dao = AsyncAuthUserDAO(session)
     user = await auth_user_dao.get_by_id(request.state.user_id)
 
     if not user:

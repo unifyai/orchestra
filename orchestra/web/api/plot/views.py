@@ -235,7 +235,7 @@ async def create_plot(
             # Get API key for LLM call
             from orchestra.db.dao.api_key_dao import ApiKeyDAO
 
-            api_key_dao = ApiKeyDAO(session)
+            api_key_dao = AsyncApiKeyDAO(session)
             if organization_id:
                 keys = await api_key_dao.get_organization_keys(user_id, organization_id)
             else:
