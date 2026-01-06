@@ -11,7 +11,7 @@ from .helpers import _build_subquery_for_identifier
 __all__ = ["build_sql_query", "_compute_expression"]
 
 
-async def _compute_expression(
+def _compute_expression(
     filter_dict,
     log_event_alias,
     session,
@@ -23,7 +23,7 @@ async def _compute_expression(
     Use build_sql_query -> subquery or expression -> .execute() -> return single result.
     If multiple rows, pick the first or do an aggregator as needed.
     """
-    expr = await build_sql_query(
+    expr = build_sql_query(
         filter_dict,
         log_event_alias,
         session,
@@ -41,7 +41,7 @@ async def _compute_expression(
         return session.execute(select(expr)).scalar()
 
 
-async def build_sql_query(
+def build_sql_query(
     filter_dict,
     log_event_alias,
     session,
@@ -112,7 +112,7 @@ async def build_sql_query(
 
             query_context = QueryContext()
 
-        result = await _build_sql_query_jsonb(
+        result = _build_sql_query_jsonb(
             filter_dict,
             log_event_alias,
             session,
@@ -190,7 +190,7 @@ async def build_sql_query(
     operand = filter_dict.get("operand")
 
     if operand in ("and", "or", "not"):
-        return await _handle_logical_operator(
+        return _handle_logical_operator(
             filter_dict,
             log_event_alias,
             session,
@@ -200,7 +200,7 @@ async def build_sql_query(
             is_vector=is_vector,
         )
     elif operand in ("+", "-", "*", "/", "%", "**", "//"):
-        return await _handle_arithmetic_operator(
+        return _handle_arithmetic_operator(
             filter_dict,
             log_event_alias,
             session,
@@ -210,7 +210,7 @@ async def build_sql_query(
             is_vector=is_vector,
         )
     elif operand in ("==", "!=", "<", ">", "<=", ">=", "is", "is not"):
-        return await _handle_comparison_operator(
+        return _handle_comparison_operator(
             filter_dict,
             log_event_alias,
             session,
@@ -220,7 +220,7 @@ async def build_sql_query(
             is_vector=is_vector,
         )
     elif operand in ("in", "not in"):
-        return await _handle_membership_operator(
+        return _handle_membership_operator(
             filter_dict,
             log_event_alias,
             session,
@@ -255,7 +255,7 @@ async def build_sql_query(
         "embed_image",
         "phash",
     ):
-        return await _handle_functions(
+        return _handle_functions(
             filter_dict,
             log_event_alias,
             session,
@@ -267,7 +267,7 @@ async def build_sql_query(
             context_id=context_id,
         )
     elif operand == "INDEX":
-        return await _handle_index_operator(
+        return _handle_index_operator(
             filter_dict,
             log_event_alias,
             session,
@@ -277,7 +277,7 @@ async def build_sql_query(
             is_vector=is_vector,
         )
     elif operand == "SLICE":
-        return await _handle_slice_operator(
+        return _handle_slice_operator(
             filter_dict,
             log_event_alias,
             session,
@@ -287,7 +287,7 @@ async def build_sql_query(
             is_vector=is_vector,
         )
     elif operand == "dict_method":
-        return await _handle_dict_method(
+        return _handle_dict_method(
             filter_dict,
             log_event_alias,
             session,
@@ -299,7 +299,7 @@ async def build_sql_query(
             context_id=context_id,
         )
     elif operand == "if_expr":
-        return await _handle_if_expr(
+        return _handle_if_expr(
             filter_dict,
             log_event_alias,
             session,
@@ -309,7 +309,7 @@ async def build_sql_query(
             is_vector=is_vector,
         )
     elif operand == "list_comp":
-        return await _handle_list_comp(
+        return _handle_list_comp(
             filter_dict,
             log_event_alias,
             session,
@@ -321,7 +321,7 @@ async def build_sql_query(
             context_id=context_id,
         )
     elif operand == "dict_comp":
-        return await _handle_dict_comp(
+        return _handle_dict_comp(
             filter_dict,
             log_event_alias,
             session,
@@ -333,7 +333,7 @@ async def build_sql_query(
             context_id=context_id,
         )
     elif operand == "zip":
-        return await _handle_zip(
+        return _handle_zip(
             filter_dict,
             log_event_alias,
             session,
@@ -343,7 +343,7 @@ async def build_sql_query(
             is_vector=is_vector,
         )
     elif operand == "l2":
-        return await _handle_l2(
+        return _handle_l2(
             filter_dict,
             log_event_alias,
             session,
@@ -352,7 +352,7 @@ async def build_sql_query(
             local_scope=local_scope,
         )
     elif operand == "cosine":
-        return await _handle_cosine(
+        return _handle_cosine(
             filter_dict,
             log_event_alias,
             session,
@@ -361,7 +361,7 @@ async def build_sql_query(
             local_scope=local_scope,
         )
     elif operand == "ip":
-        return await _handle_ip(
+        return _handle_ip(
             filter_dict,
             log_event_alias,
             session,
@@ -370,7 +370,7 @@ async def build_sql_query(
             local_scope=local_scope,
         )
     elif operand == "l1":
-        return await _handle_l1(
+        return _handle_l1(
             filter_dict,
             log_event_alias,
             session,
@@ -379,7 +379,7 @@ async def build_sql_query(
             local_scope=local_scope,
         )
     elif operand == "hamming":
-        return await _handle_hamming(
+        return _handle_hamming(
             filter_dict,
             log_event_alias,
             session,
@@ -388,7 +388,7 @@ async def build_sql_query(
             local_scope=local_scope,
         )
     elif operand == "jaccard":
-        return await _handle_jaccard(
+        return _handle_jaccard(
             filter_dict,
             log_event_alias,
             session,
@@ -397,7 +397,7 @@ async def build_sql_query(
             local_scope=local_scope,
         )
     elif operand == "phash_distance":
-        return await _handle_phash_distance(
+        return _handle_phash_distance(
             filter_dict,
             log_event_alias,
             session,
@@ -408,7 +408,7 @@ async def build_sql_query(
     elif operand == "str_method":
         from .functions import _handle_str_method
 
-        return await _handle_str_method(
+        return _handle_str_method(
             filter_dict,
             log_event_alias,
             session,
@@ -426,7 +426,7 @@ async def build_sql_query(
             return literal(filter_dict)
 
 
-async def _build_sql_query_jsonb(
+def _build_sql_query_jsonb(
     filter_dict,
     log_event_alias,
     session,
@@ -447,8 +447,6 @@ async def _build_sql_query_jsonb(
                        When provided, aggregation functions can register CTEs for
                        pre-computation instead of using correlated subqueries.
     """
-    import asyncio
-
     if local_scope is None:
         local_scope = {}
 
@@ -466,25 +464,22 @@ async def _build_sql_query_jsonb(
                 for item in filter_dict
             )
             if has_special_dicts:
-                # Build each element concurrently and return as Python list of SQL expressions
-                results = await asyncio.gather(
-                    *[
-                        _build_sql_query_jsonb(
-                            item,
-                            log_event_alias,
-                            session,
-                            log_event_ids,
-                            is_derived=is_derived,
-                            local_scope=local_scope,
-                            is_vector=is_vector,
-                            project_id=project_id,
-                            context_id=context_id,
-                            query_context=query_context,
-                        )
-                        for item in filter_dict
-                    ],
-                )
-                return list(results)
+                # Build each element and return as Python list of SQL expressions
+                return [
+                    _build_sql_query_jsonb(
+                        item,
+                        log_event_alias,
+                        session,
+                        log_event_ids,
+                        is_derived=is_derived,
+                        local_scope=local_scope,
+                        is_vector=is_vector,
+                        project_id=project_id,
+                        context_id=context_id,
+                        query_context=query_context,
+                    )
+                    for item in filter_dict
+                ]
 
             # Pass list directly, let SQLAlchemy/Psycopg2 handle JSONB serialization
             return literal(filter_dict, type_=JSONB)
@@ -563,7 +558,7 @@ async def _build_sql_query_jsonb(
 
     # List comprehensions: [x*2 for x in scores if x > 0]
     if operand == "list_comp":
-        return await jsonb_builder._handle_list_comp_jsonb(
+        return jsonb_builder._handle_list_comp_jsonb(
             filter_dict,
             log_event_alias,
             session,
@@ -578,7 +573,7 @@ async def _build_sql_query_jsonb(
 
     # Dictionary comprehensions: {k: v*2 for k, v in items.items()}
     if operand == "dict_comp":
-        return await jsonb_builder._handle_dict_comp_jsonb(
+        return jsonb_builder._handle_dict_comp_jsonb(
             filter_dict,
             log_event_alias,
             session,
@@ -593,7 +588,7 @@ async def _build_sql_query_jsonb(
 
     # Conditional expressions: x if condition else y
     if operand == "if_expr":
-        return await jsonb_builder._handle_if_expr_jsonb(
+        return jsonb_builder._handle_if_expr_jsonb(
             filter_dict,
             log_event_alias,
             session,
@@ -608,7 +603,7 @@ async def _build_sql_query_jsonb(
 
     # Index operator: arr[0], dict["key"]
     if operand == "INDEX":
-        return await jsonb_builder._handle_index_operator_jsonb(
+        return jsonb_builder._handle_index_operator_jsonb(
             filter_dict,
             log_event_alias,
             session,
@@ -623,7 +618,7 @@ async def _build_sql_query_jsonb(
 
     # Slice operator: arr[1:5], str[:10]
     if operand == "SLICE":
-        return await jsonb_builder._handle_slice_operator_jsonb(
+        return jsonb_builder._handle_slice_operator_jsonb(
             filter_dict,
             log_event_alias,
             session,
@@ -638,7 +633,7 @@ async def _build_sql_query_jsonb(
 
     # Dictionary methods: .keys(), .values(), .items(), .get()
     if operand == "dict_method":
-        return await jsonb_builder._handle_dict_method_jsonb(
+        return jsonb_builder._handle_dict_method_jsonb(
             filter_dict,
             log_event_alias,
             session,
@@ -653,7 +648,7 @@ async def _build_sql_query_jsonb(
 
     # String methods: .lower(), .upper(), .strip(), .startswith(), etc.
     if operand == "str_method":
-        return await jsonb_builder._handle_str_method_jsonb(
+        return jsonb_builder._handle_str_method_jsonb(
             filter_dict,
             log_event_alias,
             session,
@@ -669,7 +664,7 @@ async def _build_sql_query_jsonb(
     # Core operators
 
     if operand in ("and", "or", "not"):
-        return await jsonb_builder._handle_logical_operator_jsonb(
+        return jsonb_builder._handle_logical_operator_jsonb(
             filter_dict,
             log_event_alias,
             session,
@@ -682,7 +677,7 @@ async def _build_sql_query_jsonb(
             query_context=query_context,
         )
     elif operand in ("+", "-", "*", "/", "%", "**", "//"):
-        return await jsonb_builder._handle_arithmetic_operator_jsonb(
+        return jsonb_builder._handle_arithmetic_operator_jsonb(
             filter_dict,
             log_event_alias,
             session,
@@ -695,7 +690,7 @@ async def _build_sql_query_jsonb(
             query_context=query_context,
         )
     elif operand in ("==", "!=", "<", ">", "<=", ">=", "is", "is not"):
-        return await jsonb_builder._handle_comparison_operator_jsonb(
+        return jsonb_builder._handle_comparison_operator_jsonb(
             filter_dict,
             log_event_alias,
             session,
@@ -708,7 +703,7 @@ async def _build_sql_query_jsonb(
             query_context=query_context,
         )
     elif operand in ("in", "not in"):
-        return await jsonb_builder._handle_membership_operator_jsonb(
+        return jsonb_builder._handle_membership_operator_jsonb(
             filter_dict,
             log_event_alias,
             session,
@@ -756,7 +751,7 @@ async def _build_sql_query_jsonb(
         "jsonb_build_array",
         "jsonb_build_object",
     ]:
-        return await jsonb_builder._handle_functions_jsonb(
+        return jsonb_builder._handle_functions_jsonb(
             filter_dict,
             log_event_alias,
             session,
@@ -772,7 +767,7 @@ async def _build_sql_query_jsonb(
     # Vector operations
 
     if operand in ("l2", "euclidean_distance"):
-        return await jsonb_builder._handle_l2_jsonb(
+        return jsonb_builder._handle_l2_jsonb(
             filter_dict,
             log_event_alias,
             session,
@@ -786,7 +781,7 @@ async def _build_sql_query_jsonb(
         )
 
     if operand == "cosine":
-        return await jsonb_builder._handle_cosine_jsonb(
+        return jsonb_builder._handle_cosine_jsonb(
             filter_dict,
             log_event_alias,
             session,
@@ -800,7 +795,7 @@ async def _build_sql_query_jsonb(
         )
 
     if operand == "ip":
-        return await jsonb_builder._handle_ip_jsonb(
+        return jsonb_builder._handle_ip_jsonb(
             filter_dict,
             log_event_alias,
             session,
@@ -814,7 +809,7 @@ async def _build_sql_query_jsonb(
         )
 
     if operand == "l1":
-        return await jsonb_builder._handle_l1_jsonb(
+        return jsonb_builder._handle_l1_jsonb(
             filter_dict,
             log_event_alias,
             session,
@@ -829,7 +824,7 @@ async def _build_sql_query_jsonb(
 
     if operand == "hamming":
         # Hamming distance uses the same vector binary op with <~> operator
-        lhs = await _build_sql_query_jsonb(
+        lhs = _build_sql_query_jsonb(
             filter_dict.get("lhs"),
             log_event_alias,
             session,
@@ -841,7 +836,7 @@ async def _build_sql_query_jsonb(
             context_id=context_id,
             query_context=query_context,
         )
-        rhs = await _build_sql_query_jsonb(
+        rhs = _build_sql_query_jsonb(
             filter_dict.get("rhs"),
             log_event_alias,
             session,
@@ -863,7 +858,7 @@ async def _build_sql_query_jsonb(
         )
 
     if operand == "jaccard":
-        return await jsonb_builder._handle_jaccard_distance_jsonb(
+        return jsonb_builder._handle_jaccard_distance_jsonb(
             filter_dict,
             log_event_alias,
             session,
@@ -877,7 +872,7 @@ async def _build_sql_query_jsonb(
         )
 
     if operand == "phash_distance":
-        return await jsonb_builder._handle_phash_distance_jsonb(
+        return jsonb_builder._handle_phash_distance_jsonb(
             filter_dict,
             log_event_alias,
             session,
@@ -892,7 +887,7 @@ async def _build_sql_query_jsonb(
 
     # zip function - handle locally for JSONB
     if operand == "zip":
-        return await jsonb_builder._handle_zip_jsonb(
+        return jsonb_builder._handle_zip_jsonb(
             filter_dict,
             log_event_alias,
             session,

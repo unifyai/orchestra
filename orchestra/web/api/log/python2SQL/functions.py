@@ -1,4 +1,3 @@
-import asyncio
 import base64
 import io
 import re
@@ -36,6 +35,7 @@ from sqlalchemy.sql.selectable import ColumnClause, Subquery
 
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.models.orchestra_models import Log, LogEventLog
+from orchestra.lib.parallel import threaded_map
 from orchestra.services.bucket_service import BucketService
 from orchestra.settings import settings
 
@@ -45,7 +45,7 @@ from .helpers import (
     _build_subquery_for_base_call,
     _build_subquery_for_identifier,
     _embeddable,
-    _get_embedding,
+    _get_embedding_sync,
     _get_image_embedding_from_url,
     _get_parent_idx,
     _is_jsonb_expression,
@@ -70,7 +70,7 @@ __all__ = [
 
 
 # Helper function for functions (len, str, type, round, round_timestamp, exists, version, isNone)
-async def _handle_date_function(rhs_expr, session):
+def _handle_date_function(rhs_expr, session):
     """
     Handles the date() function which extracts the date component from a datetime value.
 
@@ -145,7 +145,7 @@ async def _handle_date_function(rhs_expr, session):
             return cast(rhs_expr, Date)
 
 
-async def _handle_functions(
+def _handle_functions(
     filter_dict,
     log_event_alias,
     session,
@@ -171,15 +171,13 @@ async def _handle_functions(
     Returns:
         SQLAlchemy condition or expression based on the provided function.
     """
-    import asyncio
-
     # Route to appropriate handler based on feature flag
     if settings.use_jsonb_queries:
         # Extract project_id and context_id from session or log_event_alias if available
         # These are needed for FieldType lookups in JSONB mode
 
         # Comment 2: Use passed-in project_id/context_id instead of getattr
-        return await jsonb_builder._handle_functions_jsonb(
+        return jsonb_builder._handle_functions_jsonb(
             filter_dict,
             log_event_alias,
             session,
@@ -198,24 +196,21 @@ async def _handle_functions(
     if operand in no_arg_functions:
         rhs_expr = None
     elif operand in two_arg_functions:
-        rhs_expr = await asyncio.gather(
-            *[
-                build_sql_query(
-                    expr,
-                    log_event_alias,
-                    session,
-                    log_event_ids=log_event_ids,
-                    is_derived=is_derived,
-                    local_scope=local_scope,
-                    is_vector=is_vector,
-                )
-                for expr in filter_dict.get("rhs")
-            ],
-        )
-        rhs_expr = list(rhs_expr)
+        rhs_expr = [
+            build_sql_query(
+                expr,
+                log_event_alias,
+                session,
+                log_event_ids=log_event_ids,
+                is_derived=is_derived,
+                local_scope=local_scope,
+                is_vector=is_vector,
+            )
+            for expr in filter_dict.get("rhs")
+        ]
     else:
         # one_arg_functions
-        rhs_expr = await build_sql_query(
+        rhs_expr = build_sql_query(
             filter_dict.get("rhs"),
             log_event_alias,
             session,
@@ -333,7 +328,7 @@ async def _handle_functions(
                 raise ValueError("type(...) expects exactly 1 argument")
             arg_node = arg_node[0]
 
-        arg_expr = await build_sql_query(
+        arg_expr = build_sql_query(
             arg_node,
             log_event_alias,
             session,
@@ -656,7 +651,7 @@ async def _handle_functions(
         # Case 2: Handle exists(<subquery>).
         elif isinstance(rhs_expr, Subquery):
             # Build the subquery for the argument, which can be any valid expression.
-            rhs_expr = await build_sql_query(
+            rhs_expr = build_sql_query(
                 filter_dict.get("rhs"),
                 log_event_alias,
                 session,
@@ -817,7 +812,7 @@ async def _handle_functions(
         )
     elif operand == "isNone":
         if isinstance(filter_dict.get("rhs"), dict):
-            rhs_expr = await build_sql_query(
+            rhs_expr = build_sql_query(
                 filter_dict.get("rhs"),
                 log_event_alias,
                 session,
@@ -932,7 +927,7 @@ async def _handle_functions(
                 return cast(rhs_expr, Time)
 
     elif operand == "date":
-        return await _handle_date_function(rhs_expr, session)
+        return _handle_date_function(rhs_expr, session)
     elif operand == "now":
         if log_event_ids is None or (
             isinstance(log_event_ids, list) and len(log_event_ids) == 0
@@ -1054,10 +1049,10 @@ async def _handle_functions(
                         key=key,
                     )
                 else:
-                    # Generate embeddings immediately
-                    from .helpers import _ensure_vectors_exist
+                    # Sync: generate embeddings immediately (sync wrapper)
+                    from .helpers import _ensure_vectors_exist_sync
 
-                    await _ensure_vectors_exist(
+                    _ensure_vectors_exist_sync(
                         session=session,
                         id_to_text=id_to_text,
                         model=model,
@@ -1108,8 +1103,8 @@ async def _handle_functions(
                     f"embed() requires a valid embeddable string, got {text}",
                 )
 
-            # Get the embedding vector
-            embedding = await _get_embedding(text, model, dimensions)
+            # Get the embedding vector (sync wrapper for use in sync query builder)
+            embedding = _get_embedding_sync(text, model, dimensions)
 
             # Create a vector literal using pgvector
             vector_expr = literal(embedding, type_=Vector(len(embedding)))
@@ -1133,13 +1128,14 @@ async def _handle_functions(
             # 2. Create BucketService once before parallel processing to avoid repeated instantiation
             bucket_service = BucketService()
 
-            # 3. Compute embeddings for each image using async concurrent processing
-            async def compute_image_embedding_async(log_event_id, image_url, bucket_svc):
+            # 3. Compute embeddings for each image using parallel processing (like phash)
+            def compute_image_embedding(args):
                 """Helper function to compute embedding for a single image."""
+                log_event_id, image_url, bucket_svc = args
                 embedding_vector = None
                 error_msg = None
                 if image_url and isinstance(image_url, str):
-                    embedding_vector = await _get_image_embedding_from_url(
+                    embedding_vector = _get_image_embedding_from_url(
                         image_url,
                         bucket_svc,
                     )
@@ -1151,10 +1147,11 @@ async def _handle_functions(
                     "error": error_msg,
                 }
 
-            # Use asyncio.gather for concurrent processing
-            results = await asyncio.gather(
-                *[
-                    compute_image_embedding_async(log_event_id, image_url, bucket_service)
+            # Use parallel processing to compute embeddings for all images
+            results = threaded_map(
+                compute_image_embedding,
+                [
+                    (log_event_id, image_url, bucket_service)
                     for log_event_id, image_url in rows
                 ],
             )
@@ -1249,16 +1246,17 @@ async def _handle_functions(
             # 2. Create BucketService once before parallel processing to avoid repeated instantiation
             bucket_service = BucketService()
 
-            # 3. Compute pHash for each image URL using async concurrent processing
-            async def compute_image_hash_async(log_event_id, image_url, bucket_svc):
+            # 3. Compute pHash for each image URL using parallel processing
+            def compute_image_hash(args):
                 """Helper function to compute perceptual hash for a single image."""
+                log_event_id, image_url, bucket_svc = args
                 phash_hex = None
                 error_msg = None
                 if image_url and isinstance(image_url, str):
                     try:
                         # Fetch with retry to handle GCS eventual consistency
                         filename = image_url.split("/")[-1]
-                        base64_image = await fetch_media_with_retry(bucket_svc, filename)
+                        base64_image = fetch_media_with_retry(bucket_svc, filename)
                         if base64_image:
                             image_data = base64.b64decode(base64_image)
                             image = Image.open(io.BytesIO(image_data))
@@ -1274,10 +1272,11 @@ async def _handle_functions(
                     "error": error_msg,
                 }
 
-            # Use asyncio.gather for concurrent processing
-            results = await asyncio.gather(
-                *[
-                    compute_image_hash_async(log_event_id, image_url, bucket_service)
+            # Use parallel processing to compute hashes for all images
+            results = threaded_map(
+                compute_image_hash,
+                [
+                    (log_event_id, image_url, bucket_service)
                     for log_event_id, image_url in rows
                 ],
             )
@@ -1427,7 +1426,7 @@ async def _handle_functions(
         raise ValueError(f"Unknown function operand: {operand}")
 
 
-async def _handle_dict_method(
+def _handle_dict_method(
     filter_dict,
     log_event_alias,
     session,
@@ -1446,7 +1445,7 @@ async def _handle_dict_method(
         "method"
     ]  # e.g., "keys", "values", "items", "get", "setdefault"
     if method in ("get", "setdefault"):
-        return await _handle_dict_get(
+        return _handle_dict_get(
             filter_dict,
             log_event_alias,
             session,
@@ -1464,7 +1463,7 @@ async def _handle_dict_method(
     if filter_dict.get("_jsonb_src_subq") is not None:
         src = filter_dict["_jsonb_src_subq"]
     else:
-        src = await build_sql_query(
+        src = build_sql_query(
             filter_dict["rhs"],
             log_event_alias,
             session,
@@ -1562,7 +1561,7 @@ async def _handle_dict_method(
     return final
 
 
-async def _handle_if_expr(
+def _handle_if_expr(
     filter_dict,
     log_event_alias,
     session,
@@ -1649,7 +1648,7 @@ async def _handle_if_expr(
         )
 
     in_comprehension = local_scope is not None and ("__comp_idx__" in local_scope)
-    raw_test = await build_sql_query(
+    raw_test = build_sql_query(
         filter_dict["test"],
         log_event_alias,
         session,
@@ -1660,7 +1659,7 @@ async def _handle_if_expr(
         project_id=project_id,
         context_id=context_id,
     )
-    raw_body = await build_sql_query(
+    raw_body = build_sql_query(
         filter_dict["body"],
         log_event_alias,
         session,
@@ -1671,7 +1670,7 @@ async def _handle_if_expr(
         project_id=project_id,
         context_id=context_id,
     )
-    raw_else = await build_sql_query(
+    raw_else = build_sql_query(
         filter_dict["orelse"],
         log_event_alias,
         session,
@@ -1877,7 +1876,7 @@ async def _handle_if_expr(
     return final_subq
 
 
-async def _handle_list_comp(
+def _handle_list_comp(
     filter_dict,
     log_event_alias,
     session,
@@ -1900,7 +1899,7 @@ async def _handle_list_comp(
     if filter_dict.get("_jsonb_iter_subq") is not None:
         iter_subq = filter_dict["_jsonb_iter_subq"]
     else:
-        iter_subq = await build_sql_query(
+        iter_subq = build_sql_query(
             filter_dict["iter"],
             log_event_alias,
             session,
@@ -2015,7 +2014,7 @@ async def _handle_list_comp(
 
     if parent_idx_col is not None:
         local_scope["__parent_idx__"] = (parent_idx_col, "int")
-    elt_expr = await build_sql_query(
+    elt_expr = build_sql_query(
         filter_dict["elt"],
         log_event_alias,
         session,
@@ -2097,7 +2096,7 @@ async def _handle_list_comp(
 
     where_clause = literal(True)
     for cond_ast in filter_dict.get("ifs", []):
-        cond_expr = await build_sql_query(
+        cond_expr = build_sql_query(
             cond_ast,
             log_event_alias,
             session,
@@ -2173,7 +2172,7 @@ async def _handle_list_comp(
     return final
 
 
-async def _handle_str_method(
+def _handle_str_method(
     filter_dict,
     log_event_alias,
     session,
@@ -2195,7 +2194,7 @@ async def _handle_str_method(
     bool_methods = {"startswith", "endswith", "contains", "match"}
     inferred = "bool" if method in bool_methods else "str"
 
-    src = await build_sql_query(
+    src = build_sql_query(
         filter_dict["rhs"],
         log_event_alias,
         session,
@@ -2327,7 +2326,7 @@ async def _handle_str_method(
                 stop = slice_obj.get("stop")
 
                 if start is not None:
-                    start = await build_sql_query(
+                    start = build_sql_query(
                         start,
                         log_event_alias,
                         session,
@@ -2349,7 +2348,7 @@ async def _handle_str_method(
                     start = literal(1)  # Default to beginning of string
 
                 if stop is not None:
-                    stop = await build_sql_query(
+                    stop = build_sql_query(
                         stop,
                         log_event_alias,
                         session,
@@ -2491,7 +2490,7 @@ async def _handle_str_method(
                 stop = slice_obj.get("stop")
 
                 if start is not None:
-                    start = await build_sql_query(
+                    start = build_sql_query(
                         start,
                         log_event_alias,
                         session,
@@ -2513,7 +2512,7 @@ async def _handle_str_method(
                     start = literal(1)  # Default to beginning of string
 
                 if stop is not None:
-                    stop = await build_sql_query(
+                    stop = build_sql_query(
                         stop,
                         log_event_alias,
                         session,
@@ -2542,7 +2541,7 @@ async def _handle_str_method(
             raise ValueError(f"Unsupported string method: {method}")
 
 
-async def _handle_dict_comp(
+def _handle_dict_comp(
     filter_dict,
     log_event_alias,
     session,
@@ -2565,7 +2564,7 @@ async def _handle_dict_comp(
     if filter_dict.get("_jsonb_iter_subq") is not None:
         iter_subq = filter_dict["_jsonb_iter_subq"]
     else:
-        iter_subq = await build_sql_query(
+        iter_subq = build_sql_query(
             filter_dict["iter"],
             log_event_alias,
             session,
@@ -2689,7 +2688,7 @@ async def _handle_dict_comp(
             )
         return expr, None, False
 
-    key_expr = await build_sql_query(
+    key_expr = build_sql_query(
         filter_dict["key_elt"],
         log_event_alias,
         session,
@@ -2701,7 +2700,7 @@ async def _handle_dict_comp(
         context_id=context_id,
     )
 
-    val_expr = await build_sql_query(
+    val_expr = build_sql_query(
         filter_dict["val_elt"],
         log_event_alias,
         session,
@@ -2892,7 +2891,7 @@ async def _handle_dict_comp(
 
     where_clause = literal(True)
     for cond_ast in filter_dict.get("ifs", []):
-        cond_expr = await build_sql_query(
+        cond_expr = build_sql_query(
             cond_ast,
             log_event_alias,
             session,
@@ -2995,7 +2994,7 @@ def ensure_jsonb(expr):
     return func.to_jsonb(expr)
 
 
-async def _handle_dict_get(
+def _handle_dict_get(
     filter_dict,
     log_event_alias,
     session,
@@ -3023,7 +3022,7 @@ async def _handle_dict_get(
         raise ValueError("dict.get() accepts at most 2 arguments (key, default)")
 
     # Build SQL for the dictionary container
-    container_sql = await build_sql_query(
+    container_sql = build_sql_query(
         filter_dict["rhs"],
         log_event_alias,
         session,
@@ -3034,7 +3033,7 @@ async def _handle_dict_get(
     )
 
     # Build SQL for the key
-    key_sql = await build_sql_query(
+    key_sql = build_sql_query(
         filter_dict["key"],
         log_event_alias,
         session,
@@ -3047,7 +3046,7 @@ async def _handle_dict_get(
     # Build SQL for the default value if provided
     default_sql = None
     if "default" in filter_dict and filter_dict["default"] is not None:
-        default_sql = await build_sql_query(
+        default_sql = build_sql_query(
             filter_dict["default"],
             log_event_alias,
             session,
@@ -3228,7 +3227,7 @@ async def _handle_dict_get(
             return value_expr
 
 
-async def _handle_zip(
+def _handle_zip(
     filter_dict,
     log_event_alias,
     session,
