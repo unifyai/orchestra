@@ -88,10 +88,10 @@ async def get_credits(
         },
     },
 )
-def deduct_credits(
+async def deduct_credits(
     request_fastapi: Request,
     request: DeductCreditsRequest,
-    session=Depends(get_db_session),
+    session=Depends(get_async_db_session),
 ) -> DeductCreditsResponse:
     """
     Deducts credits from the user's account.
@@ -101,11 +101,11 @@ def deduct_credits(
     \f
     :param request_fastapi: FastAPI request object.
     :param request: Request body containing the amount to deduct.
-    :param session: Database session.
+    :param session: Async database session.
     :return: Response with previous, deducted, and current credit amounts.
     """
-    users_dao = UsersDAO(session)
-    user = users_dao.filter(id=request_fastapi.state.user_id)
+    users_dao = AsyncUsersDAO(session)
+    user = await users_dao.filter(id=request_fastapi.state.user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
 
@@ -117,8 +117,7 @@ def deduct_credits(
             detail=f"Insufficient credits. Available: {current_credits}, requested: {request.amount}",
         )
 
-    users_dao.recharge_credit(request_fastapi.state.user_id, -request.amount)
-    session.commit()
+    await users_dao.recharge_credit(request_fastapi.state.user_id, -request.amount)
 
     new_credits = current_credits - request.amount
 

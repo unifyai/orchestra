@@ -15,6 +15,7 @@ from orchestra.db.dao.assistant_hiring_one_time_approval_link_dao import (
     AssistantHiringOneTimeApprovalLinkDAO,
 )
 from orchestra.db.dao.async_auth_user_dao import AsyncAuthUserDAO
+from orchestra.db.dao.async_users_dao import AsyncUsersDAO
 from orchestra.db.dao.auth_user_dao import (
     ASSISTANT_HIRING_APPROVAL_STATUSES,
     AuthUser,
@@ -507,10 +508,10 @@ async def set_stripe_id_for_user(
 @admin_router.get("/auth-user/is-frozen")
 async def is_account_frozen(
     user_id: str,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
-    users_dao = UsersDAO(session)
-    frozen = users_dao.is_account_frozen(user_id)
+    users_dao = AsyncUsersDAO(session)
+    frozen = await users_dao.is_account_frozen(user_id)
     return {"user_id": user_id, "is_frozen": frozen}
 
 
@@ -910,15 +911,15 @@ async def update_query_logging_status(
 @router.get("/user/business-status", response_model=UserBusinessStatusResponse)
 async def get_user_business_status(
     request: Request,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
     """Get the current user's business classification status."""
     user_id = getattr(request.state, "user_id", None)
     if not user_id:
         raise HTTPException(status_code=401, detail="Authentication required")
 
-    auth_user_dao = AuthUserDAO(session)
-    user_row = auth_user_dao.get_by_id(user_id)
+    auth_user_dao = AsyncAuthUserDAO(session)
+    user_row = await auth_user_dao.get_by_id(user_id)
 
     if not user_row:
         raise HTTPException(status_code=404, detail="User not found")
