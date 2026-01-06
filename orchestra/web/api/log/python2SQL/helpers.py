@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import copy
 import functools
@@ -86,17 +87,45 @@ __all__ = [
     "DEFAULT_IMAGE_EMBEDDING_MODEL",
 ]
 
-# Initialize async OpenAI client if API key is available
+# OpenAI API key for embeddings
 OPENAI_API_KEY = os.getenv("ORCHESTRA_OPENAI_API_KEY")
-# Large embedding batches (hundreds of items) can take several minutes to process
-_async_client = (
-    AsyncOpenAI(
-        api_key=OPENAI_API_KEY,
-        timeout=httpx.Timeout(300.0, connect=30.0),  # 5 min total, 30s connect
-    )
-    if OPENAI_API_KEY
-    else None
-)
+
+# Per-event-loop AsyncOpenAI client cache.
+# httpx's connection pool tracks state per-event-loop, so using a single global
+# client from multiple event loops (e.g., via _run_async_in_sync creating new loops)
+# causes pool contention and hangs. Each event loop gets its own client instance.
+_async_clients: dict[int, AsyncOpenAI] = {}
+_async_clients_lock = threading.Lock()
+
+
+def _get_async_client() -> AsyncOpenAI | None:
+    """
+    Get or create an AsyncOpenAI client for the current event loop.
+
+    This avoids connection pool contention when embedding functions are called
+    from multiple different event loops (e.g., the main FastAPI loop vs. new
+    loops created by _run_async_in_sync in ThreadPoolExecutor).
+
+    Returns:
+        AsyncOpenAI client for the current event loop, or None if no API key.
+    """
+    if not OPENAI_API_KEY:
+        return None
+
+    try:
+        loop = asyncio.get_running_loop()
+        loop_id = id(loop)
+    except RuntimeError:
+        # No running loop - use a sentinel ID
+        loop_id = 0
+
+    if loop_id not in _async_clients:
+        with _async_clients_lock:
+            if loop_id not in _async_clients:
+                _async_clients[loop_id] = AsyncOpenAI(api_key=OPENAI_API_KEY)
+
+    return _async_clients[loop_id]
+
 
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
 DEFAULT_IMAGE_EMBEDDING_MODEL = "multimodalembedding@001"
@@ -303,7 +332,8 @@ async def _get_embeddings_batch(
 
             start_time = time.monotonic()
             try:
-                resp = await _async_client.embeddings.create(**kwargs)
+                client = _get_async_client()
+                resp = await client.embeddings.create(**kwargs)
                 duration_ms = (time.monotonic() - start_time) * 1000
                 span.set_attribute("embedding.duration_ms", duration_ms)
                 span.set_attribute("embedding.success", True)
