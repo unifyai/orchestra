@@ -11,7 +11,6 @@ from providers.completion import PROVIDER_CLASSES
 from orchestra.db.dao.dataset_dao import DatasetDAO
 from orchestra.db.dao.router_dao import RouterDAO
 from orchestra.web.api.utils.gcp import read_from_bucket, send_pubsub_msg
-from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
 
@@ -104,7 +103,6 @@ def send_to_train_server(action, **data):
         },
     },
 )
-@handle_on_prem(endpoint="/router/train", method="none")
 def train_router(
     request_fastapi: Request,
     name: str = Query(description="Name of the router.", example="my_router"),
@@ -223,7 +221,6 @@ def train_router(
         },
     },
 )
-@handle_on_prem(endpoint="/router", method="none")
 def delete_router(
     request_fastapi: Request,
     name: str = Query(
@@ -251,7 +248,6 @@ def delete_router(
 
 
 @router.post("/router/rename")
-@handle_on_prem(endpoint="/router/rename", method="none")
 def rename_router(
     request_fastapi: Request,
     name: str = Query(
@@ -306,7 +302,6 @@ def rename_router(
         },
     },
 )
-@handle_on_prem(endpoint="/router/list", method="none")
 def list_routers(
     request_fastapi: Request,
     router_dao: RouterDAO = Depends(),
@@ -328,7 +323,6 @@ def list_routers(
 
 # old function for frontend
 @router.get("/get_dataset_evaluation")
-@handle_on_prem(endpoint="/get_dataset_evaluation", method="get")
 def get_dataset_evaluation(
     request_fastapi: Request,
     dataset_name: str,

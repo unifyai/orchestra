@@ -8,12 +8,8 @@ from fastapi.param_functions import Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from providers.completion import PROVIDER_CLASSES
 
-from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
 from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
-from orchestra.db.dao.custom_router_dao import CustomRouterDAO
-from orchestra.db.dao.endpoint_dao import EndpointDAO
-from orchestra.db.dao.router_dao import RouterDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.settings import settings
@@ -21,14 +17,8 @@ from orchestra.web.api.dependencies import _ro_session
 from orchestra.web.api.llm_queries.schema import (
     ChatCompletionRequest,
     ChatCompletionResponse,
-    RouterScoresResponse,
 )
 from orchestra.web.api.utils.bg_tasks import db_operations
-from orchestra.web.api.utils.dynamic_routing import (
-    NeuralRouter,
-    Router,
-    get_router_endpoint_id,
-)
 from orchestra.web.api.utils.helpers import filter_orchestra_only_args
 from orchestra.web.api.utils.http_responses import (
     insufficient_credits_error,
@@ -36,7 +26,6 @@ from orchestra.web.api.utils.http_responses import (
     invalid_model_str,
     not_found,
 )
-from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
 
@@ -71,12 +60,8 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
 
     :raises HTTPException: when user has insufficient credits.
     """
-    endpoint_dao = EndpointDAO(session)
-    benchmark_run_dao = BenchmarkRunDAO(session)
     custom_endpoint_dao = CustomEndpointDAO(session)
     custom_api_key_dao = CustomApiKeyDAO(session)
-    custom_router_dao = CustomRouterDAO(session)
-    router_dao = RouterDAO(session)
 
     if isinstance(request, list):
         request_priority_list = request
@@ -172,83 +157,19 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             provider if provider == "custom" else provider.replace("custom-", "")
         )
         try_provider = 0
-        router_choices = None
         using_router = model.startswith("router")
         router_str = provider if using_router else None
         num_tries_provider = min(5, len(model_region_priority_list))
 
         if using_router:
-            if os.environ.get("ON_PREM"):
-                endpoint_id = 1
-            else:
-                # parse router string
-                tmp = model.split("_", 1)
-                if len(tmp) == 1:
-                    # TODO: unify the two tables (router & custom_router)
-                    endpoint_id = get_router_endpoint_id(
-                        custom_router_dao,
-                        user_id=None,
-                        router_name="foundation_router",
-                    )
-                else:
-                    router_name = tmp[1]
-                    try:
-                        router_data = router_dao.filter(
-                            user_id=user_id,
-                            name=router_name,
-                        )[0]
-                        if not hasattr(router_data, "gcp_router_id"):
-                            raise HTTPException(
-                                400,
-                                detail="This router is not currently deployed.",
-                            )
-                        endpoint_id = router_data.gcp_router_id
-                        print(endpoint_id)
-                    except:
-                        # TODO: add proper error message for this
-                        raise invalid_model_str
+            raise HTTPException(
+                status_code=400,
+                detail="Router functionality has been removed.",
+            )
 
         t0 = time.time()
         try:
             while try_provider >= 0 and try_provider < num_tries_provider:
-                # routing
-                if provider_str not in PROVIDER_CLASSES or using_router:
-                    # 1 token ~ 4 letters + 0.25 safety ratio for different tokenizers
-                    num_tokens_est = 0
-                    for msg in messages:
-                        if msg.get("content") is not None:
-                            num_tokens_est += len(msg["content"])
-                    input_tokens = num_tokens_est * 1.25
-
-                    # neural routing
-                    if using_router:
-                        if router_choices is None:
-                            router = NeuralRouter(
-                                request.model,
-                                request_fastapi,
-                                endpoint_dao,
-                                benchmark_run_dao,
-                            )
-                            router_choices = router(
-                                messages[-1]["content"],
-                                endpoint_id,
-                                input_tokens=input_tokens,
-                            )
-                            model_region_priority_list = router_choices
-                    # performance routing
-                    else:
-                        model, provider, _ = Router(
-                            request.model,
-                            request_fastapi,
-                            endpoint_dao,
-                            benchmark_run_dao,
-                        )(input_tokens=input_tokens)
-                        model_region_priority_list[try_provider] = (
-                            model,
-                            provider,
-                            region,
-                        )
-
                 # get the current model, provider and region from the list
                 model, provider, region = model_region_priority_list[try_provider]
                 provider_str = (
@@ -433,21 +354,3 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     processing_time = (time.time() - t0) * 1000
     response_fastapi.headers["openai-processing-ms"] = f"{processing_time:.0f}"
     return ChatCompletionResponse(**response)
-
-
-@router.post(
-    "/router/scores",
-    include_in_schema=False,
-    response_model=RouterScoresResponse,
-)
-@handle_on_prem("/router/scores", "none")
-def get_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
-    request_fastapi: Request,
-    request: ChatCompletionRequest,
-    session=Depends(get_db_session),
-) -> RouterScoresResponse:
-    endpoint_dao = EndpointDAO(session)
-    benchmark_run_dao = BenchmarkRunDAO(session)
-    rc = NeuralRouter(request.model, endpoint_dao, benchmark_run_dao)
-    scores = rc(request_fastapi, request.messages[-1]["content"], debug=True)
-    return RouterScoresResponse(scores=scores)
