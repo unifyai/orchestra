@@ -6,7 +6,7 @@ from typing import Optional, Tuple
 
 import httpx
 from fastapi import HTTPException, status
-from openai import OpenAI
+from openai import AsyncOpenAI
 from pydantic import BaseModel
 
 from orchestra.settings import settings
@@ -60,9 +60,9 @@ class OpenAIService:
     def __init__(self):
         if not settings.openai_api_key:
             raise ValueError("openai_api_key is not set in settings.")
-        self.client = OpenAI(api_key=settings.openai_api_key)
+        self.client = AsyncOpenAI(api_key=settings.openai_api_key)
 
-    def analyze_image(self, image_url: str) -> ImageAnalysisResponse:
+    async def analyze_image(self, image_url: str) -> ImageAnalysisResponse:
         """
         Analyzes an image to check for a human face and NSFW content.
         """
@@ -77,7 +77,7 @@ class OpenAIService:
         - 'reason': string (a brief explanation for your decision, e.g., "Image is a landscape with no people," or "Image contains explicit content.").
         """
         try:
-            response = self.client.beta.chat.completions.parse(
+            response = await self.client.beta.chat.completions.parse(
                 model="gpt-4o",
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -116,14 +116,14 @@ class OpenAIService:
                 detail=f"An error occurred with the image analysis service: {str(e)}",
             ) from e
 
-    def analyze_audio(self, audio_url: str) -> TextModerationResponse:
+    async def analyze_audio(self, audio_url: str) -> TextModerationResponse:
         """
         Analyzes audio for speech and NSFW content by transcribing it and then moderating the text.
         """
         # 1. Download audio
         try:
-            with httpx.Client() as client:
-                response = client.get(audio_url)
+            async with httpx.AsyncClient() as client:
+                response = await client.get(audio_url)
                 response.raise_for_status()
                 audio_bytes = response.content
                 content_type = response.headers.get(
@@ -156,7 +156,7 @@ class OpenAIService:
 
         # 2. Transcribe audio
         try:
-            transcription = self.client.audio.transcriptions.create(
+            transcription = await self.client.audio.transcriptions.create(
                 model="whisper-1",
                 file=audio_file,
             )
@@ -186,7 +186,7 @@ class OpenAIService:
         """
 
         try:
-            response = self.client.beta.chat.completions.parse(
+            response = await self.client.beta.chat.completions.parse(
                 model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -219,7 +219,7 @@ class OpenAIService:
                 detail=f"An error occurred with the audio moderation service: {str(e)}",
             ) from e
 
-    def moderate_text(self, text: str) -> TextModerationResult:
+    async def moderate_text(self, text: str) -> TextModerationResult:
         """
         Analyzes a string of text for NSFW content.
         """
@@ -232,7 +232,7 @@ class OpenAIService:
         - 'reason': string (a brief explanation for your decision, e.g., "Text is clean," or "Text contains explicit language.").
         """
         try:
-            response = self.client.beta.chat.completions.parse(
+            response = await self.client.beta.chat.completions.parse(
                 model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -261,7 +261,7 @@ class OpenAIService:
                 detail=f"An error occurred with the text moderation service: {str(e)}",
             ) from e
 
-    def detect_language_from_text(self, text: str) -> Optional[str]:
+    async def detect_language_from_text(self, text: str) -> Optional[str]:
         """
         Detects language from a string of text using OpenAI's structured output.
         - If detection is successful and the language is supported, returns the language code.
@@ -330,7 +330,7 @@ class OpenAIService:
         For example, if the text is in English, respond with: {"language_code": "en"}
         """
         try:
-            response = self.client.beta.chat.completions.parse(
+            response = await self.client.beta.chat.completions.parse(
                 model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -380,7 +380,7 @@ class OpenAIService:
                 detail=f"An error occurred with the language detection service: {str(e)}",
             ) from e
 
-    def generate_voice_description_from_bio(
+    async def generate_voice_description_from_bio(
         self,
         bio: str,
         description_hint: Optional[str] = None,
@@ -404,7 +404,7 @@ class OpenAIService:
             )
 
         try:
-            response = self.client.beta.chat.completions.parse(
+            response = await self.client.beta.chat.completions.parse(
                 model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -446,7 +446,7 @@ class OpenAIService:
                 detail=f"An error occurred with the voice description generation service: {str(e)}",
             ) from e
 
-    def generate_speech(
+    async def generate_speech(
         self,
         text: str,
         voice_id: str,
@@ -493,7 +493,7 @@ class OpenAIService:
         openai_format, content_type = supported_formats[output_format]
 
         try:
-            response = self.client.audio.speech.create(
+            response = await self.client.audio.speech.create(
                 model=model_id or "gpt-4o-mini-tts",
                 voice=voice_id,
                 input=text,

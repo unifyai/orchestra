@@ -2890,7 +2890,7 @@ async def generate_speech(
                 similarity_boost=request_data.elevenlabs_voice_settings_similarity_boost,
             )
         elif request_data.provider == "openai":
-            audio_bytes, content_type = openai_service.generate_speech(
+            audio_bytes, content_type = await openai_service.generate_speech(
                 text=request_data.text,
                 voice_id=request_data.voice_id,
                 model_id=request_data.model_id or "gpt-4o-mini-tts",
@@ -2949,7 +2949,7 @@ async def design_voice_generate_previews_endpoint(
         if request_data.bio:
             try:
                 final_voice_description = (
-                    openai_service.generate_voice_description_from_bio(
+                    await openai_service.generate_voice_description_from_bio(
                         bio=request_data.bio,
                         description_hint=request_data.voice_description,
                     )
@@ -3066,7 +3066,7 @@ async def design_voice_create_from_preview_endpoint(
             # Fallback to language detection from text description
             else:
                 try:
-                    detected_language = openai_service.detect_language_from_text(
+                    detected_language = await openai_service.detect_language_from_text(
                         request_data.voice_description,
                     )
                     voice_language = detected_language or "en"
@@ -3501,7 +3501,7 @@ async def upload_assistant_video(
     description="Generates a new photo using a text prompt and returns the image URL. This action costs credits.",
     tags=["Media"],
 )
-def generate_assistant_photo(
+async def generate_assistant_photo(
     request: Request,
     payload: PhotoGenerateRequest,
     session: Session = Depends(get_db_session),
@@ -3520,7 +3520,7 @@ def generate_assistant_photo(
 
     # 1. Moderate the prompt
     try:
-        moderation_result = openai_service.moderate_text(payload.prompt)
+        moderation_result = await openai_service.moderate_text(payload.prompt)
         if moderation_result.is_nsfw:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -3661,7 +3661,7 @@ async def edit_assistant_photo(
         # 1. Moderate inputs
         try:
             # Moderate text prompt
-            prompt_moderation = openai_service.moderate_text(prompt)
+            prompt_moderation = await openai_service.moderate_text(prompt)
             if prompt_moderation.is_nsfw:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -3669,7 +3669,7 @@ async def edit_assistant_photo(
                 )
 
             # Moderate input image
-            image_analysis = openai_service.analyze_image(
+            image_analysis = await openai_service.analyze_image(
                 image_url=input_image_for_replicate,
             )
             if image_analysis.is_nsfw:
@@ -3849,7 +3849,7 @@ async def animate_video_endpoint(
 
         try:
             # Perform content moderation and analysis
-            image_analysis = openai_service.analyze_image(
+            image_analysis = await openai_service.analyze_image(
                 image_url=final_image_url_for_replicate,
             )
             if not image_analysis.has_human_face:
@@ -3863,7 +3863,7 @@ async def animate_video_endpoint(
                     detail=f"Image moderation failed: The image was flagged as inappropriate. Reason: {image_analysis.reason}",
                 )
 
-            audio_analysis = openai_service.analyze_audio(
+            audio_analysis = await openai_service.analyze_audio(
                 audio_url=final_audio_url_for_replicate,
             )
             # New check for speech content
