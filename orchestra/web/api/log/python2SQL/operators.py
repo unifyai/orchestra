@@ -65,7 +65,7 @@ __all__ = [
 
 
 # Value-level OR coalescing helper: returns first truthy value (as text)
-async def _value_or_coalesce_subq(
+def _value_or_coalesce_subq(
     or_filter_dict,
     log_event_alias,
     session,
@@ -84,7 +84,7 @@ async def _value_or_coalesce_subq(
     lhs_node = or_filter_dict.get("lhs")
     rhs_node = or_filter_dict.get("rhs")
 
-    lhs_expr = await build_sql_query(
+    lhs_expr = build_sql_query(
         lhs_node,
         log_event_alias,
         session,
@@ -93,7 +93,7 @@ async def _value_or_coalesce_subq(
         local_scope=local_scope,
         is_vector=is_vector,
     )
-    rhs_expr = await build_sql_query(
+    rhs_expr = build_sql_query(
         rhs_node,
         log_event_alias,
         session,
@@ -287,7 +287,7 @@ from .truthiness import build_truthiness_sql as _build_truthiness_sql
 from .truthiness import get_or_list_fallback as _get_or_list_fallback
 
 
-async def _handle_logical_operator(
+def _handle_logical_operator(
     filter_dict,
     log_event_alias,
     session,
@@ -304,7 +304,7 @@ async def _handle_logical_operator(
 
     # The 'not' operator can be handled simply by negating the truthiness
     if operand == "not":
-        rhs = await build_sql_query(
+        rhs = build_sql_query(
             filter_dict.get("rhs"),
             log_event_alias,
             session,
@@ -356,7 +356,7 @@ async def _handle_logical_operator(
             rhs_rhs_node = rhs_node.get("rhs")
 
             # Build RHS expressions for comparison
-            lhs_rhs_expr = await build_sql_query(
+            lhs_rhs_expr = build_sql_query(
                 lhs_rhs_node,
                 log_event_alias,
                 session,
@@ -365,7 +365,7 @@ async def _handle_logical_operator(
                 local_scope=local_scope,
                 is_vector=is_vector,
             )
-            rhs_rhs_expr = await build_sql_query(
+            rhs_rhs_expr = build_sql_query(
                 rhs_rhs_node,
                 log_event_alias,
                 session,
@@ -435,7 +435,7 @@ async def _handle_logical_operator(
             )
 
     # Build LHS and RHS expressions for 'and' / 'or' (original logic)
-    lhs = await build_sql_query(
+    lhs = build_sql_query(
         lhs_node,
         log_event_alias,
         session,
@@ -444,7 +444,7 @@ async def _handle_logical_operator(
         local_scope=local_scope,
         is_vector=is_vector,
     )
-    rhs = await build_sql_query(
+    rhs = build_sql_query(
         rhs_node,
         log_event_alias,
         session,
@@ -646,7 +646,7 @@ def _arithmetic_expr(lval, rval, operand, lval_type, rval_type):
 
 
 # Helper function for arithmetic operators (+, -, *, /, %)
-async def _handle_arithmetic_operator(
+def _handle_arithmetic_operator(
     filter_dict,
     log_event_alias,
     session,
@@ -672,7 +672,7 @@ async def _handle_arithmetic_operator(
 
     # Rewrite value-level `or` used inside arithmetic into a coalescing subquery
     if isinstance(lhs_node, dict) and lhs_node.get("operand") == "or":
-        lhs = await _value_or_coalesce_subq(
+        lhs = _value_or_coalesce_subq(
             lhs_node,
             log_event_alias,
             session,
@@ -682,7 +682,7 @@ async def _handle_arithmetic_operator(
             is_vector=is_vector,
         )
     else:
-        lhs = await build_sql_query(
+        lhs = build_sql_query(
             lhs_node,
             log_event_alias,
             session,
@@ -692,7 +692,7 @@ async def _handle_arithmetic_operator(
             is_vector=is_vector,
         )
     if isinstance(rhs_node, dict) and rhs_node.get("operand") == "or":
-        rhs = await _value_or_coalesce_subq(
+        rhs = _value_or_coalesce_subq(
             rhs_node,
             log_event_alias,
             session,
@@ -702,7 +702,7 @@ async def _handle_arithmetic_operator(
             is_vector=is_vector,
         )
     else:
-        rhs = await build_sql_query(
+        rhs = build_sql_query(
             rhs_node,
             log_event_alias,
             session,
@@ -780,7 +780,7 @@ async def _handle_arithmetic_operator(
 
 
 # Helper function for comparison operators (==, !=, <, >, <=, >=, is, is not)
-async def _handle_comparison_operator(
+def _handle_comparison_operator(
     filter_dict,
     log_event_alias,
     session,
@@ -801,7 +801,7 @@ async def _handle_comparison_operator(
         SQLAlchemy condition or expression based on the comparison operator.
     """
     operand = filter_dict.get("operand")
-    lhs_sql = await build_sql_query(
+    lhs_sql = build_sql_query(
         filter_dict.get("lhs"),
         log_event_alias,
         session,
@@ -810,7 +810,7 @@ async def _handle_comparison_operator(
         local_scope=local_scope,
         is_vector=is_vector,
     )
-    rhs_sql = await build_sql_query(
+    rhs_sql = build_sql_query(
         filter_dict.get("rhs"),
         log_event_alias,
         session,
@@ -1000,7 +1000,7 @@ async def _handle_comparison_operator(
 
 
 # Helper function for membership operators (in, not in)
-async def _handle_membership_operator(
+def _handle_membership_operator(
     filter_dict,
     log_event_alias,
     session,
@@ -1032,7 +1032,7 @@ async def _handle_membership_operator(
     or_fallback_array_expr = None
     if or_fallback_list is not None:
         # Build only the LHS of the 'or' (the array expression)
-        or_fallback_array_expr = await build_sql_query(
+        or_fallback_array_expr = build_sql_query(
             rhs_dict["lhs"],
             log_event_alias,
             session,
@@ -1042,7 +1042,7 @@ async def _handle_membership_operator(
             is_vector=is_vector,
         )
 
-    lhs = await build_sql_query(
+    lhs = build_sql_query(
         filter_dict.get("lhs"),
         log_event_alias,
         session,
@@ -1056,7 +1056,7 @@ async def _handle_membership_operator(
     if or_fallback_array_expr is not None:
         rhs = or_fallback_array_expr
     else:
-        rhs = await build_sql_query(
+        rhs = build_sql_query(
             rhs_dict,
             log_event_alias,
             session,
@@ -1282,7 +1282,7 @@ async def _handle_membership_operator(
         return substring_cond if is_in else ~substring_cond
 
 
-async def _handle_index_operator(
+def _handle_index_operator(
     filter_dict,
     log_event_alias,
     session,
@@ -1308,7 +1308,7 @@ async def _handle_index_operator(
     lhs_node = filter_dict.get("lhs")
     rhs_node = filter_dict.get("rhs")
 
-    lhs_expr = await build_sql_query(
+    lhs_expr = build_sql_query(
         lhs_node,
         log_event_alias,
         session,
@@ -1319,7 +1319,7 @@ async def _handle_index_operator(
         project_id=project_id,
         context_id=context_id,
     )
-    rhs_expr = await build_sql_query(
+    rhs_expr = build_sql_query(
         rhs_node,
         log_event_alias,
         session,
@@ -1497,7 +1497,7 @@ async def _handle_index_operator(
             )
 
 
-async def _handle_slice_operator(
+def _handle_slice_operator(
     filter_dict,
     log_event_alias,
     session,
@@ -1524,7 +1524,7 @@ async def _handle_slice_operator(
     # Unpack the slice bounds
     lower, upper = rhs_bounds
 
-    lhs_expr = await build_sql_query(
+    lhs_expr = build_sql_query(
         lhs_node,
         log_event_alias,
         session,
@@ -1775,7 +1775,7 @@ def _vector_binary_op(
     return expr
 
 
-async def _handle_l2(
+def _handle_l2(
     filter_dict,
     log_event_alias,
     session,
@@ -1786,7 +1786,7 @@ async def _handle_l2(
     """
     Handles L2 distance operator between two vector operands: v1 <-> v2.
     """
-    lhs = await build_sql_query(
+    lhs = build_sql_query(
         filter_dict.get("lhs"),
         log_event_alias,
         session,
@@ -1795,7 +1795,7 @@ async def _handle_l2(
         local_scope=local_scope,
         is_vector=True,
     )
-    rhs = await build_sql_query(
+    rhs = build_sql_query(
         filter_dict.get("rhs"),
         log_event_alias,
         session,
@@ -1807,7 +1807,7 @@ async def _handle_l2(
     return _vector_binary_op(lhs, rhs, session, "<->", "float", "l2_distance")
 
 
-async def _handle_cosine(
+def _handle_cosine(
     filter_dict,
     log_event_alias,
     session,
@@ -1818,7 +1818,7 @@ async def _handle_cosine(
     """
     Handles cosine similarity operator between two vector operands: v1 <=> v2.
     """
-    lhs = await build_sql_query(
+    lhs = build_sql_query(
         filter_dict.get("lhs"),
         log_event_alias,
         session,
@@ -1827,7 +1827,7 @@ async def _handle_cosine(
         local_scope=local_scope,
         is_vector=True,
     )
-    rhs = await build_sql_query(
+    rhs = build_sql_query(
         filter_dict.get("rhs"),
         log_event_alias,
         session,
@@ -1839,7 +1839,7 @@ async def _handle_cosine(
     return _vector_binary_op(lhs, rhs, session, "<=>", "float", "cosine_similarity")
 
 
-async def _handle_ip(
+def _handle_ip(
     filter_dict,
     log_event_alias,
     session,
@@ -1850,7 +1850,7 @@ async def _handle_ip(
     """
     Handles inner product operator between two vector operands: v1 <#> v2.
     """
-    lhs = await build_sql_query(
+    lhs = build_sql_query(
         filter_dict.get("lhs"),
         log_event_alias,
         session,
@@ -1859,7 +1859,7 @@ async def _handle_ip(
         local_scope=local_scope,
         is_vector=True,
     )
-    rhs = await build_sql_query(
+    rhs = build_sql_query(
         filter_dict.get("rhs"),
         log_event_alias,
         session,
@@ -1871,7 +1871,7 @@ async def _handle_ip(
     return _vector_binary_op(lhs, rhs, session, "<#>", "float", "inner_product")
 
 
-async def _handle_l1(
+def _handle_l1(
     filter_dict,
     log_event_alias,
     session,
@@ -1882,7 +1882,7 @@ async def _handle_l1(
     """
     Handles L1 distance operator between two vector operands: v1 <+> v2.
     """
-    lhs = await build_sql_query(
+    lhs = build_sql_query(
         filter_dict.get("lhs"),
         log_event_alias,
         session,
@@ -1891,7 +1891,7 @@ async def _handle_l1(
         local_scope=local_scope,
         is_vector=True,
     )
-    rhs = await build_sql_query(
+    rhs = build_sql_query(
         filter_dict.get("rhs"),
         log_event_alias,
         session,
@@ -1903,7 +1903,7 @@ async def _handle_l1(
     return _vector_binary_op(lhs, rhs, session, "<+>", "float", "l1_distance")
 
 
-async def _handle_hamming(
+def _handle_hamming(
     filter_dict,
     log_event_alias,
     session,
@@ -1914,7 +1914,7 @@ async def _handle_hamming(
     """
     Handles Hamming distance operator between two vector operands: v1 <~> v2.
     """
-    lhs = await build_sql_query(
+    lhs = build_sql_query(
         filter_dict.get("lhs"),
         log_event_alias,
         session,
@@ -1923,7 +1923,7 @@ async def _handle_hamming(
         local_scope=local_scope,
         is_vector=True,
     )
-    rhs = await build_sql_query(
+    rhs = build_sql_query(
         filter_dict.get("rhs"),
         log_event_alias,
         session,
@@ -1935,7 +1935,7 @@ async def _handle_hamming(
     return _vector_binary_op(lhs, rhs, session, "<~>", "float", "hamming_distance")
 
 
-async def _handle_jaccard(
+def _handle_jaccard(
     filter_dict,
     log_event_alias,
     session,
@@ -1946,7 +1946,7 @@ async def _handle_jaccard(
     """
     Handles Jaccard distance operator between two vector operands: v1 <%> v2.
     """
-    lhs = await build_sql_query(
+    lhs = build_sql_query(
         filter_dict.get("lhs"),
         log_event_alias,
         session,
@@ -1955,7 +1955,7 @@ async def _handle_jaccard(
         local_scope=local_scope,
         is_vector=True,
     )
-    rhs = await build_sql_query(
+    rhs = build_sql_query(
         filter_dict.get("rhs"),
         log_event_alias,
         session,
@@ -1967,7 +1967,7 @@ async def _handle_jaccard(
     return _vector_binary_op(lhs, rhs, session, "<%>", "float", "jaccard_distance")
 
 
-async def _handle_phash_distance(
+def _handle_phash_distance(
     filter_dict,
     log_event_alias,
     session,
@@ -2001,7 +2001,7 @@ async def _handle_phash_distance(
         lhs_phash = compute_phash_from_base64(lhs_dict["value"])
         lhs = literal(lhs_phash) if lhs_phash is not None else literal(None)
     else:
-        lhs = await build_sql_query(
+        lhs = build_sql_query(
             lhs_dict,
             log_event_alias,
             session,
@@ -2014,7 +2014,7 @@ async def _handle_phash_distance(
         rhs_phash = compute_phash_from_base64(rhs_dict["value"])
         rhs = literal(rhs_phash) if rhs_phash is not None else literal(None)
     else:
-        rhs = await build_sql_query(
+        rhs = build_sql_query(
             rhs_dict,
             log_event_alias,
             session,

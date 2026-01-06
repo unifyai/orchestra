@@ -38,6 +38,8 @@ from sqlalchemy import (
     select,
 )
 
+from orchestra.lib.parallel import threaded_map
+
 load_dotenv()
 from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.exc import IntegrityError
@@ -70,10 +72,13 @@ __all__ = [
     "_substitute_placeholders",
     "_maybe_vector_column",
     "_ensure_vectors_exist",
+    "_ensure_vectors_exist_sync",
     "_queue_embeddings_for_generation",
     "_get_or_generate_embedding",
     "_get_embedding",
+    "_get_embedding_sync",
     "_get_embeddings_batch",
+    "_get_embeddings_batch_sync",
     "_get_image_embedding_batch",
     "_get_image_embedding_from_url",
     "_is_jsonb_expression",
@@ -394,7 +399,78 @@ async def _get_embeddings_batch(
     return out
 
 
-async def _get_image_embedding_from_url(
+# =============================================================================
+# Sync wrappers for callers in sync contexts (e.g., background workers,
+# sync route handlers). These detect whether an event loop is already running
+# and handle both cases appropriately:
+# - If no loop is running: use asyncio.run() (creates new loop)
+# - If loop is running: use thread pool to avoid "cannot be called from running event loop" error
+# =============================================================================
+
+
+def _run_async_in_sync(coro):
+    """
+    Run an async coroutine from sync code, handling both cases:
+    - No event loop running: use asyncio.run()
+    - Event loop running: use thread pool executor to run in separate thread
+    """
+    import asyncio
+    import concurrent.futures
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        # No running loop - safe to use asyncio.run()
+        return asyncio.run(coro)
+
+    # There's a running loop - we can't use asyncio.run() from here
+    # Use a thread pool to run the coroutine in a new thread with its own event loop
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(asyncio.run, coro)
+        return future.result()
+
+
+def _get_embedding_sync(
+    text: str,
+    model: str | None = None,
+    dimensions: int | None = None,
+) -> list[float]:
+    """
+    Sync wrapper for _get_embedding.
+    Handles both sync contexts (no event loop) and async contexts (running event loop).
+    """
+    return _run_async_in_sync(_get_embedding(text, model, dimensions))
+
+
+def _get_embeddings_batch_sync(
+    texts: list[str],
+    model: str | None = None,
+    dimensions: int | None = None,
+) -> list[list[float]]:
+    """
+    Sync wrapper for _get_embeddings_batch.
+    Handles both sync contexts (no event loop) and async contexts (running event loop).
+    """
+    return _run_async_in_sync(_get_embeddings_batch(texts, model, dimensions))
+
+
+def _ensure_vectors_exist_sync(
+    session: "Session",
+    id_to_text: dict[int, str],
+    model: Optional[str],
+    dimensions: Optional[int],
+    key: str,
+) -> None:
+    """
+    Sync wrapper for _ensure_vectors_exist.
+    Handles both sync contexts (no event loop) and async contexts (running event loop).
+    """
+    return _run_async_in_sync(
+        _ensure_vectors_exist(session, id_to_text, model, dimensions, key),
+    )
+
+
+def _get_image_embedding_from_url(
     image_url: str,
     bucket_service=None,
     _retry_count: int = 0,
@@ -427,7 +503,7 @@ async def _get_image_embedding_from_url(
 
                 # Extract filename from URL and fetch with retry for GCS eventual consistency
                 filename = image_url.split("/")[-1]
-                base64_image = await fetch_media_with_retry(bucket_service, filename)
+                base64_image = fetch_media_with_retry(bucket_service, filename)
 
                 if not base64_image:
                     logging.warning(f"Failed to fetch image from GCS: {filename}")
@@ -465,19 +541,18 @@ async def _get_image_embedding_from_url(
             # Prepare the request payload
             payload = {"instances": [{"image": {"bytesBase64Encoded": image_base64}}]}
 
-            # Make the REST API call (async)
+            # Make the REST API call
             headers = {
                 "Authorization": f"Bearer {credentials.token}",
                 "Content-Type": "application/json",
             }
 
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    endpoint,
-                    headers=headers,
-                    json=payload,
-                    timeout=30.0,  # 30 second timeout
-                )
+            response = httpx.post(
+                endpoint,
+                headers=headers,
+                json=payload,
+                timeout=30.0,  # 30 second timeout
+            )
 
             # Check for errors
             response.raise_for_status()
@@ -522,7 +597,7 @@ async def _get_image_embedding_from_url(
                 f"Retryable error during image embedding ({error_type}), retrying with fresh credentials...",
             )
             _reset_vertexai_credentials()
-            return await _get_image_embedding_from_url(
+            return _get_image_embedding_from_url(
                 image_url,
                 bucket_service,
                 _retry_count=1,
@@ -536,10 +611,10 @@ async def _get_image_embedding_from_url(
         return None
 
 
-async def _get_image_embedding_batch(image_urls: list[str]) -> list[list[float]]:
+def _get_image_embedding_batch(image_urls: list[str]) -> list[list[float]]:
     """
     Get embedding vectors for a batch of images (GCS URLs or base64 strings) using
-    Vertex AI's multimodal embedding model with async concurrent processing.
+    Vertex AI's multimodal embedding model with parallel processing.
 
     Args:
         image_urls: List of image URLs (GCS) or base64 encoded image strings
@@ -551,16 +626,10 @@ async def _get_image_embedding_batch(image_urls: list[str]) -> list[list[float]]
         RuntimeError: If the image embedding model cannot be loaded
         ValueError: If image decoding fails
     """
-    import asyncio
-
     if not image_urls:
         return []
 
-    # Process all images concurrently using asyncio.gather
-    results = await asyncio.gather(
-        *[_get_image_embedding_from_url(url) for url in image_urls],
-    )
-    return list(results)
+    return threaded_map(_get_image_embedding_from_url, image_urls)
 
 
 def _extract_placeholders(equation: str) -> list:
