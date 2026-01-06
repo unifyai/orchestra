@@ -1,5 +1,4 @@
 """
-from sqlalchemy.ext.asyncio import AsyncSession
 Shared sibling context cleanup logic for Assistants/UnityTests projects.
 
 Handles the 3-tier context hierarchy used in Assistants projects:
@@ -12,6 +11,8 @@ removed from sibling tiers to maintain consistency.
 """
 
 from typing import TYPE_CHECKING, Dict, List, Optional
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestra.db.models.orchestra_models import (
     Context,

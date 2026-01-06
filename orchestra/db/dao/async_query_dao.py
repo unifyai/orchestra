@@ -6,7 +6,8 @@ from typing import List, Optional
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession, aliased
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from orchestra.db.models.orchestra_models import Query, QueryTagAssociation, Tag
 
