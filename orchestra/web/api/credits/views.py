@@ -6,9 +6,10 @@ from typing import Dict
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
 
+from orchestra.db.dao.async_users_dao import AsyncUsersDAO
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.db.dependencies import get_db_session
+from orchestra.db.dependencies import get_async_db_session, get_db_session
 from orchestra.db.models.orchestra_models import Users
 from orchestra.lib.time import month_end_utc
 from orchestra.web.api.credits.schema import (
@@ -40,19 +41,19 @@ logger.addHandler(handler)
         },
     },
 )
-def get_credits(
+async def get_credits(
     request_fastapi: Request,
-    session=Depends(get_db_session),
+    session=Depends(get_async_db_session),
 ) -> Users:
     """
     Returns the number of available credits.
     \f
     :param request_fastapi: FastAPI request object.
-    :param users_dao: DAO for users models.
+    :param session: Async database session.
     :return: user instance with credits from database.
     """
-    users_dao = UsersDAO(session)
-    user = users_dao.filter(id=request_fastapi.state.user_id)
+    users_dao = AsyncUsersDAO(session)
+    user = await users_dao.filter(id=request_fastapi.state.user_id)
     # TODO: Remove this after fixing the DB entries
     if len(user) == 0:
         logging.debug(f"##ANCHOR## bot: {request_fastapi.state.user_id}")

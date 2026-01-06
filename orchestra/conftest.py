@@ -28,6 +28,7 @@ from fastapi import FastAPI
 from google.cloud import storage
 from httpx import AsyncClient
 from sqlalchemy import Engine, create_engine, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 warnings.filterwarnings("ignore", category=UserWarning)
@@ -38,7 +39,7 @@ TIMING_RECORDS = []
 # Global to track current test info for timing records
 CURRENT_TEST_INFO = {"name": None, "mode": None}
 
-from orchestra.db.dependencies import get_db_session
+from orchestra.db.dependencies import get_async_db_session, get_db_session
 from orchestra.db.utils import create_database, drop_database
 from orchestra.settings import settings
 from orchestra.web.application import get_app
@@ -222,6 +223,7 @@ def dbsession(
 def fastapi_app(
     dbsession: Session,
     _engine: Engine,
+    worker_id: str,
 ) -> FastAPI:
     """
     Fixture for creating FastAPI app with OTel tracing enabled.
@@ -237,6 +239,36 @@ def fastapi_app(
     # Set up db_engine on app state (normally done in _setup_db during startup)
     # Required for SQLAlchemy instrumentation in setup_opentelemetry
     application.state.db_engine = _engine
+
+    # Set up async database infrastructure for tests
+    # Use the same database URL transformation as the sync engine
+    url = str(settings.db_url)
+    if worker_id:
+        url = url.replace("orchestra_test", f"orchestra_test_{worker_id}")
+    async_db_url = url.replace("postgresql://", "postgresql+asyncpg://").replace(
+        "postgresql+psycopg2://",
+        "postgresql+asyncpg://",
+    )
+    async_engine = create_async_engine(async_db_url, echo=settings.db_echo)
+    async_session_factory = async_sessionmaker(
+        async_engine,
+        class_=AsyncSession,
+        expire_on_commit=False,
+    )
+    application.state.async_db_engine = async_engine
+    application.state.async_session_factory = async_session_factory
+
+    # Override async session dependency
+    async def get_test_async_session():
+        async with async_session_factory() as session:
+            try:
+                yield session
+                await session.commit()
+            except Exception:
+                await session.rollback()
+                raise
+
+    application.dependency_overrides[get_async_db_session] = get_test_async_session
 
     # Set up OTel tracing (idempotent - TracerProvider created once per process)
     # This enables trace capture during tests when ORCHESTRA_LOG_DIR is set
