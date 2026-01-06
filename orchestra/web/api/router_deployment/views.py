@@ -9,7 +9,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from orchestra.db.dao.router_dao import RouterDAO
 from orchestra.web.api.utils.gcp import blob_exists, send_pubsub_msg
-from orchestra.web.api.utils.on_prem import handle_on_prem
 
 router = APIRouter()
 
@@ -77,7 +76,6 @@ def send_to_deploy_server(action, **data):
         },
     },
 )
-@handle_on_prem(endpoint="/router/deploy", method="post")
 def deploy_router(
     request_fastapi: Request,
     name: str = Query(
@@ -153,7 +151,6 @@ def deploy_router(
         },
     },
 )
-@handle_on_prem(endpoint="/router/deploy", method="delete")
 def undeploy_router(
     request_fastapi: Request,
     name: str = Query(
@@ -211,7 +208,6 @@ def undeploy_router(
         },
     },
 )
-@handle_on_prem(endpoint="/router/deploy/list", method="get")
 def list_deployed_routers(
     request_fastapi: Request,
     router_dao: RouterDAO = Depends(),
