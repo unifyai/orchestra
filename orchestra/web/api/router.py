@@ -9,7 +9,6 @@ from orchestra.web.api import (  # noqa: WPS235
     context,
     credits,
     docs,
-    endpoint_metrics,
     interface,
     llm_queries,
     log,
@@ -17,7 +16,6 @@ from orchestra.web.api import (  # noqa: WPS235
     monitoring,
     organization,
     project,
-    provider,
     roles,
     storage,
     supported_endpoints,
@@ -51,13 +49,6 @@ api_router.include_router(
     admin.router,
     prefix="/admin",
     tags=["admin"],
-    include_in_schema=False,
-    dependencies=ADMIN_AUTH,
-)
-api_router.include_router(  # CLEANUP: Delete this? Check if it's being used
-    provider.router,
-    prefix="/admin",
-    tags=["provider"],
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
 )
@@ -119,11 +110,6 @@ api_router.include_router(
 api_router.include_router(
     logging.router,
     tags=["Usage"],
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(
-    endpoint_metrics.router,
-    tags=["Endpoint Metrics"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
