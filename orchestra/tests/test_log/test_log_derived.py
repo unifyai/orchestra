@@ -2096,8 +2096,12 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient, use_jsonb_mode):
     all_logs = response.json()["logs"]
 
     # Extract image URLs and verify each is available in GCS
-    max_availability_retries = 10
-    availability_retry_delay = 3  # seconds between retries
+    # Use exponential backoff: 1, 2, 4, 8, 10, 10, 10... (capped at 10s)
+    # Total max wait: ~60 seconds (vs 30s before)
+    max_availability_retries = 12
+    base_delay = 1  # Start with 1 second
+    max_delay = 10  # Cap at 10 seconds per retry
+    total_wait_time = 0
 
     for attempt in range(max_availability_retries):
         unavailable_images = []
@@ -2122,22 +2126,26 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient, use_jsonb_mode):
 
         if not unavailable_images:
             logging.info(
-                f"All {len(all_logs)} images available in GCS after {attempt + 1} attempts",
+                f"All {len(all_logs)} images available in GCS after {attempt + 1} attempts "
+                f"({total_wait_time}s total wait)",
             )
             break
 
         if attempt < max_availability_retries - 1:
+            # Exponential backoff with cap
+            delay = min(base_delay * (2**attempt), max_delay)
+            total_wait_time += delay
             logging.warning(
                 f"GCS pre-flight check: {len(unavailable_images)} images not yet available "
-                f"({unavailable_images}), retrying in {availability_retry_delay}s "
+                f"({unavailable_images}), retrying in {delay}s "
                 f"(attempt {attempt + 1}/{max_availability_retries})",
             )
-            await asyncio.sleep(availability_retry_delay)
+            await asyncio.sleep(delay)
         else:
             pytest.fail(
                 f"GCS pre-flight check failed: Images {unavailable_images} not available "
                 f"after {max_availability_retries} attempts "
-                f"({max_availability_retries * availability_retry_delay}s total wait time). "
+                f"({total_wait_time}s total wait time). "
                 f"This indicates severe GCS eventual consistency issues.",
             )
 
