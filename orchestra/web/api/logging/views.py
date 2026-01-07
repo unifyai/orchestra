@@ -9,7 +9,6 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.param_functions import Depends
 from sqlalchemy.orm import Session
 
-from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.local_endpoint_dao import LocalEndpointDAO
 from orchestra.db.dao.query_dao import QueryDAO
@@ -69,7 +68,6 @@ def get_queries(
 ):
     query_dao = QueryDAO(session)
     endpoint_dao = EndpointDAO(session)
-    custom_endpoint_dao = CustomEndpointDAO(session)
     local_endpoint_dao = LocalEndpointDAO(session)
     """
     Get the queries history, optionally for a given set of tags for a narrowed search.
@@ -80,7 +78,6 @@ def get_queries(
         endpoints = [endpoints]
 
     global_endpoint_ids = []
-    custom_endpoint_ids = []
     local_endpoint_ids = []
     if endpoints:
         for e_str in endpoints:
@@ -92,12 +89,6 @@ def get_queries(
                         name=_model,
                     )[0].id
                     local_endpoint_ids.append(id_)
-                elif _provider == "custom":
-                    _id = custom_endpoint_dao.filter(
-                        user_id=request_fastapi.state.user_id,
-                        name=_model,
-                    )[0].id
-                    custom_endpoint_ids.append(_id)
                 else:
                     _id = endpoint_dao.get_endpoints_of(
                         models=[_model],
@@ -119,7 +110,7 @@ def get_queries(
         user_id=request_fastapi.state.user_id,
         tags=tags,
         endpoint_ids=global_endpoint_ids,
-        custom_endpoint_ids=custom_endpoint_ids,
+        custom_endpoint_ids=[],
         local_endpoint_ids=local_endpoint_ids,
         start_time=start_time,
         end_time=end_time,

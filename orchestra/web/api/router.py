@@ -8,8 +8,6 @@ from orchestra.web.api import (  # noqa: WPS235
     api_keys,
     context,
     credits,
-    custom_api_keys,
-    custom_endpoints,
     dashboard_view,
     docs,
     endpoint_metrics,
@@ -124,8 +122,6 @@ groupings = {
         "Supported Endpoints",
         "LLM Queries",
         "Usage",
-        "Custom Endpoints",
-        "Custom API keys",
         "Endpoint Metrics",
     ],
     "Logging": [
@@ -166,16 +162,6 @@ api_router.include_router(
 api_router.include_router(
     logging.router,
     tags=["Usage"],
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(
-    custom_api_keys.router,
-    tags=["Custom API keys"],
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(
-    custom_endpoints.router,
-    tags=["Custom Endpoints"],
     dependencies=API_KEY_AUTH,
 )
 api_router.include_router(
