@@ -415,7 +415,7 @@ async def test_admin_endpoints_fix_orphaned_project_workflow(
     org_api_key = None
     for org in user_info.get("organizations", []):
         if org.get("id") == org_id:
-            org_api_key = org.get("apiKey")
+            org_api_key = org.get("api_key")
             break
 
     assert org_api_key is not None, "Should have org API key"

@@ -40,7 +40,7 @@ async def test_admin_file_endpoints_end_to_end(client):
         "/v0/admin/file",
         json={
             "user_id": user_id,
-            "project": project_name,
+            "project_name": project_name,
             "files": files_payload,
             "staging": True,
         },
@@ -50,7 +50,7 @@ async def test_admin_file_endpoints_end_to_end(client):
 
     # 2) List files and verify all are present and contents match (base64)
     list_resp = await client.get(
-        f"/v0/admin/file?user_id={user_id}&project={project_name}&staging=true",
+        f"/v0/admin/file?user_id={user_id}&project_name={project_name}&staging=true",
         headers=ADMIN_HEADERS,
     )
     assert list_resp.status_code == status.HTTP_200_OK, list_resp.json()
@@ -62,7 +62,7 @@ async def test_admin_file_endpoints_end_to_end(client):
     # 3) Read each file via contents endpoint and verify round-trip
     for path, original_bytes in original_files.items():
         read_resp = await client.get(
-            f"/v0/admin/file/contents?user_id={user_id}&project={project_name}&path={path}&staging=true",
+            f"/v0/admin/file/contents?user_id={user_id}&project_name={project_name}&path={path}&staging=true",
             headers=ADMIN_HEADERS,
         )
         assert read_resp.status_code == status.HTTP_200_OK, read_resp.json()
@@ -74,14 +74,14 @@ async def test_admin_file_endpoints_end_to_end(client):
     # 4) Delete a single file, verify it is gone
     del_single_path = "text/hello.txt"
     del_single_resp = await client.delete(
-        f"/v0/admin/file?user_id={user_id}&project={project_name}&path={del_single_path}&staging=true",
+        f"/v0/admin/file?user_id={user_id}&project_name={project_name}&path={del_single_path}&staging=true",
         headers=ADMIN_HEADERS,
     )
     assert del_single_resp.status_code == status.HTTP_200_OK, del_single_resp.json()
 
     # Confirm not listed anymore
     list_after_single = await client.get(
-        f"/v0/admin/file?user_id={user_id}&project={project_name}&staging=true",
+        f"/v0/admin/file?user_id={user_id}&project_name={project_name}&staging=true",
         headers=ADMIN_HEADERS,
     )
     assert list_after_single.status_code == status.HTTP_200_OK
@@ -90,7 +90,7 @@ async def test_admin_file_endpoints_end_to_end(client):
 
     # Reading should 404 now
     read_deleted = await client.get(
-        f"/v0/admin/file/contents?user_id={user_id}&project={project_name}&path={del_single_path}&staging=true",
+        f"/v0/admin/file/contents?user_id={user_id}&project_name={project_name}&path={del_single_path}&staging=true",
         headers=ADMIN_HEADERS,
     )
     assert read_deleted.status_code == status.HTTP_404_NOT_FOUND
@@ -98,13 +98,13 @@ async def test_admin_file_endpoints_end_to_end(client):
     # 4b) Delete a folder (recursive) and verify files under it are gone
     del_folder = "bin"
     del_folder_resp = await client.delete(
-        f"/v0/admin/file?user_id={user_id}&project={project_name}&path={del_folder}&staging=true",
+        f"/v0/admin/file?user_id={user_id}&project_name={project_name}&path={del_folder}&staging=true",
         headers=ADMIN_HEADERS,
     )
     assert del_folder_resp.status_code == status.HTTP_200_OK, del_folder_resp.json()
 
     list_after_folder = await client.get(
-        f"/v0/admin/file?user_id={user_id}&project={project_name}&staging=true",
+        f"/v0/admin/file?user_id={user_id}&project_name={project_name}&staging=true",
         headers=ADMIN_HEADERS,
     )
     assert list_after_folder.status_code == status.HTTP_200_OK
@@ -115,7 +115,7 @@ async def test_admin_file_endpoints_end_to_end(client):
 
     # Cleanup remaining test data (delete img/ folder)
     del_img_resp = await client.delete(
-        f"/v0/admin/file?user_id={user_id}&project={project_name}&path=img&staging=true",
+        f"/v0/admin/file?user_id={user_id}&project_name={project_name}&path=img&staging=true",
         headers=ADMIN_HEADERS,
     )
     assert del_img_resp.status_code == status.HTTP_200_OK, del_img_resp.json()
@@ -140,7 +140,7 @@ async def test_admin_file_signed_url_endpoints(client):
     # 1) Create upload URL (resumable)
     req = {
         "user_id": user_id,
-        "project": project_name,
+        "project_name": project_name,
         "path": "signed/file.bin",
         "content_type": "application/octet-stream",
         "staging": True,
@@ -172,7 +172,7 @@ async def test_admin_file_signed_url_endpoints(client):
 
     # Verify via get_file_contents
     read_resp = await client.get(
-        f"/v0/admin/file/contents?user_id={user_id}&project={project_name}&path=signed/file.bin&staging=true",
+        f"/v0/admin/file/contents?user_id={user_id}&project_name={project_name}&path=signed/file.bin&staging=true",
         headers=ADMIN_HEADERS,
     )
     assert read_resp.status_code == status.HTTP_200_OK, read_resp.json()
@@ -181,7 +181,7 @@ async def test_admin_file_signed_url_endpoints(client):
 
     # 3) Create download URL and verify content
     down_resp = await client.get(
-        f"/v0/admin/file/download_url?user_id={user_id}&project={project_name}&path=signed/file.bin&staging=true",
+        f"/v0/admin/file/download_url?user_id={user_id}&project_name={project_name}&path=signed/file.bin&staging=true",
         headers=ADMIN_HEADERS,
     )
     assert down_resp.status_code == status.HTTP_200_OK, down_resp.json()
@@ -196,7 +196,7 @@ async def test_admin_file_signed_url_endpoints(client):
     # 4) Invalid path should 400
     bad_req = {
         "user_id": user_id,
-        "project": project_name,
+        "project_name": project_name,
         "path": "../escape.bin",
         "staging": True,
     }
@@ -208,7 +208,7 @@ async def test_admin_file_signed_url_endpoints(client):
     assert bad_resp.status_code == status.HTTP_400_BAD_REQUEST
 
     bad_get = await client.get(
-        f"/v0/admin/file/download_url?user_id={user_id}&project={project_name}&path=../escape.bin&staging=true",
+        f"/v0/admin/file/download_url?user_id={user_id}&project_name={project_name}&path=../escape.bin&staging=true",
         headers=ADMIN_HEADERS,
     )
     assert bad_get.status_code == status.HTTP_400_BAD_REQUEST
@@ -216,7 +216,7 @@ async def test_admin_file_signed_url_endpoints(client):
     # 5) Unknown project should 404
     no_proj_req = {
         "user_id": user_id,
-        "project": "does-not-exist",
+        "project_name": "does-not-exist",
         "path": "file.bin",
     }
     no_proj_resp = await client.post(
@@ -228,7 +228,7 @@ async def test_admin_file_signed_url_endpoints(client):
 
     # Cleanup the uploaded object
     del_resp = await client.delete(
-        f"/v0/admin/file?user_id={user_id}&project={project_name}&path=signed&staging=true",
+        f"/v0/admin/file?user_id={user_id}&project_name={project_name}&path=signed&staging=true",
         headers=ADMIN_HEADERS,
     )
     assert del_resp.status_code == status.HTTP_200_OK, del_resp.json()
@@ -262,7 +262,7 @@ async def test_admin_file_download_url_prefix(client):
         "/v0/admin/file",
         json={
             "user_id": user_id,
-            "project": project_name,
+            "project_name": project_name,
             "files": files_payload,
             "staging": True,
         },
@@ -272,7 +272,7 @@ async def test_admin_file_download_url_prefix(client):
 
     # Request download URLs by prefix
     resp = await client.get(
-        f"/v0/admin/file/download_url?user_id={user_id}&project={project_name}&path=home/install&staging=true&as_prefix=true",
+        f"/v0/admin/file/download_url?user_id={user_id}&project_name={project_name}&path=home/install&staging=true&as_prefix=true",
         headers=ADMIN_HEADERS,
     )
     assert resp.status_code == status.HTTP_200_OK, resp.json()
@@ -285,7 +285,7 @@ async def test_admin_file_download_url_prefix(client):
 
     # Cleanup
     del_resp = await client.delete(
-        f"/v0/admin/file?user_id={user_id}&project={project_name}&path=home&staging=true",
+        f"/v0/admin/file?user_id={user_id}&project_name={project_name}&path=home&staging=true",
         headers=ADMIN_HEADERS,
     )
     assert del_resp.status_code == status.HTTP_200_OK, del_resp.json()

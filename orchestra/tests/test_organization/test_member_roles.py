@@ -1058,7 +1058,7 @@ async def test_list_members_includes_phone_number(client: AsyncClient):
         headers=ADMIN_HEADERS,
     )
     assert user_details_resp.status_code == status.HTTP_200_OK
-    phone_user_api_key = user_details_resp.json().get("apiKey")
+    phone_user_api_key = user_details_resp.json().get("api_key")
 
     phone_user = {
         "id": phone_user_id,

@@ -106,7 +106,7 @@ admin_router = APIRouter()
     "/_debug/jsonb_mode",
     include_in_schema=False,  # Hide from OpenAPI docs
 )
-async def set_jsonb_mode_endpoint(enabled: bool):
+def set_jsonb_mode_endpoint(enabled: bool):
     """
     Toggle query mode at runtime for development and testing.
     """
@@ -123,7 +123,7 @@ async def set_jsonb_mode_endpoint(enabled: bool):
     "/_debug/jsonb_mode",
     include_in_schema=False,  # Hide from OpenAPI docs
 )
-async def get_jsonb_mode_endpoint():
+def get_jsonb_mode_endpoint():
     """Get current query mode status."""
     from orchestra.settings import settings
 
@@ -260,7 +260,7 @@ def create_logs(
         organization_id = getattr(request_fastapi.state, "organization_id", None)
         project = project_dao.get_by_user_and_name(
             user_id=user_id,
-            name=request.project,
+            name=request.project_name,
             organization_id=organization_id,
         )
         project_id = project.id
@@ -423,7 +423,7 @@ def prepare_resolved_ids(
             # Note: column_context is a formatting parameter, not used in query
             rows, _count = _get_logs_query_jsonb(
                 request_fastapi=request_fastapi,
-                project=project_name,
+                project_name=project_name,
                 context=query_dict.get("context"),
                 filter_expr=query_dict.get("filter_expr"),
                 sorting=query_dict.get("sorting"),
@@ -443,7 +443,7 @@ def prepare_resolved_ids(
             # EAV mode: _get_logs_query returns (raw_rows, params, count)
             raw_rows, _, _count = _get_logs_query(
                 request_fastapi=request_fastapi,
-                project=project_name,
+                project_name=project_name,
                 column_context=query_dict.get("column_context"),
                 context=query_dict.get("context"),
                 filter_expr=query_dict.get("filter_expr"),
@@ -588,7 +588,7 @@ def create_from_logs(
     # 1) Validate the project
     try:
         project_obj = project_dao.get_by_user_and_name(
-            name=body.project,
+            name=body.project_name,
             user_id=user_id,
             organization_id=organization_id,
         )
@@ -596,7 +596,7 @@ def create_from_logs(
     except (IndexError, AttributeError):
         raise HTTPException(
             status_code=404,
-            detail=f"Project '{body.project}' not found.",
+            detail=f"Project '{body.project_name}' not found.",
         )
     # Get or create context_id
     if body.context:
@@ -624,7 +624,7 @@ def create_from_logs(
         equation=body.equation,
         referenced_logs=body.referenced_logs,
         request_fastapi=request_fastapi,
-        project_name=body.project,
+        project_name=body.project_name,
         project_dao=project_dao,
         field_type_dao=field_type_dao,
         context_dao=context_dao,
@@ -1248,7 +1248,7 @@ def update_derived_log(
     # 1) Validate the project
     try:
         project_obj = project_dao.get_by_user_and_name(
-            name=body.project,
+            name=body.project_name,
             user_id=user_id,
             organization_id=organization_id,
         )
@@ -1256,7 +1256,7 @@ def update_derived_log(
     except (IndexError, AttributeError):
         raise HTTPException(
             status_code=404,
-            detail=f"Project '{body.project}' not found.",
+            detail=f"Project '{body.project_name}' not found.",
         )
     # Get or create context_id
     if body.context:
@@ -1423,7 +1423,7 @@ def update_derived_log(
         equation=updated_equation,
         referenced_logs=body.target_derived_logs,
         request_fastapi=request_fastapi,
-        project_name=body.project,
+        project_name=body.project_name,
         project_dao=project_dao,
         field_type_dao=field_type_dao,
         context_dao=context_dao,
@@ -1517,7 +1517,7 @@ def update_derived_log(
             equation=final_equation,
             referenced_logs=new_refs,  # use the new referenced logs
             request_fastapi=request_fastapi,
-            project_name=body.project,
+            project_name=body.project_name,
             project_dao=project_dao,
             field_type_dao=field_type_dao,
             context_dao=context_dao,
@@ -1733,7 +1733,7 @@ def update_logs(
     if hasattr(body, "logs") and body.logs is not None:
         # Check if it's a filter dict and validate required fields
         if isinstance(body.logs, dict):
-            if not body.project:
+            if not body.project_name:
                 raise HTTPException(
                     status_code=400,
                     detail="When passing a filter dict in `logs`, you must supply `project`.",
@@ -1743,7 +1743,7 @@ def update_logs(
             organization_id = getattr(request_fastapi.state, "organization_id", None)
             try:
                 project_obj = project_dao.get_by_user_and_name(
-                    name=body.project,
+                    name=body.project_name,
                     user_id=user_id,
                     organization_id=organization_id,
                 )
@@ -1751,7 +1751,7 @@ def update_logs(
             except (IndexError, AttributeError):
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Project '{body.project}' not found.",
+                    detail=f"Project '{body.project_name}' not found.",
                 )
 
             # It's a filter dict, use log_dao.get_ids_by_filter to get matching IDs
@@ -2543,7 +2543,7 @@ def _update_logs_jsonb(
     if hasattr(body, "logs") and body.logs is not None:
         # Check if it's a filter dict and validate required fields
         if isinstance(body.logs, dict):
-            if not body.project:
+            if not body.project_name:
                 raise HTTPException(
                     status_code=400,
                     detail="When passing a filter dict in `logs`, you must supply `project`.",
@@ -2552,14 +2552,14 @@ def _update_logs_jsonb(
             # Get project ID first for filtering
             try:
                 project_obj = project_dao.get_by_user_and_name(
-                    name=body.project,
+                    name=body.project_name,
                     user_id=user_id,
                 )
                 project_id = project_obj.id
             except (IndexError, AttributeError):
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Project '{body.project}' not found.",
+                    detail=f"Project '{body.project_name}' not found.",
                 )
 
             # It's a filter dict, use log_dao.get_ids_by_filter to get matching IDs
@@ -3795,13 +3795,13 @@ def delete_logs(
     try:
         project_id = project_dao.get_by_user_and_name(
             user_id=user_id,
-            name=body.project,
+            name=body.project_name,
             organization_id=organization_id,
         ).id
     except (IndexError, AttributeError):
         raise HTTPException(
             status_code=404,
-            detail=f"Project '{body.project}' not found.",
+            detail=f"Project '{body.project_name}' not found.",
         )
 
     # Validate context
@@ -3810,7 +3810,7 @@ def delete_logs(
     if not context:
         raise HTTPException(
             status_code=404,
-            detail=f"Context '{context_name}' not found for project '{body.project}'.",
+            detail=f"Context '{context_name}' not found for project '{body.project_name}'.",
         )
     context_id = context[0][0].id
 
@@ -3819,7 +3819,7 @@ def delete_logs(
     # and "<AssistantName>/<SubContext>" contexts. Deleting from one should also
     # delete from the sibling context.
     is_assistants_dual_context = (
-        (body.project == "Assistants" or "UnityTests" in body.project)
+        (body.project_name == "Assistants" or "UnityTests" in body.project_name)
         and context_name
         and "/" in context_name
     )
@@ -4566,7 +4566,7 @@ def delete_logs(
 )
 def get_logs(
     request_fastapi: Request,
-    project: str = Query(
+    project_name: str = Query(
         description="Name of the project to get entries from.",
         example="eval-project",
     ),
@@ -4715,14 +4715,14 @@ def get_logs(
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
         project_id = project_dao.get_by_user_and_name(
-            name=project,
+            name=project_name,
             user_id=request_fastapi.state.user_id,
             organization_id=organization_id,
         ).id
     except Exception as e:
         raise HTTPException(
             status_code=404,
-            detail=f"Project {project} not found.",
+            detail=f"Project {project_name} not found.",
         )
     # Format logs into flat structure.
     context_name = "" if not context else context
@@ -4744,7 +4744,7 @@ def get_logs(
                 start_time = time.time()
                 rows, total_count = _get_logs_query_jsonb(
                     request_fastapi,
-                    project=project,
+                    project_name=project_name,
                     context=context,
                     filter_expr=filter_expr,
                     sorting=sorting,
@@ -4831,7 +4831,7 @@ def get_logs(
             try:
                 all_rows, context_len, total_count = _get_logs_query(
                     request_fastapi,
-                    project=project,
+                    project_name=project_name,
                     column_context=column_context,
                     context=context,
                     filter_expr=filter_expr,
@@ -4905,7 +4905,7 @@ def get_logs(
     try:
         event_ids_subq, total_count = _get_all_filtered_log_event_ids(
             request_fastapi=request_fastapi,
-            project=project,
+            project_name=project_name,
             context=context,
             filter_expr=filter_expr,
             from_ids=from_ids,
@@ -5134,7 +5134,7 @@ def query_logs_post(
     Example with image embedding:
     ```json
     {
-        "project": "my-project",
+        "project_name": "my-project",
         "filter_expr": "cosine(image_embedding, embed_image('data:image/png;base64,iVBORw0KG...')) < 0.3",
         "limit": 10
     }
@@ -5150,14 +5150,14 @@ def query_logs_post(
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
         project_id = project_dao.get_by_user_and_name(
-            name=body.project,
+            name=body.project_name,
             user_id=request_fastapi.state.user_id,
             organization_id=organization_id,
         ).id
     except Exception as e:
         raise HTTPException(
             status_code=404,
-            detail=f"Project {body.project} not found.",
+            detail=f"Project {body.project_name} not found.",
         )
 
     # Format logs into flat structure.
@@ -5175,7 +5175,7 @@ def query_logs_post(
             # JSONB query path
             rows, total_count = _get_logs_query_jsonb(
                 request_fastapi,
-                project=body.project,
+                project_name=body.project_name,
                 context=body.context,
                 filter_expr=body.filter_expr,
                 sorting=body.sorting,
@@ -5243,7 +5243,7 @@ def query_logs_post(
             # EAV query path (original code)
             all_rows, context_len, total_count = _get_logs_query(
                 request_fastapi,
-                project=body.project,
+                project_name=body.project_name,
                 column_context=body.column_context,
                 context=body.context,
                 filter_expr=body.filter_expr,
@@ -5295,7 +5295,7 @@ def query_logs_post(
         # Handle grouped case - similar to GET /logs grouped logic
         all_rows, context_len, total_count = _get_all_filtered_log_event_ids(
             request_fastapi=request_fastapi,
-            project=body.project,
+            project_name=body.project_name,
             column_context=body.column_context,
             context=body.context,
             filter_expr=body.filter_expr,
@@ -5317,7 +5317,7 @@ def query_logs_post(
             group_by=body.group_by,
             all_log_event_ids=all_rows,
             request_fastapi=request_fastapi,
-            project=body.project,
+            project_name=body.project_name,
             column_context=body.column_context,
             context=body.context,
             filter_expr=body.filter_expr,
@@ -5396,7 +5396,7 @@ def query_logs_post(
 )
 def get_logs_latest_timestamp(
     request_fastapi: Request,
-    project: str = Query(
+    project_name: str = Query(
         description="Name of the project to get entries from.",
         example="eval-project",
     ),
@@ -5477,7 +5477,7 @@ def get_logs_latest_timestamp(
     if settings.use_jsonb_queries:
         return _get_logs_query_jsonb(
             request_fastapi,
-            project=project,
+            project_name=project_name,
             context=context,
             filter_expr=filter_expr,
             sorting=sorting,
@@ -5497,7 +5497,7 @@ def get_logs_latest_timestamp(
     else:
         return _get_logs_query(
             request_fastapi,
-            project=project,
+            project_name=project_name,
             column_context=column_context,
             context=context,
             filter_expr=filter_expr,
@@ -5537,7 +5537,7 @@ def get_logs_latest_timestamp(
 def get_logs_metric(
     request_fastapi: Request,
     default_metric: str = Path(...),
-    project: str = Query(...),
+    project_name: str = Query(...),
     request: Optional[GetLogsMetricRequest] = Body(None),
     session=Depends(get_db_session),
 ) -> Union[Dict[str, Any], float, int, bool, str, None]:
@@ -5638,13 +5638,13 @@ def get_logs_metric(
         user_id = request_fastapi.state.user_id
         organization_id = getattr(request_fastapi.state, "organization_id", None)
         project_obj = project_dao.get_by_user_and_name(
-            name=project,
+            name=project_name,
             user_id=user_id,
             organization_id=organization_id,
         )
         project_id = project_obj.id
     except (IndexError, AttributeError):
-        raise not_found(f"Project {project}")
+        raise not_found(f"Project {project_name}")
 
     context_name = request.context or ""
     context_obj = context_dao.filter(name=context_name, project_id=project_obj.id)
@@ -5820,7 +5820,7 @@ def get_logs_metric(
 )
 def get_log_groups(
     request_fastapi: Request,
-    project: str = Query(
+    project_name: str = Query(
         description="Name of the project to get entries from.",
         example="eval-project",
     ),
@@ -5874,7 +5874,7 @@ def get_log_groups(
         # JSONB mode: returns (id, data_dict, key_order, created_at) tuples
         rows, _ = _get_logs_query_jsonb(
             request_fastapi=request_fastapi,
-            project=project,
+            project_name=project_name,
             context=context,
             filter_expr=filter_expr,
             sorting=None,
@@ -5931,7 +5931,7 @@ def get_log_groups(
         # - row_event_id
         raw_rows, _, _ = _get_logs_query(
             request_fastapi=request_fastapi,
-            project=project,
+            project_name=project_name,
             column_context=None,
             context=context,
             filter_expr=filter_expr,
@@ -6028,7 +6028,7 @@ def rename_field(
 
     try:
         # Check if this is the protected Unity/Tasks context
-        if request.project == "Unity" and request.context == "Tasks":
+        if request.project_name == "Unity" and request.context == "Tasks":
             raise HTTPException(
                 status_code=403,
                 detail="Cannot modify fields in the built-in Tasks table - it is immutable",
@@ -6039,14 +6039,14 @@ def rename_field(
         organization_id = getattr(request_fastapi.state, "organization_id", None)
         project = project_dao.get_by_user_and_name(
             user_id=user_id,
-            name=request.project,
+            name=request.project_name,
             organization_id=organization_id,
         )
 
         if not project:
             raise HTTPException(
                 status_code=404,
-                detail=f"Project '{request.project}' not found",
+                detail=f"Project '{request.project_name}' not found",
             )
         project_id = project.id
 
@@ -6181,7 +6181,7 @@ def join_logs(
         mode: Type of join to perform ('inner', 'left', 'right', or 'outer')
         new_context: Name for the new context where joined logs will be stored
         columns: Optional list of column names to include in the joined result
-        project: Name of the project containing the logs
+        project_name: Name of the project containing the logs
 
     Returns:
         JSON response with info about the join operation
@@ -6200,14 +6200,14 @@ def join_logs(
     try:
         project_obj = project_dao.get_by_user_and_name(
             user_id=user_id,
-            name=request.project,
+            name=request.project_name,
             organization_id=organization_id,
         )
         project_id = project_obj.id
     except (IndexError, AttributeError):
         raise HTTPException(
             status_code=404,
-            detail=f"Project '{request.project}' not found.",
+            detail=f"Project '{request.project_name}' not found.",
         )
 
     # Validate pair_of_args
@@ -6256,7 +6256,7 @@ def join_logs(
     # Perform the join operation
     try:
         new_log_ids = _join_logs(
-            project_name=request.project,
+            project_name=request.project_name,
             project_id=project_id,
             pair_of_args=request.pair_of_args,
             join_expr=request.join_expr,
@@ -6322,7 +6322,7 @@ def join_logs(
 )
 def get_fields(
     request_fastapi: Request,
-    project: str = Query(
+    project_name: str = Query(
         description="Name of the project to get fields and their types for.",
         example="eval-project",
     ),
@@ -6366,13 +6366,13 @@ def get_fields(
         user_id = request_fastapi.state.user_id
         organization_id = getattr(request_fastapi.state, "organization_id", None)
         project_obj = project_dao.get_by_user_and_name(
-            name=project,
+            name=project_name,
             user_id=user_id,
             organization_id=organization_id,
         )
         project_id = project_obj.id
     except (IndexError, AttributeError):
-        raise not_found(f"Project {project}")
+        raise not_found(f"Project {project_name}")
 
     # For derived entries, get their equations (project-wide)
     derived_equations = {}
@@ -6532,14 +6532,14 @@ def create_fields(
         organization_id = getattr(request_fastapi.state, "organization_id", None)
         project = project_dao.get_by_user_and_name(
             user_id=user_id,
-            name=request.project,
+            name=request.project_name,
             organization_id=organization_id,
         )
         project_id = project.id
     except (IndexError, AttributeError):
         raise HTTPException(
             status_code=404,
-            detail=f"Project '{request.project}' not found.",
+            detail=f"Project '{request.project_name}' not found.",
         )
 
     # Get or create context
@@ -6762,7 +6762,7 @@ def delete_fields(
     log_dao = LogDAO(session, context_dao)
 
     # Check if this is the protected Unity/Tasks context
-    if request.project == "Unity" and request.context == "Tasks":
+    if request.project_name == "Unity" and request.context == "Tasks":
         raise HTTPException(
             status_code=403,
             detail="Cannot modify fields in the built-in Tasks table - it is immutable",
@@ -6774,14 +6774,14 @@ def delete_fields(
         organization_id = getattr(request_fastapi.state, "organization_id", None)
         project = project_dao.get_by_user_and_name(
             user_id=user_id,
-            name=request.project,
+            name=request.project_name,
             organization_id=organization_id,
         )
         project_id = project.id
     except (IndexError, AttributeError):
         raise HTTPException(
             status_code=404,
-            detail=f"Project '{request.project}' not found.",
+            detail=f"Project '{request.project_name}' not found.",
         )
 
     # Get context
@@ -7346,7 +7346,7 @@ def update_active_derived_logs(
         },
     },
 )
-async def process_traffic_logs(
+def process_traffic_logs(
     max_messages: int = Query(100, description="Maximum number of messages to pull"),
     session=Depends(get_db_session),
     _=Depends(auth_admin_key),
@@ -7438,7 +7438,7 @@ async def process_traffic_logs(
                     context_id=context_id,
                     request=CreateLogConfig(
                         entries=entries,
-                        project=PROJ_NAME,
+                        project_name=PROJ_NAME,
                         context=None,
                     ),
                     project_dao=project_dao,
@@ -7512,7 +7512,7 @@ MAX_TIME_SECONDS_HARD_CAP = 600  # 10 minutes max
         },
     },
 )
-async def process_embedding_queue(
+def process_embedding_queue(
     max_items: int = Query(
         1000,
         le=MAX_ITEMS_HARD_CAP,
@@ -7643,7 +7643,7 @@ async def process_embedding_queue(
         },
     },
 )
-async def run_index_maintenance(
+def run_index_maintenance(
     session=Depends(get_db_session),
     _=Depends(auth_admin_key),
 ):

@@ -79,7 +79,7 @@ def _create_interface_response(
 def _get_interface(
     request_fastapi: Request,
     interface_id: Optional[str],
-    project: Optional[str],
+    project_name: Optional[str],
     name: Optional[str],
     checkpoint: bool,
     project_dao: ProjectDAO,
@@ -92,7 +92,7 @@ def _get_interface(
     Args:
         request_fastapi: The FastAPI request object.
         interface_id: Optional ID of the interface to retrieve.
-        project: Optional project name the interface belongs to.
+        project_name: Optional project name the interface belongs to.
         name: Optional name of the interface to retrieve.
         checkpoint: Whether to get a checkpoint version.
         project_dao: Project DAO dependency.
@@ -125,18 +125,18 @@ def _get_interface(
                     detail=f"Project with ID {interface.project_id} not found.",
                 )
     # Get by project and name
-    elif project and name:
+    elif project_name and name:
         # Verify project exists and user has access
         organization_id = getattr(request_fastapi.state, "organization_id", None)
         project_obj = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
-            name=project,
+            name=project_name,
             organization_id=organization_id,
         )
         if not project_obj:
             raise HTTPException(
                 status_code=404,
-                detail=f"Project {project} not found or you don't have access.",
+                detail=f"Project {project_name} not found or you don't have access.",
             )
 
         # For specific operations like deletion, we need to get the active interface
@@ -154,12 +154,12 @@ def _get_interface(
         if not interface:
             raise HTTPException(
                 status_code=404,
-                detail=f"Interface {name} not found in project {project}.",
+                detail=f"Interface {name} not found in project {project_name}.",
             )
     else:
         raise HTTPException(
             status_code=400,
-            detail="Either interface_id or both project and name must be provided.",
+            detail="Either interface_id or both project_name and name must be provided.",
         )
 
     if only_interface:
@@ -233,13 +233,13 @@ def create_interface(
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
-        name=request.project,  # Assuming project is the name for now
+        name=request.project_name,  # Assuming project is the name for now
         organization_id=organization_id,
     )
     if not project:
         raise HTTPException(
             status_code=404,
-            detail=f"Project {request.project} not found or you don't have access.",
+            detail=f"Project {request.project_name} not found or you don't have access.",
         )
 
     # Check if interface already exists
@@ -335,9 +335,9 @@ def get_interface(
         None,
         description="The ID of the interface to retrieve",
     ),
-    project: Optional[str] = Query(
+    project_name: Optional[str] = Query(
         None,
-        description="The project ID the interface belongs to",
+        description="The project name the interface belongs to",
     ),
     name: Optional[str] = Query(
         None,
@@ -360,7 +360,7 @@ def get_interface(
     interface, _ = _get_interface(
         request_fastapi=request_fastapi,
         interface_id=interface_id,
-        project=project,
+        project_name=project_name,
         name=name,
         checkpoint=checkpoint,
         project_dao=project_dao,
@@ -414,7 +414,10 @@ def get_interface(
 )
 def list_interfaces(
     request_fastapi: Request,
-    project: str = Query(..., description="The project ID to list interfaces for"),
+    project_name: str = Query(
+        ...,
+        description="The project name to list interfaces for",
+    ),
     checkpoint: bool = Query(
         False,
         description="Whether to list checkpoint versions (manually saved)",
@@ -430,20 +433,20 @@ def list_interfaces(
 
     # Verify project exists and user has access
     organization_id = getattr(request_fastapi.state, "organization_id", None)
-    project = project_dao.get_by_user_and_name(
+    project_obj = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
-        name=project,
+        name=project_name,
         organization_id=organization_id,
     )
-    if not project:
+    if not project_obj:
         raise HTTPException(
             status_code=404,
-            detail=f"Project {project} not found or you don't have access.",
+            detail=f"Project {project_name} not found or you don't have access.",
         )
 
     # Get interfaces
     interfaces = interface_dao.get_interfaces(
-        project_id=project.id,
+        project_id=project_obj.id,
         is_checkpoint=checkpoint,
     )
 
@@ -509,9 +512,9 @@ def update_interface(
         None,
         description="The ID of the interface to update",
     ),
-    project: Optional[str] = Query(
+    project_name: Optional[str] = Query(
         None,
-        description="The project ID the interface belongs to",
+        description="The project name the interface belongs to",
     ),
     name: Optional[str] = Query(
         None,
@@ -549,18 +552,18 @@ def update_interface(
                 detail=f"Project with ID {interface.project_id} not found.",
             )
     # Get by project and name
-    elif project and name:
+    elif project_name and name:
         # Verify project exists and user has access
         organization_id = getattr(request_fastapi.state, "organization_id", None)
         project_obj = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
-            name=project,
+            name=project_name,
             organization_id=organization_id,
         )
         if not project_obj:
             raise HTTPException(
                 status_code=404,
-                detail=f"Project {project} not found or you don't have access.",
+                detail=f"Project {project_name} not found or you don't have access.",
             )
 
         # Check if interface with the specified checkpoint status exists
@@ -576,7 +579,7 @@ def update_interface(
             # If non-checkpoint interface doesn't exist, that's an error
             raise HTTPException(
                 status_code=404,
-                detail=f"Interface {name} not found in project {project}.",
+                detail=f"Interface {name} not found in project {project_name}.",
             )
         elif not interface and checkpoint:
             # If checkpoint version doesn't exist but regular version does,
@@ -590,7 +593,7 @@ def update_interface(
             if not regular_interface:
                 raise HTTPException(
                     status_code=404,
-                    detail=f"Interface {name} not found in project {project}.",
+                    detail=f"Interface {name} not found in project {project_name}.",
                 )
 
             # Create a new checkpoint version based on the regular interface
@@ -717,9 +720,9 @@ def create_interface_checkpoint(
         None,
         description="The ID of the interface to checkpoint",
     ),
-    project: Optional[str] = Query(
+    project_name: Optional[str] = Query(
         None,
-        description="The project ID the interface belongs to",
+        description="The project name the interface belongs to",
     ),
     name: Optional[str] = Query(
         None,
@@ -738,7 +741,7 @@ def create_interface_checkpoint(
     interface, project_obj = _get_interface(
         request_fastapi=request_fastapi,
         interface_id=interface_id,
-        project=project,
+        project_name=project_name,
         name=name,
         checkpoint=False,  # Always get the active interface
         project_dao=project_dao,
@@ -853,9 +856,9 @@ def get_interface_checkpoint(
         None,
         description="The ID of the interface to get checkpoint for",
     ),
-    project: Optional[str] = Query(
+    project_name: Optional[str] = Query(
         None,
-        description="The project ID the interface belongs to",
+        description="The project name the interface belongs to",
     ),
     name: Optional[str] = Query(
         None,
@@ -879,7 +882,7 @@ def get_interface_checkpoint(
         _, project_obj = _get_interface(
             request_fastapi=request_fastapi,
             interface_id=interface_id,
-            project=project,
+            project_name=project_name,
             name=name,
             checkpoint=False,
             project_dao=project_dao,
@@ -948,9 +951,9 @@ def delete_interface(
         None,
         description="The ID of the interface to delete",
     ),
-    project: Optional[str] = Query(
+    project_name: Optional[str] = Query(
         None,
-        description="The project ID the interface belongs to",
+        description="The project name the interface belongs to",
     ),
     name: Optional[str] = Query(
         None,
@@ -969,7 +972,7 @@ def delete_interface(
     interface, project_obj = _get_interface(
         request_fastapi=request_fastapi,
         interface_id=interface_id,
-        project=project,
+        project_name=project_name,
         name=name,
         checkpoint=False,
         project_dao=project_dao,
@@ -1050,7 +1053,7 @@ def export_interface_template(
     interface, _ = _get_interface(
         request_fastapi=request_fastapi,
         interface_id=request.interface_id,
-        project=request.project,
+        project_name=request.project_name,
         name=request.interface_name,
         checkpoint=request.checkpoint,
         project_dao=project_dao,
@@ -1087,7 +1090,7 @@ def export_interface_template(
     metadata = {
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "exported_by": request_fastapi.state.user_id,
-        "source_project": request.project,
+        "source_project": request.project_name,
         "template_name": request.template_name or interface.name,
     }
 
@@ -1134,7 +1137,7 @@ def export_interface_template(
 #     # Get project validation schema
 #     validation_schema = validator.get_project_validation_schema(
 #         user_id=request_fastapi.state.user_id,
-#         project_name=request.project,
+#         project_name=request.project_name,
 #     )
 
 #     # Validate the template
@@ -1175,7 +1178,7 @@ def export_interface_template(
 #     # Get project validation schema
 #     validation_schema = validator.get_project_validation_schema(
 #         user_id=request_fastapi.state.user_id,
-#         project_name=request.project,
+#         project_name=request.project_name,
 #     )
 
 #     # Sanitize the template
@@ -1228,13 +1231,13 @@ def import_interface_template(
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
-        name=request.project,
+        name=request.project_name,
         organization_id=organization_id,
     )
     if not project:
         raise HTTPException(
             status_code=404,
-            detail=f"Project {request.project} not found or you don't have access.",
+            detail=f"Project {request.project_name} not found or you don't have access.",
         )
 
     validation_result = None
@@ -1246,7 +1249,7 @@ def import_interface_template(
         validator = TemplateValidator(session)
         validation_schema = validator.get_project_validation_schema(
             user_id=request_fastapi.state.user_id,
-            project_name=request.project,
+            project_name=request.project_name,
             organization_id=organization_id,
         )
         validation_result = validator.validate_interface_template(

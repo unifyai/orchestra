@@ -18,7 +18,7 @@ async def test_get_logs_w_sorting(client: AsyncClient, use_jsonb_mode):
 
     # descending creation time (default)
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -71,7 +71,7 @@ async def test_get_logs_w_sorting(client: AsyncClient, use_jsonb_mode):
 
     # ascending temperature
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"sorting": json.dumps({"_/temperature": "ascending"})},
         headers=HEADERS,
     )
@@ -125,7 +125,7 @@ async def test_get_logs_w_sorting(client: AsyncClient, use_jsonb_mode):
 
     # descending temperature
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"sorting": json.dumps({"_/temperature": "descending"})},
         headers=HEADERS,
     )
@@ -194,7 +194,7 @@ async def test_get_logs_w_timestamp_sorting(client: AsyncClient, use_jsonb_mode)
         response = await client.post(
             "/v0/logs",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "params": {"a/b/param1": f"test_{i}"},
                 "entries": entries,
             },
@@ -204,7 +204,7 @@ async def test_get_logs_w_timestamp_sorting(client: AsyncClient, use_jsonb_mode)
 
     # descending timestamp
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"sorting": json.dumps({"_/timestamp": "descending"})},
         headers=HEADERS,
     )
@@ -273,7 +273,7 @@ async def test_get_logs_w_date_sorting(client: AsyncClient, use_jsonb_mode):
         response = await client.post(
             "/v0/logs",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "params": {"a/b/param1": f"test_{i}"},
                 "entries": entries,
             },
@@ -283,7 +283,7 @@ async def test_get_logs_w_date_sorting(client: AsyncClient, use_jsonb_mode):
 
     # descending timestamp
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"sorting": json.dumps({"_/timestamp": "descending"})},
         headers=HEADERS,
     )
@@ -348,7 +348,7 @@ async def test_get_logs_w_dynamic_expression_sorting(
 
     expr = "round(_/temperature, 1)"
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"sorting": json.dumps({expr: "ascending"})},
         headers=HEADERS,
     )
@@ -369,7 +369,7 @@ async def test_get_logs_w_dynamic_expression_sorting(
 
     # Also test descending
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"sorting": json.dumps({expr: "descending"})},
         headers=HEADERS,
     )

@@ -1,5 +1,5 @@
 import io
-from unittest.mock import ANY, AsyncMock, MagicMock
+from unittest.mock import ANY, MagicMock
 
 import pytest
 from fastapi import status
@@ -74,11 +74,11 @@ def mock_media_services_factory(fastapi_app):
     )
     bucket_mock.delete_assistant_file.return_value = True
 
-    # OpenAIService methods are async, so use AsyncMock
+    # OpenAIService methods are sync
     openai_mock = MagicMock(spec=OriginalOpenAIService)
-    openai_mock.analyze_image = AsyncMock()
-    openai_mock.analyze_audio = AsyncMock()
-    openai_mock.moderate_text = AsyncMock()
+    openai_mock.analyze_image = MagicMock()
+    openai_mock.analyze_audio = MagicMock()
+    openai_mock.moderate_text = MagicMock()
     # Default success response for moderation checks
     openai_mock.analyze_image.return_value = ImageAnalysisResponse(
         has_human_face=True,

@@ -1199,7 +1199,7 @@ async def test_delete_assistant_deletes_contexts(
     # The "Assistants" project is created automatically on first assistant creation
     # Create a log with _user and _assistant fields in the user/assistant context
     log_payload = {
-        "project": project_name,
+        "project_name": project_name,
         "context": user_assistant_context,
         "entries": [
             {
@@ -1233,7 +1233,7 @@ async def test_delete_assistant_deletes_contexts(
 
     # Verify context and logs exist before deletion
     logs_before_delete = await client.get(
-        f"/v0/logs?project={project_name}&context={user_assistant_context}",
+        f"/v0/logs?project_name={project_name}&context={user_assistant_context}",
         headers=HEADERS,
     )
     assert logs_before_delete.status_code == 200
@@ -1252,7 +1252,7 @@ async def test_delete_assistant_deletes_contexts(
     # A successful deletion can result in either the context being empty (200 OK, count=0)
     # or the context itself being gone (404 Not Found). Both are valid success states.
     logs_after_delete = await client.get(
-        f"/v0/logs?project={project_name}&context={user_assistant_context}",
+        f"/v0/logs?project_name={project_name}&context={user_assistant_context}",
         headers=HEADERS,
     )
 
@@ -1271,7 +1271,7 @@ async def test_delete_assistant_deletes_contexts(
     # User/Assistant/Ctx context is deleted
     for sibling_ctx in [user_all_context, global_all_context]:
         sibling_logs = await client.get(
-            f"/v0/logs?project={project_name}&context={sibling_ctx}",
+            f"/v0/logs?project_name={project_name}&context={sibling_ctx}",
             headers=HEADERS,
         )
         if sibling_logs.status_code == 200:

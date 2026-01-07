@@ -13,50 +13,6 @@ class AccountSuspendedError(RuntimeError):
     """Raised when a user's account is suspended due to billing issues."""
 
 
-router_already_deployed = HTTPException(
-    status_code=status.HTTP_400_BAD_REQUEST,
-    detail="This router is already deployed!",
-)
-
-router_is_not_deployed = HTTPException(
-    status_code=status.HTTP_400_BAD_REQUEST,
-    detail="This router is not deployed!",
-)
-
-
-def invalid_training_endpoints(endpoints: List[str]):
-    return HTTPException(
-        status_code=status.HTTP_400_BAD_REQUEST,
-        detail=f"Invalid input. Couldn't find endpoints {endpoints}.",
-    )
-
-
-router_training_already_exists = HTTPException(
-    status_code=status.HTTP_400_BAD_REQUEST,
-    detail=(
-        "A router with this name has already been trained. Please, "
-        "choose a different one."
-    ),
-)
-
-router_training_does_not_exist = HTTPException(
-    status_code=status.HTTP_400_BAD_REQUEST,
-    detail=(
-        "This router training doesn't exist. "
-        "Please, choose a different one or trigger the training first."
-    ),
-)
-
-invalid_dataset_name = HTTPException(
-    status_code=status.HTTP_400_BAD_REQUEST,
-    detail="Invalid name for a dataset. Please, choose a different one.",
-)
-
-dataset_already_exists = HTTPException(
-    status_code=status.HTTP_400_BAD_REQUEST,
-    detail="A dataset with this name already exists. Please, choose a different one.",
-)
-
 invalid_model_id = HTTPException(
     status_code=status.HTTP_400_BAD_REQUEST,
     detail="Invalid input. model-id doesn't match any entry in the model hub.",

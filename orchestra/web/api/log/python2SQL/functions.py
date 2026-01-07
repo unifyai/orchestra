@@ -45,7 +45,7 @@ from .helpers import (
     _build_subquery_for_base_call,
     _build_subquery_for_identifier,
     _embeddable,
-    _get_embedding_sync,
+    _get_embedding,
     _get_image_embedding_from_url,
     _get_parent_idx,
     _is_jsonb_expression,
@@ -1050,9 +1050,9 @@ def _handle_functions(
                     )
                 else:
                     # Sync: generate embeddings immediately (sync wrapper)
-                    from .helpers import _ensure_vectors_exist_sync
+                    from .helpers import _ensure_vectors_exist
 
-                    _ensure_vectors_exist_sync(
+                    _ensure_vectors_exist(
                         session=session,
                         id_to_text=id_to_text,
                         model=model,
@@ -1104,7 +1104,7 @@ def _handle_functions(
                 )
 
             # Get the embedding vector (sync wrapper for use in sync query builder)
-            embedding = _get_embedding_sync(text, model, dimensions)
+            embedding = _get_embedding(text, model, dimensions)
 
             # Create a vector literal using pgvector
             vector_expr = literal(embedding, type_=Vector(len(embedding)))

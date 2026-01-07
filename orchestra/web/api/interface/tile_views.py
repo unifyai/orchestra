@@ -1584,13 +1584,13 @@ def import_tile_template(
         organization_id = getattr(request_fastapi.state, "organization_id", None)
         project = project_dao.get_by_user_and_name(
             user_id=request_fastapi.state.user_id,
-            name=request.project,
+            name=request.project_name,
             organization_id=organization_id,
         )
         if not project:
             raise HTTPException(
                 status_code=404,
-                detail=f"Project {request.project} not found or you don't have access.",
+                detail=f"Project {request.project_name} not found or you don't have access.",
             )
 
         interface = interface_dao.get_by_project_and_name(

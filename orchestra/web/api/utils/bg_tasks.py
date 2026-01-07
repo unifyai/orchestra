@@ -6,7 +6,6 @@ from typing import Dict, Optional
 from sqlalchemy.orm import sessionmaker
 
 from orchestra.db.dao.auth_user_dao import AuthUserDAO
-from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
@@ -97,7 +96,6 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
         provider_dao = ProviderDAO(session)
         endpoint_dao = EndpointDAO(session)
         auth_user_dao = AuthUserDAO(session)
-        custom_endpoint_dao = CustomEndpointDAO(session)
         users_dao = UsersDAO(session)
 
         if usage is None:
@@ -107,27 +105,15 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
         if router is None:
             router = ""
 
-        if "custom" in provider:
-            endpoint_id = None
-            try:
-                custom_endpoint_id = int(
-                    custom_endpoint_dao.filter(
-                        user_id=user_id,
-                        name=model,
-                    )[0].id,
-                )
-            except IndexError:
-                raise internal_endpoint_not_found
-        else:
-            model_id = int(model_dao.filter(mdl_code=model)[0].id)
-            provider_id = int(provider_dao.filter(name=provider)[0].id)
-            try:
-                endpoint_id = int(
-                    endpoint_dao.filter(mdl_id=model_id, provider_id=provider_id)[0].id,
-                )
-                custom_endpoint_id = None
-            except IndexError:
-                raise internal_endpoint_not_found
+        model_id = int(model_dao.filter(mdl_code=model)[0].id)
+        provider_id = int(provider_dao.filter(name=provider)[0].id)
+        try:
+            endpoint_id = int(
+                endpoint_dao.filter(mdl_id=model_id, provider_id=provider_id)[0].id,
+            )
+            custom_endpoint_id = None
+        except IndexError:
+            raise internal_endpoint_not_found
         query_model_request = QueryModelRequest(
             user_id=user_id,
             organization_id=organization_id,

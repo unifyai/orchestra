@@ -434,7 +434,7 @@ async def test_assistant_whatsapp_conflict_none_non_sharing_contact(
     log_resp = await client.post(
         "/v0/logs",
         json={
-            "project": project,
+            "project_name": project,
             "context": "Contacts",
             "params": {},
             "entries": [contact],
@@ -523,7 +523,7 @@ async def test_assistant_whatsapp_conflict_single_sharing_contact(client: AsyncC
     log_resp = await client.post(
         "/v0/logs",
         json={
-            "project": project,
+            "project_name": project,
             "context": "Contacts",
             "params": {},
             "entries": [contact],

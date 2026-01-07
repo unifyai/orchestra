@@ -44,7 +44,7 @@ async def _create_test_interface(
     response = await client.post(
         "/v0/interfaces/",
         headers=HEADERS,
-        json={"name": name, "project": project, "color": color},
+        json={"name": name, "project_name": project, "color": color},
     )
     return response
 
@@ -68,7 +68,7 @@ async def _get_interface(
         )
     elif project and name:
         return await client.get(
-            f"/v0/interfaces/?project={project}&name={name}",
+            f"/v0/interfaces/?project_name={project}&name={name}",
             headers=HEADERS,
         )
     else:
@@ -79,7 +79,7 @@ async def _list_interfaces(client: AsyncClient, project=None):
     """List interfaces for a project"""
     if project:
         return await client.get(
-            f"/v0/interfaces/list?project={project}",
+            f"/v0/interfaces/list?project_name={project}",
             headers=HEADERS,
         )
     else:
@@ -105,7 +105,7 @@ async def _update_interface(
         )
     elif project and name:
         return await client.put(
-            f"/v0/interfaces/?project={project}&name={name}",
+            f"/v0/interfaces/?project_name={project}&name={name}",
             headers=HEADERS,
             json=update_data,
         )
@@ -127,7 +127,7 @@ async def _delete_interface(
         )
     elif project and name:
         return await client.delete(
-            f"/v0/interfaces/?project={project}&name={name}",
+            f"/v0/interfaces/?project_name={project}&name={name}",
             headers=HEADERS,
         )
     else:
@@ -148,7 +148,7 @@ async def _create_interface_checkpoint(
         )
     elif project and name:
         return await client.post(
-            f"/v0/interfaces/checkpoint?project={project}&name={name}",
+            f"/v0/interfaces/checkpoint?project_name={project}&name={name}",
             headers=HEADERS,
         )
     else:
@@ -169,7 +169,7 @@ async def _get_interface_checkpoint(
         )
     elif project and name:
         return await client.get(
-            f"/v0/interfaces/checkpoint?project={project}&name={name}",
+            f"/v0/interfaces/checkpoint?project_name={project}&name={name}",
             headers=HEADERS,
         )
     else:
@@ -1131,7 +1131,7 @@ async def test_export_interface_template_with_valid_schema_by_project_and_name(
     await _create_test_interface(client)
 
     export_request = {
-        "project": TEST_PROJECT,
+        "project_name": TEST_PROJECT,
         "interface_name": TEST_INTERFACE,
         "include_metadata": True,
         "description": "Export by project and name",
@@ -1274,7 +1274,7 @@ async def test_import_interface_template_with_valid_schema(client: AsyncClient):
     }
 
     import_request = {
-        "project": TEST_PROJECT,
+        "project_name": TEST_PROJECT,
         "template": template,
         "validate_first": False,  # Skip validation for v0
         "auto_sanitize": False,
@@ -1335,7 +1335,7 @@ async def test_import_interface_template_with_valid_schema_new_name(
     }
 
     import_request = {
-        "project": TEST_PROJECT,
+        "project_name": TEST_PROJECT,
         "template": template,
         "new_interface_name": "overridden_name",
         "validate_first": False,
@@ -1384,7 +1384,7 @@ async def test_import_interface_template_with_valid_schema_overwrite_existing(
 
     # First try without overwrite
     import_request = {
-        "project": TEST_PROJECT,
+        "project_name": TEST_PROJECT,
         "template": template,
         "overwrite_existing": False,
         "validate_first": False,
@@ -1503,7 +1503,7 @@ async def test_import_interface_template_with_valid_schema_complex_structure(
     }
 
     import_request = {
-        "project": TEST_PROJECT,
+        "project_name": TEST_PROJECT,
         "template": template,
         "validate_first": False,
         "auto_sanitize": False,
@@ -1631,7 +1631,7 @@ async def test_export_import_interface_template_with_valid_schema_roundtrip(
 
     # Import the template back
     import_request = {
-        "project": TEST_PROJECT,
+        "project_name": TEST_PROJECT,
         "template": exported_template,
         "validate_first": False,
         "auto_sanitize": False,
@@ -1693,7 +1693,7 @@ async def test_import_interface_template_with_valid_schema_empty_template(
     }
 
     import_request = {
-        "project": TEST_PROJECT,
+        "project_name": TEST_PROJECT,
         "template": empty_template,
         "validate_first": False,
         "auto_sanitize": False,
@@ -1815,7 +1815,7 @@ async def test_interface_context_validation_valid_reference(client: AsyncClient)
         "/v0/interfaces/",
         json={
             "name": "test-interface",
-            "project": project_name,
+            "project_name": project_name,
             "context": context_name,
         },
         headers=HEADERS,
@@ -1856,7 +1856,7 @@ async def test_interface_context_validation_invalid_reference(client: AsyncClien
         "/v0/interfaces/",
         json={
             "name": "test-interface",
-            "project": project_name,
+            "project_name": project_name,
             "context": invalid_context,
         },
         headers=HEADERS,

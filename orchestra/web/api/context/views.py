@@ -724,7 +724,7 @@ def add_logs_to_context(
                 # JSONB mode: returns (rows, count) where rows are (id, data, created_at)
                 rows, _ = _get_logs_query_jsonb(
                     request_fastapi=request_fastapi,
-                    project=project_name,
+                    project_name=project_name,
                     context=log_args.get("context"),
                     filter_expr=log_args.get("filter_expr"),
                     sorting=log_args.get("sorting"),
@@ -744,7 +744,7 @@ def add_logs_to_context(
                 # EAV mode: returns (raw_rows, _, count)
                 raw_rows, _, _ = _get_logs_query(
                     request_fastapi=request_fastapi,
-                    project=project_name,
+                    project_name=project_name,
                     column_context=log_args.get("column_context"),
                     context=log_args.get("context"),
                     filter_expr=log_args.get("filter_expr"),

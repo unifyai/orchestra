@@ -34,7 +34,7 @@ router = APIRouter()
     response_model=TeamResponse,
     status_code=status.HTTP_201_CREATED,
 )
-async def create_team(
+def create_team(
     request_fastapi: Request,
     organization_id: int,
     team_data: TeamCreate,
@@ -113,7 +113,7 @@ async def create_team(
     response_model=List[TeamResponse],
     status_code=status.HTTP_200_OK,
 )
-async def list_teams(
+def list_teams(
     request_fastapi: Request,
     organization_id: int,
     session: Session = Depends(get_db_session),
@@ -169,7 +169,7 @@ async def list_teams(
     response_model=TeamWithMembersResponse,
     status_code=status.HTTP_200_OK,
 )
-async def get_team(
+def get_team(
     request_fastapi: Request,
     organization_id: int,
     team_id: int,
@@ -232,7 +232,7 @@ async def get_team(
     response_model=TeamResponse,
     status_code=status.HTTP_200_OK,
 )
-async def update_team(
+def update_team(
     request_fastapi: Request,
     organization_id: int,
     team_id: int,
@@ -324,7 +324,7 @@ async def update_team(
     "/organizations/{organization_id}/teams/{team_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-async def delete_team(
+def delete_team(
     request_fastapi: Request,
     organization_id: int,
     team_id: int,
@@ -390,7 +390,7 @@ async def delete_team(
     response_model=TeamWithMembersResponse,
     status_code=status.HTTP_200_OK,
 )
-async def add_team_members(
+def add_team_members(
     request_fastapi: Request,
     organization_id: int,
     team_id: int,
@@ -499,7 +499,7 @@ async def add_team_members(
     response_model=TeamWithMembersResponse,
     status_code=status.HTTP_200_OK,
 )
-async def remove_team_member(
+def remove_team_member(
     request_fastapi: Request,
     organization_id: int,
     team_id: int,
@@ -578,7 +578,7 @@ async def remove_team_member(
     response_model=ResourceAccessResponse,
     status_code=status.HTTP_201_CREATED,
 )
-async def grant_resource_access(
+def grant_resource_access(
     request_fastapi: Request,
     resource_type: str,
     resource_id: int,
@@ -673,7 +673,7 @@ async def grant_resource_access(
     "/resources/{resource_type}/{resource_id}/access",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-async def revoke_resource_access(
+def revoke_resource_access(
     request_fastapi: Request,
     resource_type: str,
     resource_id: int,
@@ -741,7 +741,7 @@ async def revoke_resource_access(
     response_model=ResourceAccessResponse,
     status_code=status.HTTP_200_OK,
 )
-async def update_resource_access(
+def update_resource_access(
     request_fastapi: Request,
     resource_type: str,
     resource_id: int,
@@ -856,7 +856,7 @@ async def update_resource_access(
     response_model=ResourceAccessListResponse,
     status_code=status.HTTP_200_OK,
 )
-async def list_resource_access(
+def list_resource_access(
     request_fastapi: Request,
     resource_type: str,
     resource_id: int,
@@ -948,7 +948,7 @@ async def list_resource_access(
     response_model=UserResourceAccessResponse,
     status_code=status.HTTP_200_OK,
 )
-async def get_user_resource_access(
+def get_user_resource_access(
     request_fastapi: Request,
     resource_type: str,
     resource_id: int,

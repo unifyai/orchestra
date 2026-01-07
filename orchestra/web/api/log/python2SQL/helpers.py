@@ -1,4 +1,3 @@
-import asyncio
 import base64
 import copy
 import functools
@@ -14,7 +13,7 @@ from typing import Optional, Union
 import httpx
 from dotenv import load_dotenv
 from google.auth.transport.requests import Request
-from openai import AsyncOpenAI
+from openai import OpenAI
 from PIL import Image
 from sqlalchemy import (
     TIMESTAMP,
@@ -73,13 +72,10 @@ __all__ = [
     "_substitute_placeholders",
     "_maybe_vector_column",
     "_ensure_vectors_exist",
-    "_ensure_vectors_exist_sync",
     "_queue_embeddings_for_generation",
     "_get_or_generate_embedding",
     "_get_embedding",
-    "_get_embedding_sync",
     "_get_embeddings_batch",
-    "_get_embeddings_batch_sync",
     "_get_image_embedding_batch",
     "_get_image_embedding_from_url",
     "_is_jsonb_expression",
@@ -90,41 +86,32 @@ __all__ = [
 # OpenAI API key for embeddings
 OPENAI_API_KEY = os.getenv("ORCHESTRA_OPENAI_API_KEY")
 
-# Per-event-loop AsyncOpenAI client cache.
-# httpx's connection pool tracks state per-event-loop, so using a single global
-# client from multiple event loops (e.g., via _run_async_in_sync creating new loops)
-# causes pool contention and hangs. Each event loop gets its own client instance.
-_async_clients: dict[int, AsyncOpenAI] = {}
-_async_clients_lock = threading.Lock()
+# Global sync OpenAI client. Thread-safe via httpx.Client's connection pooling.
+_openai_client: OpenAI | None = None
+_openai_client_lock = threading.Lock()
 
 
-def _get_async_client() -> AsyncOpenAI | None:
+def _get_openai_client() -> OpenAI | None:
     """
-    Get or create an AsyncOpenAI client for the current event loop.
+    Get or create the global sync OpenAI client.
 
-    This avoids connection pool contention when embedding functions are called
-    from multiple different event loops (e.g., the main FastAPI loop vs. new
-    loops created by _run_async_in_sync in ThreadPoolExecutor).
+    Thread-safe: Uses a lock for initialization.
+    The sync httpx.Client connection pool is thread-safe without event loop issues.
 
     Returns:
-        AsyncOpenAI client for the current event loop, or None if no API key.
+        OpenAI client, or None if no API key configured.
     """
+    global _openai_client
+
     if not OPENAI_API_KEY:
         return None
 
-    try:
-        loop = asyncio.get_running_loop()
-        loop_id = id(loop)
-    except RuntimeError:
-        # No running loop - use a sentinel ID
-        loop_id = 0
+    if _openai_client is None:
+        with _openai_client_lock:
+            if _openai_client is None:
+                _openai_client = OpenAI(api_key=OPENAI_API_KEY)
 
-    if loop_id not in _async_clients:
-        with _async_clients_lock:
-            if loop_id not in _async_clients:
-                _async_clients[loop_id] = AsyncOpenAI(api_key=OPENAI_API_KEY)
-
-    return _async_clients[loop_id]
+    return _openai_client
 
 
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
@@ -213,7 +200,7 @@ _embedding_cache: dict[tuple[str, str | None, int | None], list[float]] = {}
 _EMBEDDING_CACHE_MAX_SIZE = 4096
 
 
-async def _get_embedding(
+def _get_embedding(
     text: str,
     model: str | None = None,
     dimensions: int | None = None,
@@ -227,7 +214,7 @@ async def _get_embedding(
     if cache_key in _embedding_cache:
         return _embedding_cache[cache_key]
 
-    result = (await _get_embeddings_batch([text], model, dimensions))[0]
+    result = _get_embeddings_batch([text], model, dimensions)[0]
 
     # Maintain cache size limit with simple eviction
     if len(_embedding_cache) >= _EMBEDDING_CACHE_MAX_SIZE:
@@ -239,13 +226,13 @@ async def _get_embedding(
     return result
 
 
-async def _get_embeddings_batch(
+def _get_embeddings_batch(
     texts: list[str],
     model: str | None = None,
     dimensions: int | None = None,
 ) -> list[list[float]]:
     """
-    Get embedding vectors for a batch of text strings using OpenAI's async API.
+    Get embedding vectors for a batch of text strings using OpenAI's sync API.
 
     Token-aware batching
     --------------------
@@ -262,6 +249,7 @@ async def _get_embeddings_batch(
     -----
     - This function does not modify individual texts.
     - The order of outputs matches the order of `texts`.
+    - Uses threaded_map for parallel batch execution.
 
     Raises
     ------
@@ -269,7 +257,6 @@ async def _get_embeddings_batch(
                 `MAX_TOKENS_PER_INPUT`, an API call fails for a non-token-limit
                 reason, or embedding dimensions exceed `MAX_EMBEDDING_DIMS`.
     """
-    import asyncio
     import time
 
     import openai
@@ -314,7 +301,7 @@ async def _get_embeddings_batch(
     if current_batch:
         batches.append(current_batch)
 
-    async def _embed_or_split(
+    def _embed_or_split(
         batch_texts: list[str],
         depth: int = 0,
     ) -> list[list[float]]:
@@ -332,8 +319,8 @@ async def _get_embeddings_batch(
 
             start_time = time.monotonic()
             try:
-                client = _get_async_client()
-                resp = await client.embeddings.create(**kwargs)
+                client = _get_openai_client()
+                resp = client.embeddings.create(**kwargs)
                 duration_ms = (time.monotonic() - start_time) * 1000
                 span.set_attribute("embedding.duration_ms", duration_ms)
                 span.set_attribute("embedding.success", True)
@@ -413,91 +400,25 @@ async def _get_embeddings_batch(
                         # Cannot split further; surface error
                         raise ValueError(f"Failed to get embeddings: {str(e)}")
                     mid = len(batch_texts) // 2
-                    left = await _embed_or_split(batch_texts[:mid], depth + 1)
-                    right = await _embed_or_split(batch_texts[mid:], depth + 1)
+                    left = _embed_or_split(batch_texts[:mid], depth + 1)
+                    right = _embed_or_split(batch_texts[mid:], depth + 1)
                     return left + right
 
                 span.set_attribute("embedding.error_type", "other")
                 raise ValueError(f"Failed to get embeddings: {str(e)}")
 
-    # 3) Embed each batch concurrently and concatenate results in-order
-    tasks = [_embed_or_split(batch) for batch in batches]
-    batch_results = await asyncio.gather(*tasks)
+    # 3) Embed each batch in parallel using threads and concatenate results in-order
+    if len(batches) == 1:
+        # Single batch - no need for threading overhead
+        batch_results = [_embed_or_split(batches[0])]
+    else:
+        # Multiple batches - use threaded_map for parallel execution
+        batch_results = list(threaded_map(_embed_or_split, batches))
+
     out: list[list[float]] = []
     for batch_result in batch_results:
         out.extend(batch_result)
     return out
-
-
-# =============================================================================
-# Sync wrappers for callers in sync contexts (e.g., background workers,
-# sync route handlers). These detect whether an event loop is already running
-# and handle both cases appropriately:
-# - If no loop is running: use asyncio.run() (creates new loop)
-# - If loop is running: use thread pool to avoid "cannot be called from running event loop" error
-# =============================================================================
-
-
-def _run_async_in_sync(coro):
-    """
-    Run an async coroutine from sync code, handling both cases:
-    - No event loop running: use asyncio.run()
-    - Event loop running: use thread pool executor to run in separate thread
-    """
-    import asyncio
-    import concurrent.futures
-
-    try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        # No running loop - safe to use asyncio.run()
-        return asyncio.run(coro)
-
-    # There's a running loop - we can't use asyncio.run() from here
-    # Use a thread pool to run the coroutine in a new thread with its own event loop
-    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-        future = executor.submit(asyncio.run, coro)
-        return future.result()
-
-
-def _get_embedding_sync(
-    text: str,
-    model: str | None = None,
-    dimensions: int | None = None,
-) -> list[float]:
-    """
-    Sync wrapper for _get_embedding.
-    Handles both sync contexts (no event loop) and async contexts (running event loop).
-    """
-    return _run_async_in_sync(_get_embedding(text, model, dimensions))
-
-
-def _get_embeddings_batch_sync(
-    texts: list[str],
-    model: str | None = None,
-    dimensions: int | None = None,
-) -> list[list[float]]:
-    """
-    Sync wrapper for _get_embeddings_batch.
-    Handles both sync contexts (no event loop) and async contexts (running event loop).
-    """
-    return _run_async_in_sync(_get_embeddings_batch(texts, model, dimensions))
-
-
-def _ensure_vectors_exist_sync(
-    session: "Session",
-    id_to_text: dict[int, str],
-    model: Optional[str],
-    dimensions: Optional[int],
-    key: str,
-) -> None:
-    """
-    Sync wrapper for _ensure_vectors_exist.
-    Handles both sync contexts (no event loop) and async contexts (running event loop).
-    """
-    return _run_async_in_sync(
-        _ensure_vectors_exist(session, id_to_text, model, dimensions, key),
-    )
 
 
 def _get_image_embedding_from_url(
@@ -2627,7 +2548,7 @@ async def _get_or_generate_embedding(
         return None
 
 
-async def _ensure_vectors_exist(
+def _ensure_vectors_exist(
     session: Session,
     id_to_text: dict[int, str],
     model: Optional[str],
@@ -2646,8 +2567,6 @@ async def _ensure_vectors_exist(
         dimensions: Optional number of dimensions for the embedding
         key: The key identifier for these embeddings
     """
-    import asyncio
-
     # If no texts to process, return immediately
     if not id_to_text:
         return
@@ -2683,7 +2602,7 @@ async def _ensure_vectors_exist(
 
     texts_to_embed = [id_to_text[id] for id in ids_to_embed]
 
-    # 2. Get embeddings in batches concurrently using async
+    # 2. Get embeddings in batches using threads for parallelism
     # OpenAI recommends batch sizes of 2048 for their models.
     BATCH_SIZE = 2048
     text_batches = [
@@ -2691,11 +2610,14 @@ async def _ensure_vectors_exist(
         for i in range(0, len(texts_to_embed), BATCH_SIZE)
     ]
 
-    # Run all batches concurrently
-    embedding_batch_tasks = [
-        _get_embeddings_batch(batch, model_name, dimensions) for batch in text_batches
-    ]
-    embedding_batches = await asyncio.gather(*embedding_batch_tasks)
+    # Run all batches - threaded_map handles parallelism if multiple batches
+    def embed_batch(batch: list[str]) -> list[list[float]]:
+        return _get_embeddings_batch(batch, model_name, dimensions)
+
+    if len(text_batches) == 1:
+        embedding_batches = [embed_batch(text_batches[0])]
+    else:
+        embedding_batches = list(threaded_map(embed_batch, text_batches))
 
     # Flatten the list of lists of embeddings
     all_embeddings = [embedding for batch in embedding_batches for embedding in batch]

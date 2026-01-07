@@ -48,13 +48,13 @@ class UserRequest(BaseModel):
 class AccountRequest(BaseModel):
     provider: str
     type: str
-    providerAccountId: str
+    provider_account_id: str
     access_token: str
     expires_at: int
     scope: str
     token_type: str
     id_token: str
-    userId: Optional[str] = None
+    user_id: Optional[str] = None
 
 
 class FreezeAccountRequest(BaseModel):

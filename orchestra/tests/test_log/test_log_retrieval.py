@@ -47,7 +47,10 @@ async def test_get_logs(client: AsyncClient, use_jsonb_mode):
     _ = await _create_log(client, project_name, user=1)
 
     # fetch entries for the project
-    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS,
+    )
 
     assert response.status_code == 200, response.json()
     assert isinstance(response.json(), dict)
@@ -72,7 +75,10 @@ async def test_get_logs(client: AsyncClient, use_jsonb_mode):
     )
 
     # fetch entries for the empty project
-    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS_2)
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS_2,
+    )
 
     assert response.status_code == 200, response.json()
     assert isinstance(response.json()["logs"], list)
@@ -84,7 +90,10 @@ async def test_get_logs_project_not_found(client: AsyncClient, use_jsonb_mode):
     project_name = "non_existent_project"
 
     # This should return 404 as the project does not exist
-    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS,
+    )
 
     assert response.status_code == 404, response.json()
     assert response.json() == {
@@ -102,7 +111,7 @@ async def test_get_params(client: AsyncClient, use_jsonb_mode):
 
     # fetch all params for the project
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
         params={"column_context": "params"},
     )
@@ -117,7 +126,7 @@ async def test_get_params(client: AsyncClient, use_jsonb_mode):
 
     # fetch params for the project with the full context, prepended by "params"
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
         params={"column_context": "params/a/b"},
     )
@@ -132,7 +141,7 @@ async def test_get_params(client: AsyncClient, use_jsonb_mode):
 
     # fetch params for the project with the full context, with "params" inside
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
         params={"column_context": "a/params/b"},
     )
@@ -147,7 +156,7 @@ async def test_get_params(client: AsyncClient, use_jsonb_mode):
 
     # fetch params for the project with the full context, appended by "params"
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
         params={"column_context": "a/b/params"},
     )
@@ -171,7 +180,7 @@ async def test_get_entries(client: AsyncClient, use_jsonb_mode):
 
     # fetch all entries for the project
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
         params={"column_context": "entries"},
     )
@@ -194,7 +203,7 @@ async def test_get_entries(client: AsyncClient, use_jsonb_mode):
 
     # fetch entries for the project with the full context, prepended by "entries"
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
         params={"column_context": "entries/a/b"},
     )
@@ -217,7 +226,7 @@ async def test_get_entries(client: AsyncClient, use_jsonb_mode):
 
     # fetch entries for the project with the full context, with "entries" inside
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
         params={"column_context": "a/entries/b"},
     )
@@ -240,7 +249,7 @@ async def test_get_entries(client: AsyncClient, use_jsonb_mode):
 
     # fetch entries for the project with the full context, appended by "entries"
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
         params={"column_context": "a/b/entries"},
     )
@@ -272,7 +281,7 @@ async def test_get_logs_from_ids(client: AsyncClient, use_jsonb_mode):
 
     # fetch entries for the project
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"return_ids_only": True},
         headers=HEADERS,
     )
@@ -281,7 +290,7 @@ async def test_get_logs_from_ids(client: AsyncClient, use_jsonb_mode):
 
     # fetch entries for the project
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"from_ids": "&".join([str(i) for i in from_ids])},
         headers=HEADERS,
     )
@@ -304,7 +313,7 @@ async def test_get_logs_excluding_ids(client: AsyncClient, use_jsonb_mode):
 
     # fetch entries for the project
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"return_ids_only": True},
         headers=HEADERS,
     )
@@ -313,7 +322,7 @@ async def test_get_logs_excluding_ids(client: AsyncClient, use_jsonb_mode):
 
     # fetch entries for the project
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"exclude_ids": "&".join([str(i) for i in exclude_ids])},
         headers=HEADERS,
     )
@@ -337,7 +346,7 @@ async def test_get_logs_from_fields(client: AsyncClient, use_jsonb_mode):
 
     # fetch entries for the project
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"from_fields": "&".join(["_/temperature", "_/state", "_/metadata"])},
         headers=HEADERS,
     )
@@ -366,7 +375,7 @@ async def test_get_logs_excluding_fields(client: AsyncClient, use_jsonb_mode):
 
     # fetch entries for the project
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={
             "exclude_fields": "&".join(
                 [
@@ -407,7 +416,7 @@ async def test_get_logs_w_column_context(client: AsyncClient, use_jsonb_mode):
 
     # get full context log
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
 
@@ -441,7 +450,7 @@ async def test_get_logs_w_column_context(client: AsyncClient, use_jsonb_mode):
 
     # get log with "a" context
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"column_context": "a"},
         headers=HEADERS,
     )
@@ -476,7 +485,7 @@ async def test_get_logs_w_column_context(client: AsyncClient, use_jsonb_mode):
 
     # get log with "a/b" context
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"column_context": "a/b"},
         headers=HEADERS,
     )
@@ -511,7 +520,7 @@ async def test_get_logs_w_column_context(client: AsyncClient, use_jsonb_mode):
 
     # get log with "a/b/c" context
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"column_context": "a/b/c"},
         headers=HEADERS,
     )
@@ -550,7 +559,7 @@ async def test_get_logs_latest_timestamp(client: AsyncClient, use_jsonb_mode):
 
     # assert the latest timestamp t1 is more recent than t0
     response = await client.get(
-        f"/v0/logs/latest_timestamp?project={project_name}",
+        f"/v0/logs/latest_timestamp?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -569,7 +578,7 @@ async def test_get_logs_latest_timestamp(client: AsyncClient, use_jsonb_mode):
 
     # assert the latest timestamp t2 is more recent than t1
     response = await client.get(
-        f"/v0/logs/latest_timestamp?project={project_name}",
+        f"/v0/logs/latest_timestamp?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -590,7 +599,7 @@ async def test_get_log_ids(client: AsyncClient, use_jsonb_mode):
 
     # fetch entries for the project
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"return_ids_only": True},
         headers=HEADERS,
     )
@@ -613,7 +622,7 @@ async def test_get_logs_field_ordering(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "field1": "first",
                 "field2": "second",
@@ -628,7 +637,7 @@ async def test_get_logs_field_ordering(client: AsyncClient, use_jsonb_mode):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "field2": "second again",
                 "field3": "third again",
@@ -641,7 +650,7 @@ async def test_get_logs_field_ordering(client: AsyncClient, use_jsonb_mode):
 
     # Get logs and verify field ordering
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -690,14 +699,14 @@ async def test_get_logs_with_value_limit(client: AsyncClient, use_jsonb_mode):
     # Create log with test data
     response = await client.post(
         "/v0/logs",
-        json={"project": project_name, "entries": test_data["entries"]},
+        json={"project_name": project_name, "entries": test_data["entries"]},
         headers=HEADERS,
     )
     assert response.status_code == 200
 
     # Test with value_limit=10
     response = await client.get(
-        f"/v0/logs?project={project_name}&value_limit=10",
+        f"/v0/logs?project_name={project_name}&value_limit=10",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -736,7 +745,7 @@ async def test_get_logs_with_value_limit(client: AsyncClient, use_jsonb_mode):
 
     # Test with no value_limit (backward compatibility)
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -759,7 +768,7 @@ async def test_get_logs_with_value_limit(client: AsyncClient, use_jsonb_mode):
 
     # Test with zero value_limit
     response = await client.get(
-        f"/v0/logs?project={project_name}&value_limit=0",
+        f"/v0/logs?project_name={project_name}&value_limit=0",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -784,7 +793,10 @@ async def test_get_empty_logs(client: AsyncClient, use_jsonb_mode):
     _ = await _create_project(client, project_name)
 
     # fetch entries for the project
-    response = await client.get(f"/v0/logs?project={project_name}", headers=HEADERS)
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS,
+    )
 
     assert response.status_code == 200, response.json()
     assert isinstance(response.json()["logs"], list)  # List of logs is returned
@@ -799,7 +811,7 @@ async def test_get_logs_w_pagination(client: AsyncClient, use_jsonb_mode):
 
     # limit = 3
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"limit": 3},
         headers=HEADERS,
     )
@@ -826,7 +838,7 @@ async def test_get_logs_w_pagination(client: AsyncClient, use_jsonb_mode):
 
     # limit = 3 and offset = 2
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"limit": 3, "offset": 2},
         headers=HEADERS,
     )
@@ -857,7 +869,7 @@ async def test_get_logs_w_pagination(client: AsyncClient, use_jsonb_mode):
 
     # offset = 5
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"offset": 5},
         headers=HEADERS,
     )
@@ -932,7 +944,7 @@ async def test_get_logs_nested_dict_ordering(client: AsyncClient, use_jsonb_mode
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": nested_data,
         },
         headers=HEADERS,
@@ -941,7 +953,7 @@ async def test_get_logs_nested_dict_ordering(client: AsyncClient, use_jsonb_mode
 
     # Retrieve and verify the log
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -999,7 +1011,7 @@ async def test_get_logs_randomized_pagination_and_reproducibility(
     # Page 1 with randomize
     resp1 = await client.get(
         "/v0/logs",
-        params={"project": project, "randomize": True, "limit": 3},
+        params={"project_name": project, "randomize": True, "limit": 3},
         headers=HEADERS,
     )
     assert resp1.status_code == 200
@@ -1008,7 +1020,7 @@ async def test_get_logs_randomized_pagination_and_reproducibility(
     # Repeated call returns same IDs
     resp2 = await client.get(
         "/v0/logs",
-        params={"project": project, "randomize": True, "limit": 3},
+        params={"project_name": project, "randomize": True, "limit": 3},
         headers=HEADERS,
     )
     assert [log["id"] for log in resp2.json()["logs"]] == ids_page1
@@ -1016,7 +1028,7 @@ async def test_get_logs_randomized_pagination_and_reproducibility(
     # Page 2 has no overlap
     resp3 = await client.get(
         "/v0/logs",
-        params={"project": project, "randomize": True, "limit": 3, "offset": 3},
+        params={"project_name": project, "randomize": True, "limit": 3, "offset": 3},
         headers=HEADERS,
     )
     ids_page2 = [log["id"] for log in resp3.json()["logs"]]
