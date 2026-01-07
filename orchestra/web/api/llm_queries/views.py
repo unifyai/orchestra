@@ -8,8 +8,6 @@ from fastapi.param_functions import Depends
 from fastapi.responses import JSONResponse, StreamingResponse
 from providers.completion import PROVIDER_CLASSES
 
-from orchestra.db.dao.custom_api_key_dao import CustomApiKeyDAO
-from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.settings import settings
@@ -24,7 +22,6 @@ from orchestra.web.api.utils.http_responses import (
     insufficient_credits_error,
     invalid_messages,
     invalid_model_str,
-    not_found,
 )
 
 router = APIRouter()
@@ -51,18 +48,11 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
     :param request: ChatCompletionRequest object.
     :param endpoint_dao: DAO for endpoint models.
     :param benchmark_run_dao: DAO for benchmark run models.
-    :param custom_endpoint_dao: DAO for custom endpoint models.
-    :param custom_api_key_dao: DAO for custom api key models.
-    :param custom_router_dao: DAO for custom router models.
-    :param router_dao: DAO for router models.
 
     :return: ChatCompletionResponse object.
 
     :raises HTTPException: when user has insufficient credits.
     """
-    custom_endpoint_dao = CustomEndpointDAO(session)
-    custom_api_key_dao = CustomApiKeyDAO(session)
-
     if isinstance(request, list):
         request_priority_list = request
     else:
@@ -153,9 +143,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
             available_credits = float(user.credits if user else 0)
 
         model, provider, region = model_region_priority_list[0]
-        provider_str = (
-            provider if provider == "custom" else provider.replace("custom-", "")
-        )
+        provider_str = provider
         try_provider = 0
         using_router = model.startswith("router")
         router_str = provider if using_router else None
@@ -167,55 +155,23 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                 detail="Router functionality has been removed.",
             )
 
+        if use_custom_keys:
+            raise HTTPException(
+                status_code=400,
+                detail="Custom API keys functionality has been removed.",
+            )
+
         t0 = time.time()
         try:
             while try_provider >= 0 and try_provider < num_tries_provider:
                 # get the current model, provider and region from the list
                 model, provider, region = model_region_priority_list[try_provider]
-                provider_str = (
-                    provider
-                    if provider == "custom"
-                    else provider.replace("custom_", "")
-                )
-
-                # fetch custom api key
-                custom_api_key, custom_endpoint = None, None
-                if use_custom_keys:
-                    # the request is made to a regular endpoint
-                    # but using custom keys with the provider
-                    if "custom" not in provider:
-                        try:
-                            custom_api_key = custom_api_key_dao.filter(
-                                user_id=user_id,
-                                key=provider,
-                            )[0].value
-                        except IndexError:
-                            raise not_found("Custom API Key")
-                    # the request is made to a custom endpoint
-                    # either to an existing provider or a custom provider
-                    else:
-                        try:
-                            custom_endpoint = custom_endpoint_dao.filter(
-                                user_id=user_id,
-                                name=model,
-                            )[0]
-                        except IndexError:
-                            raise not_found("Custom endpoint")
-                        try:
-                            custom_api_key = custom_api_key_dao.filter(
-                                id=custom_endpoint.key_id,
-                            )[0].value
-                        except IndexError:
-                            raise not_found("Custom API Key")
+                provider_str = provider
 
                 # get the provider class
-                lm = PROVIDER_CLASSES[provider_str](
-                    model,
-                    custom_endpoint=custom_endpoint,
-                    custom_api_key=custom_api_key,
-                )
+                lm = PROVIDER_CLASSES[provider_str](model)
 
-                if not on_prem and available_credits <= 0 and not use_custom_keys:
+                if not on_prem and available_credits <= 0:
                     raise insufficient_credits_error
 
                 stream = request.stream
@@ -311,11 +267,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
                 yield f"data: {json.dumps(chat_response.model_dump())}\n\n"  # noqa: WPS237, E501
             processing_time = (time.time() - t0) * 1000
             chat_response.choices[0]["delta"]["content"] = msg
-            cost = (
-                response.total_cost * settings.chat_completions_markup_rate
-                if not use_custom_keys
-                else 0
-            )
+            cost = response.total_cost * settings.chat_completions_markup_rate
             background_tasks.add_task(
                 db_operations,
                 cost=cost,
@@ -335,9 +287,7 @@ def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS238
         return StreamingResponse(stream_and_update_db(), media_type="text/event-stream")
     else:
         processing_time = (time.time() - t0) * 1000
-        cost = (
-            cost * settings.chat_completions_markup_rate if not use_custom_keys else 0
-        )
+        cost = cost * settings.chat_completions_markup_rate
         background_tasks.add_task(
             db_operations,
             cost=cost,
