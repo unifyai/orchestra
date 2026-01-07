@@ -1,13 +1,22 @@
 """
-Resource pool instrumentation for identifying bottlenecks under load.
+Resource limits instrumentation for identifying bottlenecks under load.
 
-Adds OTel span events when bottlenecks are detected:
-- DB connection pool delays (checkout wait > threshold)
-- DB connection pool overflow
-- High file descriptor usage
+Provides two complementary instrumentation mechanisms:
 
-Key design principle: "Quiet by default" - events only fire when there's
-something noteworthy, so traces aren't polluted during normal operation.
+1. OTel span events (quiet by default):
+   - Fire only when thresholds are exceeded
+   - Useful for debugging specific slow requests
+   - Appear in ORCHESTRA_LOG_DIR traces
+
+2. Prometheus metrics (always recorded):
+   - Aggregate over time for trends and alerting
+   - Useful for dashboards and capacity planning
+   - Available at /metrics endpoint
+
+Instrumented resources:
+- DB connection pool (checkout wait time, pool size, overflow)
+- Request concurrency (active requests per worker)
+- File descriptor usage (Linux only)
 """
 
 import logging
@@ -17,11 +26,47 @@ import time
 from typing import Any
 
 from opentelemetry import trace
+from prometheus_client import Counter, Gauge, Histogram
 from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from sqlalchemy.pool import Pool
 
 logger = logging.getLogger(__name__)
+
+# =============================================================================
+# Prometheus Metrics
+# =============================================================================
+
+# DB connection pool metrics
+DB_POOL_CHECKOUT_WAIT = Histogram(
+    "orchestra_db_pool_checkout_wait_seconds",
+    "Time spent waiting for a DB connection from the pool",
+    buckets=(0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0),
+)
+
+DB_POOL_CONNECTIONS = Gauge(
+    "orchestra_db_pool_connections",
+    "Current DB connection pool state",
+    ["state"],  # "checked_out", "checked_in", "overflow"
+)
+
+DB_POOL_OVERFLOW_TOTAL = Counter(
+    "orchestra_db_pool_overflow_total",
+    "Number of overflow connections created (pool exhausted)",
+)
+
+# Request concurrency metrics
+REQUESTS_CONCURRENT = Gauge(
+    "orchestra_requests_concurrent",
+    "Number of requests currently being processed in this worker",
+    ["worker_pid"],
+)
+
+REQUESTS_CONCURRENT_PEAK = Gauge(
+    "orchestra_requests_concurrent_peak",
+    "Peak concurrent requests seen in this worker",
+    ["worker_pid"],
+)
 
 # =============================================================================
 # Configuration Thresholds
@@ -46,6 +91,26 @@ _checkout_lock = threading.Lock()
 _instrumented_pool: Pool | None = None
 
 
+def _update_pool_gauges() -> None:
+    """Update Prometheus gauges with current pool state."""
+    global _instrumented_pool
+    if _instrumented_pool is None:
+        return
+
+    try:
+        DB_POOL_CONNECTIONS.labels(state="checked_out").set(
+            _instrumented_pool.checkedout(),
+        )
+        DB_POOL_CONNECTIONS.labels(state="checked_in").set(
+            _instrumented_pool.checkedin(),
+        )
+        DB_POOL_CONNECTIONS.labels(state="overflow").set(
+            _instrumented_pool.overflow(),
+        )
+    except Exception as e:
+        logger.debug(f"Failed to update pool gauges: {e}")
+
+
 def _on_do_connect(dbapi_conn: Any, connection_record: Any) -> None:
     """
     Called when a new physical DB connection is created.
@@ -59,7 +124,15 @@ def _on_do_connect(dbapi_conn: Any, connection_record: Any) -> None:
 
     try:
         overflow_count = _instrumented_pool.overflow()
+
+        # Update Prometheus gauges
+        _update_pool_gauges()
+
         if overflow_count > 0:
+            # Prometheus: increment overflow counter
+            DB_POOL_OVERFLOW_TOTAL.inc()
+
+            # OTel: emit span event
             span = trace.get_current_span()
             if span and span.is_recording():
                 span.add_event(
@@ -229,6 +302,13 @@ def instrument_db_pool(engine: Engine) -> None:
                 if thread_id is not None:
                     wait_time = time.perf_counter() - start_time
 
+                    # Prometheus: always record checkout wait time
+                    DB_POOL_CHECKOUT_WAIT.observe(wait_time)
+
+                    # Update pool state gauges
+                    _update_pool_gauges()
+
+                    # OTel: only emit event if wait exceeded threshold
                     if wait_time > POOL_CHECKOUT_WARN_THRESHOLD:
                         span = trace.get_current_span()
                         if span and span.is_recording():
@@ -337,7 +417,8 @@ class RequestTracker:
     """
     Context manager to track request concurrency.
 
-    Emits a span event if concurrent requests exceed threshold.
+    Updates Prometheus gauges on every request, and emits an OTel span event
+    if concurrent requests exceed the warning threshold.
 
     Usage:
         with RequestTracker():
@@ -352,8 +433,15 @@ class RequestTracker:
             current = _active_requests
             if current > _peak_concurrent_requests:
                 _peak_concurrent_requests = current
+                # Prometheus: update peak gauge
+                REQUESTS_CONCURRENT_PEAK.labels(worker_pid=str(os.getpid())).set(
+                    _peak_concurrent_requests,
+                )
 
-        # Emit warning if we're at high concurrency
+        # Prometheus: update current concurrent requests gauge
+        REQUESTS_CONCURRENT.labels(worker_pid=str(os.getpid())).set(current)
+
+        # OTel: emit warning only if we're at high concurrency
         if current >= CONCURRENT_REQUESTS_WARN_THRESHOLD:
             span = trace.get_current_span()
             if span and span.is_recording():
@@ -372,6 +460,10 @@ class RequestTracker:
 
         with _active_requests_lock:
             _active_requests -= 1
+            current = _active_requests
+
+        # Prometheus: update current concurrent requests gauge
+        REQUESTS_CONCURRENT.labels(worker_pid=str(os.getpid())).set(current)
 
 
 # =============================================================================
