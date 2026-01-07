@@ -106,7 +106,7 @@ admin_router = APIRouter()
     "/_debug/jsonb_mode",
     include_in_schema=False,  # Hide from OpenAPI docs
 )
-async def set_jsonb_mode_endpoint(enabled: bool):
+def set_jsonb_mode_endpoint(enabled: bool):
     """
     Toggle query mode at runtime for development and testing.
     """
@@ -123,7 +123,7 @@ async def set_jsonb_mode_endpoint(enabled: bool):
     "/_debug/jsonb_mode",
     include_in_schema=False,  # Hide from OpenAPI docs
 )
-async def get_jsonb_mode_endpoint():
+def get_jsonb_mode_endpoint():
     """Get current query mode status."""
     from orchestra.settings import settings
 
@@ -7346,7 +7346,7 @@ def update_active_derived_logs(
         },
     },
 )
-async def process_traffic_logs(
+def process_traffic_logs(
     max_messages: int = Query(100, description="Maximum number of messages to pull"),
     session=Depends(get_db_session),
     _=Depends(auth_admin_key),
@@ -7512,7 +7512,7 @@ MAX_TIME_SECONDS_HARD_CAP = 600  # 10 minutes max
         },
     },
 )
-async def process_embedding_queue(
+def process_embedding_queue(
     max_items: int = Query(
         1000,
         le=MAX_ITEMS_HARD_CAP,
@@ -7643,7 +7643,7 @@ async def process_embedding_queue(
         },
     },
 )
-async def run_index_maintenance(
+def run_index_maintenance(
     session=Depends(get_db_session),
     _=Depends(auth_admin_key),
 ):

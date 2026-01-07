@@ -77,7 +77,7 @@ logger = logging.getLogger(__name__)
 
 
 @admin_router.post("/auth-user")
-async def create_user(
+def create_user(
     user: UserRequest,
     session: Session = Depends(get_db_session),
 ):
@@ -119,7 +119,7 @@ async def create_user(
 
 
 @admin_router.get("/auth-user/by-user-id")
-async def get_user(
+def get_user(
     user_id: str,
     session: Session = Depends(get_db_session),
 ):
@@ -197,7 +197,7 @@ async def get_user(
 
 
 @admin_router.get("/auth-user/by-email")
-async def get_user_by_email(
+def get_user_by_email(
     email: str,
     session: Session = Depends(get_db_session),
 ):
@@ -275,7 +275,7 @@ async def get_user_by_email(
 
 
 @admin_router.get("/auth-user/by-account")
-async def get_user_by_account(
+def get_user_by_account(
     provider_account_id: str,
     provider: str,
     session: Session = Depends(get_db_session),
@@ -334,7 +334,7 @@ async def get_user_by_account(
 
 
 @admin_router.put("/auth-user")
-async def update_user(
+def update_user(
     updated_user: UserRequest,
     session: Session = Depends(get_db_session),
 ):
@@ -355,7 +355,7 @@ async def update_user(
 
 
 @admin_router.delete("/auth-user", response_model=AccountDeletionResponse)
-async def delete_user(
+def delete_user(
     user_id: str,
     force: bool = Query(
         False,
@@ -385,7 +385,7 @@ async def delete_user(
 
 
 @admin_router.post("/account")
-async def link_account(
+def link_account(
     account: AccountRequest,
     session: Session = Depends(get_db_session),
 ):
@@ -402,7 +402,7 @@ async def link_account(
 
 
 @admin_router.delete("/account")
-async def unlink_account(account: AccountRequest):  # TODO, when would this be used?
+def unlink_account(account: AccountRequest):  # TODO, when would this be used?
     # Unlink an account from the user
     return {
         "message": f"Account {account.provider} unlinked for user {account.user_id}",
@@ -420,7 +420,7 @@ def generate_key(size=32):
 
 
 @admin_router.put("/auth-user/tier")
-async def set_user_tier(
+def set_user_tier(
     user_id: str,
     tier: str,
     session: Session = Depends(get_db_session),
@@ -439,7 +439,7 @@ async def set_user_tier(
 
 
 @admin_router.put("/auth-user/quotas/reset")
-async def reset_user_quotas(
+def reset_user_quotas(
     user_id: str,
     session: Session = Depends(get_db_session),
 ):
@@ -452,7 +452,7 @@ async def reset_user_quotas(
 
 
 @admin_router.put("/auth-user/quotas/reset/all")
-async def reset_all_user_quotas(
+def reset_all_user_quotas(
     session: Session = Depends(get_db_session),
 ):
     auth_user_dao = AuthUserDAO(session)
@@ -467,7 +467,7 @@ async def reset_all_user_quotas(
 
 
 @admin_router.post("/auth-user/freeze")
-async def freeze_account(
+def freeze_account(
     request: FreezeAccountRequest,
     session: Session = Depends(get_db_session),
 ):
@@ -478,7 +478,7 @@ async def freeze_account(
 
 
 @admin_router.post("/auth-user/freeze-by-stripe-id")
-async def freeze_account_by_stripe_id(
+def freeze_account_by_stripe_id(
     request: FreezeAccountByStripeIdRequest,
     session: Session = Depends(get_db_session),
 ):
@@ -494,7 +494,7 @@ async def freeze_account_by_stripe_id(
 
 
 @admin_router.put("/auth-user/stripe-id")
-async def set_stripe_id_for_user(
+def set_stripe_id_for_user(
     request: StripeIdRequest,
     session: Session = Depends(get_db_session),
 ):
@@ -505,7 +505,7 @@ async def set_stripe_id_for_user(
 
 
 @admin_router.get("/auth-user/is-frozen")
-async def is_account_frozen(
+def is_account_frozen(
     user_id: str,
     session: Session = Depends(get_db_session),
 ):
@@ -515,7 +515,7 @@ async def is_account_frozen(
 
 
 @admin_router.get("/api_key/list")
-async def list_user_api_keys(
+def list_user_api_keys(
     user_id: str,
     session: Session = Depends(get_db_session),
 ):
@@ -527,7 +527,7 @@ async def list_user_api_keys(
 
 
 @admin_router.post("/api_key")
-async def create_api_key(
+def create_api_key(
     name: str,
     user_id: Optional[str] = None,
     organization_id: Optional[int] = None,
@@ -555,7 +555,7 @@ async def create_api_key(
 
 
 @admin_router.post("/api_key/reset")
-async def reset_api_key(
+def reset_api_key(
     user_id: Optional[str] = None,
     organization_id: Optional[int] = None,
     session: Session = Depends(get_db_session),
@@ -577,7 +577,7 @@ async def reset_api_key(
 
 
 @admin_router.post("/api-keys/{key_id}/regenerate")
-async def regenerate_api_key(
+def regenerate_api_key(
     key_id: int,
     session: Session = Depends(get_db_session),
 ):
@@ -626,7 +626,7 @@ async def regenerate_api_key(
 
 
 @admin_router.post("/auth-user/{user_id}/organization-api-key")
-async def create_organization_api_key(
+def create_organization_api_key(
     user_id: str,
     organization_id: int,
     name: str = "",
@@ -703,7 +703,7 @@ async def create_organization_api_key(
 
 
 @admin_router.get("/organization/list")
-async def list_organization(
+def list_organization(
     name: str,
     session: Session = Depends(get_db_session),
 ):
@@ -718,7 +718,7 @@ async def list_organization(
 
 
 @admin_router.post("/organization")
-async def create_organization(
+def create_organization(
     name: str,
     owner_id: Optional[str] = None,
     session: Session = Depends(get_db_session),
@@ -750,7 +750,7 @@ async def create_organization(
 
 
 @admin_router.post("/organization/member")
-async def add_organization_member(
+def add_organization_member(
     name: str,
     new_member_email: str,
     role_id: Optional[int] = None,
@@ -805,7 +805,7 @@ async def add_organization_member(
 
 
 @admin_router.put("/organization/member/role")
-async def update_organization_member_role(
+def update_organization_member_role(
     organization: str,
     member_email: str,
     role_id: int,
@@ -845,7 +845,7 @@ async def update_organization_member_role(
 
 
 @router.get("/user/query-logging")
-async def get_query_logging_status(
+def get_query_logging_status(
     request: Request,
     session: Session = Depends(get_db_session),
 ):
@@ -860,7 +860,7 @@ async def get_query_logging_status(
 
 
 @router.get("/user/basic-info")
-async def get_user_basic_info(
+def get_user_basic_info(
     request: Request,
     session: Session = Depends(get_db_session),
 ):
@@ -887,7 +887,7 @@ async def get_user_basic_info(
 
 
 @router.patch("/user/query-logging")
-async def update_query_logging_status(
+def update_query_logging_status(
     request: Request,
     body: UpdateQueryLoggingRequest,
     session: Session = Depends(get_db_session),
@@ -908,7 +908,7 @@ async def update_query_logging_status(
 
 
 @router.get("/user/business-status", response_model=UserBusinessStatusResponse)
-async def get_user_business_status(
+def get_user_business_status(
     request: Request,
     session: Session = Depends(get_db_session),
 ):
@@ -953,7 +953,7 @@ async def get_user_business_status(
 
 
 @router.put("/user/account-type")
-async def update_user_account_type(
+def update_user_account_type(
     request: Request,
     body: UpdateAccountTypeRequest,
     session: Session = Depends(get_db_session),
@@ -996,7 +996,7 @@ async def update_user_account_type(
 
 
 @router.patch("/user/business-info")
-async def update_user_business_info(
+def update_user_business_info(
     request: Request,
     body: UpdateBusinessInfoRequest,
     session: Session = Depends(get_db_session),
@@ -1040,7 +1040,7 @@ async def update_user_business_info(
 
 
 @admin_router.post("/auth-user/verify-business")
-async def verify_business_account(
+def verify_business_account(
     body: BusinessVerificationRequest,
     session: Session = Depends(get_db_session),
 ):
@@ -1067,7 +1067,7 @@ async def verify_business_account(
 
 
 @admin_router.get("/auth-user/business-accounts")
-async def list_business_accounts(
+def list_business_accounts(
     verified: Optional[bool] = Query(None, description="Filter by verification status"),
     limit: int = Query(50, ge=1, le=1000),
     offset: int = Query(0, ge=0),
@@ -1104,7 +1104,7 @@ async def list_business_accounts(
 
 
 @router.post("/user/create-with-business-info")
-async def create_user_with_business_info(
+def create_user_with_business_info(
     body: UpdateAccountTypeRequest,
     session: Session = Depends(get_db_session),
 ):
@@ -1163,7 +1163,7 @@ async def create_user_with_business_info(
     response_model=AssistantHiringApprovalResponse,
     status_code=200,
 )
-async def request_assistant_hiring_approval(
+def request_assistant_hiring_approval(
     request: Request,
     session: Session = Depends(get_db_session),
 ):
@@ -1205,7 +1205,7 @@ async def request_assistant_hiring_approval(
     "/auth-user/{target_user_id}/assistant-hiring-approval/{status}",
     response_model=AssistantHiringApprovalResponse,
 )
-async def set_user_assistant_hiring_status(
+def set_user_assistant_hiring_status(
     target_user_id: str,
     status: str,  # e.g., "approved", "pending", "rejected", "revoked"
     session: Session = Depends(get_db_session),
@@ -1278,7 +1278,7 @@ async def set_user_assistant_hiring_status(
     "/auth-user/assistant-hiring-approval",
     response_model=List[AssistantHiringApprovalUserStatus],
 )
-async def list_users_by_assistant_hiring_approval(
+def list_users_by_assistant_hiring_approval(
     status_filter: Optional[str] = Query(
         None,
         description=f"Filter by status: {', '.join(s for s in ASSISTANT_HIRING_APPROVAL_STATUSES if s is not None)}, 'none', or 'all'",
@@ -1339,7 +1339,7 @@ async def list_users_by_assistant_hiring_approval(
     response_model=AssistantHiringApprovalResponse,
     status_code=200,
 )
-async def claim_assistant_hiring_one_time_link(
+def claim_assistant_hiring_one_time_link(
     request: Request,
     payload: AssistantHiringOneTimeLinkClaimTokenRequest,
     session: Session = Depends(get_db_session),
@@ -1457,7 +1457,7 @@ async def claim_assistant_hiring_one_time_link(
     response_model=AssistantHiringOneTimeLinkResponse,
     status_code=201,
 )
-async def create_assistant_hiring_one_time_link(
+def create_assistant_hiring_one_time_link(
     payload: AssistantHiringApprovalCreateLinkRequest = Depends(),
     session: Session = Depends(get_db_session),
 ):
@@ -1484,7 +1484,7 @@ async def create_assistant_hiring_one_time_link(
     "/assistant-hiring-one-time-link",
     response_model=List[AssistantHiringOneTimeLinkResponse],
 )
-async def list_assistant_hiring_one_time_link(
+def list_assistant_hiring_one_time_link(
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     session: Session = Depends(get_db_session),
@@ -1504,7 +1504,7 @@ async def list_assistant_hiring_one_time_link(
 
 
 @admin_router.delete("/assistant-hiring-one-time-link/{link_id}", status_code=204)
-async def delete_assistant_hiring_one_time_link(
+def delete_assistant_hiring_one_time_link(
     link_id: str,
     session: Session = Depends(get_db_session),
 ):
@@ -1516,7 +1516,7 @@ async def delete_assistant_hiring_one_time_link(
 
 
 @router.post("/user/validate-tax-id")
-async def validate_tax_id(
+def validate_tax_id(
     request: Request,
     tax_id: str = Query(..., description="Tax ID to validate"),
     country: str = Query(..., description="Two-letter country code"),
@@ -1540,7 +1540,7 @@ async def validate_tax_id(
 
 
 @router.get("/user/supported-tax-countries")
-async def get_supported_tax_countries():
+def get_supported_tax_countries():
     """Get list of countries supported for tax ID validation."""
     return {
         "supported_countries": TaxIDValidator.get_supported_countries(),
@@ -1549,7 +1549,7 @@ async def get_supported_tax_countries():
 
 
 @router.get("/user/onboarding-status", response_model=OnboardingStatusResponse)
-async def get_onboarding_status(
+def get_onboarding_status(
     request: Request,
     session: Session = Depends(get_db_session),
 ):
@@ -1564,7 +1564,7 @@ async def get_onboarding_status(
 
 
 @router.put("/user/onboarding-status")
-async def update_onboarding_status(
+def update_onboarding_status(
     request: Request,
     body: UpdateOnboardingStatusRequest,
     session: Session = Depends(get_db_session),
@@ -1585,7 +1585,7 @@ async def update_onboarding_status(
 
 
 @router.get("/user/can-delete-account", response_model=CanDeleteAccountResponse)
-async def can_delete_account(
+def can_delete_account(
     request: Request,
     session: Session = Depends(get_db_session),
 ):
@@ -1609,7 +1609,7 @@ async def can_delete_account(
 
 
 @router.delete("/user/delete-account", response_model=AccountDeletionResponse)
-async def delete_own_account(
+def delete_own_account(
     request: Request,
     body: AccountDeletionConfirmation,
     session: Session = Depends(get_db_session),
