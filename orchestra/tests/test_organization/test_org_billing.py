@@ -791,7 +791,7 @@ async def test_list_projects_tree_personal_api_key(client: AsyncClient):
     list_response = await client.get("/v0/projects/tree", headers=user["headers"])
     assert list_response.status_code == 200
     projects = list_response.json()
-    project_names = [p["project"] for p in projects]
+    project_names = [p["project_name"] for p in projects]
 
     assert "Personal_Tree_Test" in project_names
     assert "Org_Tree_Test" not in project_names
@@ -828,7 +828,7 @@ async def test_list_projects_tree_org_api_key(client: AsyncClient):
     list_response = await client.get("/v0/projects/tree", headers=org_headers)
     assert list_response.status_code == 200
     projects = list_response.json()
-    project_names = [p["project"] for p in projects]
+    project_names = [p["project_name"] for p in projects]
 
     assert "Org_Tree_Shown" in project_names
     assert "Personal_Tree_Hidden" not in project_names

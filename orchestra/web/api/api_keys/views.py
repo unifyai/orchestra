@@ -12,7 +12,7 @@ router = APIRouter()
 
 
 @router.get("/api-keys", response_model=ApiKeysListResponse)
-async def list_api_keys(
+def list_api_keys(
     request_fastapi: Request,
     session: Session = Depends(get_db_session),
 ) -> ApiKeysListResponse:
@@ -71,7 +71,7 @@ async def list_api_keys(
 
 
 @router.delete("/api-keys/{key_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def revoke_api_key(
+def revoke_api_key(
     request_fastapi: Request,
     key_id: int,
     session: Session = Depends(get_db_session),

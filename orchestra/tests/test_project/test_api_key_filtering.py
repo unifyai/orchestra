@@ -145,7 +145,7 @@ async def test_list_projects_tree_respects_api_key_context(
     response = await client.get("/v0/projects/tree", headers=owner["headers"])
     assert response.status_code == status.HTTP_200_OK
     personal_tree = response.json()
-    personal_names = [p["project"] for p in personal_tree]  # tree uses "project" key
+    personal_names = [p["project_name"] for p in personal_tree]
     assert "TreePersonal" in personal_names
     assert "TreeOrg" not in personal_names
 
@@ -153,7 +153,7 @@ async def test_list_projects_tree_respects_api_key_context(
     response = await client.get("/v0/projects/tree", headers=org_headers)
     assert response.status_code == status.HTTP_200_OK
     org_tree = response.json()
-    org_names = [p["project"] for p in org_tree]  # tree uses "project" key
+    org_names = [p["project_name"] for p in org_tree]
     assert "TreeOrg" in org_names
     assert "TreePersonal" not in org_names
 
@@ -274,7 +274,7 @@ async def test_log_to_personal_project_with_org_api_key_fails(
     response = await client.post(
         "/v0/logs",
         json={
-            "project": "PersonalLogTest",
+            "project_name": "PersonalLogTest",
             "entries": [{"data": {"test": "value"}}],
         },
         headers=org_headers,
@@ -316,7 +316,7 @@ async def test_log_to_org_project_with_personal_api_key_fails(
     response = await client.post(
         "/v0/logs",
         json={
-            "project": "OrgLogTest",
+            "project_name": "OrgLogTest",
             "entries": [{"data": {"test": "value"}}],
         },
         headers=owner["headers"],
@@ -358,7 +358,7 @@ async def test_log_to_org_project_with_org_api_key_succeeds(
     response = await client.post(
         "/v0/logs",
         json={
-            "project": "OrgLogSuccessTest",
+            "project_name": "OrgLogSuccessTest",
             "entries": [{"data": {"test": "value"}}],
         },
         headers=org_headers,
@@ -599,7 +599,7 @@ async def test_org_member_without_grant_cannot_log_to_project(
     response = await client.post(
         "/v0/logs",
         json={
-            "project": "OwnerOnlyLogProject",
+            "project_name": "OwnerOnlyLogProject",
             "entries": [{"data": {"test": "value"}}],
         },
         headers=member_org_headers,
@@ -677,7 +677,7 @@ async def test_org_member_with_grant_can_log_to_project(
     response = await client.post(
         "/v0/logs",
         json={
-            "project": "SharedLogProject",
+            "project_name": "SharedLogProject",
             "entries": [{"data": {"test": "value"}}],
         },
         headers=member_org_headers,
@@ -733,7 +733,7 @@ async def test_viewer_can_read_but_not_write_logs(
     await client.post(
         "/v0/logs",
         json={
-            "project": "ViewerTestProject",
+            "project_name": "ViewerTestProject",
             "entries": [{"data": {"owner_log": "value"}}],
         },
         headers=owner_org_headers,
@@ -768,7 +768,7 @@ async def test_viewer_can_read_but_not_write_logs(
     # Viewer can query logs
     response = await client.post(
         "/v0/logs/query",
-        json={"project": "ViewerTestProject"},
+        json={"project_name": "ViewerTestProject"},
         headers=viewer_org_headers,
     )
     assert response.status_code == status.HTTP_200_OK
@@ -777,7 +777,7 @@ async def test_viewer_can_read_but_not_write_logs(
     response = await client.post(
         "/v0/logs",
         json={
-            "project": "ViewerTestProject",
+            "project_name": "ViewerTestProject",
             "entries": [{"data": {"viewer_log": "value"}}],
         },
         headers=viewer_org_headers,

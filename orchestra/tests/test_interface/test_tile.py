@@ -49,7 +49,7 @@ async def _create_test_interface(
     response = await client.post(
         "/v0/interfaces/",
         headers=HEADERS,
-        json={"name": name, "project": project, "color": color},
+        json={"name": name, "project_name": project, "color": color},
     )
     assert response.status_code == 201, f"Failed to create interface: {response.json()}"
     return response
@@ -2370,7 +2370,7 @@ async def test_import_tile_template_with_valid_schema(client: AsyncClient):
     }
 
     import_request = {
-        "project": TEST_PROJECT,
+        "project_name": TEST_PROJECT,
         "template": template,
         "tab_id": tab_id,
         "validate_first": False,  # Skip validation for v0
@@ -2435,7 +2435,7 @@ async def test_import_tile_template_with_valid_schema_new_name(client: AsyncClie
     }
 
     import_request = {
-        "project": TEST_PROJECT,
+        "project_name": TEST_PROJECT,
         "template": template,
         "tab_id": tab_id,
         "new_tile_name": "overridden_tile_name",
@@ -2480,7 +2480,7 @@ async def test_import_tile_template_with_valid_schema_by_interface_and_tab_name(
     }
 
     import_request = {
-        "project": TEST_PROJECT,
+        "project_name": TEST_PROJECT,
         "template": template,
         "interface_id": interface_id,
         "tab_name": "target_tab",
@@ -2532,7 +2532,7 @@ async def test_import_tile_template_with_valid_schema_overwrite_existing(
 
     # First try without overwrite
     import_request = {
-        "project": TEST_PROJECT,
+        "project_name": TEST_PROJECT,
         "template": template,
         "tab_id": tab_id,
         "overwrite_existing": False,
@@ -2627,7 +2627,7 @@ async def test_import_tile_template_with_valid_schema_all_tile_types(
 
     for template in templates:
         import_request = {
-            "project": TEST_PROJECT,
+            "project_name": TEST_PROJECT,
             "template": template,
             "tab_id": tab_id,
             "validate_first": False,
@@ -2695,7 +2695,7 @@ async def test_import_tile_template_with_valid_schema_complex_positioning(
     }
 
     import_request = {
-        "project": TEST_PROJECT,
+        "project_name": TEST_PROJECT,
         "template": template,
         "tab_id": tab_id,
         "validate_first": False,
@@ -2801,7 +2801,7 @@ if __name__ == "__main__":
 
     # Import the template back to the same tab
     import_request = {
-        "project": TEST_PROJECT,
+        "project_name": TEST_PROJECT,
         "template": exported_template,
         "tab_id": tab_id,
         "validate_first": False,
@@ -2864,7 +2864,7 @@ async def test_import_tile_template_with_valid_schema_minimal_template(
     }
 
     import_request = {
-        "project": TEST_PROJECT,
+        "project_name": TEST_PROJECT,
         "template": minimal_template,
         "tab_id": tab_id,
         "validate_first": False,

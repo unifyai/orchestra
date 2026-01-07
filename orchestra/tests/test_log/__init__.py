@@ -266,7 +266,7 @@ def _create_log(
     return client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "params": params,
             "entries": entries,
             "context": context,
@@ -337,7 +337,7 @@ def _create_derived_entry(
     return client.post(
         "/v0/logs/derived",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "key": key,
             "equation": equation,
             "referenced_logs": referenced_logs,
@@ -349,7 +349,7 @@ def _create_derived_entry(
 
 async def fetch_logs(client, project_name, **query_params):
     default_params = {
-        "project": project_name,
+        "project_name": project_name,
         "sorting": json.dumps({"id": "ascending"}),
     }
     default_params.update(query_params)
@@ -361,7 +361,7 @@ async def fetch_logs(client, project_name, **query_params):
 def _get_log(client, project_name, log_id, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
     return client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"from_ids": f"{log_id}"},
         headers=_headers,
     )
@@ -396,7 +396,7 @@ def _delete_logs(
     if source_type:
         json_data["source_type"] = source_type
     if project_name:
-        json_data["project"] = project_name
+        json_data["project_name"] = project_name
     if context:
         json_data["context"] = context
     if delete_empty_fields:
@@ -440,7 +440,7 @@ def _delete_log_fields_from_logs(
         str(client.base_url) + f"/v0/logs",
         json={
             "ids_and_fields": fields,
-            "project": project_name,
+            "project_name": project_name,
             "delete_empty_logs": delete_empty_logs,
             "delete_empty_fields": delete_empty_fields,
         },

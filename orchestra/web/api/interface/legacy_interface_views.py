@@ -72,13 +72,13 @@ def create_interface(
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
-        name=request.project,
+        name=request.project_name,
         organization_id=organization_id,
     )
     if not project:
         raise HTTPException(
             status_code=404,
-            detail=f"Project {request.project} not found.",
+            detail=f"Project {request.project_name} not found.",
         )
     dao = temp_interface_dao if request.temporary else interface_dao
     interfaces = dao.get_interfaces(
@@ -179,13 +179,13 @@ def update_interface(
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     project = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
-        name=request.project,
+        name=request.project_name,
         organization_id=organization_id,
     )
     if not project:
         raise HTTPException(
             status_code=404,
-            detail=f"Project {request.project} not found.",
+            detail=f"Project {request.project_name} not found.",
         )
     dao = temp_interface_dao if request.temporary else interface_dao
     interfaces = dao.get_interfaces(
@@ -234,7 +234,7 @@ def update_interface(
                     "example": [
                         {
                             "name": "tab1",
-                            "project": "my_project",
+                            "project_name": "my_project",
                             "items": [
                                 {
                                     "i": "n0",
@@ -282,7 +282,7 @@ def update_interface(
 def get_interfaces(
     request_fastapi: Request,
     name: str = Query(None),
-    project: str = Query(...),
+    project_name: str = Query(...),
     temporary: bool = Query(False),
     session: Session = Depends(get_db_session),
 ):
@@ -295,13 +295,13 @@ def get_interfaces(
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     project_obj = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
-        name=project,
+        name=project_name,
         organization_id=organization_id,
     )
     if not project_obj:
         raise HTTPException(
             status_code=404,
-            detail=f"Project {project} not found.",
+            detail=f"Project {project_name} not found.",
         )
     dao = temp_interface_dao if temporary else interface_dao
     all_interfaces = dao.get_interfaces(
@@ -347,7 +347,7 @@ def get_interfaces(
         return [
             {
                 "name": name,
-                "project": project,
+                "project_name": project_name,
                 "items": items,
                 "new_counter": new_counter,
                 "context": None,
@@ -362,7 +362,7 @@ def get_interfaces(
     return [
         {
             "name": interface.name,
-            "project": interface.project,
+            "project_name": interface.project,
             "items": json.loads(interface.items),
             "new_counter": interface.new_counter,
             "context": interface.context,
@@ -396,7 +396,7 @@ def get_interfaces(
 def delete_interface(
     request_fastapi: Request,
     name: str = Query(...),
-    project: str = Query(...),
+    project_name: str = Query(...),
     temporary: bool = Query(False),
     session: Session = Depends(get_db_session),
 ):
@@ -409,13 +409,13 @@ def delete_interface(
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     project_obj = project_dao.get_by_user_and_name(
         user_id=request_fastapi.state.user_id,
-        name=project,
+        name=project_name,
         organization_id=organization_id,
     )
     if not project_obj:
         raise HTTPException(
             status_code=404,
-            detail=f"Project {project} not found.",
+            detail=f"Project {project_name} not found.",
         )
     dao = temp_interface_dao if temporary else interface_dao
     interfaces = dao.get_interfaces(

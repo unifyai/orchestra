@@ -93,7 +93,7 @@ async def test_metadata_get_truthiness(
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "metadata.get('key')",
         },
         headers=HEADERS,
@@ -130,7 +130,7 @@ async def test_missing_key_is_falsy(
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "metadata.get('missing_key')",
         },
         headers=HEADERS,
@@ -165,7 +165,7 @@ async def test_negated_truthiness(
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "not metadata.get('key')",
         },
         headers=HEADERS,
@@ -217,7 +217,7 @@ async def test_chained_truthiness_short_circuit(
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "metadata.get('a') and metadata['a'].get('b')",
         },
         headers=HEADERS,
@@ -290,7 +290,7 @@ async def test_membership_with_or_fallback(
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "'vip' in (metadata.get('tags') or [])",
         },
         headers=HEADERS,
@@ -335,7 +335,7 @@ async def test_or_fallback_with_non_empty_default(
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "'default' in (metadata.get('tags') or ['default'])",
         },
         headers=HEADERS,
@@ -387,7 +387,7 @@ async def test_nested_or_fallback_pattern(
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "'vip' in (metadata['thread'].get('tags') or [])",
         },
         headers=HEADERS,
@@ -462,7 +462,7 @@ async def test_full_complex_filter(
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": complex_filter,
         },
         headers=HEADERS,
@@ -509,7 +509,7 @@ async def test_truthiness_in_or_expression(
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "metadata.get('primary') or metadata.get('fallback')",
         },
         headers=HEADERS,
@@ -575,7 +575,7 @@ async def test_field_not_equals_none_filter(
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "custom_hash != None",
         },
         headers=HEADERS,
@@ -594,7 +594,7 @@ async def test_field_not_equals_none_filter(
     resp2 = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "None != custom_hash",
         },
         headers=HEADERS,
@@ -646,7 +646,7 @@ async def test_field_equals_none_filter(
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "optional_field == None",
         },
         headers=HEADERS,
@@ -699,7 +699,7 @@ async def test_explicit_json_null_vs_missing_key(
     resp1 = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "status != None",
         },
         headers=HEADERS,
@@ -712,7 +712,7 @@ async def test_explicit_json_null_vs_missing_key(
     resp2 = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "status == None",
         },
         headers=HEADERS,
@@ -753,7 +753,7 @@ async def test_nested_field_none_comparison(
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "metadata['level1']['level2'] != None",
         },
         headers=HEADERS,
@@ -794,7 +794,7 @@ async def test_none_comparison_with_is_operator(
     resp1 = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "field is not None",
         },
         headers=HEADERS,
@@ -807,7 +807,7 @@ async def test_none_comparison_with_is_operator(
     resp2 = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "field is None",
         },
         headers=HEADERS,
@@ -844,7 +844,7 @@ async def test_chained_none_comparisons(
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "field1 != None and field2 != None",
         },
         headers=HEADERS,
@@ -881,7 +881,7 @@ async def test_none_comparison_with_or(
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "field1 != None or field2 != None",
         },
         headers=HEADERS,
@@ -925,7 +925,7 @@ async def test_none_comparison_after_get_method(
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "metadata.get('key') != None",
         },
         headers=HEADERS,
@@ -964,7 +964,7 @@ async def test_mixed_none_and_value_comparison(
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "status != None and status != 'excluded'",
         },
         headers=HEADERS,
@@ -1008,7 +1008,7 @@ async def test_none_in_list_membership(
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "status in [None, 'a', 'b']",
         },
         headers=HEADERS,
@@ -1057,7 +1057,7 @@ async def test_truthiness_in_grouping_filter(
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "metadata.get('enabled')",
             "groupby": "group",
         },

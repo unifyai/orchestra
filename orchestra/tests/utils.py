@@ -101,14 +101,14 @@ async def create_test_user(
             approve_resp.status_code == status.HTTP_200_OK
         ), f"Failed to approve user {email}: {approve_resp.json()}"
 
-    api_key = user_data.get("apiKey")
+    api_key = user_data.get("api_key")
     if not api_key:
         user_details_resp = await client.get(
             f"/v0/admin/auth-user/by-user-id?user_id={user_id}",
             headers=ADMIN_HEADERS,
         )
         assert user_details_resp.status_code == status.HTTP_200_OK
-        api_key = user_details_resp.json().get("apiKey")
+        api_key = user_details_resp.json().get("api_key")
     assert api_key, f"API key not found for user {email}"
 
     user_auth_headers = {
