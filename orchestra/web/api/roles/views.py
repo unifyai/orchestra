@@ -24,7 +24,7 @@ router = APIRouter()
     response_model=List[PermissionResponse],
     status_code=status.HTTP_200_OK,
 )
-async def list_permissions(
+def list_permissions(
     resource_type: str | None = None,
     session: Session = Depends(get_db_session),
 ) -> List[PermissionResponse]:
@@ -60,7 +60,7 @@ async def list_permissions(
     response_model=List[RoleResponse],
     status_code=status.HTTP_200_OK,
 )
-async def list_organization_roles(
+def list_organization_roles(
     request_fastapi: Request,
     organization_id: int,
     session: Session = Depends(get_db_session),
@@ -98,7 +98,7 @@ async def list_organization_roles(
     response_model=RoleResponse,
     status_code=status.HTTP_201_CREATED,
 )
-async def create_custom_role(
+def create_custom_role(
     request_fastapi: Request,
     organization_id: int,
     role_data: RoleCreate,
@@ -171,7 +171,7 @@ async def create_custom_role(
     response_model=RoleResponse,
     status_code=status.HTTP_200_OK,
 )
-async def get_role(
+def get_role(
     request_fastapi: Request,
     organization_id: int,
     role_id: int,
@@ -221,7 +221,7 @@ async def get_role(
     response_model=RoleResponse,
     status_code=status.HTTP_200_OK,
 )
-async def update_role(
+def update_role(
     request_fastapi: Request,
     organization_id: int,
     role_id: int,
@@ -303,7 +303,7 @@ async def update_role(
     "/organizations/{organization_id}/roles/{role_id}",
     status_code=status.HTTP_204_NO_CONTENT,
 )
-async def delete_role(
+def delete_role(
     request_fastapi: Request,
     organization_id: int,
     role_id: int,
@@ -378,7 +378,7 @@ async def delete_role(
     response_model=RoleResponse,
     status_code=status.HTTP_200_OK,
 )
-async def add_permissions_to_role(
+def add_permissions_to_role(
     request_fastapi: Request,
     organization_id: int,
     role_id: int,
@@ -459,7 +459,7 @@ async def add_permissions_to_role(
     response_model=RoleResponse,
     status_code=status.HTTP_200_OK,
 )
-async def remove_permission_from_role(
+def remove_permission_from_role(
     request_fastapi: Request,
     organization_id: int,
     role_id: int,
