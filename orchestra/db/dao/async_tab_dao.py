@@ -80,7 +80,7 @@ class AsyncTabDAO:
         if is_checkpoint is not None:
             query = query.where(Tab.is_checkpoint == is_checkpoint)
 
-        return await self.session.execute(query).scalars().first()
+        return (await self.session.execute(query)).scalars().first()
 
     async def get(
         self,
@@ -119,7 +119,7 @@ class AsyncTabDAO:
             query = query.where(Tab.is_checkpoint == is_checkpoint)
 
         query = query.order_by(Tab.order.asc())
-        return await self.session.execute(query).scalars().all()
+        return (await self.session.execute(query)).scalars().all()
 
     async def list_tabs_bulk(
         self,
@@ -144,7 +144,7 @@ class AsyncTabDAO:
             query = query.where(Tab.is_checkpoint == is_checkpoint)
 
         query = query.order_by(Tab.interface_id.asc(), Tab.order.asc())
-        return await self.session.execute(query).scalars().all()
+        return (await self.session.execute(query)).scalars().all()
 
     async def update_tab(
         self,

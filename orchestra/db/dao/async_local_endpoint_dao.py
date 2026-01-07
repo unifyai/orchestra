@@ -39,7 +39,7 @@ class AsyncLocalEndpointDAO:
                 LocalEndpoint.user_id == user_id,
                 LocalEndpoint.name == name,
             )
-            return await self.session.execute(existing_stmt).scalar_one()
+            return (await self.session.execute(existing_stmt)).scalar_one()
         except:
             raise ValueError
 

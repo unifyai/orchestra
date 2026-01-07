@@ -58,7 +58,7 @@ class AsyncVoiceDAO:
             Voice.user_id == user_id,
             Voice.provider == provider,
         )
-        result = await self.session.execute(stmt).scalar_one_or_none()
+        result = (await self.session.execute(stmt)).scalar_one_or_none()
         return result
 
     async def list_voices_for_user(self, user_id: str) -> List[Voice]:
@@ -66,7 +66,7 @@ class AsyncVoiceDAO:
         List all Voices belonging to a specific user.
         """
         stmt = select(Voice).where(Voice.user_id == user_id)
-        result = await self.session.execute(stmt).scalars().all()
+        result = (await self.session.execute(stmt)).scalars().all()
         return result
 
     async def delete_voice(self, user_id: str, voice_id: str, provider: str) -> None:
@@ -89,7 +89,7 @@ class AsyncVoiceDAO:
             .where(Assistant.voice_provider == provider)
             .limit(1)
         )
-        assistant_using_voice = await self.session.execute(stmt).first()
+        assistant_using_voice = (await self.session.execute(stmt)).first()
 
         if assistant_using_voice:
             raise HTTPException(

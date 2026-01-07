@@ -7,9 +7,9 @@ from typing import List, Optional
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.log_dao import LogDAO
-from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
+from orchestra.db.dao.async_context_dao import AsyncContextDAO
+from orchestra.db.dao.async_log_dao import AsyncLogDAO
+from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
 from orchestra.db.models.orchestra_models import (
     Context,
     ContextVersion,
@@ -22,7 +22,7 @@ from orchestra.db.models.orchestra_models import (
     ResourceAccess,
     TeamMember,
 )
-from orchestra.db.utils import get_next_order_value
+from orchestra.db.utils import get_next_order_value_async
 
 logger = logging.getLogger(__name__)
 
@@ -31,8 +31,8 @@ class AsyncProjectDAO:
     def __init__(
         self,
         session: AsyncSession,
-        organization_member_dao: OrganizationMemberDAO,
-        context_dao: ContextDAO,
+        organization_member_dao: AsyncOrganizationMemberDAO,
+        context_dao: AsyncContextDAO,
     ):
         self.session = session
         self.organization_member_dao = organization_member_dao
@@ -52,7 +52,7 @@ class AsyncProjectDAO:
         """Internal method to get project by ID or by user_id and name."""
         if id is not None:
             query = select(Project).where(Project.id == id)
-            return await self.session.execute(query).scalars().first()
+            return (await self.session.execute(query)).scalars().first()
         elif user_id is not None and name is not None:
             return self.get_by_user_and_name(user_id=user_id, name=name)
         return None
@@ -75,7 +75,7 @@ class AsyncProjectDAO:
         if user_id is None and organization_id is None:
             raise ValueError("One of user_id or organization_id must be provided.")
 
-        self._validate_description(description)
+        await self._validate_description(description)
 
         # Determine order: append to end by default
         where_conditions = []
@@ -84,7 +84,7 @@ class AsyncProjectDAO:
         if organization_id is not None:
             where_conditions.append(Project.organization_id == organization_id)
 
-        order_value = get_next_order_value(
+        order_value = await get_next_order_value_async(
             session=self.session,
             model_class=Project,
             order=order,
@@ -133,7 +133,7 @@ class AsyncProjectDAO:
         description: Optional[str] = None,
         order: Optional[int] = None,
     ) -> None:
-        self._validate_description(description)
+        await self._validate_description(description)
 
         query = select(Project)
         query = query.where(Project.id == id)
@@ -191,18 +191,18 @@ class AsyncProjectDAO:
             deleted_count = soft_delete_result.rowcount
 
             # Delete associated GCS media BEFORE deleting the project
-            log_dao = LogDAO(self.session, self.context_dao)
+            log_dao = AsyncLogDAO(self.session, self.context_dao)
             logs_to_delete_query = (
-                self.session.query(Log)
+                select(Log)
                 .join(
                     LogEventLog,
                     LogEventLog.log_id == Log.id,
                 )
-                .filter(
+                .where(
                     LogEventLog.log_event_id.in_(select(log_events_subquery.c.id)),
                 )
             )
-            log_dao._bulk_delete_gcs_media(logs_to_delete_query)
+            await log_dao._bulk_delete_gcs_media_async(logs_to_delete_query)
 
             # Proceed with deleting the project (DB cascades will handle the rest)
             # Note: CASCADE will delete log_events, which will trigger CASCADE delete
@@ -251,14 +251,13 @@ class AsyncProjectDAO:
         """
         # Get project IDs the user has explicit access to via ResourceAccess
         # (either direct user grants or via team membership)
-        team_memberships = (
-            self.session.query(TeamMember.team_id)
-            .filter(TeamMember.user_id == user_id)
-            .all()
+        result = await self.session.execute(
+            select(TeamMember.team_id).where(TeamMember.user_id == user_id)
         )
+        team_memberships = result.all()
         team_id_strs = [str(tm[0]) for tm in team_memberships]
 
-        explicit_access_query = self.session.query(ResourceAccess.resource_id).filter(
+        explicit_access_stmt = select(ResourceAccess.resource_id).where(
             ResourceAccess.resource_type == "project",
             or_(
                 and_(
@@ -273,7 +272,8 @@ class AsyncProjectDAO:
                 else False,
             ),
         )
-        explicit_project_ids = [row[0] for row in explicit_access_query.all()]
+        result = await self.session.execute(explicit_access_stmt)
+        explicit_project_ids = [row[0] for row in result.all()]
 
         if organization_id is None:
             # Personal API key: only personal projects + explicitly granted personal projects
@@ -326,7 +326,7 @@ class AsyncProjectDAO:
         Returns:
             The project if found, None otherwise
         """
-        projects = self.filter_by_user_access(
+        projects = await self.filter_by_user_access(
             user_id=user_id,
             organization_id=organization_id,
             name=name,
@@ -352,7 +352,7 @@ class AsyncProjectDAO:
             The project if found, None otherwise
         """
         # Get all organization IDs the user is a member of
-        org_memberships = self.organization_member_dao.filter(user_id=user_id)
+        org_memberships = await self.organization_member_dao.filter(user_id=user_id)
         org_ids = (
             [membership[0].organization_id for membership in org_memberships]
             if org_memberships
@@ -360,14 +360,13 @@ class AsyncProjectDAO:
         )
 
         # Get explicit access grants
-        team_memberships = (
-            self.session.query(TeamMember.team_id)
-            .filter(TeamMember.user_id == user_id)
-            .all()
+        result = await self.session.execute(
+            select(TeamMember.team_id).where(TeamMember.user_id == user_id)
         )
+        team_memberships = result.all()
         team_id_strs = [str(tm[0]) for tm in team_memberships]
 
-        explicit_access_query = self.session.query(ResourceAccess.resource_id).filter(
+        explicit_access_stmt = select(ResourceAccess.resource_id).where(
             ResourceAccess.resource_type == "project",
             or_(
                 and_(
@@ -382,7 +381,8 @@ class AsyncProjectDAO:
                 else False,
             ),
         )
-        explicit_project_ids = [row[0] for row in explicit_access_query.all()]
+        result = await self.session.execute(explicit_access_stmt)
+        explicit_project_ids = [row[0] for row in result.all()]
 
         # Build query with all access conditions
         query = select(Project).where(
@@ -400,7 +400,7 @@ class AsyncProjectDAO:
             ),
         )
 
-        result = await self.session.execute(query).fetchall()
+        result = (await self.session.execute(query)).fetchall()
         return result[0][0] if result else None
 
     async def commit(
@@ -439,28 +439,27 @@ class AsyncProjectDAO:
 
         # Update the previous version's next_commit_hash array if it exists
         if current_head:
-            prev_version = (
-                self.session.query(ProjectVersion)
+            result = await self.session.execute(
+                select(ProjectVersion)
                 .filter_by(
                     project_id=project_id,
                     commit_hash=current_head,
                 )
                 .with_for_update()
-                .one()
             )
+            prev_version = result.scalars().one()
             if commit_hash not in prev_version.next_commit_hash:
                 prev_version.next_commit_hash = prev_version.next_commit_hash + [
                     commit_hash,
                 ]
 
         # 2. Find all versioned contexts and create a snapshot for each
-        contexts = (
-            self.session.query(Context)
-            .filter_by(project_id=project_id, is_versioned=True)
-            .all()
+        result = await self.session.execute(
+            select(Context).filter_by(project_id=project_id, is_versioned=True)
         )
+        contexts = result.scalars().all()
         for context in contexts:
-            self.context_dao.create_version_snapshot(
+            await self.context_dao.create_version_snapshot(
                 context=context,
                 commit_hash=commit_hash,
                 commit_message=commit_message,
@@ -488,26 +487,24 @@ class AsyncProjectDAO:
             raise ValueError("Project is not versioned.")
 
         # 1. Find the target project version by its commit hash
-        project_version = (
-            self.session.query(ProjectVersion)
-            .filter_by(project_id=project_id, commit_hash=commit_hash)
-            .one_or_none()
+        result = await self.session.execute(
+            select(ProjectVersion).filter_by(project_id=project_id, commit_hash=commit_hash)
         )
+        project_version = result.scalars().one_or_none()
         if not project_version:
             raise ValueError(
                 f"Commit hash {commit_hash} not found for project {project_id}.",
             )
 
         # 2. Find all context versions associated with this project version
-        context_versions = (
-            self.session.query(ContextVersion)
-            .filter_by(project_version_id=project_version.id)
-            .all()
+        result = await self.session.execute(
+            select(ContextVersion).filter_by(project_version_id=project_version.id)
         )
+        context_versions = result.scalars().all()
 
         # 3. Rollback each context to its respective versioned state
         for cv in context_versions:
-            self.context_dao.rollback(cv.context_id, cv.commit_hash)
+            await self.context_dao.rollback(cv.context_id, cv.commit_hash)
 
         project.updated_at = datetime.now(timezone.utc)
 
@@ -528,12 +525,12 @@ class AsyncProjectDAO:
         if not project or not project.is_versioned:
             raise ValueError("Project is not versioned.")
 
-        versions = (
-            self.session.query(ProjectVersion)
+        result = await self.session.execute(
+            select(ProjectVersion)
             .filter_by(project_id=project_id)
             .order_by(ProjectVersion.created_at.desc())
-            .all()
         )
+        versions = result.scalars().all()
         return [
             {
                 "commit_hash": v.commit_hash,

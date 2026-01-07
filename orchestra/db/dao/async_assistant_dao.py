@@ -125,7 +125,7 @@ class AsyncAssistantDAO:
                 Assistant.user_id == user_id,
                 Assistant.organization_id.is_(None),
             )
-        result = await self.session.execute(stmt).scalar_one_or_none()
+        result = (await self.session.execute(stmt)).scalar_one_or_none()
         return result
 
     async def get_assistant_by_agent_id(self, agent_id: int) -> Optional[Assistant]:
@@ -139,7 +139,7 @@ class AsyncAssistantDAO:
         :return: Assistant if found, None otherwise.
         """
         stmt = select(Assistant).where(Assistant.agent_id == agent_id)
-        result = await self.session.execute(stmt).scalar_one_or_none()
+        result = (await self.session.execute(stmt)).scalar_one_or_none()
         return result
 
     async def list_assistants_for_user(
@@ -192,7 +192,7 @@ class AsyncAssistantDAO:
             stmt = stmt.where(
                 Assistant.assistant_whatsapp_number == assistant_whatsapp_number,
             )
-        result = await self.session.execute(stmt).scalars().all()
+        result = (await self.session.execute(stmt)).scalars().all()
         return result
 
     async def list_all_org_assistants(
@@ -229,7 +229,7 @@ class AsyncAssistantDAO:
             stmt = stmt.where(
                 Assistant.assistant_whatsapp_number == assistant_whatsapp_number,
             )
-        result = await self.session.execute(stmt).scalars().all()
+        result = (await self.session.execute(stmt)).scalars().all()
         return result
 
     async def delete_assistant(
@@ -249,7 +249,7 @@ class AsyncAssistantDAO:
         :param agent_id: Assistant agent ID.
         :param organization_id: Organization ID for org context (None = personal).
         """
-        assistant = self.get_assistant_by_id(user_id, agent_id, organization_id)
+        assistant = await self.get_assistant_by_id(user_id, agent_id, organization_id)
         if assistant:
             await self.session.delete(assistant)
         else:
@@ -274,7 +274,7 @@ class AsyncAssistantDAO:
         :param organization_id: Organization ID for org context (None = personal).
         :return: Updated assistant or None if not found.
         """
-        assistant = self.get_assistant_by_id(user_id, agent_id, organization_id)
+        assistant = await self.get_assistant_by_id(user_id, agent_id, organization_id)
         if not assistant:
             return None
 
@@ -344,7 +344,7 @@ class AsyncAssistantDAO:
         :return: Updated assistant or None if not found.
         """
         # Get the personal assistant
-        assistant = self.get_assistant_by_id(user_id, agent_id, organization_id=None)
+        assistant = await self.get_assistant_by_id(user_id, agent_id, organization_id=None)
         if not assistant:
             return None
 
@@ -373,7 +373,7 @@ class AsyncAssistantDAO:
             Assistant.agent_id == agent_id,
             Assistant.organization_id == organization_id,
         )
-        assistant = await self.session.execute(stmt).scalar_one_or_none()
+        assistant = (await self.session.execute(stmt)).scalar_one_or_none()
         if not assistant:
             return None
 
@@ -413,7 +413,7 @@ class AsyncAssistantDAO:
             stmt = stmt.where(Assistant.email == email)
         if agent_id is not None:
             stmt = stmt.where(Assistant.agent_id == agent_id)
-        result = await self.session.execute(stmt).scalars().all()
+        result = (await self.session.execute(stmt)).scalars().all()
         return result
 
     async def list_all_assistant_emails(self) -> List[str]:
@@ -421,5 +421,5 @@ class AsyncAssistantDAO:
         List all non-null email addresses from all Assistants.
         """
         stmt = select(Assistant.email).where(Assistant.email.is_not(None))
-        result = await self.session.execute(stmt).scalars().all()
+        result = (await self.session.execute(stmt)).scalars().all()
         return result

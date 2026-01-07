@@ -36,7 +36,7 @@ class AsyncAssistantSecretDAO:
             AssistantSecret.agent_id == agent_id,
             AssistantSecret.secret_name == secret_name,
         )
-        return await self.session.execute(stmt).scalar_one_or_none()
+        return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def create_secret(
         self,
@@ -83,7 +83,7 @@ class AsyncAssistantSecretDAO:
             AssistantSecret.user_id == user_id,
             AssistantSecret.agent_id == agent_id,
         )
-        return await self.session.execute(stmt).scalars().all()
+        return (await self.session.execute(stmt)).scalars().all()
 
     async def update_secret(
         self,

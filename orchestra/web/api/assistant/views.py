@@ -36,7 +36,7 @@ from orchestra.db.dao.async_resource_access_dao import AsyncResourceAccessDAO
 from orchestra.db.dao.async_role_dao import AsyncRoleDAO
 from orchestra.db.dao.async_users_dao import AsyncUsersDAO
 from orchestra.db.dao.async_voice_dao import AsyncVoiceDAO
-from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dao.async_project_dao import AsyncProjectDAO
 from orchestra.db.dependencies import get_async_db_session, get_db_session
 from orchestra.db.models.orchestra_models import (
     AuthUser,
@@ -225,7 +225,7 @@ async def create_assistant(
     api_key_dao = AsyncApiKeyDAO(session)
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     log_event_dao = AsyncLogEventDAO(session)
     log_dao = AsyncLogDAO(session, context_dao)
     api_keys = await api_key_dao.filter(user_id=user_id)
@@ -354,7 +354,7 @@ async def create_assistant(
                     description="Project to manage and track all organization assistants.",
                     is_versioned=False,
                 )
-                session.flush()
+                await session.flush()
 
                 # Fetch the created project
                 org_projects = await project_dao.filter(
@@ -565,7 +565,7 @@ async def create_assistant(
                 session = next(get_db_session(request))
                 assistant_dao = AsyncAssistantDAO(session)
                 context_dao = AsyncContextDAO(session)
-                project_dao = ProjectDAO(
+                project_dao = AsyncProjectDAO(
                     session,
                     organization_member_dao,
                     context_dao,
@@ -1105,7 +1105,7 @@ async def delete_assistant(
     dao = AsyncAssistantDAO(session)
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     organization_id = getattr(request.state, "organization_id", None)
     cleanup_errors = []
     try:
@@ -1735,7 +1735,7 @@ async def transfer_assistant_to_org(
     assistant_dao = AsyncAssistantDAO(session)
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     resource_access_dao = AsyncResourceAccessDAO(session)
     role_dao = AsyncRoleDAO(session)
 
@@ -1799,7 +1799,7 @@ async def transfer_assistant_to_org(
                     description="Project to manage and track all organization assistants.",
                     is_versioned=False,
                 )
-                session.flush()  # Get project ID
+                await session.flush()  # Get project ID
                 org_projects = await project_dao.filter(
                     organization_id=target_org_id,
                     name=ASSISTANTS_PROJECT_NAME,
@@ -2053,7 +2053,7 @@ async def transfer_assistant_to_personal(
     assistant_dao = AsyncAssistantDAO(session)
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Verify this is an org assistant (must use org API key)
@@ -3121,7 +3121,7 @@ async def design_voice_create_from_preview_endpoint(
             provider="elevenlabs",
         )
         db_voice.is_preset = False  # Designed voices are not presets
-        session.flush()  # Ensure db_voice gets all attributes before commit
+        await session.flush()  # Ensure db_voice gets all attributes before commit
         await session.commit()  # Commit DB voice creation
 
         return InfoResponse(

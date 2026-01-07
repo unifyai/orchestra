@@ -36,7 +36,7 @@ class AsyncRecordingDAO:
         List all CallRecordings for a specific agent.
         """
         stmt = select(CallRecording).where(CallRecording.agent_id == agent_id)
-        result = await self.session.execute(stmt).scalars().all()
+        result = (await self.session.execute(stmt)).scalars().all()
         return result
 
     async def get_recording(
@@ -51,7 +51,7 @@ class AsyncRecordingDAO:
             CallRecording.agent_id == agent_id,
             CallRecording.id == recording_id,
         )
-        return await self.session.execute(stmt).scalar_one_or_none()
+        return (await self.session.execute(stmt)).scalar_one_or_none()
 
     async def delete_recording(self, agent_id: int, recording_id: int) -> bool:
         """

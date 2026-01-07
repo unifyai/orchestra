@@ -965,7 +965,7 @@ class AsyncLogDAO:
                                 .having(func.count(Log.id) == len(composite_keys))
                             )
 
-                            if await self.session.execute(verify_q.limit(1)).first():
+                            if (await self.session.execute(verify_q.limit(1))).first():
                                 raise ValueError(
                                     f"Duplicate entry for composite key {key_values}.",
                                 )
@@ -1000,7 +1000,7 @@ class AsyncLogDAO:
                     if context_id is not None:
                         q = q.where(LogEventContext.context_id == context_id)
 
-                    if await self.session.execute(q.limit(1)).first():
+                    if (await self.session.execute(q.limit(1))).first():
                         raise ValueError(f"Duplicate entry for unique field '{key}'.")
 
                     # JSONB Mode: Also check in LogEvent.data JSONB column
@@ -1590,7 +1590,7 @@ class AsyncLogDAO:
             .group_by(LogEventLog.log_event_id)
             .having(func.count(Log.id) == len(parent_ids))
         )
-        return await self.session.execute(q.limit(1)).first() is not None
+        return (await self.session.execute(q.limit(1))).first() is not None
 
     async def _batch_validate_parents(
         self,

@@ -81,7 +81,7 @@ class AsyncFavoriteProjectDAO:
             FavoriteProject.id == favorite_id,
             FavoriteProject.user_id == user_id,
         )
-        result = await self.session.execute(query).scalar_one_or_none()
+        result = (await self.session.execute(query)).scalar_one_or_none()
         if result is None:
             raise ValueError(
                 f"Favorite project with ID {favorite_id} not found for user {user_id}",
@@ -107,7 +107,7 @@ class AsyncFavoriteProjectDAO:
             FavoriteProject.user_id == user_id,
             FavoriteProject.project_id == project_id,
         )
-        return await self.session.execute(query).scalar_one_or_none()
+        return (await self.session.execute(query)).scalar_one_or_none()
 
     async def update(
         self,

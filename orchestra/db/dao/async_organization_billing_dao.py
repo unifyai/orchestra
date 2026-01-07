@@ -53,7 +53,7 @@ class AsyncOrganizationBillingDAO:
         query = select(Organization).where(
             Organization.stripe_customer_id == stripe_customer_id,
         )
-        return await self.session.execute(query).scalars().first()
+        return (await self.session.execute(query)).scalars().first()
 
     async def has_direct_billing(self, organization_id: int) -> bool:
         """

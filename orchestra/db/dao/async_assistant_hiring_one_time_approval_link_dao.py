@@ -36,7 +36,7 @@ class AsyncAssistantHiringOneTimeApprovalLinkDAO:
         query = select(AssistantHiringOneTimeApprovalLink).where(
             AssistantHiringOneTimeApprovalLink.token == token,
         )
-        return await self.session.execute(query).scalar_one_or_none()
+        return (await self.session.execute(query)).scalar_one_or_none()
 
     async def get_by_id(
         self,
@@ -45,7 +45,7 @@ class AsyncAssistantHiringOneTimeApprovalLinkDAO:
         query = select(AssistantHiringOneTimeApprovalLink).where(
             AssistantHiringOneTimeApprovalLink.id == link_id,
         )
-        return await self.session.execute(query).scalar_one_or_none()
+        return (await self.session.execute(query)).scalar_one_or_none()
 
     async def claim_link(
         self,
@@ -78,7 +78,7 @@ class AsyncAssistantHiringOneTimeApprovalLinkDAO:
             .offset(offset)
             .order_by(AssistantHiringOneTimeApprovalLink.created_at.desc())
         )
-        return list(await self.session.execute(query).scalars().all())
+        return list((await self.session.execute(query)).scalars().all())
 
     async def delete_link(self, link_id: str) -> bool:
         link = self.get_by_id(link_id)

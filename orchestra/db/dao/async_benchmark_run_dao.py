@@ -127,7 +127,7 @@ class AsyncBenchmarkRunDAO:
             .join(Provider, Endpoint.provider_id == Provider.id)
             .join(Datapoint, Datapoint.benchmark_run_id == BenchmarkRun.id)
         )
-        return await self.session.execute(query).all()
+        return (await self.session.execute(query)).all()
 
     async def update_benchmark_run(  # noqa: WPS211, WPS213, WPS231, C901
         self,

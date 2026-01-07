@@ -94,6 +94,35 @@ def get_next_order_value(
     return (max_order or -1) + 1
 
 
+async def get_next_order_value_async(
+    session,
+    model_class: Type,
+    order: Optional[int] = None,
+    where_conditions: Optional[List[Any]] = None,
+) -> int:
+    """
+    Async version of get_next_order_value.
+
+    Get the next order value for a model, either using the provided order
+    or auto-incrementing based on the current maximum order value.
+    """
+    if order is not None:
+        return order
+
+    # Build query to find maximum order value
+    max_order_query = select(func.max(model_class.order))
+
+    # Apply any where conditions
+    if where_conditions:
+        for condition in where_conditions:
+            max_order_query = max_order_query.where(condition)
+
+    # Execute query and calculate next order value
+    result = await session.execute(max_order_query)
+    max_order = result.scalar_one()
+    return (max_order or -1) + 1
+
+
 @dataclass
 class PathSegment:
     """Represents one segment of a FK path.

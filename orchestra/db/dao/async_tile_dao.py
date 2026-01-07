@@ -384,7 +384,7 @@ class AsyncTileDAO:
         if is_checkpoint is not None:
             query = query.where(Tile.is_checkpoint == is_checkpoint)
 
-        return await self.session.execute(query).scalars().first()
+        return (await self.session.execute(query)).scalars().first()
 
     async def get(
         self,
@@ -450,7 +450,7 @@ class AsyncTileDAO:
         if is_checkpoint is not None:
             query = query.where(Tile.is_checkpoint == is_checkpoint)
 
-        return await self.session.execute(query).scalars().all()
+        return (await self.session.execute(query)).scalars().all()
 
     async def update_tile(
         self,
@@ -805,7 +805,7 @@ class AsyncTileDAO:
         if id is not None:
             # Direct lookup by specialized tile primary key
             query = select(model_class).where(model_class.id == id)
-            return await self.session.execute(query).scalars().first()
+            return (await self.session.execute(query)).scalars().first()
 
         # If identifying by tab_id and name, first get the base tile
         if tab_id is not None and name is not None:
@@ -819,7 +819,7 @@ class AsyncTileDAO:
 
             # Then get the specialized tile using the base tile's tile_id reference
             query = select(model_class).where(model_class.tile_id == base_tile.id)
-            return await self.session.execute(query).scalars().first()
+            return (await self.session.execute(query)).scalars().first()
 
         return None
 

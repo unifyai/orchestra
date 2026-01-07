@@ -77,7 +77,7 @@ class AsyncTempInterfaceDAO:
         if name is not None:
             query = query.where(TempInterface.name == name)
         query = query.order_by(TempInterface.created_at.asc())
-        interfaces = await self.session.execute(query).scalars().all()
+        interfaces = (await self.session.execute(query)).scalars().all()
         return interfaces
 
     async def delete_interface(self, project_id: int, name: str):

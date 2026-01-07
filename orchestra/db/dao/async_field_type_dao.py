@@ -37,7 +37,7 @@ class AsyncFieldTypeDAO:
             FieldType.field_name == field_name,
             FieldType.context_id == context_id,
         )
-        return await self.session.execute(query).scalars().first()
+        return (await self.session.execute(query)).scalars().first()
 
     async def create_field_type_if_absent(
         self,
@@ -158,7 +158,7 @@ class AsyncFieldTypeDAO:
         if context_id is not None:
             query = query.where(FieldType.context_id == context_id)
 
-        field_types = await self.session.execute(query).scalars().all()
+        field_types = (await self.session.execute(query)).scalars().all()
         from orchestra.web.api.log.utils.type_utils import get_display_type
 
         if return_mutable:
@@ -383,7 +383,7 @@ class AsyncFieldTypeDAO:
             FieldType.field_name == field_name,
             FieldType.context_id == context_id,
         )
-        field_type = await self.session.execute(query).scalars().first()
+        field_type = (await self.session.execute(query)).scalars().first()
 
         if field_type:
             await self.session.delete(field_type)
@@ -417,7 +417,7 @@ class AsyncFieldTypeDAO:
         if context_id is not None:
             query = query.where(FieldType.context_id == context_id)
 
-        result = await self.session.execute(query).scalars().all()
+        result = (await self.session.execute(query)).scalars().all()
         return {field: i for i, field in enumerate(result)}
 
     async def rename_field(

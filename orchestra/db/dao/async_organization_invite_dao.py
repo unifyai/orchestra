@@ -62,12 +62,12 @@ class AsyncOrganizationInviteDAO:
     async def get_by_id(self, invite_id: str) -> Optional[OrganizationInvite]:
         """Get an invite by its ID."""
         query = select(OrganizationInvite).where(OrganizationInvite.id == invite_id)
-        return await self.session.execute(query).scalar_one_or_none()
+        return (await self.session.execute(query)).scalar_one_or_none()
 
     async def get_by_token(self, token: str) -> Optional[OrganizationInvite]:
         """Get an invite by its token."""
         query = select(OrganizationInvite).where(OrganizationInvite.token == token)
-        return await self.session.execute(query).scalar_one_or_none()
+        return (await self.session.execute(query)).scalar_one_or_none()
 
     async def get_by_email_and_org(
         self,
@@ -79,7 +79,7 @@ class AsyncOrganizationInviteDAO:
             OrganizationInvite.invitee_email == email.lower(),
             OrganizationInvite.organization_id == organization_id,
         )
-        return await self.session.execute(query).scalar_one_or_none()
+        return (await self.session.execute(query)).scalar_one_or_none()
 
     async def list_by_organization(
         self,
@@ -102,7 +102,7 @@ class AsyncOrganizationInviteDAO:
             query = query.where(OrganizationInvite.expires_at >= now)
 
         query = query.order_by(OrganizationInvite.created_at.desc())
-        return list(await self.session.execute(query).scalars().all())
+        return list((await self.session.execute(query)).scalars().all())
 
     async def list_by_email(self, email: str) -> List[OrganizationInvite]:
         """
@@ -120,7 +120,7 @@ class AsyncOrganizationInviteDAO:
             )
             .order_by(OrganizationInvite.created_at.desc())
         )
-        return list(await self.session.execute(query).scalars().all())
+        return list((await self.session.execute(query)).scalars().all())
 
     async def delete(self, invite_id: str) -> bool:
         """

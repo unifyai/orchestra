@@ -179,4 +179,4 @@ class AsyncOrganizationDAO:
         if name_filter:
             query = query.where(Organization.name.ilike(f"%{name_filter}%"))
         query = query.order_by(Organization.id).limit(limit).offset(offset)
-        return list(await self.session.execute(query).scalars().all())
+        return list((await self.session.execute(query)).scalars().all())

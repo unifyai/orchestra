@@ -80,7 +80,7 @@ class AsyncInterfaceDAO:
         if is_checkpoint is not None:
             query = query.where(Interface.is_checkpoint == is_checkpoint)
 
-        return await self.session.execute(query).scalars().first()
+        return (await self.session.execute(query)).scalars().first()
 
     async def get(
         self,
@@ -119,7 +119,7 @@ class AsyncInterfaceDAO:
             query = query.where(Interface.is_checkpoint == is_checkpoint)
 
         query = query.order_by(Interface.created_at.asc())
-        interfaces = await self.session.execute(query).scalars().all()
+        interfaces = (await self.session.execute(query)).scalars().all()
         return interfaces
 
     async def get_interfaces_bulk(
@@ -145,7 +145,7 @@ class AsyncInterfaceDAO:
             query = query.where(Interface.is_checkpoint == is_checkpoint)
 
         query = query.order_by(Interface.project_id.asc(), Interface.order.asc())
-        return await self.session.execute(query).scalars().all()
+        return (await self.session.execute(query)).scalars().all()
 
     async def update_interface(
         self,
@@ -279,7 +279,7 @@ class AsyncInterfaceDAO:
             )
         else:
             return None
-        return await self.session.execute(query).scalars().first()
+        return (await self.session.execute(query)).scalars().first()
 
     async def get_checkpoint(
         self,
