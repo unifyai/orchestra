@@ -24,6 +24,7 @@ from sqlalchemy.orm import sessionmaker
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dependencies import register_db_listeners
 from orchestra.settings import settings
+from orchestra.web.api.utils.resource_limits_instrumentation import instrument_db_pool
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,9 @@ def _setup_db(app: FastAPI) -> None:  # pragma: no cover
         engine,
         expire_on_commit=False,
     )
+
+    # Instrument the connection pool for bottleneck detection
+    instrument_db_pool(engine)
 
     # Store engine and session_factory in app state
     app.state.db_engine = engine
