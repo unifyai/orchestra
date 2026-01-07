@@ -8,7 +8,6 @@ from orchestra.web.api import (  # noqa: WPS235
     api_keys,
     context,
     credits,
-    dashboard_view,
     docs,
     endpoint_metrics,
     interface,
@@ -52,13 +51,6 @@ api_router.include_router(
     admin.router,
     prefix="/admin",
     tags=["admin"],
-    include_in_schema=False,
-    dependencies=ADMIN_AUTH,
-)
-api_router.include_router(
-    dashboard_view.router,
-    prefix="/admin",
-    tags=["Users"],
     include_in_schema=False,
     dependencies=ADMIN_AUTH,
 )
@@ -110,41 +102,6 @@ api_router.include_router(
     dependencies=ADMIN_AUTH,
 )
 # API_KEY_AUTH endpoints
-
-groupings = {
-    "Assistants": [
-        "Assistant Management",
-        "Voices",
-        "Media",
-        "Recordings",
-    ],
-    "Universal API": [
-        "Supported Endpoints",
-        "LLM Queries",
-        "Usage",
-        "Endpoint Metrics",
-    ],
-    "Logging": [
-        "Datasets",
-        "Dataset Artifacts",
-        "Projects",
-        "Project Artifacts",
-        "Contexts",
-        "Context Artifacts",
-        "Logs",
-        "Plots",
-        "Configs",
-    ],
-    "Storage": [
-        "Storage",
-    ],
-    "Account": [
-        "Credits",
-        "Query Logging",
-        "Organizations",
-        "API Keys",
-    ],
-}
 
 # Universal API
 
