@@ -67,7 +67,7 @@ class CartesiaService:
             )
         return response_data
 
-    async def clone_voice(
+    def clone_voice(
         self,
         file_content: bytes,
         file_name: str,
@@ -97,8 +97,8 @@ class CartesiaService:
         request_headers.pop("Content-Type", None)
 
         try:
-            async with httpx.AsyncClient(timeout=LONG_OPERATION_TIMEOUT) as client:
-                response = await client.post(
+            with httpx.Client(timeout=LONG_OPERATION_TIMEOUT) as client:
+                response = client.post(
                     url,
                     data=data,
                     files=files,
@@ -111,15 +111,15 @@ class CartesiaService:
                 detail=f"Request to Cartesia failed: {e}",
             )
 
-    async def delete_voice(self, voice_id: str) -> Dict[str, Any]:
+    def delete_voice(self, voice_id: str) -> Dict[str, Any]:
         """
         Deletes a voice from Cartesia.
         Reference: https://docs.cartesia.ai/2025-04-16/api-reference/voices/delete
         """
         url = f"{self.base_url}/voices/{voice_id}"
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.delete(url, headers=self.headers)
+            with httpx.Client() as client:
+                response = client.delete(url, headers=self.headers)
             return self._handle_response(response)
         except httpx.RequestError as e:
             raise CartesiaAPIError(
@@ -127,15 +127,15 @@ class CartesiaService:
                 detail=f"Request to Cartesia failed: {e}",
             )
 
-    async def list_voices(self) -> Dict[str, Any]:
+    def list_voices(self) -> Dict[str, Any]:
         """
         List all available voices from Cartesia.
         Reference: https://docs.cartesia.ai/2025-04-16/api-reference/voices/list
         """
         url = f"{self.base_url}/voices"
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(url, headers=self.headers)
+            with httpx.Client() as client:
+                response = client.get(url, headers=self.headers)
             return self._handle_response(response)
         except httpx.RequestError as e:
             raise CartesiaAPIError(
@@ -143,15 +143,15 @@ class CartesiaService:
                 detail=f"Request to Cartesia failed: {e}",
             )
 
-    async def get_voice(self, id: str) -> Dict[str, Any]:
+    def get_voice(self, id: str) -> Dict[str, Any]:
         """
         Get details of a specific voice from Cartesia.
         Reference: https://docs.cartesia.ai/2025-04-16/api-reference/voices/get
         """
         url = f"{self.base_url}/voices/{id}"
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(url, headers=self.headers)
+            with httpx.Client() as client:
+                response = client.get(url, headers=self.headers)
             return self._handle_response(response)
         except httpx.RequestError as e:
             raise CartesiaAPIError(
@@ -159,7 +159,7 @@ class CartesiaService:
                 detail=f"Request to Cartesia failed: {e}",
             )
 
-    async def generate_speech(
+    def generate_speech(
         self,
         transcript: str,
         voice_id: str,  # This is Cartesia's internal voice ID
@@ -222,8 +222,8 @@ class CartesiaService:
             payload["language"] = language
 
         try:
-            async with httpx.AsyncClient(timeout=TTS_TIMEOUT) as client:
-                response = await client.post(url, json=payload, headers=self.headers)
+            with httpx.Client(timeout=TTS_TIMEOUT) as client:
+                response = client.post(url, json=payload, headers=self.headers)
             audio_bytes = self._handle_audio_response(response)
             return audio_bytes, content_type
         except httpx.RequestError as e:

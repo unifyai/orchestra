@@ -2535,7 +2535,7 @@ async def clone_voice(
         file_content = await file.read()
         if not voice_language:
             try:
-                detected_language = await deepgram_service.detect_language_from_audio(
+                detected_language = deepgram_service.detect_language_from_audio(
                     file_content,
                     user_id,
                     file.content_type,
@@ -2551,7 +2551,7 @@ async def clone_voice(
                 )
 
         if provider == "cartesia":
-            cartesia_response = await cartesia_service.clone_voice(
+            cartesia_response = cartesia_service.clone_voice(
                 file_content=file_content,
                 file_name=file.filename or "audio_clip_default_name",
                 name=name,
@@ -2560,7 +2560,7 @@ async def clone_voice(
             )
             new_voice_id = cartesia_response.get("id")
         elif provider == "elevenlabs":
-            elevenlabs_response = await elevenlabs_service.clone_voice(
+            elevenlabs_response = elevenlabs_service.clone_voice(
                 file_content=file_content,
                 file_name=file.filename or "audio_clip_default_name",
                 name=name,
@@ -2626,7 +2626,7 @@ async def clone_voice(
             elif provider == "elevenlabs":
                 provider_service = elevenlabs_service
             try:
-                await provider_service.delete_voice(new_voice_id)
+                provider_service.delete_voice(new_voice_id)
             except Exception as e_voice_cleanup:
                 logging.error(
                     f"Failed to cleanup {provider} voice {new_voice_id} after DB integrity error: {e_voice_cleanup}",
@@ -2643,7 +2643,7 @@ async def clone_voice(
             elif provider == "elevenlabs":
                 provider_service = elevenlabs_service
             try:
-                await provider_service.delete_voice(new_voice_id)
+                provider_service.delete_voice(new_voice_id)
             except Exception:
                 pass
         raise HTTPException(
@@ -2795,7 +2795,7 @@ async def delete_voice(
 
             if provider_service:
                 try:
-                    await provider_service.delete_voice(voice_id)
+                    provider_service.delete_voice(voice_id)
                 except (CartesiaAPIError, ElevenLabsAPIError) as e_provider:
                     # If the provider says "not found," it's a non-critical error.
                     # We can proceed since our goal is to have it deleted.
@@ -2877,7 +2877,7 @@ async def generate_speech(
 
     try:
         if request_data.provider == "cartesia":
-            audio_bytes, content_type = await cartesia_service.generate_speech(
+            audio_bytes, content_type = cartesia_service.generate_speech(
                 transcript=request_data.text,
                 voice_id=request_data.voice_id,
                 model_id=request_data.model_id or "sonic-2",  # Default Cartesia model
@@ -2887,7 +2887,7 @@ async def generate_speech(
                 language=request_data.cartesia_language,
             )
         elif request_data.provider == "elevenlabs":
-            audio_bytes, content_type = await elevenlabs_service.generate_speech(
+            audio_bytes, content_type = elevenlabs_service.generate_speech(
                 text=request_data.text,
                 voice_id=request_data.voice_id,
                 model_id=request_data.model_id
@@ -2898,7 +2898,7 @@ async def generate_speech(
                 similarity_boost=request_data.elevenlabs_voice_settings_similarity_boost,
             )
         elif request_data.provider == "openai":
-            audio_bytes, content_type = await openai_service.generate_speech(
+            audio_bytes, content_type = openai_service.generate_speech(
                 text=request_data.text,
                 voice_id=request_data.voice_id,
                 model_id=request_data.model_id or "gpt-4o-mini-tts",
@@ -2957,7 +2957,7 @@ async def design_voice_generate_previews_endpoint(
         if request_data.bio:
             try:
                 final_voice_description = (
-                    await openai_service.generate_voice_description_from_bio(
+                    openai_service.generate_voice_description_from_bio(
                         bio=request_data.bio,
                         description_hint=request_data.voice_description,
                     )
@@ -2985,7 +2985,7 @@ async def design_voice_generate_previews_endpoint(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="A voice description is required. Provide 'voice_description' or 'bio'.",
             )
-        el_response_data = await elevenlabs_service.design_voice_generate_previews(
+        el_response_data = elevenlabs_service.design_voice_generate_previews(
             voice_description=final_voice_description,
             text_for_preview=request_data.text,
             auto_generate_text_flag=request_data.auto_generate_text,
@@ -3047,12 +3047,10 @@ async def design_voice_create_from_preview_endpoint(
                     audio_content = base64.b64decode(request_data.audio_base_64)
                     # Assume MP3 if media_type is not provided
                     media_type = request_data.media_type or "audio/mpeg"
-                    detected_language = (
-                        await deepgram_service.detect_language_from_audio(
-                            audio_content=audio_content,
-                            user_id=user_id,
-                            content_type=media_type,
-                        )
+                    detected_language = deepgram_service.detect_language_from_audio(
+                        audio_content=audio_content,
+                        user_id=user_id,
+                        content_type=media_type,
                     )
                     voice_language = detected_language or "en"
                 except DeepgramAPIError as e:
@@ -3074,7 +3072,7 @@ async def design_voice_create_from_preview_endpoint(
             # Fallback to language detection from text description
             else:
                 try:
-                    detected_language = await openai_service.detect_language_from_text(
+                    detected_language = openai_service.detect_language_from_text(
                         request_data.voice_description,
                     )
                     voice_language = detected_language or "en"
@@ -3088,7 +3086,7 @@ async def design_voice_create_from_preview_endpoint(
                     )
 
         # Step 1: Call ElevenLabs to create the voice from the generated_voice_id
-        el_created_voice_data = await elevenlabs_service.create_voice_from_generated_id(
+        el_created_voice_data = elevenlabs_service.create_voice_from_generated_id(
             voice_name=request_data.voice_name,
             generated_voice_id=request_data.generated_voice_id,
             description=request_data.voice_description,
@@ -3145,7 +3143,7 @@ async def design_voice_create_from_preview_endpoint(
                 logging.warning(
                     f"Attempting to clean up orphaned ElevenLabs voice {new_el_voice_id} due to error: {e.detail}",
                 )
-                await elevenlabs_service.delete_voice(new_el_voice_id)
+                elevenlabs_service.delete_voice(new_el_voice_id)
             except Exception as e_cleanup:
                 logging.error(
                     f"Failed to cleanup orphaned ElevenLabs voice {new_el_voice_id}: {e_cleanup}",
@@ -3166,7 +3164,7 @@ async def design_voice_create_from_preview_endpoint(
                 f"DB IntegrityError for EL voice {new_el_voice_id}. Attempting EL cleanup.",
             )
             try:
-                await elevenlabs_service.delete_voice(new_el_voice_id)
+                elevenlabs_service.delete_voice(new_el_voice_id)
             except Exception as e_cleanup:
                 logging.error(
                     f"Failed to cleanup EL voice {new_el_voice_id} after DB integrity error: {e_cleanup}",
@@ -3184,7 +3182,7 @@ async def design_voice_create_from_preview_endpoint(
                 f"Generic error after EL voice {new_el_voice_id} might have been created. Attempting EL cleanup.",
             )
             try:
-                await elevenlabs_service.delete_voice(new_el_voice_id)
+                elevenlabs_service.delete_voice(new_el_voice_id)
             except Exception as e_cleanup:
                 logging.error(
                     f"Failed to cleanup EL voice {new_el_voice_id} after generic error: {e_cleanup}",
@@ -3528,7 +3526,7 @@ async def generate_assistant_photo(
 
     # 1. Moderate the prompt
     try:
-        moderation_result = await openai_service.moderate_text(payload.prompt)
+        moderation_result = openai_service.moderate_text(payload.prompt)
         if moderation_result.is_nsfw:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -3669,7 +3667,7 @@ async def edit_assistant_photo(
         # 1. Moderate inputs
         try:
             # Moderate text prompt
-            prompt_moderation = await openai_service.moderate_text(prompt)
+            prompt_moderation = openai_service.moderate_text(prompt)
             if prompt_moderation.is_nsfw:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
@@ -3677,7 +3675,7 @@ async def edit_assistant_photo(
                 )
 
             # Moderate input image
-            image_analysis = await openai_service.analyze_image(
+            image_analysis = openai_service.analyze_image(
                 image_url=input_image_for_replicate,
             )
             if image_analysis.is_nsfw:
@@ -3857,7 +3855,7 @@ async def animate_video_endpoint(
 
         try:
             # Perform content moderation and analysis
-            image_analysis = await openai_service.analyze_image(
+            image_analysis = openai_service.analyze_image(
                 image_url=final_image_url_for_replicate,
             )
             if not image_analysis.has_human_face:
@@ -3871,7 +3869,7 @@ async def animate_video_endpoint(
                     detail=f"Image moderation failed: The image was flagged as inappropriate. Reason: {image_analysis.reason}",
                 )
 
-            audio_analysis = await openai_service.analyze_audio(
+            audio_analysis = openai_service.analyze_audio(
                 audio_url=final_audio_url_for_replicate,
             )
             # New check for speech content
