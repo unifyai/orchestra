@@ -42,7 +42,7 @@ class TestSyncClientThreadSafety:
         """
         from orchestra.web.api.log.python2SQL.helpers import (
             OPENAI_API_KEY,
-            _get_embeddings_batch_sync,
+            _get_embeddings_batch,
         )
 
         if not OPENAI_API_KEY:
@@ -55,7 +55,7 @@ class TestSyncClientThreadSafety:
             """Make a sync embedding call and return results."""
             start = time.monotonic()
             try:
-                result = _get_embeddings_batch_sync(texts_per_call)
+                result = _get_embeddings_batch(texts_per_call)
                 duration = time.monotonic() - start
                 return {
                     "call_id": call_id,
