@@ -80,7 +80,7 @@ class ElevenLabsService:
             )
         return response_data
 
-    async def clone_voice(
+    def clone_voice(
         self,
         file_content: bytes,
         file_name: str,
@@ -108,8 +108,8 @@ class ElevenLabsService:
         request_headers.pop("Content-Type", None)
 
         try:
-            async with httpx.AsyncClient(timeout=LONG_OPERATION_TIMEOUT) as client:
-                response = await client.post(
+            with httpx.Client(timeout=LONG_OPERATION_TIMEOUT) as client:
+                response = client.post(
                     url,
                     data=data,
                     files=files,
@@ -122,15 +122,15 @@ class ElevenLabsService:
                 detail=f"Request to ElevenLabs failed: {e}",
             )
 
-    async def delete_voice(self, voice_id: str) -> Dict[str, Any]:
+    def delete_voice(self, voice_id: str) -> Dict[str, Any]:
         """
         Deletes a voice from ElevenLabs.
         Reference: https://elevenlabs.io/docs/api-reference/voices/delete
         """
         url = f"{self.v1_base_url}/voices/{voice_id}"
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.delete(url, headers=self.headers)
+            with httpx.Client() as client:
+                response = client.delete(url, headers=self.headers)
             return self._handle_response(response)
         except httpx.RequestError as e:
             raise ElevenLabsAPIError(
@@ -138,15 +138,15 @@ class ElevenLabsService:
                 detail=f"Request to ElevenLabs failed: {e}",
             )
 
-    async def list_voices(self) -> Dict[str, Any]:
+    def list_voices(self) -> Dict[str, Any]:
         """
         List all available voices from ElevenLabs.
         Reference: https://elevenlabs.io/docs/api-reference/voices/search
         """
         url = f"{self.v2_base_url}/voices"
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(url, headers=self.headers)
+            with httpx.Client() as client:
+                response = client.get(url, headers=self.headers)
             return self._handle_response(response)
         except httpx.RequestError as e:
             raise ElevenLabsAPIError(
@@ -154,15 +154,15 @@ class ElevenLabsService:
                 detail=f"Request to ElevenLabs failed: {e}",
             )
 
-    async def get_voice(self, voice_id: str) -> Dict[str, Any]:
+    def get_voice(self, voice_id: str) -> Dict[str, Any]:
         """
         Get details of a specific voice from ElevenLabs.
         Reference: https://elevenlabs.io/docs/api-reference/voices/get
         """
         url = f"{self.v1_base_url}/voices/{voice_id}"
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(url, headers=self.headers)
+            with httpx.Client() as client:
+                response = client.get(url, headers=self.headers)
             return self._handle_response(response)
         except httpx.RequestError as e:
             raise ElevenLabsAPIError(
@@ -207,7 +207,7 @@ class ElevenLabsService:
         # Add other mappings if EL supports more raw types directly (e.g. "audio/flac")
         return "application/octet-stream"  # Fallback
 
-    async def generate_speech(
+    def generate_speech(
         self,
         text: str,
         voice_id: str,  # This is ElevenLabs' voice_id
@@ -248,8 +248,8 @@ class ElevenLabsService:
         )
 
         try:
-            async with httpx.AsyncClient(timeout=TTS_TIMEOUT) as client:
-                response = await client.post(
+            with httpx.Client(timeout=TTS_TIMEOUT) as client:
+                response = client.post(
                     url,
                     json=payload,
                     headers=self.headers,
@@ -263,7 +263,7 @@ class ElevenLabsService:
                 detail=f"Request to ElevenLabs TTS failed: {e}",
             )
 
-    async def design_voice_generate_previews(
+    def design_voice_generate_previews(
         self,
         voice_description: str,  # Main description
         text_for_preview: Optional[str] = None,
@@ -291,8 +291,8 @@ class ElevenLabsService:
         request_headers["Content-Type"] = "application/json"
 
         try:
-            async with httpx.AsyncClient(timeout=LONG_OPERATION_TIMEOUT) as client:
-                response = await client.post(url, json=payload, headers=request_headers)
+            with httpx.Client(timeout=LONG_OPERATION_TIMEOUT) as client:
+                response = client.post(url, json=payload, headers=request_headers)
             return self._handle_response(response)
         except httpx.RequestError as e:
             raise ElevenLabsAPIError(
@@ -300,7 +300,7 @@ class ElevenLabsService:
                 detail=f"Request to ElevenLabs /text-to-voice/design failed: {e}",
             )
 
-    async def create_voice_from_generated_id(
+    def create_voice_from_generated_id(
         self,
         voice_name: str,
         generated_voice_id: str,
@@ -321,8 +321,8 @@ class ElevenLabsService:
             payload["labels"] = labels
 
         try:
-            async with httpx.AsyncClient(timeout=LONG_OPERATION_TIMEOUT) as client:
-                response = await client.post(url, json=payload, headers=self.headers)
+            with httpx.Client(timeout=LONG_OPERATION_TIMEOUT) as client:
+                response = client.post(url, json=payload, headers=self.headers)
             return self._handle_response(response)
         except httpx.RequestError as e:
             raise ElevenLabsAPIError(
