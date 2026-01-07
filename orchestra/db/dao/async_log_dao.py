@@ -496,7 +496,7 @@ class AsyncLogDAO:
             await self.session.execute(
                 update(Log)
                 .where(Log.id.in_(log_ids_subquery))
-                .values(key=new_field_name, updated_at=datetime.now(timezone.utc))
+                .values(key=new_field_name, updated_at=datetime.now(timezone.utc)),
             )
 
             # Update JSONLog table via LogEventJSONLog association
@@ -514,7 +514,7 @@ class AsyncLogDAO:
             await self.session.execute(
                 update(JSONLog)
                 .where(JSONLog.id.in_(json_log_ids_subquery))
-                .values(key=new_field_name)
+                .values(key=new_field_name),
             )
 
             # JSONB Mode: Update LogEvent.data JSONB column - rename key within the JSON object
@@ -599,7 +599,6 @@ class AsyncLogDAO:
         )
 
         # Add filter for media types
-        from sqlalchemy import select
         media_select = logs_select.where(
             Log.inferred_type.in_(("image", "audio")),
         )
@@ -681,7 +680,7 @@ class AsyncLogDAO:
             select(LogEvent.id, LogEvent.data).where(
                 LogEvent.id.in_(log_event_ids),
                 LogEvent.project_id == project_id,
-            )
+            ),
         )
         log_events = result.all()
 
@@ -751,7 +750,7 @@ class AsyncLogDAO:
                     .where(
                         LogEventJSONLog.log_event_id == log_event_log.log_event_id,
                         JSONLog.key == log.key,
-                    )
+                    ),
                 )
                 json_log = result.scalars().first()
             else:
@@ -782,7 +781,7 @@ class AsyncLogDAO:
             select(FieldType).where(
                 FieldType.project_id.in_(all_project_ids),
                 FieldType.unique == True,
-            )
+            ),
         )
         field_types = result.scalars().all()
 
@@ -793,7 +792,7 @@ class AsyncLogDAO:
         contexts_with_composite_keys = {}
         if all_context_ids:
             result = await self.session.execute(
-                select(Context).where(Context.id.in_(all_context_ids))
+                select(Context).where(Context.id.in_(all_context_ids)),
             )
             contexts = result.scalars().all()
             for ctx in contexts:
@@ -1293,7 +1292,7 @@ class AsyncLogDAO:
                     .where(LogEventLog.log_event_id.in_(log_event_ids_to_check))
                     .where(Log.key.in_(keys_to_check))
                     .where(Log.param_version.in_(versions_to_check))
-                    .with_for_update()
+                    .with_for_update(),
                 )
                 rows_to_check = result.all()
                 for row, log_event_id in rows_to_check:
@@ -1352,7 +1351,7 @@ class AsyncLogDAO:
                     .join(LogEventJSONLog, LogEventJSONLog.json_log_id == JSONLog.id)
                     .where(LogEventJSONLog.log_event_id.in_([pk[0] for pk in pks]))
                     .where(JSONLog.key.in_([pk[1] for pk in pks]))
-                    .with_for_update()
+                    .with_for_update(),
                 )
                 conflicting = result.all()
                 for json_log, log_event_id in conflicting:
@@ -2020,7 +2019,7 @@ class AsyncLogDAO:
                     select(Log, LogEventLog.log_event_id)
                     .join(LogEventLog, LogEventLog.log_id == Log.id)
                     .where(LogEventLog.log_event_id.in_(log_event_ids))
-                    .where(Log.key.in_(keys))
+                    .where(Log.key.in_(keys)),
                 )
                 existing_logs = result.all()
 
@@ -2034,7 +2033,7 @@ class AsyncLogDAO:
                     select(JSONLog, LogEventJSONLog.log_event_id)
                     .join(LogEventJSONLog, LogEventJSONLog.json_log_id == JSONLog.id)
                     .where(LogEventJSONLog.log_event_id.in_(log_event_ids))
-                    .where(JSONLog.key.in_(keys))
+                    .where(JSONLog.key.in_(keys)),
                 )
                 existing_json_logs = result.all()
 
@@ -2205,7 +2204,7 @@ class AsyncLogDAO:
                             .where(LogEventLog.log_event_id.in_(log_event_ids_check))
                             .where(Log.key.in_(keys_check))
                             .where(Log.param_version.in_(versions_check))
-                            .with_for_update()
+                            .with_for_update(),
                         )
                         existing_conflicting_logs = result.all()
 
@@ -2242,7 +2241,7 @@ class AsyncLogDAO:
                                 ),
                             )
                             .where(JSONLog.key.in_(json_keys_check))
-                            .with_for_update()
+                            .with_for_update(),
                         )
                         existing_conflicting_json_logs = result.all()
 
@@ -2294,7 +2293,7 @@ class AsyncLogDAO:
                                     for eid, k, pv in check_keys
                                 ],
                             ),
-                        )
+                        ),
                     )
 
                     # Build a map of (log_event_id, key, param_version) -> Log
@@ -2481,7 +2480,7 @@ class AsyncLogDAO:
                 project_id=project_id,
                 field_name=key,
                 context_id=context_id,
-            )
+            ),
         )
         field_type = result.scalars().first()
 
@@ -2643,7 +2642,7 @@ class AsyncLogDAO:
                 result = await self.session.execute(
                     select(Log)
                     .join(LogEventLog, LogEventLog.log_id == Log.id)
-                    .where(LogEventLog.log_event_id == le_id, Log.key == base_key)
+                    .where(LogEventLog.log_event_id == le_id, Log.key == base_key),
                 )
                 log_entry = result.scalars().first()
                 if not log_entry:
@@ -2679,7 +2678,7 @@ class AsyncLogDAO:
                     .where(
                         LogEventJSONLog.log_event_id == le_id,
                         JSONLog.key == base_key,
-                    )
+                    ),
                 )
                 json_log = result.scalars().first()
 
@@ -2825,7 +2824,7 @@ class AsyncLogDAO:
         result = await self.session.execute(
             select(LogEvent)
             .where(LogEvent.id.in_(all_log_ids))
-            .with_for_update()  # Lock rows to prevent concurrent modifications
+            .with_for_update(),  # Lock rows to prevent concurrent modifications
         )
         log_events = result.scalars().all()
 
@@ -2915,7 +2914,7 @@ class AsyncLogDAO:
 
             if or_conditions:
                 result = await self.session.execute(
-                    select(FieldType).where(or_(*or_conditions))
+                    select(FieldType).where(or_(*or_conditions)),
                 )
                 existing_field_types = result.scalars().all()
                 for ft in existing_field_types:
@@ -3369,7 +3368,7 @@ class AsyncLogDAO:
             query_result = await self.session.execute(
                 select(LogEvent)
                 .where(LogEvent.id.in_(all_log_ids))
-                .with_for_update()  # Lock rows to prevent concurrent modifications
+                .with_for_update(),  # Lock rows to prevent concurrent modifications
             )
             log_events = query_result.scalars().all()
 

@@ -25,7 +25,6 @@ from orchestra.db.dao.async_users_dao import AsyncUsersDAO
 from orchestra.db.dao.auth_user_dao import ASSISTANT_HIRING_APPROVAL_STATUSES, AuthUser
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_async_db_session
-from orchestra.db.seeding.default_tasks_seeder import DefaultTasksSeeder
 from orchestra.services.user_account_cleanup_service import UserAccountCleanupService
 from orchestra.settings import settings
 from orchestra.web.api.users.schema import (

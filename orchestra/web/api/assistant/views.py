@@ -1156,7 +1156,7 @@ async def delete_assistant(
                     select(Project).where(
                         Project.organization_id == organization_id,
                         Project.name == ASSISTANTS_PROJECT_NAME,
-                    )
+                    ),
                 )
                 assistants_project = result.scalars().first()
             else:
@@ -1183,7 +1183,7 @@ async def delete_assistant(
                             Context.name.like(f"%/{assistant_context_prefix}"),
                             Context.name.like(f"%/{assistant_context_prefix}/%"),
                         ),
-                    )
+                    ),
                 )
                 contexts_to_delete = result.scalars().all()
                 if contexts_to_delete:
@@ -1875,19 +1875,19 @@ async def transfer_assistant_to_org(
                             Context.name.like(f"%/{assistant_context_prefix}"),
                             Context.name.like(f"%/{assistant_context_prefix}/%"),
                         ),
-                    )
+                    ),
                 )
                 contexts_to_transfer = result.scalars().all()
                 for ctx in contexts_to_transfer:
                     # Update LogEvent.project_id for all log events in this context
                     # This is required because logs are queried by LogEvent.project_id
                     subquery = select(LogEventContext.log_event_id).where(
-                        LogEventContext.context_id == ctx.id
+                        LogEventContext.context_id == ctx.id,
                     )
                     await session.execute(
                         update(LogEvent)
                         .where(LogEvent.id.in_(subquery))
-                        .values(project_id=org_project.id)
+                        .values(project_id=org_project.id),
                     )
                     # Update the context's project_id
                     ctx.project_id = org_project.id
@@ -1906,7 +1906,7 @@ async def transfer_assistant_to_org(
                             Context.name.like("All/%"),  # Tier 1: All/*
                             Context.name.like("%/All/%"),  # Tier 2: User/All/*
                         ),
-                    )
+                    ),
                 )
                 shared_contexts = result.scalars().all()
 
@@ -1921,9 +1921,8 @@ async def transfer_assistant_to_org(
                         )
                         .where(
                             LogEventContext.context_id == shared_ctx.id,
-                            LogEvent.data["_assistant_id"].astext
-                            == str(assistant_id),
-                        )
+                            LogEvent.data["_assistant_id"].astext == str(assistant_id),
+                        ),
                     )
                     assistant_log_ids = [row[0] for row in result.all()]
 
@@ -1937,7 +1936,7 @@ async def transfer_assistant_to_org(
                         select(Context).where(
                             Context.project_id == org_project.id,
                             Context.name == shared_ctx.name,
-                        )
+                        ),
                     )
                     org_shared_ctx = result.scalars().first()
 
@@ -1957,7 +1956,7 @@ async def transfer_assistant_to_org(
                     await session.execute(
                         update(LogEvent)
                         .where(LogEvent.id.in_(assistant_log_ids))
-                        .values(project_id=org_project.id)
+                        .values(project_id=org_project.id),
                     )
 
                     # Update context links to point to org's context
@@ -1967,7 +1966,7 @@ async def transfer_assistant_to_org(
                             LogEventContext.log_event_id.in_(assistant_log_ids),
                             LogEventContext.context_id == shared_ctx.id,
                         )
-                        .values(context_id=target_ctx_id)
+                        .values(context_id=target_ctx_id),
                     )
 
                 logs_transferred = (
@@ -2112,7 +2111,7 @@ async def transfer_assistant_to_personal(
                             Context.name.like(f"%/{assistant_context_prefix}"),
                             Context.name.like(f"%/{assistant_context_prefix}/%"),
                         ),
-                    )
+                    ),
                 )
                 contexts_to_delete = result.scalars().all()
                 for ctx in contexts_to_delete:

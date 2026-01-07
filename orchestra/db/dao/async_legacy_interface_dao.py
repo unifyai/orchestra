@@ -86,7 +86,7 @@ class AsyncLegacyInterfaceDAO:
                 select(Interface).where(
                     Interface.project_id == project_id,
                     Interface.name == name,
-                )
+                ),
             )
             interface = result.scalars().first()
             await self.session.delete(interface)

@@ -369,7 +369,7 @@ class AsyncDerivedLogDAO:
             if key and key != derived_log.key:
                 # Get the associated log_event_id
                 result = await self.session.execute(
-                    select(LogEventDerivedLog).filter_by(derived_log_id=derived_log.id)
+                    select(LogEventDerivedLog).filter_by(derived_log_id=derived_log.id),
                 )
                 log_event_derived_log = result.scalars().first()
 
@@ -387,7 +387,7 @@ class AsyncDerivedLogDAO:
                             DerivedLog.key == key,
                             DerivedLog.id
                             != derived_log.id,  # Exclude current derived log
-                        )
+                        ),
                     )
                     exists = result.scalars().first()
                     if exists:

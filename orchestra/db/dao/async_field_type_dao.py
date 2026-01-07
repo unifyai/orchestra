@@ -75,7 +75,7 @@ class AsyncFieldTypeDAO:
                 FieldType.project_id == project_id,
                 FieldType.field_name == field_name,
                 FieldType.context_id == context_id,
-            )
+            ),
         )
         existing = result.scalars().first()
         if existing:
@@ -214,7 +214,7 @@ class AsyncFieldTypeDAO:
                 FieldType.project_id == project_id,
                 FieldType.field_name == field_name,
                 FieldType.context_id == context_id,
-            )
+            ),
         )
         existing = result.scalars().first()
         if existing and existing.field_category != field_category:
@@ -291,7 +291,7 @@ class AsyncFieldTypeDAO:
                 FieldType.project_id == project_id,
                 FieldType.field_name == field_name,
                 FieldType.context_id == context_id,
-            )
+            ),
         )
         existing = result.scalars().first()
 
@@ -328,7 +328,7 @@ class AsyncFieldTypeDAO:
                 FieldType.project_id == project_id,
                 FieldType.context_id == context_id,
                 FieldType.field_name.in_(field_names),
-            )
+            ),
         )
         existing_fields = result.scalars().all()
 
@@ -443,7 +443,7 @@ class AsyncFieldTypeDAO:
                 FieldType.project_id == project_id,
                 FieldType.field_name == old_field_name,
                 FieldType.context_id == context_id,
-            )
+            ),
         )
         field_to_rename = result.scalars().first()
 
@@ -458,7 +458,7 @@ class AsyncFieldTypeDAO:
                 FieldType.project_id == project_id,
                 FieldType.field_name == new_field_name,
                 FieldType.context_id == context_id,
-            )
+            ),
         )
         existing_field = result.scalars().first()
 
