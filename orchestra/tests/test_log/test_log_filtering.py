@@ -150,7 +150,7 @@ async def test_log_filter_helper(
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": expression,
         },
         headers=HEADERS,
@@ -230,7 +230,7 @@ async def test_full_name_filter_expression(client: AsyncClient, use_jsonb_mode):
 
     r = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": expr},
+        params={"project_name": project_name, "filter_expr": expr},
         headers=HEADERS,
     )
     assert r.status_code == 200, r.text
@@ -1365,7 +1365,7 @@ async def test_log_filter_with_whitespace_field_names(
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": expression,
         },
         headers=HEADERS,
@@ -1416,7 +1416,7 @@ async def test_isinstance_function_in_filter_expressions(
     filter_expr = f"isinstance({key}, {types_expr})"
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter_expr": filter_expr},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.text
@@ -1445,7 +1445,7 @@ async def test_dict_get_and_setdefault_behavior(client: AsyncClient, use_jsonb_m
     # get existing key
     r = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": "d1.get('a') == 1"},
+        params={"project_name": project_name, "filter_expr": "d1.get('a') == 1"},
         headers=HEADERS,
     )
     assert r.status_code == 200
@@ -1454,7 +1454,7 @@ async def test_dict_get_and_setdefault_behavior(client: AsyncClient, use_jsonb_m
     # get missing key -> None
     r = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": "d1.get('b') is None"},
+        params={"project_name": project_name, "filter_expr": "d1.get('b') is None"},
         headers=HEADERS,
     )
     assert r.status_code == 200
@@ -1463,7 +1463,7 @@ async def test_dict_get_and_setdefault_behavior(client: AsyncClient, use_jsonb_m
     # get with default for missing -> default
     r = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": "d2.get('b', 5) == 5"},
+        params={"project_name": project_name, "filter_expr": "d2.get('b', 5) == 5"},
         headers=HEADERS,
     )
     assert r.status_code == 200
@@ -1472,7 +1472,10 @@ async def test_dict_get_and_setdefault_behavior(client: AsyncClient, use_jsonb_m
     # setdefault existing key -> original value
     r = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": "d1.setdefault('a', 9) == 1"},
+        params={
+            "project_name": project_name,
+            "filter_expr": "d1.setdefault('a', 9) == 1",
+        },
         headers=HEADERS,
     )
     assert r.status_code == 200
@@ -1481,7 +1484,10 @@ async def test_dict_get_and_setdefault_behavior(client: AsyncClient, use_jsonb_m
     # setdefault missing key -> default returned
     r = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": "d2.setdefault('c', 7) == 7"},
+        params={
+            "project_name": project_name,
+            "filter_expr": "d2.setdefault('c', 7) == 7",
+        },
         headers=HEADERS,
     )
     assert r.status_code == 200
@@ -1795,13 +1801,13 @@ async def test_log_filter_helper_w_arithmetic(
     _ = await _create_project(client, project_name, user=1)
     response = await client.post(
         "/v0/logs",
-        json={"project": project_name, "entries": values},
+        json={"project_name": project_name, "entries": values},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.text
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": expression},
+        params={"project_name": project_name, "filter_expr": expression},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.text
@@ -1827,7 +1833,10 @@ async def test_get_logs_with_derived_math_expressions_and_indexing(
     # Fetch them back to confirm we have 7 log events.
     resp = await client.get(
         "/v0/logs",
-        params={"project": project_name, "sorting": json.dumps({"id": "ascending"})},
+        params={
+            "project_name": project_name,
+            "sorting": json.dumps({"id": "ascending"}),
+        },
         headers=HEADERS,
     )
     assert resp.status_code == 200, resp.text
@@ -2100,7 +2109,10 @@ async def test_get_logs_with_derived_math_expressions_and_indexing(
 
     resp = await client.get(
         "/v0/logs",
-        params={"project": project_name, "sorting": json.dumps({"id": "ascending"})},
+        params={
+            "project_name": project_name,
+            "sorting": json.dumps({"id": "ascending"}),
+        },
         headers=HEADERS,
     )
     assert resp.status_code == 200, resp.text
@@ -2247,7 +2259,7 @@ async def test_filtering_and_sorting_base_and_derived_logs(
             "/v0/logs",
             headers=HEADERS,
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "entries": data["entries"],
                 "params": data["params"],
             },
@@ -2399,7 +2411,7 @@ async def test_get_logs_w_timestamp_filtering(
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "student/timestamp": timestamp_format,
                 "test_field": "test_value",
@@ -2413,7 +2425,7 @@ async def test_get_logs_w_timestamp_filtering(
     filter_expr = f'student/timestamp == "{filter_format}"'
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter_expr": filter_expr},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.text
@@ -2432,7 +2444,7 @@ async def test_get_logs_w_timestamp_filtering(
     filter_expr = f'student/timestamp > "{filter_format}"'
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter_expr": filter_expr},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.text
@@ -2453,7 +2465,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # temperature == -210.0
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "_/temperature == -210.0"},
         headers=HEADERS,
     )
@@ -2471,7 +2483,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # temperature != -210.0
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "_/temperature != -210.0"},
         headers=HEADERS,
     )
@@ -2489,7 +2501,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # temperature > 0.
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "_/temperature > 0."},
         headers=HEADERS,
     )
@@ -2515,7 +2527,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # timestamp later than 23/03/1993
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": '_/timestamp > "1993-03-23"'},
         headers=HEADERS,
     )
@@ -2541,7 +2553,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # timestamp earlier than 23/03/1993
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": '_/timestamp < "1993-03-23"'},
         headers=HEADERS,
     )
@@ -2579,7 +2591,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # timestamp is 23/03/1993
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": '_/timestamp == "1993-03-23"'},
         headers=HEADERS,
     )
@@ -2589,7 +2601,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # is earlier than or later than 23/03/1993
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={
             "filter_expr": '_/timestamp < "1993-03-23" or _/timestamp > "1993-03-23"',
         },
@@ -2601,7 +2613,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # liquid not in state
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "'liquid' not in _/state"},
         headers=HEADERS,
     )
@@ -2617,7 +2629,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
     }
 
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "_/description == 'boiling water'"},
         headers=HEADERS,
     )
@@ -2628,7 +2640,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # check multiple conditions
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "('liquid' not in _/state) or (_/temperature == 0)"},
         headers=HEADERS,
     )
@@ -2668,7 +2680,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # Now test filtering for logs where updated_at > created_at
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "updated_at > created_at"},
         headers=HEADERS,
     )
@@ -2681,7 +2693,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # Test filtering for logs where updated_at = created_at
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "updated_at == created_at"},
         headers=HEADERS,
     )
@@ -2693,7 +2705,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
     assert log_ids_found == [7, 6, 5, 4, 3]
     # Test combining timestamp filters with other fields
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={
             "filter_expr": "updated_at > created_at and _/state == 'gas->liquid'",
         },
@@ -2707,7 +2719,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # Test filtering by updated_at range
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={
             "filter_expr": f'updated_at >= "{initial_time.isoformat()}"',
         },
@@ -2721,7 +2733,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # check exists
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "exists(_/state)"},
         headers=HEADERS,
     )
@@ -2731,7 +2743,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # check not exists
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "not exists(_/temperature)"},
         headers=HEADERS,
     )
@@ -2741,7 +2753,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # Test log_id equality filtering
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "log_id == 1"},
         headers=HEADERS,
     )
@@ -2752,7 +2764,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # Test log_id inequality filtering
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "log_id != 1"},
         headers=HEADERS,
     )
@@ -2763,7 +2775,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # Test log_id in operator
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "log_id in [1, 2, 3]"},
         headers=HEADERS,
     )
@@ -2774,7 +2786,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # Test log_id not in operator
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "log_id not in [1, 2, 3]"},
         headers=HEADERS,
     )
@@ -2785,7 +2797,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # Test nested conditions with log_id
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "log_id > 2 and _/temperature > 0"},
         headers=HEADERS,
     )
@@ -2798,7 +2810,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # Test non-existent log_id
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "log_id == 9999"},
         headers=HEADERS,
     )
@@ -2808,7 +2820,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # Test log_id with complex nested conditions
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={
             "filter_expr": "(log_id > 1 and log_id < 4) and (_/temperature > 0 or _/safe is True)",
         },
@@ -2826,7 +2838,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # check len
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "len(_/description) < 10"},
         headers=HEADERS,
     )
@@ -2836,7 +2848,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
     assert result["logs"][1]["entries"]["_/description"] == "lava"
 
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "len(_/_data) > 2"},
         headers=HEADERS,
     )
@@ -2847,7 +2859,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # check in
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "'lava' in _/description"},
         headers=HEADERS,
     )
@@ -2859,7 +2871,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
     # check version (EAV-specific: param versioning not supported in JSONB mode)
     if not use_jsonb_mode:
         response = await client.get(
-            f"/v0/logs?project={project_name}",
+            f"/v0/logs?project_name={project_name}",
             params={"filter_expr": "version(a/b/param1) == 1"},
             headers=HEADERS,
         )
@@ -2870,7 +2882,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # check is <val>
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "_/safe is True"},
         headers=HEADERS,
     )
@@ -2894,7 +2906,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
     )
     assert response.status_code == 200, response.json()
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "_/description is None"},
         headers=HEADERS,
     )
@@ -2910,7 +2922,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
 
     # num_tokens derived behavior sanity
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "num_tokens(_/description) >= 1"},
         headers=HEADERS,
     )
@@ -2966,7 +2978,7 @@ async def test_num_tokens_function_w_various_types(client: AsyncClient, use_json
     for expr, expected_key in cases:
         r = await client.get(
             "/v0/logs",
-            params={"project": project_name, "filter_expr": expr},
+            params={"project_name": project_name, "filter_expr": expr},
             headers=HEADERS,
         )
         assert r.status_code == 200, r.text
@@ -3009,7 +3021,7 @@ async def test_now_function_in_filter_expressions(client: AsyncClient, use_jsonb
     for log_data in logs_data:
         response = await client.post(
             "/v0/logs",
-            json={"project": project_name, "entries": log_data["entries"]},
+            json={"project_name": project_name, "entries": log_data["entries"]},
             headers=HEADERS,
         )
         assert response.status_code == 200, response.text
@@ -3017,7 +3029,7 @@ async def test_now_function_in_filter_expressions(client: AsyncClient, use_jsonb
     # 1. Test now() > past timestamp
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": "now() > dt/timestamp"},
+        params={"project_name": project_name, "filter_expr": "now() > dt/timestamp"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.text
@@ -3028,7 +3040,7 @@ async def test_now_function_in_filter_expressions(client: AsyncClient, use_jsonb
     # 2. Test now() < future timestamp
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": "now() < dt/timestamp"},
+        params={"project_name": project_name, "filter_expr": "now() < dt/timestamp"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.text
@@ -3040,7 +3052,7 @@ async def test_now_function_in_filter_expressions(client: AsyncClient, use_jsonb
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "(now() - dt/timestamp) > 'PT12H'",
         },
         headers=HEADERS,
@@ -3054,7 +3066,7 @@ async def test_now_function_in_filter_expressions(client: AsyncClient, use_jsonb
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "date(now()) >= date(dt/timestamp)",
         },
         headers=HEADERS,
@@ -3110,7 +3122,7 @@ async def test_timezone_aware_datetime_filtering(client: AsyncClient, use_jsonb_
     for log_data in logs_data:
         response = await client.post(
             "/v0/logs",
-            json={"project": project_name, "entries": log_data["entries"]},
+            json={"project_name": project_name, "entries": log_data["entries"]},
             headers=HEADERS,
         )
         assert response.status_code == 200, response.text
@@ -3119,7 +3131,7 @@ async def test_timezone_aware_datetime_filtering(client: AsyncClient, use_jsonb_
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "dt/utc_time == dt/est_time and dt/name == 'same_instant_different_zones'",
         },
         headers=HEADERS,
@@ -3133,7 +3145,7 @@ async def test_timezone_aware_datetime_filtering(client: AsyncClient, use_jsonb_
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "dt/utc_time != dt/est_time and dt/name == 'same_wall_time_different_zones'",
         },
         headers=HEADERS,
@@ -3147,7 +3159,7 @@ async def test_timezone_aware_datetime_filtering(client: AsyncClient, use_jsonb_
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "dt/utc_time < dt/est_time and dt/name == 'same_wall_time_different_zones'",
         },
         headers=HEADERS,
@@ -3161,7 +3173,7 @@ async def test_timezone_aware_datetime_filtering(client: AsyncClient, use_jsonb_
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "now() - dt/utc_time > 'PT0.000001S'",
         },
         headers=HEADERS,
@@ -3173,7 +3185,7 @@ async def test_timezone_aware_datetime_filtering(client: AsyncClient, use_jsonb_
     # 5. Test that now() preserves timezone information in comparisons
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": "dt/est_time < now()"},
+        params={"project_name": project_name, "filter_expr": "dt/est_time < now()"},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.text
@@ -3260,7 +3272,7 @@ async def test_advanced_datetime_arithmetic(client: AsyncClient, use_jsonb_mode)
     for log_data in logs_data:
         response = await client.post(
             "/v0/logs",
-            json={"project": project_name, "entries": log_data["entries"]},
+            json={"project_name": project_name, "entries": log_data["entries"]},
             headers=HEADERS,
         )
         assert response.status_code == 200, response.text
@@ -3269,7 +3281,7 @@ async def test_advanced_datetime_arithmetic(client: AsyncClient, use_jsonb_mode)
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "dt/precise_ts == '2023-06-15T14:30:45.123+00:00'",
         },
         headers=HEADERS,
@@ -3283,7 +3295,7 @@ async def test_advanced_datetime_arithmetic(client: AsyncClient, use_jsonb_mode)
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "dt/precise_ts == '2023-06-15T14:30:45.123456+00:00'",
         },
         headers=HEADERS,
@@ -3297,7 +3309,7 @@ async def test_advanced_datetime_arithmetic(client: AsyncClient, use_jsonb_mode)
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "dt/start_ts + 'PT2H30M' == '2023-06-15T12:45:30.500+00:00'",
         },
         headers=HEADERS,
@@ -3311,7 +3323,7 @@ async def test_advanced_datetime_arithmetic(client: AsyncClient, use_jsonb_mode)
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "dt/end_ts - dt/start_ts == 'PT2H30M15.25S'",
         },
         headers=HEADERS,
@@ -3326,7 +3338,7 @@ async def test_advanced_datetime_arithmetic(client: AsyncClient, use_jsonb_mode)
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "dt/est_ts - dt/utc_ts == 'PT5H'",
         },
         headers=HEADERS,
@@ -3340,7 +3352,7 @@ async def test_advanced_datetime_arithmetic(client: AsyncClient, use_jsonb_mode)
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "date(dt/timestamp) == dt/date and time(dt/timestamp) == dt/time",
         },
         headers=HEADERS,
@@ -3354,7 +3366,7 @@ async def test_advanced_datetime_arithmetic(client: AsyncClient, use_jsonb_mode)
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "dt/middle == (dt/start + ((dt/end - dt/start) / 2))",
         },
         headers=HEADERS,
@@ -3369,7 +3381,7 @@ async def test_advanced_datetime_arithmetic(client: AsyncClient, use_jsonb_mode)
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "dt/feb01 - dt/jan31 == 'PT0.002S'",
         },
         headers=HEADERS,
@@ -3383,7 +3395,7 @@ async def test_advanced_datetime_arithmetic(client: AsyncClient, use_jsonb_mode)
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "(dt/precise_ts > '2023-06-15T00:00:00.000+00:00') and (date(dt/precise_ts) == '2023-06-15')",
         },
         headers=HEADERS,
@@ -3398,7 +3410,7 @@ async def test_advanced_datetime_arithmetic(client: AsyncClient, use_jsonb_mode)
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "dt/precise_ts + 'PT0.877S' == '2023-06-15T14:30:46.000+00:00'",
         },
         headers=HEADERS,
@@ -3415,7 +3427,7 @@ async def test_get_logs_w_str_filtering(client: AsyncClient, use_jsonb_mode):
     _ = await _create_several_logs(client, project_name)
 
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "'2' in str(_/_data)"},
         headers=HEADERS,
     )
@@ -3424,7 +3436,7 @@ async def test_get_logs_w_str_filtering(client: AsyncClient, use_jsonb_mode):
     assert len(result["logs"]) == 2
 
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": "str('2') in str(_/_data)"},
         headers=HEADERS,
     )
@@ -3433,7 +3445,7 @@ async def test_get_logs_w_str_filtering(client: AsyncClient, use_jsonb_mode):
     assert len(result["logs"]) == 2
 
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": """'{"a": 2' in str(_/_data)"""},
         headers=HEADERS,
     )
@@ -3442,7 +3454,7 @@ async def test_get_logs_w_str_filtering(client: AsyncClient, use_jsonb_mode):
     assert len(result["logs"]) == 1
 
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         params={"filter_expr": """str('{"a": 2') in str(_/_data)"""},
         headers=HEADERS,
     )
@@ -3509,7 +3521,7 @@ async def test_array_membership_operator(
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": filter_expr,
         },
         headers=HEADERS,
@@ -3562,7 +3574,7 @@ async def test_boolean_membership_operator_error(
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": filter_expr,
         },
         headers=HEADERS,
@@ -3624,7 +3636,7 @@ async def test_capitalize_behavior(
     # Fetch the log with the derived entry
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "from_ids": str(log_id)},
+        params={"project_name": project_name, "from_ids": str(log_id)},
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -3640,7 +3652,7 @@ async def test_capitalize_behavior(
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": f"derived_capitalize == '{expected_result}'",
         },
         headers=HEADERS,
@@ -3704,7 +3716,7 @@ async def test_unicode_whitespace_stripping(
     # Fetch the log with the derived entries
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "from_ids": str(log_id)},
+        params={"project_name": project_name, "from_ids": str(log_id)},
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -3720,7 +3732,7 @@ async def test_unicode_whitespace_stripping(
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": f"derived_strip == '{expected_stripped}'",
         },
         headers=HEADERS,
@@ -3774,7 +3786,7 @@ async def test_string_pattern_binding(
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": filter_expr,
         },
         headers=HEADERS,
@@ -3844,7 +3856,7 @@ async def test_string_slicing(
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": filter_expr,
         },
         headers=HEADERS,
@@ -3869,7 +3881,7 @@ async def test_string_slicing(
     # Fetch the log with the derived entry
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "from_ids": str(log_id)},
+        params={"project_name": project_name, "from_ids": str(log_id)},
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -3950,7 +3962,7 @@ async def test_complex_string_filter_expressions(client: AsyncClient, use_jsonb_
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": f"content == {json.dumps(math_question)}",
         },
         headers=HEADERS,
@@ -3964,7 +3976,7 @@ async def test_complex_string_filter_expressions(client: AsyncClient, use_jsonb_
     resp = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": f"content == {json.dumps(probability_question)}",
         },
         headers=HEADERS,
@@ -3999,7 +4011,7 @@ async def test_filters_on_nones(
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": filter_expr,
         },
         headers=HEADERS,
@@ -4046,7 +4058,7 @@ async def test_embed_column_function(client: AsyncClient, use_jsonb_mode):
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "l2(embed(text_content), embed('apple')) < 1.1",
             "sorting": json.dumps(
                 {"l2(embed(text_content), embed('apple'))": "ascending"},
@@ -4066,7 +4078,7 @@ async def test_embed_column_function(client: AsyncClient, use_jsonb_mode):
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "cosine(embed(text_content), embed('fruit')) > 0.5",
         },
         headers=HEADERS,
@@ -4081,7 +4093,7 @@ async def test_embed_column_function(client: AsyncClient, use_jsonb_mode):
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "ip(embed(text_content), embed('orange juice')) < 0.",
         },
         headers=HEADERS,
@@ -4098,7 +4110,7 @@ async def test_embed_column_function(client: AsyncClient, use_jsonb_mode):
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "filter_expr": "l1(embed(text_content), embed('banana')) > 10",
         },
         headers=HEADERS,
@@ -4148,7 +4160,7 @@ async def test_filter_with_vector_function_on_uncomputed_base_field(
 
     # 4. Verify the derived entry was created correctly
     response = await client.get(
-        f"/v0/logs?project={project_name}&from_ids={log_id}",
+        f"/v0/logs?project_name={project_name}&from_ids={log_id}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -4206,7 +4218,7 @@ async def test_filter_on_field_with_existing_embedding(
     string_filter_expr = f"doc_text == '{log_content}'"
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": string_filter_expr},
+        params={"project_name": project_name, "filter_expr": string_filter_expr},
         headers=HEADERS,
     )
 
@@ -4229,7 +4241,7 @@ async def test_filter_on_field_with_existing_embedding(
     )
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": vector_filter_expr},
+        params={"project_name": project_name, "filter_expr": vector_filter_expr},
         headers=HEADERS,
     )
 
@@ -4283,7 +4295,7 @@ async def test_type_function_in_filter_expressions(
     filter_expr = f"type({key}) == '{expected_type}'"
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter_expr": filter_expr},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.text
@@ -4450,7 +4462,7 @@ async def test_safe_temporal_casting_with_invalid_values(
     )
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter_expr": filter_expr},
         headers=HEADERS,
     )
     # Should not fail with InvalidDatetimeFormat error
@@ -4472,7 +4484,7 @@ async def test_safe_temporal_casting_with_invalid_values(
     filter_expr = "event_time != 'NULL' and event_time >= '12:00:00'"
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter_expr": filter_expr},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Query failed: {response.text}"
@@ -4489,7 +4501,7 @@ async def test_safe_temporal_casting_with_invalid_values(
     filter_expr = "WorksOrderReportedCompletedDate != 'NULL'"
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter_expr": filter_expr},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Query failed: {response.text}"
@@ -4507,7 +4519,7 @@ async def test_safe_temporal_casting_with_invalid_values(
     filter_expr = "duration != 'NULL' and duration > 'PT1H'"
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter_expr": filter_expr},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Query failed: {response.text}"
@@ -4524,7 +4536,7 @@ async def test_safe_temporal_casting_with_invalid_values(
     filter_expr = "WorksOrderReportedCompletedDate == '2025-09-15'"
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter_expr": filter_expr},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Query failed: {response.text}"
@@ -4540,7 +4552,7 @@ async def test_safe_temporal_casting_with_invalid_values(
     filter_expr = "WorksOrderReportedCompletedDate != ''"
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter_expr": filter_expr},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Query failed: {response.text}"
@@ -4664,7 +4676,7 @@ async def test_null_safe_equality_inequality_comparisons(
     filter_expr = "completion_date != 'NULL'"
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter_expr": filter_expr},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Query failed: {response.text}"
@@ -4680,7 +4692,7 @@ async def test_null_safe_equality_inequality_comparisons(
     filter_expr = "completion_date == 'NULL'"
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter_expr": filter_expr},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Query failed: {response.text}"
@@ -4700,7 +4712,7 @@ async def test_null_safe_equality_inequality_comparisons(
     )
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter_expr": filter_expr},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Query failed: {response.text}"
@@ -4718,7 +4730,7 @@ async def test_null_safe_equality_inequality_comparisons(
     filter_expr = "completion_date != ''"
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter_expr": filter_expr},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Query failed: {response.text}"
@@ -4733,7 +4745,7 @@ async def test_null_safe_equality_inequality_comparisons(
     filter_expr = "completion_date == '2025-09-15'"
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter_expr": filter_expr},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Query failed: {response.text}"
@@ -4749,7 +4761,7 @@ async def test_null_safe_equality_inequality_comparisons(
     filter_expr = "completion_date != '2025-09-15'"
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter_expr": filter_expr},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Query failed: {response.text}"
@@ -4773,7 +4785,7 @@ async def test_null_safe_equality_inequality_comparisons(
     )
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter_expr": filter_expr},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Query failed: {response.text}"
@@ -4821,7 +4833,7 @@ async def test_filter_with_json_schema_typed_field(
     fields_response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "sender_id": {
                     "type": json_schema_type,
@@ -4843,7 +4855,7 @@ async def test_filter_with_json_schema_typed_field(
     log_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "sender_id": 3,
                 "exchange_id": 12345,
@@ -4859,7 +4871,7 @@ async def test_filter_with_json_schema_typed_field(
     filter_expr = "exchange_id == 12345"
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter_expr": filter_expr},
         headers=HEADERS,
     )
     assert (
@@ -4873,7 +4885,7 @@ async def test_filter_with_json_schema_typed_field(
     filter_expr = "sender_id == 3"
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter_expr": filter_expr},
         headers=HEADERS,
     )
     assert response.status_code == 200, (
@@ -4891,7 +4903,7 @@ async def test_filter_with_json_schema_typed_field(
     log_response_10 = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "sender_id": 10,
                 "exchange_id": 99998,
@@ -4908,7 +4920,7 @@ async def test_filter_with_json_schema_typed_field(
     filter_expr = "sender_id > 5"
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter_expr": filter_expr},
         headers=HEADERS,
     )
     assert response.status_code == 200, (
@@ -4926,7 +4938,7 @@ async def test_filter_with_json_schema_typed_field(
     filter_expr = "sender_id in [1, 2, 3, 4]"
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter_expr": filter_expr},
         headers=HEADERS,
     )
     assert response.status_code == 200, (
@@ -4941,7 +4953,7 @@ async def test_filter_with_json_schema_typed_field(
     filter_expr = "sender_id == 3 and exchange_id == 12345"
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter_expr": filter_expr},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Combined filter failed: {response.text}"
@@ -4953,7 +4965,7 @@ async def test_filter_with_json_schema_typed_field(
     log_response_null = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "sender_id": None,  # NULL sender (contact deleted)
                 "exchange_id": 99999,
@@ -4969,7 +4981,7 @@ async def test_filter_with_json_schema_typed_field(
     filter_expr = "sender_id is None"
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter_expr": filter_expr},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Filter for None failed: {response.text}"
@@ -4981,7 +4993,7 @@ async def test_filter_with_json_schema_typed_field(
     filter_expr = "sender_id is not None"
     response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": filter_expr},
+        params={"project_name": project_name, "filter_expr": filter_expr},
         headers=HEADERS,
     )
     assert response.status_code == 200, f"Filter for not None failed: {response.text}"
@@ -5021,7 +5033,7 @@ async def test_sort_and_aggregate_json_schema_typed_field(
     fields_response = await client.post(
         "/v0/logs/fields",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "fields": {
                 "priority": {
                     "type": json_schema_type,
@@ -5042,7 +5054,7 @@ async def test_sort_and_aggregate_json_schema_typed_field(
     for priority in test_priorities:
         log_response = await client.post(
             "/v0/logs",
-            json={"project": project_name, "entries": {"priority": priority}},
+            json={"project_name": project_name, "entries": {"priority": priority}},
             headers=HEADERS,
         )
         assert log_response.status_code == 200, log_response.json()
@@ -5052,7 +5064,7 @@ async def test_sort_and_aggregate_json_schema_typed_field(
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "sorting": json.dumps({"priority": "ascending"}),
         },
         headers=HEADERS,
@@ -5076,7 +5088,7 @@ async def test_sort_and_aggregate_json_schema_typed_field(
     response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "sorting": json.dumps({"priority": "descending"}),
         },
         headers=HEADERS,
@@ -5097,7 +5109,7 @@ async def test_sort_and_aggregate_json_schema_typed_field(
     response = await client.get(
         "/v0/logs/metric/sum",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "key": "priority",
         },
         headers=HEADERS,

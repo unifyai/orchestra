@@ -9,7 +9,7 @@ from orchestra.web.api.interface.schema import ProjectTemplateSchema
 class FavoriteProjectIn(BaseModel):
     """Request model for creating a favorite project."""
 
-    project: str = Field(description="The name of the project to favorite")
+    project_name: str = Field(description="The name of the project to favorite")
     position: int = Field(description="Position of the project in the favorites list")
 
 
@@ -151,7 +151,7 @@ class ProjectCommitHistory(BaseModel):
 class ExportProjectTemplateRequest(BaseModel):
     """Request to export a project template."""
 
-    project: str
+    project_name: str
     interface_names: Optional[List[str]] = None  # If None, export all interfaces
     checkpoint: bool = False
     # Common template fields
@@ -164,7 +164,7 @@ class ExportProjectTemplateRequest(BaseModel):
 class ImportProjectTemplateRequest(BaseModel):
     """Request to import a project template."""
 
-    project: str
+    project_name: str
     template: ProjectTemplateSchema  # Properly typed template instead of dict
     validate_first: bool = True
     auto_sanitize: bool = True
@@ -186,7 +186,7 @@ class InterfaceInfo(BaseModel):
 
 
 class ProjectTreeItem(BaseModel):
-    project: str
+    project_name: str
     icon: str
     order: int
     interfaces: List[InterfaceInfo]

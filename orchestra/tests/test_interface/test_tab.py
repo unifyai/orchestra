@@ -51,7 +51,7 @@ async def _create_test_interface(
     response = await client.post(
         "/v0/interfaces/",
         headers=HEADERS,
-        json={"name": name, "project": project, "color": color},
+        json={"name": name, "project_name": project, "color": color},
     )
     assert response.status_code == 201, f"Failed to create interface: {response.json()}"
     return response
@@ -1279,7 +1279,7 @@ async def test_import_tab_template_with_valid_schema(client: AsyncClient):
     }
 
     import_request = {
-        "project": TEST_PROJECT,
+        "project_name": TEST_PROJECT,
         "template": template,
         "interface_id": interface_id,
         "validate_first": False,  # Skip validation for v0
@@ -1347,7 +1347,7 @@ async def test_import_tab_template_with_valid_schema_new_name(client: AsyncClien
     }
 
     import_request = {
-        "project": TEST_PROJECT,
+        "project_name": TEST_PROJECT,
         "template": template,
         "interface_id": interface_id,
         "new_tab_name": "overridden_tab_name",
@@ -1384,7 +1384,7 @@ async def test_import_tab_template_with_valid_schema_by_interface_name(
     }
 
     import_request = {
-        "project": TEST_PROJECT,
+        "project_name": TEST_PROJECT,
         "template": template,
         "interface_name": "target_interface",
         "validate_first": False,
@@ -1435,7 +1435,7 @@ async def test_import_tab_template_with_valid_schema_overwrite_existing(
 
     # First try without overwrite
     import_request = {
-        "project": TEST_PROJECT,
+        "project_name": TEST_PROJECT,
         "template": template,
         "interface_id": interface_id,
         "overwrite_existing": False,
@@ -1549,7 +1549,7 @@ async def test_import_tab_template_with_valid_schema_complex_tiles(client: Async
     }
 
     import_request = {
-        "project": TEST_PROJECT,
+        "project_name": TEST_PROJECT,
         "template": template,
         "interface_id": interface_id,
         "validate_first": False,
@@ -1679,7 +1679,7 @@ async def test_export_import_tab_template_with_valid_schema_roundtrip(
 
     # Import the template back to the same interface
     import_request = {
-        "project": TEST_PROJECT,
+        "project_name": TEST_PROJECT,
         "template": exported_template,
         "interface_id": interface_id,
         "validate_first": False,
@@ -1748,7 +1748,7 @@ async def test_import_tab_template_with_valid_schema_empty_template(
     }
 
     import_request = {
-        "project": TEST_PROJECT,
+        "project_name": TEST_PROJECT,
         "template": empty_template,
         "interface_id": interface_id,
         "validate_first": False,

@@ -364,7 +364,7 @@ async def test_nested_array_cascade_delete(client: AsyncClient, use_jsonb_mode):
     img1_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "entries": {"url": "https://example.com/1.jpg"},
         },
@@ -376,7 +376,7 @@ async def test_nested_array_cascade_delete(client: AsyncClient, use_jsonb_mode):
     img2_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "entries": {"url": "https://example.com/2.jpg"},
         },
@@ -389,7 +389,7 @@ async def test_nested_array_cascade_delete(client: AsyncClient, use_jsonb_mode):
     img_logs_response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
         },
         headers=HEADERS,
@@ -409,7 +409,7 @@ async def test_nested_array_cascade_delete(client: AsyncClient, use_jsonb_mode):
     transcript_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Transcripts",
             "entries": {
                 "transcript_id": "t_001",
@@ -428,7 +428,7 @@ async def test_nested_array_cascade_delete(client: AsyncClient, use_jsonb_mode):
     get_response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Transcripts",
         },
         headers=HEADERS,
@@ -441,7 +441,7 @@ async def test_nested_array_cascade_delete(client: AsyncClient, use_jsonb_mode):
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "ids_and_fields": [[img1_log_id, []]],
             "source_type": "all",
@@ -454,7 +454,7 @@ async def test_nested_array_cascade_delete(client: AsyncClient, use_jsonb_mode):
     get_after_response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Transcripts",
         },
         headers=HEADERS,
@@ -470,7 +470,7 @@ async def test_nested_array_cascade_delete(client: AsyncClient, use_jsonb_mode):
     get_img2_response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
         },
         headers=HEADERS,
@@ -526,7 +526,7 @@ async def test_nested_array_cascade_update(client: AsyncClient, use_jsonb_mode):
     img_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "entries": {"image_id": 10, "url": "https://example.com/old.jpg"},
         },
@@ -539,7 +539,7 @@ async def test_nested_array_cascade_update(client: AsyncClient, use_jsonb_mode):
     transcript1_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Transcripts",
             "entries": {
                 "transcript_id": "t_001",
@@ -555,7 +555,7 @@ async def test_nested_array_cascade_update(client: AsyncClient, use_jsonb_mode):
     transcript2_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Transcripts",
             "entries": {
                 "transcript_id": "t_002",
@@ -573,7 +573,7 @@ async def test_nested_array_cascade_update(client: AsyncClient, use_jsonb_mode):
     update_response = await client.put(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "logs": [img_log_id],
             "entries": {"image_id": 99},
@@ -587,7 +587,7 @@ async def test_nested_array_cascade_update(client: AsyncClient, use_jsonb_mode):
     get_transcripts_response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Transcripts",
         },
         headers=HEADERS,
@@ -652,7 +652,7 @@ async def test_nested_array_set_null(client: AsyncClient, use_jsonb_mode):
     img_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "entries": {"url": "https://example.com/1.jpg"},
         },
@@ -665,7 +665,7 @@ async def test_nested_array_set_null(client: AsyncClient, use_jsonb_mode):
     img_logs_response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
         },
         headers=HEADERS,
@@ -677,7 +677,7 @@ async def test_nested_array_set_null(client: AsyncClient, use_jsonb_mode):
     transcript_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Transcripts",
             "entries": {
                 "transcript_id": "t_001",
@@ -695,7 +695,7 @@ async def test_nested_array_set_null(client: AsyncClient, use_jsonb_mode):
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "ids_and_fields": [[img_log_id, []]],
             "source_type": "all",
@@ -708,7 +708,7 @@ async def test_nested_array_set_null(client: AsyncClient, use_jsonb_mode):
     get_transcripts_response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Transcripts",
         },
         headers=HEADERS,
@@ -765,7 +765,7 @@ async def test_nested_object_cascade_delete(client: AsyncClient, use_jsonb_mode)
     user_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Users",
             "entries": {"name": "Alice"},
         },
@@ -778,7 +778,7 @@ async def test_nested_object_cascade_delete(client: AsyncClient, use_jsonb_mode)
     user_logs_response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Users",
         },
         headers=HEADERS,
@@ -790,7 +790,7 @@ async def test_nested_object_cascade_delete(client: AsyncClient, use_jsonb_mode)
     doc_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Documents",
             "entries": {
                 "doc_id": "doc_001",
@@ -812,7 +812,7 @@ async def test_nested_object_cascade_delete(client: AsyncClient, use_jsonb_mode)
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Users",
             "ids_and_fields": [[user_log_id, []]],
             "source_type": "all",
@@ -825,7 +825,7 @@ async def test_nested_object_cascade_delete(client: AsyncClient, use_jsonb_mode)
     get_docs_response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Documents",
         },
         headers=HEADERS,
@@ -877,7 +877,7 @@ async def test_nested_object_cascade_update(client: AsyncClient, use_jsonb_mode)
     user_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Users",
             "entries": {"user_id": 100, "name": "Alice"},
         },
@@ -890,7 +890,7 @@ async def test_nested_object_cascade_update(client: AsyncClient, use_jsonb_mode)
     doc_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Documents",
             "entries": {
                 "doc_id": "doc_001",
@@ -911,7 +911,7 @@ async def test_nested_object_cascade_update(client: AsyncClient, use_jsonb_mode)
     update_response = await client.put(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Users",
             "logs": [user_log_id],
             "entries": {"user_id": 999},
@@ -925,7 +925,7 @@ async def test_nested_object_cascade_update(client: AsyncClient, use_jsonb_mode)
     get_docs_response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Documents",
         },
         headers=HEADERS,
@@ -980,7 +980,7 @@ async def test_deeply_nested_cascade_delete(client: AsyncClient, use_jsonb_mode)
     user1_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Users",
             "entries": {"name": "Alice"},
         },
@@ -992,7 +992,7 @@ async def test_deeply_nested_cascade_delete(client: AsyncClient, use_jsonb_mode)
     user2_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Users",
             "entries": {"name": "Bob"},
         },
@@ -1005,7 +1005,7 @@ async def test_deeply_nested_cascade_delete(client: AsyncClient, use_jsonb_mode)
     user_logs_response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Users",
         },
         headers=HEADERS,
@@ -1025,7 +1025,7 @@ async def test_deeply_nested_cascade_delete(client: AsyncClient, use_jsonb_mode)
     org_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Organizations",
             "entries": {
                 "org_id": "org_001",
@@ -1055,7 +1055,7 @@ async def test_deeply_nested_cascade_delete(client: AsyncClient, use_jsonb_mode)
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Users",
             "ids_and_fields": [[user1_log_id, []]],
             "source_type": "all",
@@ -1068,7 +1068,7 @@ async def test_deeply_nested_cascade_delete(client: AsyncClient, use_jsonb_mode)
     get_orgs_response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Organizations",
         },
         headers=HEADERS,
@@ -1137,7 +1137,7 @@ async def test_nested_fk_multiple_occurrences_update(
     tag_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Tags",
             "entries": {"tag_id": 50, "label": "Python"},
         },
@@ -1150,7 +1150,7 @@ async def test_nested_fk_multiple_occurrences_update(
     post_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Posts",
             "entries": {
                 "post_id": "post_001",
@@ -1169,7 +1169,7 @@ async def test_nested_fk_multiple_occurrences_update(
     update_response = await client.put(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Tags",
             "logs": [tag_log_id],
             "entries": {"tag_id": 99},
@@ -1183,7 +1183,7 @@ async def test_nested_fk_multiple_occurrences_update(
     get_posts_response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Posts",
         },
         headers=HEADERS,
@@ -1247,7 +1247,7 @@ async def test_nested_fk_no_cascade_if_value_not_present(
     img1_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "entries": {"url": "https://example.com/1.jpg"},
         },
@@ -1259,7 +1259,7 @@ async def test_nested_fk_no_cascade_if_value_not_present(
     img2_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "entries": {"url": "https://example.com/2.jpg"},
         },
@@ -1272,7 +1272,7 @@ async def test_nested_fk_no_cascade_if_value_not_present(
     img_logs_response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
         },
         headers=HEADERS,
@@ -1292,7 +1292,7 @@ async def test_nested_fk_no_cascade_if_value_not_present(
     t1_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Transcripts",
             "entries": {
                 "transcript_id": "t_001",
@@ -1309,7 +1309,7 @@ async def test_nested_fk_no_cascade_if_value_not_present(
     t2_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Transcripts",
             "entries": {
                 "transcript_id": "t_002",
@@ -1326,7 +1326,7 @@ async def test_nested_fk_no_cascade_if_value_not_present(
     t3_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Transcripts",
             "entries": {
                 "transcript_id": "t_003",
@@ -1342,7 +1342,7 @@ async def test_nested_fk_no_cascade_if_value_not_present(
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "ids_and_fields": [[img1_log_id, []]],
             "source_type": "all",
@@ -1355,7 +1355,7 @@ async def test_nested_fk_no_cascade_if_value_not_present(
     get_transcripts_response = await client.get(
         "/v0/logs",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Transcripts",
         },
         headers=HEADERS,
@@ -1428,7 +1428,7 @@ async def test_nested_fk_validation_prevents_invalid_reference(
     transcript_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Transcripts",
             "entries": {
                 "transcript_id": "t_001",
@@ -1494,7 +1494,7 @@ async def test_flat_array_validation(client: AsyncClient, use_jsonb_mode):
     img1_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "entries": {"image_id": 1, "url": "img1.jpg"},
         },
@@ -1505,7 +1505,7 @@ async def test_flat_array_validation(client: AsyncClient, use_jsonb_mode):
     img2_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "entries": {"image_id": 2, "url": "img2.jpg"},
         },
@@ -1517,7 +1517,7 @@ async def test_flat_array_validation(client: AsyncClient, use_jsonb_mode):
     transcript_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Transcripts",
             "entries": {
                 "transcript_id": "t_001",
@@ -1570,7 +1570,7 @@ async def test_flat_array_cascade_delete(client: AsyncClient, use_jsonb_mode):
     await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "entries": {"image_id": 1, "url": "img1.jpg"},
         },
@@ -1580,7 +1580,7 @@ async def test_flat_array_cascade_delete(client: AsyncClient, use_jsonb_mode):
     img2_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "entries": {"image_id": 2, "url": "img2.jpg"},
         },
@@ -1591,7 +1591,7 @@ async def test_flat_array_cascade_delete(client: AsyncClient, use_jsonb_mode):
     await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "entries": {"image_id": 3, "url": "img3.jpg"},
         },
@@ -1602,7 +1602,7 @@ async def test_flat_array_cascade_delete(client: AsyncClient, use_jsonb_mode):
     transcript_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Transcripts",
             "entries": {
                 "transcript_id": "t_001",
@@ -1618,7 +1618,7 @@ async def test_flat_array_cascade_delete(client: AsyncClient, use_jsonb_mode):
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "ids_and_fields": [[img2_log_id, []]],
             "source_type": "all",
@@ -1630,7 +1630,7 @@ async def test_flat_array_cascade_delete(client: AsyncClient, use_jsonb_mode):
     # Verify transcript array was updated (wildcard path = remove elements)
     transcripts = await client.get(
         "/v0/logs",
-        params={"project": project_name, "context": "Transcripts"},
+        params={"project_name": project_name, "context": "Transcripts"},
         headers=HEADERS,
     )
     assert transcripts.status_code == 200
@@ -1677,7 +1677,7 @@ async def test_nested_array_objects_cascade_delete(client: AsyncClient, use_json
     await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "entries": {"image_id": 1, "url": "img1.jpg"},
         },
@@ -1687,7 +1687,7 @@ async def test_nested_array_objects_cascade_delete(client: AsyncClient, use_json
     img2_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "entries": {"image_id": 2, "url": "img2.jpg"},
         },
@@ -1698,7 +1698,7 @@ async def test_nested_array_objects_cascade_delete(client: AsyncClient, use_json
     await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "entries": {"image_id": 3, "url": "img3.jpg"},
         },
@@ -1709,7 +1709,7 @@ async def test_nested_array_objects_cascade_delete(client: AsyncClient, use_json
     transcript_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Transcripts",
             "entries": {
                 "transcript_id": "t_001",
@@ -1729,7 +1729,7 @@ async def test_nested_array_objects_cascade_delete(client: AsyncClient, use_json
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "ids_and_fields": [[img2_log_id, []]],
             "source_type": "all",
@@ -1741,7 +1741,7 @@ async def test_nested_array_objects_cascade_delete(client: AsyncClient, use_json
     # Verify transcript images array was updated - object with image_id=2 removed
     transcripts = await client.get(
         "/v0/logs",
-        params={"project": project_name, "context": "Transcripts"},
+        params={"project_name": project_name, "context": "Transcripts"},
         headers=HEADERS,
     )
     assert transcripts.status_code == 200
@@ -1793,7 +1793,7 @@ async def test_nested_object_no_wildcard_cascade_delete(
     user_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Users",
             "entries": {"user_id": 5, "name": "Alice"},
         },
@@ -1805,7 +1805,7 @@ async def test_nested_object_no_wildcard_cascade_delete(
     article_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Articles",
             "entries": {
                 "article_id": "a_001",
@@ -1827,7 +1827,7 @@ async def test_nested_object_no_wildcard_cascade_delete(
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Users",
             "ids_and_fields": [[user_log_id, []]],
             "source_type": "all",
@@ -1839,7 +1839,7 @@ async def test_nested_object_no_wildcard_cascade_delete(
     # Verify article was CASCADE deleted (no wildcard = delete entire log)
     articles = await client.get(
         "/v0/logs",
-        params={"project": project_name, "context": "Articles"},
+        params={"project_name": project_name, "context": "Articles"},
         headers=HEADERS,
     )
     assert articles.status_code == 200
@@ -1884,7 +1884,7 @@ async def test_deep_nested_cascade_delete(client: AsyncClient, use_jsonb_mode):
     await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Users",
             "entries": {"user_id": 1, "name": "Alice"},
         },
@@ -1894,7 +1894,7 @@ async def test_deep_nested_cascade_delete(client: AsyncClient, use_jsonb_mode):
     user2_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Users",
             "entries": {"user_id": 2, "name": "Bob"},
         },
@@ -1905,7 +1905,7 @@ async def test_deep_nested_cascade_delete(client: AsyncClient, use_jsonb_mode):
     await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Users",
             "entries": {"user_id": 3, "name": "Charlie"},
         },
@@ -1916,7 +1916,7 @@ async def test_deep_nested_cascade_delete(client: AsyncClient, use_jsonb_mode):
     org_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Organizations",
             "entries": {
                 "org_id": "org_001",
@@ -1947,7 +1947,7 @@ async def test_deep_nested_cascade_delete(client: AsyncClient, use_jsonb_mode):
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Users",
             "ids_and_fields": [[user2_log_id, []]],
             "source_type": "all",
@@ -1959,7 +1959,7 @@ async def test_deep_nested_cascade_delete(client: AsyncClient, use_jsonb_mode):
     # Verify organization teams were updated - Bob removed from both teams
     orgs = await client.get(
         "/v0/logs",
-        params={"project": project_name, "context": "Organizations"},
+        params={"project_name": project_name, "context": "Organizations"},
         headers=HEADERS,
     )
     assert orgs.status_code == 200
@@ -2013,7 +2013,7 @@ async def test_flat_array_cascade_update(client: AsyncClient, use_jsonb_mode):
     await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "entries": {"image_id": 1, "url": "img1.jpg"},
         },
@@ -2023,7 +2023,7 @@ async def test_flat_array_cascade_update(client: AsyncClient, use_jsonb_mode):
     img2_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "entries": {"image_id": 2, "url": "img2.jpg"},
         },
@@ -2034,7 +2034,7 @@ async def test_flat_array_cascade_update(client: AsyncClient, use_jsonb_mode):
     await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "entries": {"image_id": 3, "url": "img3.jpg"},
         },
@@ -2045,7 +2045,7 @@ async def test_flat_array_cascade_update(client: AsyncClient, use_jsonb_mode):
     await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Transcripts",
             "entries": {
                 "transcript_id": "t_001",
@@ -2059,7 +2059,7 @@ async def test_flat_array_cascade_update(client: AsyncClient, use_jsonb_mode):
     update_response = await client.put(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "logs": [img2_log_id],
             "entries": {"image_id": 99},
@@ -2072,7 +2072,7 @@ async def test_flat_array_cascade_update(client: AsyncClient, use_jsonb_mode):
     # Verify transcript was CASCADE updated
     transcripts = await client.get(
         "/v0/logs",
-        params={"project": project_name, "context": "Transcripts"},
+        params={"project_name": project_name, "context": "Transcripts"},
         headers=HEADERS,
     )
     assert transcripts.status_code == 200
@@ -2120,7 +2120,7 @@ async def test_flat_array_set_null(client: AsyncClient, use_jsonb_mode):
     await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "entries": {"image_id": 1, "url": "img1.jpg"},
         },
@@ -2130,7 +2130,7 @@ async def test_flat_array_set_null(client: AsyncClient, use_jsonb_mode):
     img2_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "entries": {"image_id": 2, "url": "img2.jpg"},
         },
@@ -2141,7 +2141,7 @@ async def test_flat_array_set_null(client: AsyncClient, use_jsonb_mode):
     await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "entries": {"image_id": 3, "url": "img3.jpg"},
         },
@@ -2152,7 +2152,7 @@ async def test_flat_array_set_null(client: AsyncClient, use_jsonb_mode):
     await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Transcripts",
             "entries": {
                 "transcript_id": "t_001",
@@ -2167,7 +2167,7 @@ async def test_flat_array_set_null(client: AsyncClient, use_jsonb_mode):
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "ids_and_fields": [[img2_log_id, []]],
             "source_type": "all",
@@ -2179,7 +2179,7 @@ async def test_flat_array_set_null(client: AsyncClient, use_jsonb_mode):
     # Verify transcript was SET NULL
     transcripts = await client.get(
         "/v0/logs",
-        params={"project": project_name, "context": "Transcripts"},
+        params={"project_name": project_name, "context": "Transcripts"},
         headers=HEADERS,
     )
     assert transcripts.status_code == 200
@@ -2227,7 +2227,7 @@ async def test_flat_array_multiple_occurrences(client: AsyncClient, use_jsonb_mo
     img_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "entries": {"image_id": 2, "url": "img2.jpg"},
         },
@@ -2239,7 +2239,7 @@ async def test_flat_array_multiple_occurrences(client: AsyncClient, use_jsonb_mo
     await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Transcripts",
             "entries": {
                 "transcript_id": "t_001",
@@ -2254,7 +2254,7 @@ async def test_flat_array_multiple_occurrences(client: AsyncClient, use_jsonb_mo
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "ids_and_fields": [[img_log_id, []]],
             "source_type": "all",
@@ -2266,7 +2266,7 @@ async def test_flat_array_multiple_occurrences(client: AsyncClient, use_jsonb_mo
     # Verify all occurrences were SET NULL
     transcripts = await client.get(
         "/v0/logs",
-        params={"project": project_name, "context": "Transcripts"},
+        params={"project_name": project_name, "context": "Transcripts"},
         headers=HEADERS,
     )
     assert transcripts.status_code == 200
@@ -2314,7 +2314,7 @@ async def test_flat_array_mixed_operations(client: AsyncClient, use_jsonb_mode):
     img1_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "entries": {"image_id": 1, "url": "img1.jpg"},
         },
@@ -2325,7 +2325,7 @@ async def test_flat_array_mixed_operations(client: AsyncClient, use_jsonb_mode):
     img2_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "entries": {"image_id": 2, "url": "img2.jpg"},
         },
@@ -2336,7 +2336,7 @@ async def test_flat_array_mixed_operations(client: AsyncClient, use_jsonb_mode):
     await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "entries": {"image_id": 3, "url": "img3.jpg"},
         },
@@ -2347,7 +2347,7 @@ async def test_flat_array_mixed_operations(client: AsyncClient, use_jsonb_mode):
     await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Transcripts",
             "entries": {
                 "transcript_id": "t_001",
@@ -2362,7 +2362,7 @@ async def test_flat_array_mixed_operations(client: AsyncClient, use_jsonb_mode):
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "ids_and_fields": [[img2_log_id, []]],
             "source_type": "all",
@@ -2373,7 +2373,7 @@ async def test_flat_array_mixed_operations(client: AsyncClient, use_jsonb_mode):
     # Verify: [1, None, 3]
     transcripts = await client.get(
         "/v0/logs",
-        params={"project": project_name, "context": "Transcripts"},
+        params={"project_name": project_name, "context": "Transcripts"},
         headers=HEADERS,
     )
     assert transcripts.status_code == 200
@@ -2385,7 +2385,7 @@ async def test_flat_array_mixed_operations(client: AsyncClient, use_jsonb_mode):
         "DELETE",
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Images",
             "ids_and_fields": [[img1_log_id, []]],
             "source_type": "all",
@@ -2396,7 +2396,7 @@ async def test_flat_array_mixed_operations(client: AsyncClient, use_jsonb_mode):
     # Verify: [None, None, 3]
     transcripts = await client.get(
         "/v0/logs",
-        params={"project": project_name, "context": "Transcripts"},
+        params={"project_name": project_name, "context": "Transcripts"},
         headers=HEADERS,
     )
     assert transcripts.status_code == 200
@@ -2454,7 +2454,7 @@ async def test_nested_fk_empty_array_no_error(client: AsyncClient, use_jsonb_mod
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Documents",
             "entries": {
                 "document_id": "doc_001",
@@ -2471,7 +2471,7 @@ async def test_nested_fk_empty_array_no_error(client: AsyncClient, use_jsonb_mod
     # Verify the log was created correctly
     get_response = await client.get(
         "/v0/logs",
-        params={"project": project_name, "context": "Documents"},
+        params={"project_name": project_name, "context": "Documents"},
         headers=HEADERS,
     )
     assert get_response.status_code == 200
@@ -2520,7 +2520,7 @@ async def test_nested_fk_missing_field_no_error(client: AsyncClient, use_jsonb_m
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": "Articles",
             "entries": {
                 "article_id": "article_001",

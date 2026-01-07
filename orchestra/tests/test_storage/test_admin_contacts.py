@@ -47,7 +47,7 @@ async def test_admin_list_contacts_basic(client: AsyncClient, use_jsonb_mode):
 
     # 3) Create logs under the "contacts" context
     payload = {
-        "project": project_name,
+        "project_name": project_name,
         "context": "Contacts",
         "params": {},
         "entries": [contact1, contact2],
@@ -116,7 +116,7 @@ async def test_admin_list_contacts_across_contexts(client: AsyncClient, use_json
 
     # Create log in top-level Contacts context
     payload1 = {
-        "project": project_name,
+        "project_name": project_name,
         "context": "Contacts",
         "params": {},
         "entries": [contact1],
@@ -130,7 +130,7 @@ async def test_admin_list_contacts_across_contexts(client: AsyncClient, use_json
 
     # Create log in nested Friend/Contacts context
     payload2 = {
-        "project": project_name,
+        "project_name": project_name,
         "context": "Friend/Contacts",
         "params": {},
         "entries": [contact2],
@@ -191,7 +191,7 @@ async def test_admin_list_contacts_multiple_users(client: AsyncClient, use_jsonb
 
     # Create log for user1 in Contacts context
     payload1 = {
-        "project": project1,
+        "project_name": project1,
         "context": "Contacts",
         "params": {},
         "entries": [contact1],
@@ -205,7 +205,7 @@ async def test_admin_list_contacts_multiple_users(client: AsyncClient, use_jsonb
 
     # Create log for user2 in Contacts context
     payload2 = {
-        "project": project2,
+        "project_name": project2,
         "context": "Contacts",
         "params": {},
         "entries": [contact2],

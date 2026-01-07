@@ -191,12 +191,8 @@ class UserAccountCleanupService:
             "DELETE FROM query_tag_association WHERE user_id = :uid",
             "DELETE FROM tags WHERE user_id = :uid",
             "DELETE FROM query WHERE user_id = :uid",
-            "DELETE FROM custom_endpoint WHERE user_id = :uid",
-            "DELETE FROM custom_api_key WHERE user_id = :uid",
-            "DELETE FROM custom_router WHERE user_id = :uid",
             "DELETE FROM credit_card_fingerprint WHERE user_id = :uid",
             "DELETE FROM local_endpoint WHERE user_id = :uid",
-            "DELETE FROM router WHERE user_id = :uid",
         ]
 
         for stmt in deletion_statements:

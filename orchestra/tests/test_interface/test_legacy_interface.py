@@ -37,7 +37,7 @@ def _create_interface(
         headers=HEADERS,
         json={
             "name": name,
-            "project": project,
+            "project_name": project,
             "items": items,
             "new_counter": new_counter,
             "context": context,
@@ -124,7 +124,7 @@ async def test_update_interface(client: AsyncClient):
         headers=HEADERS,
         json={
             "name": name,
-            "project": project,
+            "project_name": project,
             "items": items,
             "new_counter": new_counter,
             "new_name": "my_new_interface",
@@ -158,7 +158,7 @@ async def test_get_interface(client: AsyncClient):
     _ = await _create_context(client, project, context, "")
     _ = await _create_interface(client, name, project, items, new_counter, context)
     response = await client.get(
-        f"/v0/interface?name={name}&project={project}",
+        f"/v0/interface?name={name}&project_name={project}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -188,7 +188,7 @@ async def test_delete_interface(client: AsyncClient):
     _ = await _create_context(client, project, context, "")
     _ = await _create_interface(client, name, project, items, new_counter, context)
     response = await client.delete(
-        f"/v0/interface?name={name}&project={project}",
+        f"/v0/interface?name={name}&project_name={project}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -230,13 +230,13 @@ async def test_delete_project_deletes_interfaces_and_temp_interfaces(
 
     # Verify interfaces and temp interfaces are deleted
     response = await client.get(
-        f"/v0/interface?name=test-interface&project={project_name}",
+        f"/v0/interface?name=test-interface&project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 404, response.json()  # should not be found
 
     response = await client.get(
-        f"/v0/interface?name=test-temp-interface&project={project_name}&temporary=true",
+        f"/v0/interface?name=test-temp-interface&project_name={project_name}&temporary=true",
         headers=HEADERS,
     )
     assert response.status_code == 404, response.json()  # should not be found

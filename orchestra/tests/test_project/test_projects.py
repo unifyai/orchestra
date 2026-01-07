@@ -302,7 +302,7 @@ async def test_delete_project_logs(client: AsyncClient):
     logs_response = await client.get(
         f"/v0/logs",
         headers=HEADERS,
-        params={"project": project},
+        params={"project_name": project},
     )
     assert logs_response.status_code == 200
     logs = logs_response.json()["logs"]
@@ -321,7 +321,7 @@ async def test_delete_project_logs(client: AsyncClient):
     # Verify interface still exists
     interface_response = await client.get(
         f"/v0/interfaces/",
-        params={"project": project, "name": interface_name},
+        params={"project_name": project, "name": interface_name},
         headers=HEADERS,
     )
     assert interface_response.status_code == 200
@@ -376,7 +376,7 @@ async def test_delete_project_contexts(client: AsyncClient):
     logs_response = await client.get(
         f"/v0/logs",
         headers=HEADERS,
-        params={"project": project},
+        params={"project_name": project},
     )
     assert logs_response.status_code == 200
     logs = logs_response.json()["logs"]
@@ -394,7 +394,7 @@ async def test_delete_project_contexts(client: AsyncClient):
     # Verify interface still exists
     interface_response = await client.get(
         f"/v0/interfaces/",
-        params={"project": project, "name": interface_name},
+        params={"project_name": project, "name": interface_name},
         headers=HEADERS,
     )
     assert interface_response.status_code == 200
@@ -481,7 +481,7 @@ async def test_share_project(client: AsyncClient):
     # After sharing, project belongs to an org, so we need the org API key
     assert "organizations" in data, "User should have organization memberships"
     assert len(data["organizations"]) > 0, "User should be member of at least one org"
-    org_api_key = data["organizations"][0]["apiKey"]
+    org_api_key = data["organizations"][0]["api_key"]
     assert org_api_key is not None, "User should have org API key"
     new_headers = {
         "accept": "application/json",
@@ -509,7 +509,7 @@ async def test_share_project(client: AsyncClient):
     # 3) Verify the new user can access the project's interfaces
     response = await client.get(
         f"/v0/interfaces/list",
-        params={"project": project_name},
+        params={"project_name": project_name},
         headers=new_headers,
     )
     assert response.status_code == 200, response.json()
@@ -520,7 +520,7 @@ async def test_share_project(client: AsyncClient):
     # 4) Verify the new user can access the project's logs
     response = await client.get(
         f"/v0/logs",
-        params={"project": project_name, "context": context_name},
+        params={"project_name": project_name, "context": context_name},
         headers=new_headers,
     )
     assert response.status_code == 200, response.json()
@@ -540,7 +540,7 @@ async def test_share_project(client: AsyncClient):
     # get the logs from the new user
     response = await client.get(
         f"/v0/logs",
-        params={"project": project_name, "context": context_name},
+        params={"project_name": project_name, "context": context_name},
         headers=new_headers,
     )
     assert response.status_code == 200, response.json()
@@ -786,7 +786,7 @@ async def test_duplicate_project(client: AsyncClient):
         headers=admin_headers,
     )
     data = response.json()
-    target_user_api_key = data["apiKey"]
+    target_user_api_key = data["api_key"]
     target_headers = {
         "accept": "application/json",
         "Authorization": f"Bearer {target_user_api_key}",
@@ -826,7 +826,7 @@ async def test_duplicate_project(client: AsyncClient):
     # 3) Verify the target user can access the new interfaces
     response = await client.get(
         f"/v0/interfaces/list",
-        params={"project": target_project_name},
+        params={"project_name": target_project_name},
         headers=target_headers,
     )
     assert response.status_code == 200, response.json()
@@ -971,7 +971,7 @@ async def test_duplicate_project(client: AsyncClient):
     # 7) Verify the target user can access the logs
     response = await client.get(
         f"/v0/logs",
-        params={"project": target_project_name, "context": context_name},
+        params={"project_name": target_project_name, "context": context_name},
         headers=target_headers,
     )
     assert response.status_code == 200, response.json()
@@ -998,7 +998,7 @@ async def test_duplicate_project(client: AsyncClient):
     # Verify the source project has the updated log
     response = await client.get(
         f"/v0/logs",
-        params={"project": source_project_name, "context": context_name},
+        params={"project_name": source_project_name, "context": context_name},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -1008,7 +1008,7 @@ async def test_duplicate_project(client: AsyncClient):
     # Verify the duplicated project does NOT have the updated log
     response = await client.get(
         f"/v0/logs",
-        params={"project": target_project_name, "context": context_name},
+        params={"project_name": target_project_name, "context": context_name},
         headers=target_headers,
     )
     assert response.status_code == 200, response.json()
@@ -1057,7 +1057,7 @@ async def test_duplicate_project(client: AsyncClient):
     )
     target_interfaces_response.headers = target_headers  # Use target user headers
     target_interfaces_response = await client.get(
-        f"/v0/interfaces/list?project={target_project_name}",
+        f"/v0/interfaces/list?project_name={target_project_name}",
         headers=target_headers,
     )
     assert (
@@ -1140,7 +1140,7 @@ async def test_export_project_template_with_valid_schema(client: AsyncClient):
 
     # Export project template
     export_request = {
-        "project": project_name,
+        "project_name": project_name,
         "include_metadata": True,
         "description": "Test project template",
         "tags": ["test", "export"],
@@ -1209,7 +1209,7 @@ async def test_export_project_template_with_valid_schema_specific_interfaces(
 
     # Export only specific interface
     export_request = {
-        "project": project_name,
+        "project_name": project_name,
         "interface_names": ["interface_to_export"],
         "include_metadata": True,
     }
@@ -1260,7 +1260,7 @@ async def test_export_project_template_with_valid_schema_checkpoints(
 
     # Export from checkpoints
     export_request = {
-        "project": project_name,
+        "project_name": project_name,
         "checkpoint": True,
         "include_metadata": True,
     }
@@ -1318,7 +1318,7 @@ async def test_import_project_template_with_valid_schema(client: AsyncClient):
     }
 
     import_request = {
-        "project": target_project,
+        "project_name": target_project,
         "template": template,
         "validate_first": False,  # Skip validation for v0
         "auto_sanitize": False,
@@ -1342,7 +1342,7 @@ async def test_import_project_template_with_valid_schema(client: AsyncClient):
 
     # Verify the interface was created
     interfaces_response = await client.get(
-        f"/v0/interfaces/list?project={target_project}",
+        f"/v0/interfaces/list?project_name={target_project}",
         headers=HEADERS,
     )
     assert interfaces_response.status_code == 200
@@ -1380,7 +1380,7 @@ async def test_import_project_template_with_valid_schema_name_prefix(
     }
 
     import_request = {
-        "project": target_project,
+        "project_name": target_project,
         "template": template,
         "interface_name_prefix": "imported_",
         "validate_first": False,
@@ -1397,7 +1397,7 @@ async def test_import_project_template_with_valid_schema_name_prefix(
 
     # Verify interface was created with prefix
     interfaces_response = await client.get(
-        f"/v0/interfaces/list?project={target_project}",
+        f"/v0/interfaces/list?project_name={target_project}",
         headers=HEADERS,
     )
     interfaces = interfaces_response.json()
@@ -1443,7 +1443,7 @@ async def test_import_project_template_with_valid_schema_overwrite_existing(
 
     # First try without overwrite (should fail or skip)
     import_request = {
-        "project": target_project,
+        "project_name": target_project,
         "template": template,
         "overwrite_existing": False,
         "validate_first": False,
@@ -1527,7 +1527,7 @@ async def test_import_project_template_with_valid_schema_multiple_interfaces(
     }
 
     import_request = {
-        "project": target_project,
+        "project_name": target_project,
         "template": template,
         "validate_first": False,
         "auto_sanitize": False,
@@ -1549,7 +1549,7 @@ async def test_import_project_template_with_valid_schema_multiple_interfaces(
 
     # Verify both interfaces were created
     interfaces_response = await client.get(
-        f"/v0/interfaces/list?project={target_project}",
+        f"/v0/interfaces/list?project_name={target_project}",
         headers=HEADERS,
     )
     interfaces = interfaces_response.json()
@@ -1635,7 +1635,7 @@ async def test_export_import_project_template_with_valid_schema_roundtrip(
 
     # Export the template
     export_request = {
-        "project": source_project,
+        "project_name": source_project,
         "include_metadata": True,
         "description": "Roundtrip test template",
         "tags": ["roundtrip", "test"],
@@ -1652,7 +1652,7 @@ async def test_export_import_project_template_with_valid_schema_roundtrip(
 
     # Import the template to target project
     import_request = {
-        "project": target_project,
+        "project_name": target_project,
         "template": exported_template,
         "validate_first": False,
         "auto_sanitize": False,
@@ -1674,7 +1674,7 @@ async def test_export_import_project_template_with_valid_schema_roundtrip(
 
     # Verify the imported structure matches
     target_interfaces_response = await client.get(
-        f"/v0/interfaces/list?project={target_project}",
+        f"/v0/interfaces/list?project_name={target_project}",
         headers=HEADERS,
     )
     target_interfaces = target_interfaces_response.json()
@@ -1721,7 +1721,7 @@ async def test_export_project_template_with_valid_schema_empty_project(
     await _create_project(client, empty_project)
 
     export_request = {
-        "project": empty_project,
+        "project_name": empty_project,
         "include_metadata": True,
     }
 
@@ -1756,7 +1756,7 @@ async def test_import_project_template_with_valid_schema_empty_template(
     }
 
     import_request = {
-        "project": target_project,
+        "project_name": target_project,
         "template": empty_template,
         "validate_first": False,
         "auto_sanitize": False,
@@ -1794,7 +1794,7 @@ async def test_projects_tree(client: AsyncClient):
     assert resp.status_code == 200
     data = resp.json()
 
-    match = next((p for p in data if p["project"] == project_name), None)
+    match = next((p for p in data if p["project_name"] == project_name), None)
     assert match is not None
     assert match["icon"] == "folder"
 

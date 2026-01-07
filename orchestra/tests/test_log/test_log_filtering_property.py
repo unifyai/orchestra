@@ -1540,7 +1540,7 @@ async def test_property_based_filtering(client, setup_test_data, expr_and_type):
 
     resp = await client.get(
         "/v0/logs",
-        params={"project": project_name, "filter_expr": expr_str},
+        params={"project_name": project_name, "filter_expr": expr_str},
         headers=HEADERS,
     )
 

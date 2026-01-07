@@ -40,7 +40,7 @@ class DeepgramService:
             )
         return response.json()
 
-    async def detect_language_from_audio(
+    def detect_language_from_audio(
         self,
         audio_content: bytes,
         user_id: str,
@@ -119,8 +119,8 @@ class DeepgramService:
             payload = {"url": signed_url}
 
             # Increased timeout for remote file processing
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(url, json=payload, headers=self.headers)
+            with httpx.Client(timeout=60.0) as client:
+                response = client.post(url, json=payload, headers=self.headers)
 
             response_data = self._handle_response(response)
 

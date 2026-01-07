@@ -221,7 +221,7 @@ async def test_get_logs_metric(
         else {"key": key, "from_ids": "&".join([str(i) for i in from_ids])}
     )
     response = await client.get(
-        f"/v0/logs/metric/{metric}?project={project_name}",
+        f"/v0/logs/metric/{metric}?project_name={project_name}",
         params=params,
         headers=HEADERS,
     )
@@ -293,7 +293,7 @@ async def test_get_logs_metric_batch(client: AsyncClient, use_jsonb_mode):
     #
     single_key = "_/temperature"
     resp = await client.get(
-        f"/v0/logs/metric/mean?project={project_name}&key={single_key}",
+        f"/v0/logs/metric/mean?project_name={project_name}&key={single_key}",
         headers=HEADERS,
     )
     assert resp.status_code == 200, resp.text
@@ -309,7 +309,7 @@ async def test_get_logs_metric_batch(client: AsyncClient, use_jsonb_mode):
     #
     multiple_keys = ["_/temperature", "_/safe", "temp_plus_10", "desc_len"]
     resp = await client.get(
-        f"/v0/logs/metric/mean?project={project_name}",
+        f"/v0/logs/metric/mean?project_name={project_name}",
         params={"key": json.dumps(multiple_keys)},
         headers=HEADERS,
     )
@@ -332,7 +332,7 @@ async def test_get_logs_metric_batch(client: AsyncClient, use_jsonb_mode):
         "_/safe": "_/safe == 'true'",  # only logs with safe == true
     }
     resp = await client.get(
-        f"/v0/logs/metric/mean?project={project_name}",
+        f"/v0/logs/metric/mean?project_name={project_name}",
         params={
             "key": json.dumps(["_/temperature", "_/safe"]),
             "filter_expr": json.dumps(filter_expr_dict),
@@ -367,7 +367,7 @@ async def test_get_logs_metric_batch(client: AsyncClient, use_jsonb_mode):
         "desc_len": "5&6",  # Only logs #5 and #6 for desc_len
     }
     resp = await client.get(
-        f"/v0/logs/metric/mean?project={project_name}",
+        f"/v0/logs/metric/mean?project_name={project_name}",
         params={
             "key": json.dumps(["_/temperature", "desc_len"]),
             "from_ids": json.dumps(from_ids_dict),
@@ -386,7 +386,7 @@ async def test_get_logs_metric_batch(client: AsyncClient, use_jsonb_mode):
         "_/safe": "2&3",  # Exclude logs 2 and 3 for safe
     }
     resp = await client.get(
-        f"/v0/logs/metric/mean?project={project_name}",
+        f"/v0/logs/metric/mean?project_name={project_name}",
         params={
             "key": json.dumps(["_/temperature", "_/safe"]),
             "exclude_ids": json.dumps(exclude_ids_dict),
@@ -441,7 +441,7 @@ async def test_get_logs_metric_grouped(client: AsyncClient, use_jsonb_mode):
 
     # Test 1: Simple metric without grouping (baseline)
     response = await client.get(
-        f"/v0/logs/metric/mean?project={project_name}",
+        f"/v0/logs/metric/mean?project_name={project_name}",
         params={"key": "_/temperature"},
         headers=HEADERS,
     )
@@ -454,7 +454,7 @@ async def test_get_logs_metric_grouped(client: AsyncClient, use_jsonb_mode):
 
     # Test 2: Single-level grouping by state
     response = await client.get(
-        f"/v0/logs/metric/mean?project={project_name}",
+        f"/v0/logs/metric/mean?project_name={project_name}",
         params={
             "key": "_/temperature",
             "group_by": "entries/_/state",
@@ -481,7 +481,7 @@ async def test_get_logs_metric_grouped(client: AsyncClient, use_jsonb_mode):
 
     # Test 3: Single-level grouping by derived field
     response = await client.get(
-        f"/v0/logs/metric/mean?project={project_name}",
+        f"/v0/logs/metric/mean?project_name={project_name}",
         params={
             "key": "_/temperature",
             "group_by": "derived_entries/state_len",
@@ -500,7 +500,7 @@ async def test_get_logs_metric_grouped(client: AsyncClient, use_jsonb_mode):
 
     # Test 4: Multi-level grouping (nested)
     response = await client.get(
-        f"/v0/logs/metric/mean?project={project_name}",
+        f"/v0/logs/metric/mean?project_name={project_name}",
         params={
             "key": "_/temperature",
             "group_by": json.dumps(["entries/_/state", "entries/_/safe"]),
@@ -543,7 +543,7 @@ async def test_get_logs_metric_grouped(client: AsyncClient, use_jsonb_mode):
 
     # Test 5: Grouping with filter expression
     response = await client.get(
-        f"/v0/logs/metric/mean?project={project_name}",
+        f"/v0/logs/metric/mean?project_name={project_name}",
         params={
             "key": "_/temperature",
             "group_by": "entries/_/state",
@@ -568,7 +568,7 @@ async def test_get_logs_metric_grouped(client: AsyncClient, use_jsonb_mode):
     # Test 6: Different metrics with grouping
     for metric in ["min", "max", "sum"]:
         response = await client.get(
-            f"/v0/logs/metric/{metric}?project={project_name}",
+            f"/v0/logs/metric/{metric}?project_name={project_name}",
             params={
                 "key": "_/temperature",
                 "group_by": "entries/_/state",
@@ -640,7 +640,7 @@ async def test_get_logs_metric_batched_with_grouping(
     response = await client.get(
         "/v0/logs/metric/mean",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "key": json.dumps(["_/temperature", "derived_temp", "state_len"]),
             "group_by": "entries/_/state",
         },
@@ -711,7 +711,7 @@ async def test_get_logs_metric_batched_with_grouping(
     response = await client.get(
         "/v0/logs/metric/mean",
         params={
-            "project": project_name,
+            "project_name": project_name,
             "key": json.dumps(["_/temperature", "derived_temp"]),
             "group_by": json.dumps(["entries/_/state", "entries/_/safe"]),
         },
@@ -995,7 +995,7 @@ async def test_get_logs_metric_shared_value_reduction(
 
     # Test 1: Numeric field with shared values (Group A) vs. different values (Group B)
     response = await client.get(
-        f"/v0/logs/metric/mean?project={project_name}",
+        f"/v0/logs/metric/mean?project_name={project_name}",
         params={
             "key": "score",
             "group_by": "entries/group",
@@ -1026,7 +1026,7 @@ async def test_get_logs_metric_shared_value_reduction(
 
     # Test 2: String field with shared values (Group C) vs. different values (Group D)
     response = await client.get(
-        f"/v0/logs/metric/mean?project={project_name}",
+        f"/v0/logs/metric/mean?project_name={project_name}",
         params={
             "key": "text",
             "group_by": "entries/group",
@@ -1054,7 +1054,7 @@ async def test_get_logs_metric_shared_value_reduction(
 
     # Test 3: Boolean field with shared values (Group E)
     response = await client.get(
-        f"/v0/logs/metric/mean?project={project_name}",
+        f"/v0/logs/metric/mean?project_name={project_name}",
         params={
             "key": "is_valid",
             "group_by": "entries/group",
@@ -1080,7 +1080,7 @@ async def test_get_logs_metric_shared_value_reduction(
 
     # Test 4: Object field with shared values (Group F)
     response = await client.get(
-        f"/v0/logs/metric/mean?project={project_name}",
+        f"/v0/logs/metric/mean?project_name={project_name}",
         params={
             "key": "config",
             "group_by": "entries/group",
@@ -1102,7 +1102,7 @@ async def test_get_logs_metric_shared_value_reduction(
     # Test 5: Verify shared value reduction works for all metrics on Group A's score
     for metric in ["sum", "min", "max", "median"]:
         response = await client.get(
-            f"/v0/logs/metric/{metric}?project={project_name}",
+            f"/v0/logs/metric/{metric}?project_name={project_name}",
             params={
                 "key": "score",
                 "group_by": "entries/group",
@@ -1210,7 +1210,7 @@ async def test_get_logs_metric_time_date_timedelta(client: AsyncClient, use_json
     # Test time values with different metrics
     for metric in ["mean", "min", "max", "var", "std"]:  # "sum",
         response = await client.get(
-            f"/v0/logs/metric/{metric}?project={project_name}",
+            f"/v0/logs/metric/{metric}?project_name={project_name}",
             params={"key": "time_value"},
             headers=HEADERS,
         )
@@ -1236,7 +1236,7 @@ async def test_get_logs_metric_time_date_timedelta(client: AsyncClient, use_json
     # Test date values with different metrics
     for metric in ["mean", "min", "max", "sum", "var", "std"]:
         response = await client.get(
-            f"/v0/logs/metric/{metric}?project={project_name}",
+            f"/v0/logs/metric/{metric}?project_name={project_name}",
             params={"key": "date_value"},
             headers=HEADERS,
         )
@@ -1264,7 +1264,7 @@ async def test_get_logs_metric_time_date_timedelta(client: AsyncClient, use_json
     # Test timedelta values with different metrics
     for metric in ["mean", "min", "max", "sum", "var", "std"]:
         response = await client.get(
-            f"/v0/logs/metric/{metric}?project={project_name}",
+            f"/v0/logs/metric/{metric}?project_name={project_name}",
             params={"key": "timedelta_value"},
             headers=HEADERS,
         )
@@ -1352,7 +1352,7 @@ async def test_get_logs_metric_with_mixed_null_float_derived_column(
 
     # Verify the derived column has mixed null/float values as expected
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1373,7 +1373,7 @@ async def test_get_logs_metric_with_mixed_null_float_derived_column(
     # This should not throw an exception even though the derived column has mixed null/float values
     try:
         response = await client.get(
-            f"/v0/logs/metric/mean?project={project_name}",
+            f"/v0/logs/metric/mean?project_name={project_name}",
             params={"key": json.dumps(all_fields_list)},
             headers=HEADERS,
         )
@@ -1428,7 +1428,7 @@ async def test_get_logs_metric_with_mixed_null_float_derived_column(
     for metric in ["min", "max", "sum", "count"]:
         try:
             response = await client.get(
-                f"/v0/logs/metric/{metric}?project={project_name}",
+                f"/v0/logs/metric/{metric}?project_name={project_name}",
                 params={"key": json.dumps(all_fields_list)},
                 headers=HEADERS,
             )
@@ -1506,7 +1506,7 @@ async def test_get_logs_metric_grouped_with_mixed_null_float_derived_column(
 
     # Verify the derived column has mixed null/float values as expected
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1527,7 +1527,7 @@ async def test_get_logs_metric_grouped_with_mixed_null_float_derived_column(
     # This should trigger _compute_metric_for_key_grouped and not throw an exception
     try:
         response = await client.get(
-            f"/v0/logs/metric/mean?project={project_name}",
+            f"/v0/logs/metric/mean?project_name={project_name}",
             params={
                 "key": json.dumps(all_fields_list),
                 "group_by": "Entries/category",
@@ -1650,7 +1650,7 @@ async def test_get_logs_metric_key_specific_filters_with_mixed_null_float_derive
 
     # Verify the derived column has mixed null/float values as expected
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1680,7 +1680,7 @@ async def test_get_logs_metric_key_specific_filters_with_mixed_null_float_derive
     # This should trigger compute_metric_for_key and not throw an exception
     try:
         response = await client.get(
-            f"/v0/logs/metric/mean?project={project_name}",
+            f"/v0/logs/metric/mean?project_name={project_name}",
             params={
                 "key": json.dumps(all_fields_list),
                 "filter_expr": json.dumps(filter_expr_dict),
@@ -1731,7 +1731,7 @@ async def test_get_logs_metric_key_specific_filters_with_mixed_null_float_derive
     for metric in ["min", "max", "sum", "count"]:
         try:
             response = await client.get(
-                f"/v0/logs/metric/{metric}?project={project_name}",
+                f"/v0/logs/metric/{metric}?project_name={project_name}",
                 params={
                     "key": json.dumps(all_fields_list),
                     "filter_expr": json.dumps(filter_expr_dict),
@@ -1792,7 +1792,7 @@ async def test_metrics_count_matches_rows_and_resets_on_context_delete(
         resp = await client.post(
             "/v0/logs/fields",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "context": ctx,
                 "fields": {
                     "row_id": {"type": "int"},
@@ -1840,7 +1840,7 @@ async def test_metrics_count_matches_rows_and_resets_on_context_delete(
         resp = await client.get(
             "/v0/logs/metric/count",
             params={
-                "project": project_name,
+                "project_name": project_name,
                 "key": "row_id",
                 "context": ctx,
             },
@@ -1863,7 +1863,7 @@ async def test_metrics_count_matches_rows_and_resets_on_context_delete(
         # 4) Verify get_logs(...) returns 3 rows and metric count == 3
         rows_resp = await client.get(
             "/v0/logs",
-            params={"project": project_name, "context": ctx},
+            params={"project_name": project_name, "context": ctx},
             headers=HEADERS,
         )
         assert rows_resp.status_code == 200, rows_resp.text
@@ -1872,7 +1872,7 @@ async def test_metrics_count_matches_rows_and_resets_on_context_delete(
         metric_resp = await client.get(
             "/v0/logs/metric/count",
             params={
-                "project": project_name,
+                "project_name": project_name,
                 "key": "row_id",
                 "context": ctx,
             },
@@ -1898,7 +1898,7 @@ async def test_metrics_count_matches_rows_and_resets_on_context_delete(
         metric_reset_resp = await client.get(
             "/v0/logs/metric/count",
             params={
-                "project": project_name,
+                "project_name": project_name,
                 "key": "row_id",
                 "context": ctx,
             },
@@ -1956,7 +1956,7 @@ async def test_metrics_max_matches_row_ids_and_resets_on_context_delete(
         resp = await client.post(
             "/v0/logs/fields",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "context": ctx,
                 "fields": {
                     "row_id": {"type": "int"},
@@ -2002,7 +2002,7 @@ async def test_metrics_max_matches_row_ids_and_resets_on_context_delete(
         resp = await client.get(
             "/v0/logs/metric/max",
             params={
-                "project": project_name,
+                "project_name": project_name,
                 "key": "row_id",
                 "context": ctx,
             },
@@ -2034,7 +2034,7 @@ async def test_metrics_max_matches_row_ids_and_resets_on_context_delete(
         # Read back the rows and compute max(row_id)
         rows_resp = await client.get(
             "/v0/logs",
-            params={"project": project_name, "context": ctx},
+            params={"project_name": project_name, "context": ctx},
             headers=HEADERS,
         )
         assert rows_resp.status_code == 200, rows_resp.text
@@ -2059,7 +2059,7 @@ async def test_metrics_max_matches_row_ids_and_resets_on_context_delete(
         metric_resp = await client.get(
             "/v0/logs/metric/max",
             params={
-                "project": project_name,
+                "project_name": project_name,
                 "key": "row_id",
                 "context": ctx,
             },
@@ -2084,7 +2084,7 @@ async def test_metrics_max_matches_row_ids_and_resets_on_context_delete(
         metric_reset_resp = await client.get(
             "/v0/logs/metric/max",
             params={
-                "project": project_name,
+                "project_name": project_name,
                 "key": "row_id",
                 "context": ctx,
             },

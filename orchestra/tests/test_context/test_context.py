@@ -400,7 +400,7 @@ async def test_add_log_to_context(client: AsyncClient):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "params": {"a/b/param1": "test"},
             "entries": {
                 "metric": 0.95,
@@ -436,7 +436,7 @@ async def test_implicit_context_creation(client: AsyncClient):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "params": {"param1": "test"},
             "entries": {
                 "metric": 0.95,
@@ -487,7 +487,7 @@ async def test_get_logs_by_context(client: AsyncClient):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "params": {"a/b/param1": "test"},
             "entries": {
                 "metric": 0.95,
@@ -501,7 +501,7 @@ async def test_get_logs_by_context(client: AsyncClient):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "params": {"a/b/param1": "test"},
             "entries": {
                 "metric": 1.5,
@@ -517,7 +517,7 @@ async def test_get_logs_by_context(client: AsyncClient):
 
     # Get logs by context (only one log should be returned)
     response = await client.get(
-        f"/v0/logs?project={project_name}&context=different-context",
+        f"/v0/logs?project_name={project_name}&context=different-context",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -552,7 +552,7 @@ async def test_context_as_string(client: AsyncClient):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "params": {"param1": "test"},
             "entries": {
                 "metric": 0.95,
@@ -567,7 +567,7 @@ async def test_context_as_string(client: AsyncClient):
 
     # Get logs by context string
     response = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}",
+        f"/v0/logs?project_name={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -596,7 +596,7 @@ async def test_get_logs_no_context(client: AsyncClient):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "params": {"a/b/param1": "test"},
             "entries": {
                 "metric": 0.95,
@@ -613,7 +613,7 @@ async def test_get_logs_no_context(client: AsyncClient):
 
     # Get logs without context (should return 0 logs)
     response = await client.get(
-        f"/v0/logs?project={project_name}",
+        f"/v0/logs?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -641,7 +641,7 @@ async def test_get_fields_no_context(client: AsyncClient):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "params": {"a/b/param1": "test"},
             "entries": {
                 "metric": 0.95,
@@ -658,7 +658,7 @@ async def test_get_fields_no_context(client: AsyncClient):
 
     # Get fields with context
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}&context={context_name}",
+        f"/v0/logs/fields?project_name={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -668,7 +668,7 @@ async def test_get_fields_no_context(client: AsyncClient):
 
     # Get fields without context (should return 0 fields)
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}",
+        f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
@@ -698,7 +698,7 @@ async def test_add_log_to_multiple_contexts(client: AsyncClient):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "params": {"a/b/param1": "test"},
             "entries": {
                 "metric": 0.95,
@@ -724,7 +724,7 @@ async def test_add_log_to_multiple_contexts(client: AsyncClient):
     # Verify that log appears in both contexts
     for context in contexts:
         response = await client.get(
-            f"/v0/logs?project={project_name}&context={context}",
+            f"/v0/logs?project_name={project_name}&context={context}",
             headers=HEADERS,
         )
         assert response.status_code == 200
@@ -873,7 +873,7 @@ async def test_implicit_field_creation(client: AsyncClient):
 
     # Check that field types were created for the context
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}&context={context_name}",
+        f"/v0/logs/fields?project_name={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -907,7 +907,7 @@ async def test_implicit_field_creation(client: AsyncClient):
 
     # Check that only new field types were created
     response = await client.get(
-        f"/v0/logs/fields?project={project_name}&context={context_name}",
+        f"/v0/logs/fields?project_name={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1084,7 +1084,7 @@ async def test_context_allow_duplicates(client: AsyncClient):
 
     # Create a log with specific entries in the no-duplicates context
     log_data = {
-        "project": project_name,
+        "project_name": project_name,
         "params": {"model": "gpt-4", "temperature": 0.7},
         "entries": {
             "accuracy": 0.95,
@@ -1191,7 +1191,7 @@ async def test_context_duplicate_updates(client: AsyncClient):
 
     # Create two logs with different values in the no-duplicates context
     log_data_1 = {
-        "project": project_name,
+        "project_name": project_name,
         "params": {"model": "gpt-4", "temperature": 0.7},
         "entries": {
             "accuracy": 0.95,
@@ -1202,7 +1202,7 @@ async def test_context_duplicate_updates(client: AsyncClient):
     }
 
     log_data_2 = {
-        "project": project_name,
+        "project_name": project_name,
         "params": {"model": "gpt-4", "temperature": 0.7},
         "entries": {
             "accuracy": 0.85,
@@ -1247,7 +1247,7 @@ async def test_context_duplicate_updates(client: AsyncClient):
 
     # Create two logs with different values in the default context
     log_data_3 = {
-        "project": project_name,
+        "project_name": project_name,
         "params": {"model": "gpt-3.5", "temperature": 0.5},
         "entries": {
             "accuracy": 0.90,
@@ -1258,7 +1258,7 @@ async def test_context_duplicate_updates(client: AsyncClient):
     }
 
     log_data_4 = {
-        "project": project_name,
+        "project_name": project_name,
         "params": {"model": "gpt-3.5", "temperature": 0.5},
         "entries": {
             "accuracy": 0.80,
@@ -1324,7 +1324,7 @@ async def test_add_logs_with_copy_false(client: AsyncClient):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "params": {"model": "test-model"},
             "entries": {
                 "metric": 0.95,
@@ -1351,7 +1351,7 @@ async def test_add_logs_with_copy_false(client: AsyncClient):
 
     # Verify the logs in the context have the same IDs as the original logs
     response = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}&return_ids_only=true",
+        f"/v0/logs?project_name={project_name}&context={context_name}&return_ids_only=true",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1382,7 +1382,7 @@ async def test_add_logs_with_copy_true(client: AsyncClient):
     response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "entries": {
                 "metric": 0.95,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -1409,7 +1409,7 @@ async def test_add_logs_with_copy_true(client: AsyncClient):
 
     # Verify the logs in the context have different IDs than the original logs
     response = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}&return_ids_only=true",
+        f"/v0/logs?project_name={project_name}&context={context_name}&return_ids_only=true",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1419,7 +1419,7 @@ async def test_add_logs_with_copy_true(client: AsyncClient):
 
     # Verify the content of the copied log is the same as the original
     response = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}",
+        f"/v0/logs?project_name={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1452,7 +1452,7 @@ async def test_add_logs_via_arguments(client: AsyncClient):
         response = await client.post(
             "/v0/logs",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "params": {"model": "test-model"},
                 "entries": {
                     "metric": metric_value,
@@ -1479,7 +1479,7 @@ async def test_add_logs_via_arguments(client: AsyncClient):
 
     # Verify only logs with metric > 0.9 were added to the context
     response = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}",
+        f"/v0/logs?project_name={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1511,7 +1511,7 @@ async def test_add_logs_via_arguments_with_copy(client: AsyncClient):
         response = await client.post(
             "/v0/logs",
             json={
-                "project": project_name,
+                "project_name": project_name,
                 "params": {"model": "test-model"},
                 "entries": {
                     "metric": metric_value,
@@ -1524,7 +1524,7 @@ async def test_add_logs_via_arguments_with_copy(client: AsyncClient):
 
     # Get all logs to compare IDs later
     response = await client.get(
-        f"/v0/logs?project={project_name}&return_ids_only=true",
+        f"/v0/logs?project_name={project_name}&return_ids_only=true",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1547,7 +1547,7 @@ async def test_add_logs_via_arguments_with_copy(client: AsyncClient):
 
     # Verify logs in the context have different IDs than the original logs
     response = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}&return_ids_only=true",
+        f"/v0/logs?project_name={project_name}&context={context_name}&return_ids_only=true",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1561,7 +1561,7 @@ async def test_add_logs_via_arguments_with_copy(client: AsyncClient):
 
     # Verify the content of the copied logs
     response = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}",
+        f"/v0/logs?project_name={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1858,7 +1858,7 @@ async def test_nested_ids_batch_creation(client: AsyncClient):
     log_response = await client.post(
         "/v0/logs",
         json={
-            "project": project_name,
+            "project_name": project_name,
             "context": context_name,
             # Create a batch of 5 logs, each with some data and parent ID
             "entries": [{"data": f"step_{i}", "run_id": 0} for i in range(batch_size)],
@@ -2191,7 +2191,7 @@ async def test_composite_key_mixed_types(client: AsyncClient):
 
     # Verify we can retrieve all logs
     response = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}",
+        f"/v0/logs?project_name={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -2466,7 +2466,7 @@ async def test_independent_auto_counting(client: AsyncClient):
 
     # Get logs to verify all fields
     response = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}",
+        f"/v0/logs?project_name={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -2492,7 +2492,7 @@ async def test_independent_auto_counting(client: AsyncClient):
 
     # Get logs to verify all fields
     response = await client.get(
-        f"/v0/logs?project={project_name}&context={context_name}",
+        f"/v0/logs?project_name={project_name}&context={context_name}",
         headers=HEADERS,
     )
     assert response.status_code == 200
