@@ -72,13 +72,10 @@ __all__ = [
     "_substitute_placeholders",
     "_maybe_vector_column",
     "_ensure_vectors_exist",
-    "_ensure_vectors_exist_sync",
     "_queue_embeddings_for_generation",
     "_get_or_generate_embedding",
     "_get_embedding",
-    "_get_embedding_sync",
     "_get_embeddings_batch",
-    "_get_embeddings_batch_sync",
     "_get_image_embedding_batch",
     "_get_image_embedding_from_url",
     "_is_jsonb_expression",
@@ -422,41 +419,6 @@ def _get_embeddings_batch(
     for batch_result in batch_results:
         out.extend(batch_result)
     return out
-
-
-# =============================================================================
-# Aliases for backwards compatibility.
-# The embedding functions are now natively sync, so these are simple aliases.
-# =============================================================================
-
-
-def _get_embedding_sync(
-    text: str,
-    model: str | None = None,
-    dimensions: int | None = None,
-) -> list[float]:
-    """Alias for _get_embedding (now natively sync)."""
-    return _get_embedding(text, model, dimensions)
-
-
-def _get_embeddings_batch_sync(
-    texts: list[str],
-    model: str | None = None,
-    dimensions: int | None = None,
-) -> list[list[float]]:
-    """Alias for _get_embeddings_batch (now natively sync)."""
-    return _get_embeddings_batch(texts, model, dimensions)
-
-
-def _ensure_vectors_exist_sync(
-    session: "Session",
-    id_to_text: dict[int, str],
-    model: Optional[str],
-    dimensions: Optional[int],
-    key: str,
-) -> None:
-    """Alias for _ensure_vectors_exist (now natively sync)."""
-    return _ensure_vectors_exist(session, id_to_text, model, dimensions, key)
 
 
 def _get_image_embedding_from_url(
