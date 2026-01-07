@@ -82,14 +82,13 @@ class AsyncLegacyInterfaceDAO:
 
     async def delete_interface(self, project_id: int, name: str):
         try:
-            interface = (
-                self.session.query(Interface)
-                .filter(
+            result = await self.session.execute(
+                select(Interface).where(
                     Interface.project_id == project_id,
                     Interface.name == name,
                 )
-                .first()
             )
+            interface = result.scalars().first()
             await self.session.delete(interface)
             await self.session.commit()
         except:

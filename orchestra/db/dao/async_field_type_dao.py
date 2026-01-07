@@ -70,15 +70,14 @@ class AsyncFieldTypeDAO:
         self._validate_description(description)
 
         # First check if a field with this name exists but with a different category
-        existing = (
-            self.session.query(FieldType)
-            .filter(
+        result = await self.session.execute(
+            select(FieldType).where(
                 FieldType.project_id == project_id,
                 FieldType.field_name == field_name,
                 FieldType.context_id == context_id,
             )
-            .first()
         )
+        existing = result.scalars().first()
         if existing:
             if existing.field_category != field_category:
                 new_article = "an" if field_category == "entry" else "a"
@@ -210,15 +209,14 @@ class AsyncFieldTypeDAO:
         self._validate_description(description)
 
         # First check if a field with this name exists but with a different category
-        existing = (
-            self.session.query(FieldType)
-            .filter(
+        result = await self.session.execute(
+            select(FieldType).where(
                 FieldType.project_id == project_id,
                 FieldType.field_name == field_name,
                 FieldType.context_id == context_id,
             )
-            .first()
         )
+        existing = result.scalars().first()
         if existing and existing.field_category != field_category:
             raise ValueError(
                 f"Field '{field_name}' already exists as a {existing.field_category}. "
@@ -288,15 +286,14 @@ class AsyncFieldTypeDAO:
         This method executes one query per call.
         """
         # First get the existing field type if it exists
-        existing = (
-            self.session.query(FieldType)
-            .filter(
+        result = await self.session.execute(
+            select(FieldType).where(
                 FieldType.project_id == project_id,
                 FieldType.field_name == field_name,
                 FieldType.context_id == context_id,
             )
-            .first()
         )
+        existing = result.scalars().first()
 
         if not existing:
             raise ValueError(f"Field type {field_name} does not exist")
@@ -326,15 +323,14 @@ class AsyncFieldTypeDAO:
 
         # Verify all fields exist first
         field_names = list(field_mutability_map.keys())
-        existing_fields = (
-            self.session.query(FieldType)
-            .filter(
+        result = await self.session.execute(
+            select(FieldType).where(
                 FieldType.project_id == project_id,
                 FieldType.context_id == context_id,
                 FieldType.field_name.in_(field_names),
             )
-            .all()
         )
+        existing_fields = result.scalars().all()
 
         existing_field_names = {f.field_name for f in existing_fields}
         missing_fields = set(field_names) - existing_field_names
@@ -442,15 +438,14 @@ class AsyncFieldTypeDAO:
             ValueError: If the field doesn't exist or if the new name conflicts with an existing field
         """
         # First check if the old field exists
-        field_to_rename = (
-            self.session.query(FieldType)
-            .filter(
+        result = await self.session.execute(
+            select(FieldType).where(
                 FieldType.project_id == project_id,
                 FieldType.field_name == old_field_name,
                 FieldType.context_id == context_id,
             )
-            .first()
         )
+        field_to_rename = result.scalars().first()
 
         if not field_to_rename:
             raise ValueError(
@@ -458,15 +453,14 @@ class AsyncFieldTypeDAO:
             )
 
         # Check if the new name would conflict with an existing field
-        existing_field = (
-            self.session.query(FieldType)
-            .filter(
+        result = await self.session.execute(
+            select(FieldType).where(
                 FieldType.project_id == project_id,
                 FieldType.field_name == new_field_name,
                 FieldType.context_id == context_id,
             )
-            .first()
         )
+        existing_field = result.scalars().first()
 
         if existing_field:
             raise ValueError(

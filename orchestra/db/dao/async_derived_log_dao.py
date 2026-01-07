@@ -368,29 +368,28 @@ class AsyncDerivedLogDAO:
             # Check for key conflicts
             if key and key != derived_log.key:
                 # Get the associated log_event_id
-                log_event_derived_log = (
-                    self.session.query(LogEventDerivedLog)
-                    .filter_by(derived_log_id=derived_log.id)
-                    .first()
+                result = await self.session.execute(
+                    select(LogEventDerivedLog).filter_by(derived_log_id=derived_log.id)
                 )
+                log_event_derived_log = result.scalars().first()
 
                 if log_event_derived_log:
                     # Check if another derived log with this key exists for the same log event
-                    exists = (
-                        self.session.query(DerivedLog)
+                    result = await self.session.execute(
+                        select(DerivedLog)
                         .join(
                             LogEventDerivedLog,
                             LogEventDerivedLog.derived_log_id == DerivedLog.id,
                         )
-                        .filter(
+                        .where(
                             LogEventDerivedLog.log_event_id
                             == log_event_derived_log.log_event_id,
                             DerivedLog.key == key,
                             DerivedLog.id
                             != derived_log.id,  # Exclude current derived log
                         )
-                        .first()
                     )
+                    exists = result.scalars().first()
                     if exists:
                         raise ValueError(
                             f"Key '{key}' already exists for this log event",

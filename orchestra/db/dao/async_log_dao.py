@@ -655,18 +655,19 @@ class AsyncLogDAO:
         )
 
         # Query FieldType for media fields (field_type IN ('image', 'audio'))
-        media_field_query = self.session.query(FieldType.field_name).filter(
+        media_field_stmt = select(FieldType.field_name).where(
             FieldType.project_id == project_id,
             FieldType.field_type.in_(("image", "audio")),
         )
 
         # Filter to only specified field names if provided
         if field_names:
-            media_field_query = media_field_query.filter(
+            media_field_stmt = media_field_stmt.where(
                 FieldType.field_name.in_(field_names),
             )
 
-        media_fields = [row[0] for row in media_field_query.all()]
+        result = await self.session.execute(media_field_stmt)
+        media_fields = [row[0] for row in result.all()]
 
         if not media_fields:
             return
@@ -676,14 +677,13 @@ class AsyncLogDAO:
         )
 
         # Query LogEvent.data for the media field values
-        log_events = (
-            self.session.query(LogEvent.id, LogEvent.data)
-            .filter(
+        result = await self.session.execute(
+            select(LogEvent.id, LogEvent.data).where(
                 LogEvent.id.in_(log_event_ids),
                 LogEvent.project_id == project_id,
             )
-            .all()
         )
+        log_events = result.all()
 
         # Extract GCS URLs from the data JSONB column
         urls_to_delete = []
@@ -745,15 +745,15 @@ class AsyncLogDAO:
 
             if log_event_log:
                 # Find JSONLog via LogEventJSONLog association
-                json_log = (
-                    self.session.query(JSONLog)
+                result = await self.session.execute(
+                    select(JSONLog)
                     .join(LogEventJSONLog, LogEventJSONLog.json_log_id == JSONLog.id)
-                    .filter(
+                    .where(
                         LogEventJSONLog.log_event_id == log_event_log.log_event_id,
                         JSONLog.key == log.key,
                     )
-                    .first()
                 )
+                json_log = result.scalars().first()
             else:
                 json_log = None
             if json_log:
@@ -778,14 +778,13 @@ class AsyncLogDAO:
             return
 
         # Fetch all unique field definitions for these projects
-        field_types = (
-            self.session.query(FieldType)
-            .filter(
+        result = await self.session.execute(
+            select(FieldType).where(
                 FieldType.project_id.in_(all_project_ids),
                 FieldType.unique == True,
             )
-            .all()
         )
+        field_types = result.scalars().all()
 
         for ft in field_types:
             unique_field_defs[(ft.project_id, ft.context_id, ft.field_name)] = ft
@@ -793,11 +792,10 @@ class AsyncLogDAO:
         # Fetch all contexts to check for composite keys
         contexts_with_composite_keys = {}
         if all_context_ids:
-            contexts = (
-                self.session.query(Context)
-                .filter(Context.id.in_(all_context_ids))
-                .all()
+            result = await self.session.execute(
+                select(Context).where(Context.id.in_(all_context_ids))
             )
+            contexts = result.scalars().all()
             for ctx in contexts:
                 if ctx.unique_keys and len(ctx.unique_keys) > 0:
                     contexts_with_composite_keys[ctx.id] = ctx
@@ -1289,15 +1287,15 @@ class AsyncLogDAO:
                 keys_to_check = [pk[1] for pk in pks_v]
                 versions_to_check = [pk[2] for pk in pks_v]
 
-                rows_to_check = (
-                    self.session.query(Log, LogEventLog.log_event_id)
+                result = await self.session.execute(
+                    select(Log, LogEventLog.log_event_id)
                     .join(LogEventLog, LogEventLog.log_id == Log.id)
-                    .filter(LogEventLog.log_event_id.in_(log_event_ids_to_check))
-                    .filter(Log.key.in_(keys_to_check))
-                    .filter(Log.param_version.in_(versions_to_check))
+                    .where(LogEventLog.log_event_id.in_(log_event_ids_to_check))
+                    .where(Log.key.in_(keys_to_check))
+                    .where(Log.param_version.in_(versions_to_check))
                     .with_for_update()
-                    .all()
                 )
+                rows_to_check = result.all()
                 for row, log_event_id in rows_to_check:
                     intended = rows_log_versioned_pk2val[
                         (log_event_id, row.key, row.param_version)
@@ -1349,14 +1347,14 @@ class AsyncLogDAO:
             if rows_json_pk2val:
                 pks = list(rows_json_pk2val.keys())
                 # Check for existing JSONLog entries by joining through LogEventJSONLog
-                conflicting = (
-                    self.session.query(JSONLog, LogEventJSONLog.log_event_id)
+                result = await self.session.execute(
+                    select(JSONLog, LogEventJSONLog.log_event_id)
                     .join(LogEventJSONLog, LogEventJSONLog.json_log_id == JSONLog.id)
-                    .filter(LogEventJSONLog.log_event_id.in_([pk[0] for pk in pks]))
-                    .filter(JSONLog.key.in_([pk[1] for pk in pks]))
+                    .where(LogEventJSONLog.log_event_id.in_([pk[0] for pk in pks]))
+                    .where(JSONLog.key.in_([pk[1] for pk in pks]))
                     .with_for_update()
-                    .all()
                 )
+                conflicting = result.all()
                 for json_log, log_event_id in conflicting:
                     intended = rows_json_pk2val[(log_event_id, json_log.key)]
                     if json_log.value != intended:
@@ -1541,9 +1539,9 @@ class AsyncLogDAO:
         Check if a composite key combination already exists in the context.
         """
         q = (
-            self.session.query(LogEvent.id)
+            select(LogEvent.id)
             .join(LogEventContext)
-            .filter(LogEventContext.context_id == context_id)
+            .where(LogEventContext.context_id == context_id)
         )
 
         # Add filters for each composite key column
@@ -1560,7 +1558,8 @@ class AsyncLogDAO:
         # Ensure we have exactly the composite key columns
         q = q.group_by(LogEvent.id).having(func.count(Log.id) == len(composite_values))
 
-        return await self.session.execute(q.limit(1)).first() is not None
+        result = await self.session.execute(q.limit(1))
+        return result.first() is not None
 
     async def _validate_parent_exists(
         self,
@@ -2017,13 +2016,13 @@ class AsyncLogDAO:
                 # Query all existing logs in one go
                 log_event_ids = [k[0] for k in update_groups.keys()]
                 keys = [k[1] for k in update_groups.keys()]
-                existing_logs = (
-                    self.session.query(Log, LogEventLog.log_event_id)
+                result = await self.session.execute(
+                    select(Log, LogEventLog.log_event_id)
                     .join(LogEventLog, LogEventLog.log_id == Log.id)
-                    .filter(LogEventLog.log_event_id.in_(log_event_ids))
-                    .filter(Log.key.in_(keys))
-                    .all()
+                    .where(LogEventLog.log_event_id.in_(log_event_ids))
+                    .where(Log.key.in_(keys))
                 )
+                existing_logs = result.all()
 
                 # Create a lookup for existing logs
                 existing_log_map = {
@@ -2031,13 +2030,13 @@ class AsyncLogDAO:
                 }
 
                 # Query all existing JSON logs in one go via LogEventJSONLog association
-                existing_json_logs = (
-                    self.session.query(JSONLog, LogEventJSONLog.log_event_id)
+                result = await self.session.execute(
+                    select(JSONLog, LogEventJSONLog.log_event_id)
                     .join(LogEventJSONLog, LogEventJSONLog.json_log_id == JSONLog.id)
-                    .filter(LogEventJSONLog.log_event_id.in_(log_event_ids))
-                    .filter(JSONLog.key.in_(keys))
-                    .all()
+                    .where(LogEventJSONLog.log_event_id.in_(log_event_ids))
+                    .where(JSONLog.key.in_(keys))
                 )
+                existing_json_logs = result.all()
 
                 # Create a lookup for existing JSON logs
                 existing_json_log_map = {
@@ -2200,15 +2199,15 @@ class AsyncLogDAO:
                         keys_check = [pk[1] for pk in log_pks]
                         versions_check = [pk[2] for pk in log_pks]
 
-                        existing_conflicting_logs = (
-                            self.session.query(Log, LogEventLog.log_event_id)
+                        result = await self.session.execute(
+                            select(Log, LogEventLog.log_event_id)
                             .join(LogEventLog, LogEventLog.log_id == Log.id)
-                            .filter(LogEventLog.log_event_id.in_(log_event_ids_check))
-                            .filter(Log.key.in_(keys_check))
-                            .filter(Log.param_version.in_(versions_check))
+                            .where(LogEventLog.log_event_id.in_(log_event_ids_check))
+                            .where(Log.key.in_(keys_check))
+                            .where(Log.param_version.in_(versions_check))
                             .with_for_update()
-                            .all()
                         )
+                        existing_conflicting_logs = result.all()
 
                         for existing_log, log_event_id in existing_conflicting_logs:
                             pk = (
@@ -2231,21 +2230,21 @@ class AsyncLogDAO:
                         json_log_event_ids_check = [pk[0] for pk in json_pks]
                         json_keys_check = [pk[1] for pk in json_pks]
 
-                        existing_conflicting_json_logs = (
-                            self.session.query(JSONLog, LogEventJSONLog.log_event_id)
+                        result = await self.session.execute(
+                            select(JSONLog, LogEventJSONLog.log_event_id)
                             .join(
                                 LogEventJSONLog,
                                 LogEventJSONLog.json_log_id == JSONLog.id,
                             )
-                            .filter(
+                            .where(
                                 LogEventJSONLog.log_event_id.in_(
                                     json_log_event_ids_check,
                                 ),
                             )
-                            .filter(JSONLog.key.in_(json_keys_check))
+                            .where(JSONLog.key.in_(json_keys_check))
                             .with_for_update()
-                            .all()
                         )
+                        existing_conflicting_json_logs = result.all()
 
                         for (
                             existing_json_log,
@@ -2278,13 +2277,13 @@ class AsyncLogDAO:
 
                     # Bulk query to find all existing logs for these log_events
                     # This query finds logs that match our (log_event_id, key, param_version) tuples
-                    existing_logs_query = (
-                        self.session.query(
+                    result = await self.session.execute(
+                        select(
                             Log,
                             LogEventLog.log_event_id,
                         )
                         .join(LogEventLog, LogEventLog.log_id == Log.id)
-                        .filter(
+                        .where(
                             or_(
                                 *[
                                     and_(
@@ -2300,7 +2299,7 @@ class AsyncLogDAO:
 
                     # Build a map of (log_event_id, key, param_version) -> Log
                     existing_map = {}
-                    for log, log_event_id in existing_logs_query:
+                    for log, log_event_id in result.all():
                         key = (log_event_id, log.key, log.param_version)
                         existing_map[key] = log
 
@@ -2477,15 +2476,14 @@ class AsyncLogDAO:
             ValueError: If value is not in allowed enum values when restrict=True
         """
         # Query for existing field type
-        field_type = (
-            self.session.query(FieldType)
-            .filter_by(
+        result = await self.session.execute(
+            select(FieldType).filter_by(
                 project_id=project_id,
                 field_name=key,
                 context_id=context_id,
             )
-            .first()
         )
+        field_type = result.scalars().first()
 
         if field_type:
             # Validate or update enum values
@@ -2642,12 +2640,12 @@ class AsyncLogDAO:
 
             for (le_id, base_key), group in grouped.items():
                 # Lock the Log row for update
-                log_entry = (
-                    self.session.query(Log)
+                result = await self.session.execute(
+                    select(Log)
                     .join(LogEventLog, LogEventLog.log_id == Log.id)
-                    .filter(LogEventLog.log_event_id == le_id, Log.key == base_key)
-                    .first()
+                    .where(LogEventLog.log_event_id == le_id, Log.key == base_key)
                 )
+                log_entry = result.scalars().first()
                 if not log_entry:
                     raise ValueError(
                         f"Log entry not found for log_event_id={le_id}, key='{base_key}'",
@@ -2675,15 +2673,15 @@ class AsyncLogDAO:
                     is_versioned = bool(context and context.is_versioned)
 
                 # Get the corresponding JSONLog if it exists via LogEventJSONLog association
-                json_log = (
-                    self.session.query(JSONLog)
+                result = await self.session.execute(
+                    select(JSONLog)
                     .join(LogEventJSONLog, LogEventJSONLog.json_log_id == JSONLog.id)
-                    .filter(
+                    .where(
                         LogEventJSONLog.log_event_id == le_id,
                         JSONLog.key == base_key,
                     )
-                    .first()
                 )
+                json_log = result.scalars().first()
 
                 # Get current document value
                 current_doc = copy.deepcopy(log_entry.value)
@@ -2824,12 +2822,12 @@ class AsyncLogDAO:
         # prevent race conditions (pessimistic locking)
         # =====================================================================
         all_log_ids = list(updates_by_log_id.keys())
-        log_events = (
-            self.session.query(LogEvent)
-            .filter(LogEvent.id.in_(all_log_ids))
+        result = await self.session.execute(
+            select(LogEvent)
+            .where(LogEvent.id.in_(all_log_ids))
             .with_for_update()  # Lock rows to prevent concurrent modifications
-            .all()
         )
+        log_events = result.scalars().all()
 
         # Build a lookup map for O(1) access
         log_event_map = {le.id: le for le in log_events}
@@ -2916,9 +2914,10 @@ class AsyncLogDAO:
                     )
 
             if or_conditions:
-                existing_field_types = (
-                    self.session.query(FieldType).filter(or_(*or_conditions)).all()
+                result = await self.session.execute(
+                    select(FieldType).where(or_(*or_conditions))
                 )
+                existing_field_types = result.scalars().all()
                 for ft in existing_field_types:
                     field_type_map[(ft.project_id, ft.context_id, ft.field_name)] = ft
 
@@ -3367,12 +3366,12 @@ class AsyncLogDAO:
             # BULK FETCH: Get all LogEvents in a SINGLE query with FOR UPDATE
             # =====================================================================
             all_log_ids = list(set(le_id for (le_id, _) in grouped.keys()))
-            log_events = (
-                self.session.query(LogEvent)
-                .filter(LogEvent.id.in_(all_log_ids))
+            query_result = await self.session.execute(
+                select(LogEvent)
+                .where(LogEvent.id.in_(all_log_ids))
                 .with_for_update()  # Lock rows to prevent concurrent modifications
-                .all()
             )
+            log_events = query_result.scalars().all()
 
             # Build lookup map
             log_event_map = {le.id: le for le in log_events}
