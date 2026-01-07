@@ -1,6 +1,0 @@
-runner1:
-  load: 1
-  input_policy: short
-runner2:
-  load: 1
-  input_policy: long
