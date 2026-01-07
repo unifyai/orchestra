@@ -19,11 +19,11 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from orchestra.db.dao.auth_user_dao import AuthUserDAO
-from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
-from orchestra.db.dao.recharge_dao import RechargeDAO
-from orchestra.db.dao.users_dao import UsersDAO
-from orchestra.db.dao.webhook_log_dao import WebhookLogDAO
+from orchestra.db.dao.async_auth_user_dao import AsyncAuthUserDAO
+from orchestra.db.dao.async_organization_billing_dao import AsyncOrganizationBillingDAO
+from orchestra.db.dao.async_recharge_dao import AsyncRechargeDAO
+from orchestra.db.dao.async_users_dao import AsyncUsersDAO
+from orchestra.db.dao.async_webhook_log_dao import AsyncWebhookLogDAO
 from orchestra.db.models.orchestra_models import Organization, Recharge, RechargeStatus
 from orchestra.db.models.orchestra_models import Users as User
 from orchestra.db.models.orchestra_models import WebhookLog
@@ -88,7 +88,7 @@ def process_checkout_session_event(
         try:
             # Handle organization checkout (direct org billing)
             if organization_id:
-                org_billing_dao = OrganizationBillingDAO(session)
+                org_billing_dao = AsyncOrganizationBillingDAO(session)
                 org = org_billing_dao.get(int(organization_id))
 
                 if not org:
@@ -129,7 +129,7 @@ def process_checkout_session_event(
 
             # Handle user checkout (personal or delegated billing)
             elif user_id:
-                users_dao = UsersDAO(session)
+                users_dao = AsyncUsersDAO(session)
                 user = users_dao.get_user_with_id(user_id)
                 users_dao.recharge_credit(user_id, credits)
                 logger.info(
@@ -326,9 +326,9 @@ def process_invoice_event(event: Dict, session: Session) -> Response:  # noqa: D
 # ──────────────────────────────────────────────────────────────────────────
 def process_charge_event(event: Dict, session: Session) -> Response:  # noqa: D401
     """Business logic for *charge.* events coming from Stripe webhooks."""
-    users_dao = UsersDAO(session)
-    recharge_dao = RechargeDAO(session)
-    webhook_log_dao = WebhookLogDAO(session)
+    users_dao = AsyncUsersDAO(session)
+    recharge_dao = AsyncRechargeDAO(session)
+    webhook_log_dao = AsyncWebhookLogDAO(session)
 
     event_type = event.get("type")
     event_id = event.get("id")
@@ -642,8 +642,8 @@ def process_customer_tax_id_event(event: Dict, session: Session) -> Response:
 
     try:
         # Find user by Stripe customer ID
-        users_dao = UsersDAO(session)
-        auth_user_dao = AuthUserDAO(session)
+        users_dao = AsyncUsersDAO(session)
+        auth_user_dao = AsyncAuthUserDAO(session)
 
         billing_user = users_dao.get_user_by_stripe_id(customer_id)
         if not billing_user:
@@ -776,7 +776,7 @@ def handle_event_core(event: Dict, session: Session) -> Response:  # noqa: D401
         return process_customer_tax_id_event(event, session)
     else:
         # Log unhandled events for idempotency
-        webhook_log_dao = WebhookLogDAO(session)
+        webhook_log_dao = AsyncWebhookLogDAO(session)
         event_id = event.get("id")
         if not webhook_log_dao.event_exists(event_id):
             webhook_log_dao.create_webhook_log(event_id, event_type)

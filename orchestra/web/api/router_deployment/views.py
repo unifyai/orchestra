@@ -7,7 +7,7 @@ from typing import Dict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from orchestra.db.dao.router_dao import RouterDAO
+from orchestra.db.dao.async_router_dao import AsyncRouterDAO
 
 # Async DAOs
 from orchestra.web.api.utils.gcp import blob_exists, send_pubsub_msg
@@ -84,7 +84,7 @@ async def deploy_router(
         description="Name of the router to deploy.",
         example="router1",
     ),
-    router_dao: RouterDAO = Depends(),
+    router_dao: AsyncRouterDAO = Depends(),
 ) -> Dict[str, str]:
     """
     Deploys a trained router to a live endpoint.
@@ -159,7 +159,7 @@ async def undeploy_router(
         description="Name of the router to un-deploy.",
         example="router1",
     ),
-    router_dao: RouterDAO = Depends(),
+    router_dao: AsyncRouterDAO = Depends(),
 ) -> Dict[str, str]:
     """
     Deactivates and deletes a previously deployed router, but keeps the training
@@ -212,7 +212,7 @@ async def undeploy_router(
 )
 async def list_deployed_routers(
     request_fastapi: Request,
-    router_dao: RouterDAO = Depends(),
+    router_dao: AsyncRouterDAO = Depends(),
 ) -> list:
     """
     Fetches a list of the *deployed* routers and relevant metadata (excluding the

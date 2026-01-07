@@ -33,13 +33,13 @@ from orchestra.db.dao.async_modality_dao import AsyncModalityDAO
 from orchestra.db.dao.async_model_dao import AsyncModelDAO
 from orchestra.db.dao.async_organization_invite_dao import AsyncOrganizationInviteDAO
 from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
+from orchestra.db.dao.async_project_dao import AsyncProjectDAO
 from orchestra.db.dao.async_provider_dao import AsyncProviderDAO
 from orchestra.db.dao.async_recharge_dao import AsyncRechargeDAO
 from orchestra.db.dao.async_recharge_type_dao import AsyncRechargeTypeDAO
 from orchestra.db.dao.async_task_dao import AsyncTaskDAO
 from orchestra.db.dao.async_users_dao import AsyncUsersDAO
 from orchestra.db.dao.async_voice_dao import AsyncVoiceDAO
-from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_async_db_session
 from orchestra.db.models.orchestra_models import (
     BenchmarkRun,
@@ -1732,7 +1732,7 @@ async def write_files(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     # Admin endpoint - use any context lookup
     project = project_dao.get_by_user_and_name_any_context(
         user_id=request.user_id,
@@ -1813,7 +1813,7 @@ async def get_files(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     # Admin endpoint - use any context lookup
     project_obj = project_dao.get_by_user_and_name_any_context(
         user_id=user_id,
@@ -1904,7 +1904,7 @@ async def get_file_contents(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     # Admin endpoint - use any context lookup
     project_obj = project_dao.get_by_user_and_name_any_context(
         user_id=user_id,
@@ -1992,7 +1992,7 @@ async def delete_file_or_folder(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     # Admin endpoint - use any context lookup
     project_obj = project_dao.get_by_user_and_name_any_context(
         user_id=user_id,
@@ -2075,7 +2075,7 @@ async def create_upload_url(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     # Admin endpoint - use any context lookup
     project = project_dao.get_by_user_and_name_any_context(
         user_id=request.user_id,
@@ -2161,7 +2161,7 @@ async def create_download_url(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     # Admin endpoint - use any context lookup
     project_obj = project_dao.get_by_user_and_name_any_context(
         user_id=user_id,

@@ -8,10 +8,10 @@ from typing import List, Optional, Union
 
 from sqlalchemy.orm import Session
 
-from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.field_type_dao import FieldTypeDAO
-from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
-from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dao.async_context_dao import AsyncContextDAO
+from orchestra.db.dao.async_field_type_dao import AsyncFieldTypeDAO
+from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
+from orchestra.db.dao.async_project_dao import AsyncProjectDAO
 from orchestra.db.models.orchestra_models import Interface, Tab, Tile
 from orchestra.web.api.interface.schema import (
     InterfaceTemplateSchema,
@@ -28,14 +28,14 @@ class TemplateValidator:
 
     def __init__(self, session: Session):
         self.session = session
-        self.organization_member_dao = OrganizationMemberDAO(session)
-        self.context_dao = ContextDAO(session)
-        self.project_dao = ProjectDAO(
+        self.organization_member_dao = AsyncOrganizationMemberDAO(session)
+        self.context_dao = AsyncContextDAO(session)
+        self.project_dao = AsyncProjectDAO(
             session,
             self.organization_member_dao,
             self.context_dao,
         )
-        self.field_type_dao = FieldTypeDAO(session)
+        self.field_type_dao = AsyncFieldTypeDAO(session)
 
     def get_project_validation_schema(
         self,

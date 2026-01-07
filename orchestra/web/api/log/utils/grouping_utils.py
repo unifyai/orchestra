@@ -22,9 +22,6 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql.selectable import CTE, Subquery
 
-from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.field_type_dao import FieldTypeDAO
-from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
     DerivedLog,

@@ -8,8 +8,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from providers.completion import PROVIDER_CLASSES
 
-from orchestra.db.dao.dataset_dao import DatasetDAO
-from orchestra.db.dao.router_dao import RouterDAO
+from orchestra.db.dao.async_router_dao import AsyncRouterDAO
 
 # Async DAOs
 from orchestra.web.api.utils.gcp import read_from_bucket, send_pubsub_msg
@@ -129,8 +128,7 @@ async def train_router(
             "llama-3.1-405b-chat@fireworks-ai",
         ],
     ),
-    dataset_dao: DatasetDAO = Depends(),
-    router_dao: RouterDAO = Depends(),
+    router_dao: AsyncRouterDAO = Depends(),
 ) -> Dict[str, str]:
     """
     Train a router based on a specified training dataset and a set of endpoints to route
@@ -229,7 +227,7 @@ async def delete_router(
         description="Name of the router to delete.",
         example="my_router",
     ),
-    router_dao: RouterDAO = Depends(),
+    router_dao: AsyncRouterDAO = Depends(),
 ) -> Dict[str, str]:
     """
     Deletes a specific trained router, as well as all the training files etc.
@@ -260,7 +258,7 @@ async def rename_router(
         description="The new name for the router.",
         example="new_name",
     ),
-    router_dao: RouterDAO = Depends(),
+    router_dao: AsyncRouterDAO = Depends(),
 ):
     """
     Renames the specified router from `name` to `new_name`.
@@ -306,7 +304,7 @@ async def rename_router(
 )
 async def list_routers(
     request_fastapi: Request,
-    router_dao: RouterDAO = Depends(),
+    router_dao: AsyncRouterDAO = Depends(),
 ) -> list[str]:
     """
     Lists all the trained routers and the relevant metadata.

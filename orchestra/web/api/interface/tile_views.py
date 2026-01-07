@@ -3,12 +3,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
-from orchestra.db.dao.context_dao import ContextDAO
-from orchestra.db.dao.interface_dao import InterfaceDAO
-from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
-from orchestra.db.dao.project_dao import ProjectDAO
-from orchestra.db.dao.tab_dao import TabDAO
-from orchestra.db.dao.tile_dao import TileDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import Tab, Tile
 from orchestra.web.api.interface.schema import (
@@ -747,15 +741,17 @@ def update_tile(
 
     # Validate context fields if they're being updated
     if "context" in update_dict:
-        from orchestra.db.dao.context_dao import ContextDAO
-        from orchestra.db.dao.interface_dao import InterfaceDAO
-        from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
-        from orchestra.db.dao.project_dao import ProjectDAO
+        from orchestra.db.dao.async_context_dao import AsyncContextDAO
+        from orchestra.db.dao.async_interface_dao import AsyncInterfaceDAO
+        from orchestra.db.dao.async_organization_member_dao import (
+            AsyncOrganizationMemberDAO,
+        )
+        from orchestra.db.dao.async_project_dao import AsyncProjectDAO
 
-        organization_member_dao = OrganizationMemberDAO(session)
-        context_dao = ContextDAO(session)
-        project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-        interface_dao = InterfaceDAO(session)
+        organization_member_dao = AsyncOrganizationMemberDAO(session)
+        context_dao = AsyncContextDAO(session)
+        project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
+        interface_dao = AsyncInterfaceDAO(session)
 
         # Get the tile first to determine the project
         if tile_id:
@@ -1284,15 +1280,17 @@ def patch_tile(
 
     # Validate context fields if they're being updated
     if "context" in update_data:
-        from orchestra.db.dao.context_dao import ContextDAO
-        from orchestra.db.dao.interface_dao import InterfaceDAO
-        from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
-        from orchestra.db.dao.project_dao import ProjectDAO
+        from orchestra.db.dao.async_context_dao import AsyncContextDAO
+        from orchestra.db.dao.async_interface_dao import AsyncInterfaceDAO
+        from orchestra.db.dao.async_organization_member_dao import (
+            AsyncOrganizationMemberDAO,
+        )
+        from orchestra.db.dao.async_project_dao import AsyncProjectDAO
 
-        organization_member_dao = OrganizationMemberDAO(session)
-        context_dao = ContextDAO(session)
-        project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-        interface_dao = InterfaceDAO(session)
+        organization_member_dao = AsyncOrganizationMemberDAO(session)
+        context_dao = AsyncContextDAO(session)
+        project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
+        interface_dao = AsyncInterfaceDAO(session)
 
         interface = interface_dao.get(tab.interface_id)
         if interface:

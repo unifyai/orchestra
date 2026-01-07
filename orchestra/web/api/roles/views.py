@@ -8,7 +8,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from orchestra.db.dao.async_organization_dao import AsyncOrganizationDAO
 from orchestra.db.dao.async_permission_dao import AsyncPermissionDAO
 from orchestra.db.dao.async_role_dao import AsyncRoleDAO
-from orchestra.db.dao.role_dao import RoleDAO
 from orchestra.db.dependencies import get_async_db_session
 from orchestra.web.api.roles.schema import (
     PermissionResponse,
@@ -535,7 +534,7 @@ async def remove_permission_from_role(
         )
 
 
-async def _role_to_response(role, role_dao: RoleDAO) -> RoleResponse:
+async def _role_to_response(role, role_dao: AsyncRoleDAO) -> RoleResponse:
     """Convert Role model to RoleResponse schema."""
     permissions = role_dao.get_role_permissions(role.id)
 

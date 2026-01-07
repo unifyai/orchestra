@@ -2245,7 +2245,6 @@ def _handle_functions_jsonb(
         # datetime, date, time, timedelta, vector, etc.
         if normalized_type in ("any", "none", ""):
             if base_ids:
-                from orchestra.db.dao.log_dao import LogDAO
                 from orchestra.web.api.log.utils.type_utils import get_base_storage_type
 
                 # Sample ALL base_ids to find the first non-null type
@@ -3504,8 +3503,6 @@ def _handle_dict_get_jsonb(
     """
     from sqlalchemy import BindParameter
     from sqlalchemy.sql.selectable import Subquery
-
-    from orchestra.db.dao.log_dao import LogDAO
 
     from .core import _build_sql_query_jsonb
     from .functions import _handle_dict_get

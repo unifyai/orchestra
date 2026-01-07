@@ -48,7 +48,6 @@ from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql.elements import BinaryExpression, Cast, ColumnClause
 from sqlalchemy.sql.selectable import CTE, Subquery
 
-from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.models.orchestra_models import (
     DerivedLog,
     Embedding,

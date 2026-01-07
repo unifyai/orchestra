@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 # Async DAOs
 from orchestra.db.dao.async_custom_endpoint_dao import AsyncCustomEndpointDAO
-from orchestra.db.dao.users_dao import UsersDAO
+from orchestra.db.dao.async_users_dao import AsyncUsersDAO
 from orchestra.db.dependencies import get_async_db_session
 from orchestra.settings import settings
 from orchestra.web.api.dependencies import _ro_session
@@ -143,7 +143,7 @@ async def chat_completions(  # noqa: C901, WPS210, WPS231, WPS211, WPS217, WPS23
         user_id = request_fastapi.state.user_id
         use_custom_keys = request.use_custom_keys
         with _ro_session() as ro_sess:
-            user = UsersDAO(ro_sess).get_user_with_id(user_id)
+            user = AsyncUsersDAO(ro_sess).get_user_with_id(user_id)
         store_prompt = user.store_prompts if user else True
         store_prompt = True if store_prompt is None else store_prompt
         store_query_body, store_response_body = False, False

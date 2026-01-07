@@ -15,12 +15,11 @@ from orchestra.db.dao.async_organization_billing_dao import AsyncOrganizationBil
 from orchestra.db.dao.async_organization_dao import AsyncOrganizationDAO
 from orchestra.db.dao.async_organization_invite_dao import AsyncOrganizationInviteDAO
 from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
+from orchestra.db.dao.async_project_dao import AsyncProjectDAO
 from orchestra.db.dao.async_resource_access_dao import AsyncResourceAccessDAO
 from orchestra.db.dao.async_role_dao import AsyncRoleDAO
 from orchestra.db.dao.async_team_dao import AsyncTeamDAO
 from orchestra.db.dao.async_users_dao import AsyncUsersDAO
-from orchestra.db.dao.auth_user_dao import AuthUserDAO
-from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_async_db_session
 from orchestra.services.contact_sync_service import ContactSyncService
 from orchestra.web.api.organization.schema import (
@@ -490,7 +489,7 @@ async def add_organization_member(
 
         # Grant Member access to Assistants project if it exists
         context_dao = AsyncContextDAO(session)
-        project_dao = ProjectDAO(session, org_member_dao, context_dao)
+        project_dao = AsyncProjectDAO(session, org_member_dao, context_dao)
         assistants_projects = await project_dao.filter(
             organization_id=organization_id,
             name="Assistants",
@@ -1445,7 +1444,7 @@ async def accept_invite(
 
         # Grant Member access to Assistants project if it exists
         context_dao = AsyncContextDAO(session)
-        project_dao = ProjectDAO(session, org_member_dao, context_dao)
+        project_dao = AsyncProjectDAO(session, org_member_dao, context_dao)
         role_dao = AsyncRoleDAO(session)
         resource_access_dao = AsyncResourceAccessDAO(session)
         assistants_projects = await project_dao.filter(
@@ -1470,10 +1469,10 @@ async def accept_invite(
         await session.commit()
 
         # Trigger contact sync for all org assistants (non-blocking)
-        from orchestra.db.dao.assistant_dao import AssistantDAO
+        from orchestra.db.dao.async_assistant_dao import AsyncAssistantDAO
         from orchestra.web.api.utils.assistant_infra import trigger_contact_sync
 
-        assistant_dao = AssistantDAO(session)
+        assistant_dao = AsyncAssistantDAO(session)
         org_assistants = await assistant_dao.list_all_org_assistants(
             organization_id=invite.organization_id,
         )

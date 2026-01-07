@@ -6,8 +6,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette import status
 
 # Async DAOs
-from orchestra.db.dao.custom_endpoint_dao import CustomEndpoint, CustomEndpointDAO
+from orchestra.db.dao.async_custom_endpoint_dao import AsyncCustomEndpointDAO
 from orchestra.db.dependencies import get_async_db_session
+from orchestra.db.models.orchestra_models import CustomEndpoint
 from orchestra.web.api.custom_endpoints.schema import CustomEndpointModelResponse
 from orchestra.web.api.utils.http_responses import not_found
 
@@ -86,7 +87,7 @@ async def create_custom_endpoint(
     the `provider` argument.
 
     """
-    custom_endpoint_dao = CustomEndpointDAO(session)
+    custom_endpoint_dao = AsyncCustomEndpointDAO(session)
     custom_api_key_dao = AsyncCustomAsyncApiKeyDAO(session)
     user_id = request_fastapi.state.user_id
     if "@" not in name:
@@ -151,7 +152,7 @@ async def delete_custom_endpoint(
 
     """
     user_id = request_fastapi.state.user_id
-    custom_endpoint_dao = CustomEndpointDAO(session)
+    custom_endpoint_dao = AsyncCustomEndpointDAO(session)
     existing_endpoint = await custom_endpoint_dao.filter(user_id=user_id, name=name)
     if not existing_endpoint:
         raise not_found("Custom endpoint")
@@ -201,7 +202,7 @@ async def rename_custom_endpoint(
 
     """
     user_id = request_fastapi.state.user_id
-    custom_endpoint_dao = CustomEndpointDAO(session)
+    custom_endpoint_dao = AsyncCustomEndpointDAO(session)
     existing_endpoint = await custom_endpoint_dao.filter(user_id=user_id, name=name)
     if not existing_endpoint:
         raise not_found("Custom endpoint")
@@ -248,6 +249,6 @@ async def list_custom_endpoints(
     """
     Returns a list of the available custom endpoints.
     """
-    custom_endpoint_dao = CustomEndpointDAO(session)
+    custom_endpoint_dao = AsyncCustomEndpointDAO(session)
     user_id = request_fastapi.state.user_id
     return custom_endpoint_dao.get_user_endpoints(user_id=user_id)

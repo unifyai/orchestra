@@ -5,13 +5,13 @@ from typing import Dict, Optional
 
 from sqlalchemy.orm import sessionmaker
 
-from orchestra.db.dao.auth_user_dao import AuthUserDAO
-from orchestra.db.dao.custom_endpoint_dao import CustomEndpointDAO
-from orchestra.db.dao.endpoint_dao import EndpointDAO
-from orchestra.db.dao.model_dao import ModelDAO
-from orchestra.db.dao.organization_billing_dao import OrganizationBillingDAO
-from orchestra.db.dao.provider_dao import ProviderDAO
-from orchestra.db.dao.users_dao import UsersDAO
+from orchestra.db.dao.async_auth_user_dao import AsyncAuthUserDAO
+from orchestra.db.dao.async_custom_endpoint_dao import AsyncCustomEndpointDAO
+from orchestra.db.dao.async_endpoint_dao import AsyncEndpointDAO
+from orchestra.db.dao.async_model_dao import AsyncModelDAO
+from orchestra.db.dao.async_organization_billing_dao import AsyncOrganizationBillingDAO
+from orchestra.db.dao.async_provider_dao import AsyncProviderDAO
+from orchestra.db.dao.async_users_dao import AsyncUsersDAO
 from orchestra.db.models.orchestra_models import Organization, Recharge, RechargeStatus
 from orchestra.lib.billing import (
     deduct_credits,
@@ -93,12 +93,12 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
     """
     SessionLocal = sessionmaker(bind=get_engine(), expire_on_commit=False)
     with SessionLocal() as session:
-        model_dao = ModelDAO(session)
-        provider_dao = ProviderDAO(session)
-        endpoint_dao = EndpointDAO(session)
-        auth_user_dao = AuthUserDAO(session)
-        custom_endpoint_dao = CustomEndpointDAO(session)
-        users_dao = UsersDAO(session)
+        model_dao = AsyncModelDAO(session)
+        provider_dao = AsyncProviderDAO(session)
+        endpoint_dao = AsyncEndpointDAO(session)
+        auth_user_dao = AsyncAuthUserDAO(session)
+        custom_endpoint_dao = AsyncCustomEndpointDAO(session)
+        users_dao = AsyncUsersDAO(session)
 
         if usage is None:
             usage = {}
@@ -323,7 +323,7 @@ def db_operations(  # noqa: WPS211, WPS217, WPS210
                                 f"Org: {billing_entity.entity_id}, Month: {current_month_end}",
                             )
                         else:
-                            org_billing_dao = OrganizationBillingDAO(session)
+                            org_billing_dao = AsyncOrganizationBillingDAO(session)
                             queue_org_auto_recharge(session, locked_org, recharge_qty)
 
                             # Credit org immediately (they pay later via monthly invoice)

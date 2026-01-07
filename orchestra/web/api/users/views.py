@@ -8,23 +8,25 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestra.db.dao.assistant_hiring_one_time_approval_link_dao import (
-    AssistantHiringOneTimeApprovalLinkDAO,
-)
-
 # Async DAOs
 from orchestra.db.dao.async_account_dao import AsyncAccountDAO
 from orchestra.db.dao.async_api_key_dao import AsyncApiKeyDAO
-from orchestra.db.dao.async_auth_user_dao import AsyncAuthUserDAO
+from orchestra.db.dao.async_assistant_hiring_one_time_approval_link_dao import (
+    AsyncAssistantHiringOneTimeApprovalLinkDAO,
+)
+from orchestra.db.dao.async_auth_user_dao import (
+    ASSISTANT_HIRING_APPROVAL_STATUSES,
+    AsyncAuthUserDAO,
+)
 from orchestra.db.dao.async_context_dao import AsyncContextDAO
 from orchestra.db.dao.async_organization_dao import AsyncOrganizationDAO
 from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
+from orchestra.db.dao.async_project_dao import AsyncProjectDAO
 from orchestra.db.dao.async_resource_access_dao import AsyncResourceAccessDAO
 from orchestra.db.dao.async_role_dao import AsyncRoleDAO
 from orchestra.db.dao.async_users_dao import AsyncUsersDAO
-from orchestra.db.dao.auth_user_dao import ASSISTANT_HIRING_APPROVAL_STATUSES, AuthUser
-from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_async_db_session
+from orchestra.db.models.orchestra_models import AuthUser
 from orchestra.services.user_account_cleanup_service import UserAccountCleanupService
 from orchestra.settings import settings
 from orchestra.web.api.users.schema import (
@@ -787,7 +789,7 @@ async def add_organization_member(
 
     # Grant Member access to Assistants project if it exists
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     resource_access_dao = AsyncResourceAccessDAO(session)
     assistants_projects = await project_dao.filter(
         organization_id=org[0][0].id,
@@ -1356,7 +1358,7 @@ async def claim_assistant_hiring_one_time_link(
 
     user_instance = user_row_proxy[0]
     users_dao = AsyncUsersDAO(session)
-    token_dao = AssistantHiringOneTimeApprovalLinkDAO(session)
+    token_dao = AsyncAssistantHiringOneTimeApprovalLinkDAO(session)
 
     link = token_dao.get_by_token(payload.token)
     if not link:
@@ -1465,7 +1467,7 @@ async def create_assistant_hiring_one_time_link(
     payload: AssistantHiringApprovalCreateLinkRequest = Depends(),
     session: AsyncSession = Depends(get_async_db_session),
 ):
-    token_dao = AssistantHiringOneTimeApprovalLinkDAO(session)
+    token_dao = AsyncAssistantHiringOneTimeApprovalLinkDAO(session)
     if payload.expires_in_days <= 0:
         raise HTTPException(status_code=500, detail="Expiration days must be positive.")
 
@@ -1493,7 +1495,7 @@ async def list_assistant_hiring_one_time_link(
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_async_db_session),
 ):
-    token_dao = AssistantHiringOneTimeApprovalLinkDAO(session)
+    token_dao = AsyncAssistantHiringOneTimeApprovalLinkDAO(session)
     links = token_dao.list_links(limit=limit, offset=offset)
     return [
         AssistantHiringOneTimeLinkResponse(
@@ -1512,7 +1514,7 @@ async def delete_assistant_hiring_one_time_link(
     link_id: str,
     session: AsyncSession = Depends(get_async_db_session),
 ):
-    token_dao = AssistantHiringOneTimeApprovalLinkDAO(session)
+    token_dao = AsyncAssistantHiringOneTimeApprovalLinkDAO(session)
     if not token_dao.delete_link(link_id):
         raise not_found("One-time approval link")
     await session.commit()

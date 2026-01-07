@@ -33,8 +33,6 @@ from sqlalchemy.sql.elements import ClauseElement
 from sqlalchemy.sql.expression import Exists, UnaryExpression
 from sqlalchemy.sql.selectable import CTE, Subquery
 
-from orchestra.db.dao.log_dao import LogDAO
-
 from . import alias_utils, jsonb_builder
 from .core import build_sql_query
 from .helpers import (

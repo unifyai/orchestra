@@ -21,11 +21,11 @@ from orchestra.db.dao.async_log_event_dao import AsyncLogEventDAO
 from orchestra.db.dao.async_organization_dao import AsyncOrganizationDAO
 from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
 from orchestra.db.dao.async_plot_dao import AsyncPlotDAO
+from orchestra.db.dao.async_project_dao import AsyncProjectDAO
 from orchestra.db.dao.async_resource_access_dao import AsyncResourceAccessDAO
 from orchestra.db.dao.async_role_dao import AsyncRoleDAO
 from orchestra.db.dao.async_tab_dao import AsyncTabDAO
 from orchestra.db.dao.async_tile_dao import AsyncTileDAO
-from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_async_db_session
 from orchestra.db.models.orchestra_models import (
     Context,
@@ -99,7 +99,7 @@ async def get_project_or_404(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
 
     # Get API key context (None = personal, int = org-specific)
     organization_id = getattr(request_fastapi.state, "organization_id", None)
@@ -174,7 +174,7 @@ async def commit_project(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     try:
         commit_hash = project_dao.commit(
             project_id=project.id,
@@ -233,7 +233,7 @@ async def rollback_project(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     try:
         project_dao.rollback(project_id=project.id, commit_hash=request.commit_hash)
         return {"info": "Project rolled back successfully!"}
@@ -257,7 +257,7 @@ async def get_project_commits(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
 
     try:
         history = project_dao.get_commit_history(project.id)
@@ -302,7 +302,7 @@ async def get_favorites(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     favorite_project_dao = AsyncFavoriteProjectDAO(session)
 
     favorites = favorite_project_dao.filter_by_user(request_fastapi.state.user_id)
@@ -380,7 +380,7 @@ async def create_favorite(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     favorite_project_dao = AsyncFavoriteProjectDAO(session)
 
     user_id = request_fastapi.state.user_id
@@ -464,7 +464,7 @@ async def get_favorite(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     favorite_project_dao = AsyncFavoriteProjectDAO(session)
 
     user_id = request_fastapi.state.user_id
@@ -532,7 +532,7 @@ async def update_favorite(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     favorite_project_dao = AsyncFavoriteProjectDAO(session)
 
     # Get the favorite
@@ -679,7 +679,7 @@ async def create_project(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Check if using an organization API key
@@ -909,7 +909,7 @@ async def delete_project(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
 
     # Check if trying to delete the protected projects (Unity, AssistantJobs)
     if project.name in ["Unity", "AssistantJobs"]:
@@ -997,7 +997,7 @@ async def update_project(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
 
     # Check if trying to rename the protected Unity project
     if project.name == "Unity" and request.name is not None:
@@ -1086,7 +1086,7 @@ async def transfer_project_to_organization(
     user_id = request_fastapi.state.user_id
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     org_dao = AsyncOrganizationDAO(session)
     resource_access_dao = AsyncResourceAccessDAO(session)
     role_dao = AsyncRoleDAO(session)
@@ -1244,7 +1244,7 @@ async def transfer_project_to_personal(
     user_id = request_fastapi.state.user_id
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     org_dao = AsyncOrganizationDAO(session)
     resource_access_dao = AsyncResourceAccessDAO(session)
 
@@ -1414,7 +1414,7 @@ async def list_projects(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
 
     # Get API key context (None = personal, int = org-specific)
     organization_id = getattr(request_fastapi.state, "organization_id", None)
@@ -1439,7 +1439,7 @@ async def list_projects_tree(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     interface_dao = AsyncInterfaceDAO(session)
     tab_dao = AsyncTabDAO(session)
     favorite_project_dao = AsyncFavoriteProjectDAO(session)
@@ -1578,7 +1578,7 @@ async def export_project_template(
     """Export project interfaces as a reusable template."""
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     interface_dao = AsyncInterfaceDAO(session)
     tab_dao = AsyncTabDAO(session)
 
@@ -1693,7 +1693,7 @@ async def import_project_template(
     """Import a project template into a project."""
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     interface_dao = AsyncInterfaceDAO(session)
     tab_dao = AsyncTabDAO(session)
     tile_dao = AsyncTileDAO(session)
@@ -1914,7 +1914,7 @@ async def admin_share_project(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     auth_user_dao = AsyncAuthUserDAO(session)
     organization_dao = AsyncOrganizationDAO(session)
     role_dao = AsyncRoleDAO(session)
@@ -2109,7 +2109,7 @@ async def admin_duplicate_project(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     auth_user_dao = AsyncAuthUserDAO(session)
     log_event_dao = AsyncLogEventDAO(session)
     derived_log_dao = AsyncDerivedLogDAO(session)
@@ -2591,7 +2591,7 @@ async def admin_list_org_projects(
     """List all projects in an org without access control checks."""
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
 
     # Use filter() which bypasses RBAC (not filter_by_user_access)
     projects = await project_dao.filter(organization_id=org_id)
@@ -2626,7 +2626,7 @@ async def admin_delete_project(
     """Delete a project by ID (admin bypass)."""
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Get project

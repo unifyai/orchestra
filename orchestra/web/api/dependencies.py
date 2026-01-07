@@ -6,8 +6,8 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session, sessionmaker
 
-from orchestra.db.dao.api_key_dao import ApiKeyDAO
-from orchestra.db.dao.users_dao import UsersDAO
+from orchestra.db.dao.async_api_key_dao import AsyncApiKeyDAO
+from orchestra.db.dao.async_users_dao import AsyncUsersDAO
 from orchestra.db.models.orchestra_models import AdminUser
 from orchestra.web.api.utils.http_responses import (
     account_frozen,
@@ -54,7 +54,7 @@ def auth_api_key(
     apikey = credentials.credentials
 
     with _ro_session() as session:  # <-- opens & closes inside
-        api_key_dao = ApiKeyDAO(session)
+        api_key_dao = AsyncApiKeyDAO(session)
         db_response = api_key_dao.get_user_id_and_mail(apikey)
 
         if db_response:
@@ -125,7 +125,7 @@ def check_account_not_frozen(request: Request):
     if user_id:
         try:
             with _ro_session() as session:
-                users_dao = UsersDAO(session)
+                users_dao = AsyncUsersDAO(session)
 
                 # Check if account is frozen
                 if users_dao.is_account_frozen(user_id):

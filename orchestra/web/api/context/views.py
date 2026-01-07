@@ -14,8 +14,7 @@ from orchestra.db.dao.async_context_dao import AsyncContextDAO
 from orchestra.db.dao.async_field_type_dao import AsyncFieldTypeDAO
 from orchestra.db.dao.async_log_dao import AsyncLogDAO
 from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
-from orchestra.db.dao.log_dao import LogDAO
-from orchestra.db.dao.project_dao import ProjectDAO
+from orchestra.db.dao.async_project_dao import AsyncProjectDAO
 from orchestra.db.dependencies import get_async_db_session
 from orchestra.db.models.orchestra_models import Context
 from orchestra.web.api.context.schema import (
@@ -135,7 +134,7 @@ async def create_context(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
 
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
@@ -309,7 +308,7 @@ async def get_contexts(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
 
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
@@ -367,7 +366,7 @@ async def get_context_commits(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     user_id = request_fastapi.state.user_id
     organization_id = getattr(request_fastapi.state, "organization_id", None)
 
@@ -438,7 +437,7 @@ async def get_context(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     try:
         project = project_dao.get_by_user_and_name(
@@ -554,7 +553,7 @@ async def delete_context(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
 
     # Normalize context name: remove leading/trailing slashes
     context_name = context_name.strip("/")
@@ -670,7 +669,7 @@ async def add_logs_to_context(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     field_type_dao = AsyncFieldTypeDAO(session)
     log_dao = AsyncLogDAO(session, context_dao)
     organization_id = getattr(request_fastapi.state, "organization_id", None)
@@ -944,7 +943,7 @@ async def rename_context(
     """Rename an existing context within a project."""
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
 
     # Normalize context name: remove leading slash to treat '/exp1/name1' the same as 'exp1/name1'
     context_name = context_name.lstrip("/")
@@ -1001,7 +1000,7 @@ async def commit_context_version(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     user_id = request_fastapi.state.user_id
     organization_id = getattr(request_fastapi.state, "organization_id", None)
 
@@ -1041,7 +1040,7 @@ async def rollback_context_version(
     """
     organization_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
     user_id = request_fastapi.state.user_id
     organization_id = getattr(request_fastapi.state, "organization_id", None)
 

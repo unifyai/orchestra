@@ -17,7 +17,6 @@ from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemb
 from orchestra.db.dao.async_plot_dao import AsyncPlotDAO
 from orchestra.db.dao.async_project_dao import AsyncProjectDAO
 from orchestra.db.dao.async_resource_access_dao import AsyncResourceAccessDAO
-from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_async_db_session
 from orchestra.db.models.orchestra_models import Plot, Project
 from orchestra.settings import settings
@@ -367,7 +366,7 @@ async def list_plots(
     # Get project names for response
     org_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, org_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, org_member_dao, context_dao)
 
     items = []
     for plot in plots:
@@ -412,7 +411,7 @@ async def get_plot(
     # Get project
     org_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, org_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, org_member_dao, context_dao)
     project = await project_dao.get(plot.project_id)
 
     if not project:
@@ -472,7 +471,7 @@ async def update_plot(
     # Get project
     org_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, org_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, org_member_dao, context_dao)
     project = await project_dao.get(plot.project_id)
 
     if not project:
@@ -545,7 +544,7 @@ async def delete_plot(
     # Get project
     org_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, org_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, org_member_dao, context_dao)
     project = await project_dao.get(plot.project_id)
 
     if not project:
@@ -669,7 +668,7 @@ async def admin_get_plot(
     # Get project name
     org_member_dao = AsyncOrganizationMemberDAO(session)
     context_dao = AsyncContextDAO(session)
-    project_dao = ProjectDAO(session, org_member_dao, context_dao)
+    project_dao = AsyncProjectDAO(session, org_member_dao, context_dao)
     project = await project_dao.get(plot.project_id)
 
     project_name = project.name if project else "Unknown"

@@ -33,7 +33,6 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, aggregate_order_by
 from sqlalchemy.sql.selectable import ColumnClause, Subquery
 
-from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.models.orchestra_models import Log, LogEventLog
 from orchestra.lib.parallel import threaded_map
 from orchestra.services.bucket_service import BucketService
