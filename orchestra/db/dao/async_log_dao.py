@@ -483,43 +483,38 @@ class AsyncLogDAO:
 
             # Update Log table via LogEventLog association
             # First find the log IDs to update
-            log_ids_to_update = (
-                self.session.query(Log.id)
+            log_ids_subquery = (
+                select(Log.id)
                 .join(LogEventLog, LogEventLog.log_id == Log.id)
-                .filter(
+                .where(
                     LogEventLog.log_event_id.in_(log_event_ids),
                     Log.key == old_field_name,
                 )
-                .subquery()
             )
 
             # Then update without joins
-            log_update = (
-                self.session.query(Log)
-                .filter(Log.id.in_(select(log_ids_to_update)))
-                .update(
-                    {"key": new_field_name, "updated_at": datetime.now(timezone.utc)},
-                    synchronize_session=False,
-                )
+            await self.session.execute(
+                update(Log)
+                .where(Log.id.in_(log_ids_subquery))
+                .values(key=new_field_name, updated_at=datetime.now(timezone.utc))
             )
 
             # Update JSONLog table via LogEventJSONLog association
             # First find the JSON log IDs to update
-            json_log_ids_to_update = (
-                self.session.query(JSONLog.id)
+            json_log_ids_subquery = (
+                select(JSONLog.id)
                 .join(LogEventJSONLog, LogEventJSONLog.json_log_id == JSONLog.id)
-                .filter(
+                .where(
                     LogEventJSONLog.log_event_id.in_(log_event_ids),
                     JSONLog.key == old_field_name,
                 )
-                .subquery()
             )
 
             # Then update without joins
-            json_logs_to_update = (
-                self.session.query(JSONLog)
-                .filter(JSONLog.id.in_(select(json_log_ids_to_update)))
-                .update({"key": new_field_name}, synchronize_session=False)
+            await self.session.execute(
+                update(JSONLog)
+                .where(JSONLog.id.in_(json_log_ids_subquery))
+                .values(key=new_field_name)
             )
 
             # JSONB Mode: Update LogEvent.data JSONB column - rename key within the JSON object
