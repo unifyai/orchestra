@@ -1429,7 +1429,7 @@ def list_projects(
 
 
 @router.get("/projects/tree", response_model=List[ProjectTreeItem])
-async def list_projects_tree(
+def list_projects_tree(
     request_fastapi: Request,
     session: Session = Depends(get_db_session),
 ):
