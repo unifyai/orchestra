@@ -594,6 +594,45 @@ class AsyncLogDAO:
                             f"Failed to delete file from GCS for log {log.id}: {str(e)}",
                         )
 
+    async def _bulk_delete_gcs_media_async(self, logs_select):
+        """
+        Async version that takes a select statement instead of a Query.
+        Finds all image/audio logs and deletes the corresponding files from GCS.
+        """
+        gcs_url_prefix = (
+            f"https://storage.googleapis.com/{self.bucket_service.bucket_name}/"
+        )
+
+        # Add filter for media types
+        from sqlalchemy import select
+        media_select = logs_select.where(
+            Log.inferred_type.in_(("image", "audio")),
+        )
+
+        result = await self.session.execute(media_select)
+        logs_to_delete = result.scalars().all()
+        if not logs_to_delete:
+            return
+
+        logging.info(
+            f"Found {len(logs_to_delete)} media log(s) to check for GCS deletion.",
+        )
+
+        for log in logs_to_delete:
+            if isinstance(log.value, str):
+                clean_value = log.value.strip("\"'")
+                if clean_value.startswith(gcs_url_prefix):
+                    try:
+                        filename = clean_value.split("/")[-1]
+                        logging.warning(
+                            f"Deleting GCS file: {filename} for log ID: {log.id}",
+                        )
+                        self.bucket_service.delete_media(filename)
+                    except Exception as e:
+                        logging.error(
+                            f"Failed to delete file from GCS for log {log.id}: {str(e)}",
+                        )
+
     async def _bulk_delete_gcs_media_jsonb(
         self,
         log_event_ids: List[int],

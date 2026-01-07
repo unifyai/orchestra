@@ -3516,7 +3516,7 @@ class AsyncContextDAO:
             raise ValueError(f"Context with id {id} not found")
 
     async def delete(self, id: int) -> None:
-        from orchestra.db.dao.log_dao import LogDAO
+        from orchestra.db.dao.async_log_dao import AsyncLogDAO
         from orchestra.db.dao.sibling_context_cleanup import (
             get_assistants_sibling_context_info,
             remove_logs_from_sibling_contexts,
@@ -3558,24 +3558,23 @@ class AsyncContextDAO:
                         await self.session.flush()
 
             # Delete associated GCS media BEFORE deleting the context
-            log_dao = LogDAO(self.session, self)
+            log_dao = AsyncLogDAO(self.session, self)
             log_events_subquery = (
                 select(LogEvent.id)
                 .join(LogEventContext)
                 .where(LogEventContext.context_id == id)
-                .subquery()
             )
             logs_to_delete_query = (
-                self.session.query(Log)
+                select(Log)
                 .join(
                     LogEventLog,
                     LogEventLog.log_id == Log.id,
                 )
-                .filter(
-                    LogEventLog.log_event_id.in_(select(log_events_subquery.c.id)),
+                .where(
+                    LogEventLog.log_event_id.in_(log_events_subquery),
                 )
             )
-            log_dao._bulk_delete_gcs_media(logs_to_delete_query)
+            await log_dao._bulk_delete_gcs_media_async(logs_to_delete_query)
 
             # Proceed with deleting the context from the database
             await self.session.delete(context)
@@ -3734,9 +3733,10 @@ class AsyncContextDAO:
                 raise ValueError(f"Context with id {context_id} not found")
 
             # Get all log events
-            log_events = (
-                self.session.query(LogEvent).filter(LogEvent.id.in_(log_ids)).all()
+            result = await self.session.execute(
+                select(LogEvent).where(LogEvent.id.in_(log_ids))
             )
+            log_events = result.scalars().all()
             found_ids = {log.id for log in log_events}
             missing_ids = set(log_ids) - found_ids
 
@@ -4065,11 +4065,10 @@ class AsyncContextDAO:
             # Process each log event
             for original_log_id in log_ids:
                 # Query the original LogEvent
-                original_log_event = (
-                    self.session.query(LogEvent)
-                    .filter_by(id=original_log_id)
-                    .one_or_none()
+                result = await self.session.execute(
+                    select(LogEvent).filter_by(id=original_log_id)
                 )
+                original_log_event = result.scalars().one_or_none()
                 if not original_log_event:
                     raise ValueError(f"Log event with id {original_log_id} not found")
 
@@ -4097,12 +4096,12 @@ class AsyncContextDAO:
                 await self.session.flush()  # Get the new ID
 
                 # Query all associated Log rows for the original log event
-                original_logs = (
-                    self.session.query(Log)
+                result = await self.session.execute(
+                    select(Log)
                     .join(LogEventLog, LogEventLog.log_id == Log.id)
-                    .filter(LogEventLog.log_event_id == original_log_id)
-                    .all()
+                    .where(LogEventLog.log_event_id == original_log_id)
                 )
+                original_logs = result.scalars().all()
 
                 # Prepare bulk insert for Log entries
                 new_logs = []
@@ -4132,15 +4131,15 @@ class AsyncContextDAO:
                 if JSONLog is not None:
                     try:
                         # Query JSONLog entries for the original log event via association
-                        original_json_logs = (
-                            self.session.query(JSONLog)
+                        result = await self.session.execute(
+                            select(JSONLog)
                             .join(
                                 LogEventJSONLog,
                                 LogEventJSONLog.json_log_id == JSONLog.id,
                             )
-                            .filter(LogEventJSONLog.log_event_id == original_log_id)
-                            .all()
+                            .where(LogEventJSONLog.log_event_id == original_log_id)
                         )
+                        original_json_logs = result.scalars().all()
 
                         # Prepare bulk insert for JSONLog entries
                         new_json_logs = []
@@ -4222,15 +4221,15 @@ class AsyncContextDAO:
         # Update the previous version's next_commit_hash array if it exists
         if current_head:
             # Try to find a context version first
-            prev_context_version = (
-                self.session.query(ContextVersion)
+            result = await self.session.execute(
+                select(ContextVersion)
                 .filter_by(
                     context_id=context_id,
                     commit_hash=current_head,
                 )
                 .with_for_update()
-                .one_or_none()
             )
+            prev_context_version = result.scalars().one_or_none()
 
             if prev_context_version:
                 if commit_hash not in prev_context_version.next_commit_hash:
@@ -4239,27 +4238,27 @@ class AsyncContextDAO:
                     )
             else:
                 # If not found, it might be a project version
-                prev_project_version = (
-                    self.session.query(ProjectVersion)
+                result = await self.session.execute(
+                    select(ProjectVersion)
                     .filter_by(
                         project_id=context.project_id,
                         commit_hash=current_head,
                     )
                     .with_for_update()
-                    .one_or_none()
                 )
+                prev_project_version = result.scalars().one_or_none()
 
                 if prev_project_version:
                     # For project versions, we update the context version that was created as part of that project commit
-                    context_version_in_project = (
-                        self.session.query(ContextVersion)
+                    result = await self.session.execute(
+                        select(ContextVersion)
                         .filter_by(
                             context_id=context_id,
                             project_version_id=prev_project_version.id,
                         )
                         .with_for_update()
-                        .one_or_none()
                     )
+                    context_version_in_project = result.scalars().one_or_none()
 
                     if context_version_in_project:
                         if (
@@ -4287,11 +4286,11 @@ class AsyncContextDAO:
         This ensures the operation is atomic and safe.
         """
         try:
-            context_version = (
-                self.session.query(ContextVersion)
+            result = await self.session.execute(
+                select(ContextVersion)
                 .filter_by(context_id=context_id, commit_hash=commit_hash)
-                .one_or_none()
             )
+            context_version = result.scalars().one_or_none()
             if not context_version:
                 raise ValueError(
                     f"Commit hash {commit_hash} not found for context {context_id}.",
@@ -4334,12 +4333,12 @@ class AsyncContextDAO:
             raise ValueError("Context is not versioned.")
 
         # Query all versions for this context
-        versions = (
-            self.session.query(ContextVersion)
+        result = await self.session.execute(
+            select(ContextVersion)
             .filter_by(context_id=context_id)
             .order_by(ContextVersion.archived_at.desc())
-            .all()
         )
+        versions = result.scalars().all()
 
         history = []
         for v in versions:
@@ -4394,29 +4393,29 @@ class AsyncContextDAO:
 
         # Update the previous version's next_commit_hash array if it exists
         if prev_commit_hash:
-            prev_version = (
-                self.session.query(ContextVersion)
+            result = await self.session.execute(
+                select(ContextVersion)
                 .filter_by(
                     context_id=context.id,
                     commit_hash=prev_commit_hash,
                 )
                 .with_for_update()
-                .one()
             )
+            prev_version = result.scalars().one()
             if commit_hash not in prev_version.next_commit_hash:
                 prev_version.next_commit_hash = prev_version.next_commit_hash + [
                     commit_hash,
                 ]
 
         # 2. Get all current logs for the context
-        logs_to_version = (
-            self.session.query(Log, LogEventLog.log_event_id)
+        result = await self.session.execute(
+            select(Log, LogEventLog.log_event_id)
             .join(LogEventLog, LogEventLog.log_id == Log.id)
             .join(LogEvent, LogEvent.id == LogEventLog.log_event_id)
             .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
-            .filter(LogEventContext.context_id == context.id)
-            .all()
+            .where(LogEventContext.context_id == context.id)
         )
+        logs_to_version = result.all()
 
         if not logs_to_version:
             return
@@ -4456,11 +4455,10 @@ class AsyncContextDAO:
                 context_version_id=context_version_id,
             )
 
-        log_versions_to_restore = (
-            self.session.query(LogVersion)
-            .filter_by(context_version_id=context_version_id)
-            .all()
+        result = await self.session.execute(
+            select(LogVersion).filter_by(context_version_id=context_version_id)
         )
+        log_versions_to_restore = result.scalars().all()
         context = (
             (await self.session.execute(select(Context).filter_by(id=context_id)))
             .scalars()
@@ -4597,23 +4595,23 @@ class AsyncContextDAO:
 
         # Update the previous version's next_commit_hash array if it exists
         if prev_commit_hash:
-            prev_version = (
-                self.session.query(ContextVersion)
+            result = await self.session.execute(
+                select(ContextVersion)
                 .filter_by(
                     context_id=context.id,
                     commit_hash=prev_commit_hash,
                 )
                 .with_for_update()
-                .one()
             )
+            prev_version = result.scalars().one()
             if commit_hash not in prev_version.next_commit_hash:
                 prev_version.next_commit_hash = prev_version.next_commit_hash + [
                     commit_hash,
                 ]
 
         # 2. Get all LogEvents for the context with their JSONB data
-        log_events = (
-            self.session.query(
+        result = await self.session.execute(
+            select(
                 LogEvent.id,
                 LogEvent.data,
                 LogEvent.key_order,
@@ -4621,9 +4619,9 @@ class AsyncContextDAO:
                 LogEvent.updated_at,
             )
             .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
-            .filter(LogEventContext.context_id == context.id)
-            .all()
+            .where(LogEventContext.context_id == context.id)
         )
+        log_events = result.all()
 
         if not log_events:
             return
@@ -4657,11 +4655,10 @@ class AsyncContextDAO:
         This method only prepares the operations and does NOT commit.
         """
         # 1. Query all LogEventVersion snapshots for the target version
-        log_event_versions = (
-            self.session.query(LogEventVersion)
-            .filter_by(context_version_id=context_version_id)
-            .all()
+        result = await self.session.execute(
+            select(LogEventVersion).filter_by(context_version_id=context_version_id)
         )
+        log_event_versions = result.scalars().all()
 
         # 2. Get the context for project_id
         context = (
