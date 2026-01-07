@@ -206,7 +206,7 @@ def _get_distinct_group_values(
         # For parameters, use only base logs with version
         value_col = Log.param_version
         subquery = (
-            session.query(
+            select(
                 value_col.label("value"),
                 LogEventLog.log_event_id,
                 func.row_number()
@@ -217,24 +217,24 @@ def _get_distinct_group_values(
                 .label("rn"),
             )
             .join(LogEventLog, LogEventLog.log_id == Log.id)
-            .filter(LogEventLog.log_event_id.in_(select(log_event_ids)))
-            .filter(Log.key == group_key)
+            .where(LogEventLog.log_event_id.in_(select(log_event_ids)))
+            .where(Log.key == group_key)
             .subquery()
         )
     else:
         # For non-parameters, union base logs and derived logs
         base_query = (
-            session.query(
+            select(
                 Log.value.label("value"),
                 LogEventLog.log_event_id.label("log_event_id"),
             )
             .join(LogEventLog, LogEventLog.log_id == Log.id)
-            .filter(LogEventLog.log_event_id.in_(select(log_event_ids)))
-            .filter(Log.key == group_key)
+            .where(LogEventLog.log_event_id.in_(select(log_event_ids)))
+            .where(Log.key == group_key)
         )
 
         derived_query = (
-            session.query(
+            select(
                 DerivedLog.value.label("value"),
                 LogEventDerivedLog.log_event_id.label("log_event_id"),
             )
@@ -242,8 +242,8 @@ def _get_distinct_group_values(
                 LogEventDerivedLog,
                 LogEventDerivedLog.derived_log_id == DerivedLog.id,
             )
-            .filter(LogEventDerivedLog.log_event_id.in_(select(log_event_ids)))
-            .filter(DerivedLog.key == group_key)
+            .where(LogEventDerivedLog.log_event_id.in_(select(log_event_ids)))
+            .where(DerivedLog.key == group_key)
         )
 
         # Combine base and derived logs
@@ -253,7 +253,7 @@ def _get_distinct_group_values(
 
         # Apply row_number over the combined results
         subquery = (
-            session.query(
+            select(
                 combined_query.c.value,
                 combined_query.c.log_event_id,
                 func.row_number()
@@ -266,7 +266,7 @@ def _get_distinct_group_values(
         ).subquery()
 
     # Get distinct values with configurable ordering
-    query = session.query(subquery.c.value).filter(subquery.c.rn == 1)
+    query = select(subquery.c.value).where(subquery.c.rn == 1)
 
     if sort_direction == "ascending":
         query = query.order_by(asc(subquery.c.value).nulls_last())
@@ -312,11 +312,11 @@ def _get_distinct_group_values_jsonb(
 
     # Build base query: SELECT DISTINCT data->>'raw_key' FROM log_event
     query = (
-        session.query(
+        select(
             func.distinct(LogEvent.data.op("->>")(raw_key)).label("value"),
         )
-        .filter(LogEvent.id.in_(select(log_event_ids)))
-        .filter(LogEvent.data.op("?")(raw_key))  # Key exists check
+        .where(LogEvent.id.in_(select(log_event_ids)))
+        .where(LogEvent.data.op("?")(raw_key))  # Key exists check
     )
 
     # Apply sorting - for DISTINCT queries, ORDER BY must reference selected columns
@@ -423,37 +423,37 @@ def _get_log_event_ids_for_group_value(
     if is_param:
         # For parameters, only search base logs
         query = (
-            session.query(LogEventLog.log_event_id)
+            select(LogEventLog.log_event_id)
             .join(Log, Log.id == LogEventLog.log_id)
-            .filter(LogEventLog.log_event_id.in_(select(log_event_ids)))
-            .filter(Log.key == group_key)
-            .filter(Log.param_version == group_value)
+            .where(LogEventLog.log_event_id.in_(select(log_event_ids)))
+            .where(Log.key == group_key)
+            .where(Log.param_version == group_value)
         )
     elif group_key == "derived_entries":
         # For derived entries, only search derived logs
         query = (
-            session.query(LogEventDerivedLog.log_event_id)
+            select(LogEventDerivedLog.log_event_id)
             .join(DerivedLog, DerivedLog.id == LogEventDerivedLog.derived_log_id)
-            .filter(LogEventDerivedLog.log_event_id.in_(select(log_event_ids)))
-            .filter(DerivedLog.key == group_key)
-            .filter(cast(DerivedLog.value, JSONB) == cast(group_value, JSONB))
+            .where(LogEventDerivedLog.log_event_id.in_(select(log_event_ids)))
+            .where(DerivedLog.key == group_key)
+            .where(cast(DerivedLog.value, JSONB) == cast(group_value, JSONB))
         )
     else:
         # For non-parameters, search both base and derived logs
         base_query = (
-            session.query(LogEventLog.log_event_id)
+            select(LogEventLog.log_event_id)
             .join(Log, Log.id == LogEventLog.log_id)
-            .filter(LogEventLog.log_event_id.in_(select(log_event_ids)))
-            .filter(Log.key == group_key)
-            .filter(cast(Log.value, JSONB) == cast(group_value, JSONB))
+            .where(LogEventLog.log_event_id.in_(select(log_event_ids)))
+            .where(Log.key == group_key)
+            .where(cast(Log.value, JSONB) == cast(group_value, JSONB))
         )
 
         derived_query = (
-            session.query(LogEventDerivedLog.log_event_id)
+            select(LogEventDerivedLog.log_event_id)
             .join(DerivedLog, DerivedLog.id == LogEventDerivedLog.derived_log_id)
-            .filter(LogEventDerivedLog.log_event_id.in_(select(log_event_ids)))
-            .filter(DerivedLog.key == group_key)
-            .filter(cast(DerivedLog.value, JSONB) == cast(group_value, JSONB))
+            .where(LogEventDerivedLog.log_event_id.in_(select(log_event_ids)))
+            .where(DerivedLog.key == group_key)
+            .where(cast(DerivedLog.value, JSONB) == cast(group_value, JSONB))
         )
 
         # Combine results from both tables
@@ -496,9 +496,9 @@ def _get_log_event_ids_for_group_value_jsonb(
     # Use text extraction for type-agnostic comparison
     # This matches how _get_distinct_group_values_jsonb extracts values via ->>
     query = (
-        session.query(LogEvent.id)
-        .filter(LogEvent.id.in_(select(log_event_ids)))
-        .filter(LogEvent.data.op("->>")(raw_key) == group_value)
+        select(LogEvent.id)
+        .where(LogEvent.id.in_(select(log_event_ids)))
+        .where(LogEvent.data.op("->>")(raw_key) == group_value)
     )
 
     return [row[0] for row in query.all()]
@@ -510,10 +510,10 @@ def _get_params_for_log_events(
 ) -> Dict[str, Dict[int, Any]]:
     """Get all parameter versions used across the log events."""
     query = (
-        session.query(Log)
+        select(Log)
         .join(LogEventLog, LogEventLog.log_id == Log.id)
-        .filter(LogEventLog.log_event_id.in_(select(log_event_ids)))
-        .filter(Log.param_version.isnot(None))
+        .where(LogEventLog.log_event_id.in_(select(log_event_ids)))
+        .where(Log.param_version.isnot(None))
     )
 
     params = {}
@@ -639,7 +639,7 @@ def _get_all_filtered_log_event_ids(
         raise HTTPException(status_code=404, detail=f"Project {project} not found.")
 
     # Start from LogEvent table
-    log_event_query = session.query(LogEvent.id).filter(
+    log_event_query = select(LogEvent.id).where(
         LogEvent.project_id == project_id,
     )
 
@@ -782,13 +782,13 @@ def _fetch_logs_for_event_ids(
         if not event_ids:
             return ([], 0) if not latest_timestamp else None
     else:
-        if not session.query(event_ids.c.id).limit(1).first():
+        if not select(event_ids.c.id).limit(1).first():
             return ([], 0) if not latest_timestamp else None
 
     if isinstance(event_ids, list):
         event_ids_cte = (
-            session.query(LogEvent.id.label("id"))
-            .filter(LogEvent.id.in_(event_ids))
+            select(LogEvent.id.label("id"))
+            .where(LogEvent.id.in_(event_ids))
             .cte("event_ids_cte")
         )
     else:
@@ -856,7 +856,7 @@ def _fetch_logs_for_event_ids(
             joined = joined.outerjoin(sq, sq.c.log_event_id == event_ids_cte.c.id)
 
         pag_query = (
-            session.query(
+            select(
                 event_ids_cte.c.id.label("id"),
                 func.row_number().over(order_by=sort_criteria).label("row_num"),
             )
@@ -865,7 +865,7 @@ def _fetch_logs_for_event_ids(
         )
     else:
         # No sorting, simple pagination
-        pag_query = session.query(
+        pag_query = select(
             event_ids_cte.c.id.label("id"),
             func.row_number().over(order_by=desc(event_ids_cte.c.id)).label("row_num"),
         ).order_by(desc(event_ids_cte.c.id))
@@ -874,7 +874,7 @@ def _fetch_logs_for_event_ids(
     if isinstance(event_ids, list):
         total_count = len(event_ids)
     else:
-        total_count = session.query(func.count()).select_from(event_ids_cte).scalar()
+        total_count = select(func.count()).select_from(event_ids_cte).scalar()
 
     if limit:
         pag_query = pag_query.limit(limit)
@@ -889,7 +889,7 @@ def _fetch_logs_for_event_ids(
             session=session,
             relevant_log_events=paginated_ids_subq,
         )
-        max_ts = session.query(
+        max_ts = select(
             func.max(unified_logs_for_timestamp.c.updated_at),
         ).scalar()
         return max_ts.isoformat() if max_ts else None
@@ -913,7 +913,7 @@ def _fetch_logs_for_event_ids(
     else:
         real_prefix = ""
 
-    filtered_q = session.query(unified_logs_limited)
+    filtered_q = select(unified_logs_limited)
     if real_prefix:
         filtered_q = filtered_q.filter(
             unified_logs_limited.c.key.startswith(real_prefix),
@@ -1019,8 +1019,8 @@ def _handle_group_depth_level(
     # Create a CTE from either the list or use the subquery directly
     if isinstance(log_event_ids, list):
         event_ids_cte = (
-            session.query(LogEvent.id.label("id"))
-            .filter(LogEvent.id.in_(log_event_ids))
+            select(LogEvent.id.label("id"))
+            .where(LogEvent.id.in_(log_event_ids))
             .cte("event_ids_cte")
         )
     else:
@@ -1042,12 +1042,12 @@ def _handle_group_depth_level(
     else:
         event_ids = select(log_event_ids)
     base_q = (
-        session.query(
+        select(
             field_to_compare.label("group_value"),
             func.max(unified.c.log_event_id).label("log_event_id"),
             func.count(func.distinct(unified.c.log_event_id)).label("log_count"),
         )
-        .filter(
+        .where(
             unified.c.log_event_id.in_(event_ids),
             unified.c.key == raw_key,
         )
@@ -1079,7 +1079,7 @@ def _handle_group_depth_level(
                 # Build a sub-subquery that combines the group field and aggregator field
                 # This ensures we're properly joining the group key with its corresponding aggregator value
                 sub_subq = (
-                    session.query(
+                    select(
                         base_alias.c.log_event_id.label("log_event_id"),
                         base_alias.c.inferred_type.label("inferred_type"),
                         (
@@ -1096,7 +1096,7 @@ def _handle_group_depth_level(
                             agg_alias.c.key == agg_field_raw_key,
                         ),
                     )
-                    .filter(
+                    .where(
                         base_alias.c.log_event_id.in_(select(log_event_ids)),
                         base_alias.c.key == raw_key,
                     )
@@ -1104,7 +1104,7 @@ def _handle_group_depth_level(
                 )
 
                 # Build the outer query that groups by the group key value and applies aggregation
-                base_q = session.query(
+                base_q = select(
                     sub_subq.c.group_key_value.label("group_value"),
                     func.count(func.distinct(sub_subq.c.log_event_id)).label(
                         "group_count",
@@ -1176,7 +1176,7 @@ def _handle_group_depth_level(
         base_q = base_q.order_by(desc("log_event_id").nulls_last())
 
     # Calculate total distinct group count before applying pagination
-    total_distinct_groups = session.query(
+    total_distinct_groups = select(
         func.count(base_q.subquery().c.group_value),
     ).scalar()
 
@@ -1203,7 +1203,7 @@ def _handle_group_depth_level(
         relevant_log_events=event_ids_cte,
         key=raw_key,
     )
-    missing_ids_q = session.query(event_ids_cte.c.id).filter(
+    missing_ids_q = select(event_ids_cte.c.id).where(
         ~event_ids_cte.c.id.in_(select(present_value_q.c.log_event_id)),
     )
     missing_ids = [row[0] for row in missing_ids_q.all()]
@@ -1390,8 +1390,8 @@ def _build_grouping_sets_query(
 
     # Build the base query
     query = (
-        session.query(*select_columns)
-        .filter(LogEvent.id.in_(select(event_ids_cte.c.id)))
+        select(*select_columns)
+        .where(LogEvent.id.in_(select(event_ids_cte.c.id)))
         .group_by(func.grouping_sets(*grouping_sets_tuples))
     )
 
@@ -1461,16 +1461,16 @@ def _build_grouping_sets_query(
         cte_columns.append(row_num)
 
         # Build ranked query
-        ranked_subq = session.query(*cte_columns).subquery("ranked")
+        ranked_subq = select(*cte_columns).subquery("ranked")
 
         # Select all columns except rn, with pagination filter
         final_columns = [
             ranked_subq.c[col.key] for col in ranked_subq.c if col.key != "rn"
         ]
         query = (
-            session.query(*final_columns)
-            .filter(ranked_subq.c.rn > group_offset)
-            .filter(ranked_subq.c.rn <= group_offset + group_limit)
+            select(*final_columns)
+            .where(ranked_subq.c.rn > group_offset)
+            .where(ranked_subq.c.rn <= group_offset + group_limit)
         )
 
         # Re-apply ordering on final query
@@ -1908,9 +1908,9 @@ def _build_grouped_data_with_grouping_sets(
     if group_limit is not None:
         # Build a separate count query to get total distinct groups at level 0
         _, raw_key = parse_group_key(group_by[0])
-        count_query = session.query(
+        count_query = select(
             func.count(func.distinct(LogEvent.data.op("->>")(raw_key))),
-        ).filter(LogEvent.id.in_(select(event_ids_cte.c.id)))
+        ).where(LogEvent.id.in_(select(event_ids_cte.c.id)))
         total_group_count = count_query.scalar() or 0
 
     # Build the GROUPING SETS query
@@ -2019,8 +2019,8 @@ def _handle_group_depth_level_jsonb(
     # Convert to CTE if needed
     if isinstance(log_event_ids, list):
         event_ids_cte = (
-            session.query(LogEvent.id.label("id"))
-            .filter(LogEvent.id.in_(log_event_ids))
+            select(LogEvent.id.label("id"))
+            .where(LogEvent.id.in_(log_event_ids))
             .cte("event_ids_cte")
         )
     else:
@@ -2033,12 +2033,12 @@ def _handle_group_depth_level_jsonb(
     group_value_expr = LogEvent.data.op("->>")(raw_key)
 
     base_q = (
-        session.query(
+        select(
             group_value_expr.label("group_value"),
             func.count(func.distinct(LogEvent.id)).label("log_count"),
         )
-        .filter(LogEvent.id.in_(select(event_ids_cte.c.id)))
-        .filter(LogEvent.data.op("?")(raw_key))  # Key exists
+        .where(LogEvent.id.in_(select(event_ids_cte.c.id)))
+        .where(LogEvent.data.op("?")(raw_key))  # Key exists
         .group_by(group_value_expr)
         .order_by(desc(func.max(LogEvent.id)).nulls_last())
     )
@@ -2134,9 +2134,9 @@ def _handle_group_depth_level_jsonb(
 
     # Handle missing IDs (logs without this key) - single SQL EXCEPT query
     present_ids_q = (
-        session.query(LogEvent.id)
-        .filter(LogEvent.id.in_(select(event_ids_cte.c.id)))
-        .filter(LogEvent.data.op("?")(raw_key))
+        select(LogEvent.id)
+        .where(LogEvent.id.in_(select(event_ids_cte.c.id)))
+        .where(LogEvent.data.op("?")(raw_key))
     ).subquery()
     missing_ids_q = select(event_ids_cte.c.id).except_(select(present_ids_q.c.id))
     missing_ids = [r[0] for r in session.execute(missing_ids_q).fetchall()]
@@ -2248,7 +2248,7 @@ def _build_grouped_data(
             return {}
     else:
         # For subquery, check if it returns any rows
-        count_check = session.query(log_event_ids.c.id).limit(1).all()
+        count_check = select(log_event_ids.c.id).limit(1).all()
         if not count_check:
             return {}
 
@@ -2256,8 +2256,8 @@ def _build_grouped_data(
         if groups_only:
             if return_timestamps:
                 rows = (
-                    session.query(LogEvent.id, LogEvent.created_at)
-                    .filter(LogEvent.id.in_(select(log_event_ids)))
+                    select(LogEvent.id, LogEvent.created_at)
+                    .where(LogEvent.id.in_(select(log_event_ids)))
                     .all()
                 )
                 return {
@@ -2267,7 +2267,7 @@ def _build_grouped_data(
                 if isinstance(log_event_ids, list):
                     return log_event_ids
                 else:
-                    all_ids = session.query(log_event_ids).all()
+                    all_ids = select(log_event_ids).all()
                     event_ids = [r[0] for r in all_ids]
                     return event_ids
         return _fetch_leaf_logs(log_event_ids)
@@ -2308,8 +2308,8 @@ def _build_grouped_data(
     # Create a CTE from either the list or use the subquery directly
     if isinstance(log_event_ids, list):
         event_ids_cte = (
-            session.query(LogEvent.id.label("id"))
-            .filter(LogEvent.id.in_(log_event_ids))
+            select(LogEvent.id.label("id"))
+            .where(LogEvent.id.in_(log_event_ids))
             .cte("event_ids_cte")
         )
     else:
@@ -2326,12 +2326,12 @@ def _build_grouped_data(
         unified.c.param_version if prefix == "params" else unified.c.value
     )
     base_q = (
-        session.query(
+        select(
             field_to_compare.label("group_value"),
             func.max(unified.c.log_event_id).label("log_event_id"),
             func.count(func.distinct(unified.c.log_event_id)).label("group_count"),
         )
-        .filter(
+        .where(
             unified.c.log_event_id.in_(select(event_ids_cte.c.id)),
             unified.c.key == raw_key,
         )
@@ -2352,7 +2352,7 @@ def _build_grouped_data(
             # Build a sub-subquery that combines the group field and aggregator field
             # This ensures we're properly joining the group key with its corresponding aggregator value
             sub_subq = (
-                session.query(
+                select(
                     base_alias.c.log_event_id.label("log_event_id"),
                     base_alias.c.inferred_type.label("inferred_type"),
                     (
@@ -2369,7 +2369,7 @@ def _build_grouped_data(
                         agg_alias.c.key == agg_field_raw_key,
                     ),
                 )
-                .filter(
+                .where(
                     base_alias.c.log_event_id.in_(select(event_ids_cte.c.id)),
                     base_alias.c.key == raw_key,
                 )
@@ -2377,7 +2377,7 @@ def _build_grouped_data(
             )
 
             # Build the outer query that groups by the group key value and applies aggregation
-            base_q = session.query(
+            base_q = select(
                 sub_subq.c.group_key_value.label("group_value"),
                 func.count(func.distinct(sub_subq.c.log_event_id)).label("group_count"),
             ).group_by(sub_subq.c.group_key_value)
@@ -2445,7 +2445,7 @@ def _build_grouped_data(
         base_q = base_q.order_by(desc("log_event_id").nulls_last())
     # Calculate total distinct group count before applying pagination
     # This ensures group_count is accurate regardless of pagination
-    total_distinct_groups = session.query(
+    total_distinct_groups = select(
         func.count(base_q.subquery().c.group_value),
     ).scalar()
 
@@ -2466,7 +2466,7 @@ def _build_grouped_data(
             field_to_compare = unified.c.value
             value_to_compare = cast(group_val, JSONB)
         # Get log event IDs for this group value using the raw key
-        ids_q = session.query(unified.c.log_event_id).filter(
+        ids_q = select(unified.c.log_event_id).where(
             unified.c.log_event_id.in_(select(event_ids_cte.c.id)),
             unified.c.key == raw_key,
             field_to_compare == value_to_compare,
@@ -2511,7 +2511,7 @@ def _build_grouped_data(
         relevant_log_events=event_ids_cte,
         key=raw_key,
     )
-    missing_ids_q = session.query(event_ids_cte.c.id).filter(
+    missing_ids_q = select(event_ids_cte.c.id).where(
         ~event_ids_cte.c.id.in_(select(present_value_q.c.log_event_id)),
     )
     missing_ids = [row[0] for row in missing_ids_q.all()]
@@ -2629,14 +2629,14 @@ def _build_grouped_data_jsonb(
         if not log_event_ids:
             return {}
         event_ids_cte = (
-            session.query(LogEvent.id.label("id"))
-            .filter(LogEvent.id.in_(log_event_ids))
+            select(LogEvent.id.label("id"))
+            .where(LogEvent.id.in_(log_event_ids))
             .cte("event_ids_cte")
         )
     else:
         event_ids_cte = log_event_ids
         # Check if subquery has results
-        if not session.query(event_ids_cte.c.id).limit(1).first():
+        if not select(event_ids_cte.c.id).limit(1).first():
             return {}
 
     # GROUPING SETS optimization: use single query for count-only scenarios
@@ -2666,8 +2666,8 @@ def _build_grouped_data_jsonb(
         if groups_only:
             if return_timestamps:
                 rows = (
-                    session.query(LogEvent.id, LogEvent.created_at)
-                    .filter(LogEvent.id.in_(select(event_ids_cte.c.id)))
+                    select(LogEvent.id, LogEvent.created_at)
+                    .where(LogEvent.id.in_(select(event_ids_cte.c.id)))
                     .all()
                 )
                 return {
@@ -2677,7 +2677,7 @@ def _build_grouped_data_jsonb(
                 if isinstance(log_event_ids, list):
                     return log_event_ids
                 else:
-                    all_ids = session.query(event_ids_cte.c.id).all()
+                    all_ids = select(event_ids_cte.c.id).all()
                     return [r[0] for r in all_ids]
 
         # Fetch leaf logs using JSONB query
@@ -2731,13 +2731,13 @@ def _build_grouped_data_jsonb(
     group_value_expr = LogEvent.data.op("->>")(raw_key)
 
     base_q = (
-        session.query(
+        select(
             group_value_expr.label("group_value"),
             func.count(func.distinct(LogEvent.id)).label("group_count"),
             func.array_agg(func.distinct(LogEvent.id)).label("event_ids"),
         )
-        .filter(LogEvent.id.in_(select(event_ids_cte.c.id)))
-        .filter(LogEvent.data.op("?")(raw_key))  # Key exists
+        .where(LogEvent.id.in_(select(event_ids_cte.c.id)))
+        .where(LogEvent.data.op("?")(raw_key))  # Key exists
         .group_by(group_value_expr)
     )
 
@@ -2938,9 +2938,9 @@ def _build_grouped_data_jsonb(
 
     # Handle missing IDs (logs without this key) - single SQL EXCEPT query
     present_ids_q = (
-        session.query(LogEvent.id)
-        .filter(LogEvent.id.in_(select(event_ids_cte.c.id)))
-        .filter(LogEvent.data.op("?")(raw_key))
+        select(LogEvent.id)
+        .where(LogEvent.id.in_(select(event_ids_cte.c.id)))
+        .where(LogEvent.data.op("?")(raw_key))
     ).subquery()
     missing_ids_q = select(event_ids_cte.c.id).except_(select(present_ids_q.c.id))
     missing_ids = [r[0] for r in session.execute(missing_ids_q).fetchall()]
@@ -3046,7 +3046,7 @@ def _fetch_leaf_logs_jsonb(
     from .logging_utils import _format_jsonb_logs
 
     # Build query for LogEvent with JSONB data
-    query = session.query(LogEvent.id, LogEvent.data, LogEvent.created_at).filter(
+    query = select(LogEvent.id, LogEvent.data, LogEvent.created_at).where(
         LogEvent.id.in_(select(event_ids.c.id)),
     )
 

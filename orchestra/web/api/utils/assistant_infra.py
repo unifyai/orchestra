@@ -2,8 +2,8 @@ import os
 from typing import List
 
 import httpx
-from sqlalchemy import and_
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from orchestra.db.models.orchestra_models import (
     Context,
@@ -215,48 +215,50 @@ async def get_social_platforms_costs():
         return response.json()
 
 
-def get_running_jobs(assistant_id: str, session: Session) -> List[str]:
+async def get_running_jobs(assistant_id: str, session: AsyncSession) -> List[str]:
     """
     Get running jobs for the assistant by querying the database directly.
 
     Args:
         assistant_id: The assistant ID to find running jobs for
-        session: SQLAlchemy database session
+        session: SQLAlchemy async database session
 
     Returns:
         List of job names that are currently running for this assistant
     """
     # Find the AssistantJobs project and startup_events context
-    project = session.query(Project).filter(Project.name == "AssistantJobs").first()
+    result = await session.execute(
+        select(Project).where(Project.name == "AssistantJobs"),
+    )
+    project = result.scalars().first()
     if not project:
         return []
 
-    context = (
-        session.query(Context)
-        .filter(
+    result = await session.execute(
+        select(Context).where(
             and_(
                 Context.project_id == project.id,
                 Context.name == "startup_events",
             ),
-        )
-        .first()
+        ),
     )
+    context = result.scalars().first()
     if not context:
         return []
 
     # Query LogEvent entries where assistant_id matches and running is True
-    log_events = (
-        session.query(LogEvent)
+    result = await session.execute(
+        select(LogEvent)
         .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
-        .filter(
+        .where(
             and_(
                 LogEventContext.context_id == context.id,
                 LogEvent.data["assistant_id"].astext == str(assistant_id),
                 LogEvent.data["running"].astext == "true",
             ),
-        )
-        .all()
+        ),
     )
+    log_events = result.scalars().all()
 
     job_names = [
         log_event.data.get("job_name")
@@ -266,7 +268,7 @@ def get_running_jobs(assistant_id: str, session: Session) -> List[str]:
     return job_names
 
 
-async def stop_jobs(assistant_id: str, session: Session):
+async def stop_jobs(assistant_id: str, session: AsyncSession):
     """
     Stop a job by making a POST request to the comms endpoint.
 
@@ -274,7 +276,7 @@ async def stop_jobs(assistant_id: str, session: Session):
         assistant_id: The assistant ID to stop jobs for
         session: SQLAlchemy database session
     """
-    job_names = get_running_jobs(assistant_id, session)
+    job_names = await get_running_jobs(assistant_id, session)
     # if running job found, stop it
     if len(job_names) > 0:
         async with httpx.AsyncClient() as client:

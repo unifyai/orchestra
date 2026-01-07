@@ -2574,16 +2574,15 @@ async def _get_or_generate_embedding(
         Embedding vector, or None if text is not embeddable
     """
     # Try to fetch from DB (excluding soft-deleted)
-    embedding = (
-        session.query(Embedding)
-        .filter_by(
-            ref_id=log_event_id,
-            key=key,
-            model=model,
-        )
-        .filter(Embedding.is_deleted == False)  # noqa: E712
-        .first()
+    result = await session.execute(
+        select(Embedding).where(
+            Embedding.ref_id == log_event_id,
+            Embedding.key == key,
+            Embedding.model == model,
+            Embedding.is_deleted == False,  # noqa: E712
+        ),
     )
+    embedding = result.scalars().first()
 
     if embedding:
         return embedding.vector

@@ -900,14 +900,14 @@ def _get_logs_query(
         raise not_found(f"Project {project}")
 
     # Filtering, sorting, pagination, etc.
-    log_event_query = session.query(LogEvent.id).filter(
+    log_event_query = select(LogEvent.id).where(
         LogEvent.project_id == project_id,
     )
     context_name = "" if not context else context
     context_obj = context_dao.filter(name=context_name, project_id=project_id)
     if context_obj:
         context_id = context_obj[0][0].id
-        log_event_query = log_event_query.join(LogEventContext).filter(
+        log_event_query = log_event_query.join(LogEventContext).where(
             LogEventContext.context_id == context_id,
         )
     else:
@@ -1151,18 +1151,18 @@ def _get_logs_query(
         allowed_fields = from_fields.split("&")
         # Check both Log and DerivedLog tables for matching fields
         log_exists = (
-            session.query(LogEventLog.log_event_id)
+            select(LogEventLog.log_event_id)
             .join(Log, LogEventLog.log_id == Log.id)
-            .filter(
+            .where(
                 LogEventLog.log_event_id == LogEvent.id,
                 Log.key.in_(allowed_fields),
             )
             .exists()
         )
         derived_log_exists = (
-            session.query(LogEventDerivedLog.log_event_id)
+            select(LogEventDerivedLog.log_event_id)
             .join(DerivedLog, DerivedLog.id == LogEventDerivedLog.derived_log_id)
-            .filter(
+            .where(
                 LogEventDerivedLog.log_event_id == LogEvent.id,
                 DerivedLog.key.in_(allowed_fields),
             )
@@ -1176,18 +1176,18 @@ def _get_logs_query(
         excluded_fields = exclude_fields.split("&")
         # Check both Log and DerivedLog tables for non-excluded fields
         log_exists = (
-            session.query(LogEventLog.log_event_id)
+            select(LogEventLog.log_event_id)
             .join(Log, LogEventLog.log_id == Log.id)
-            .filter(
+            .where(
                 LogEventLog.log_event_id == LogEvent.id,
                 Log.key.notin_(excluded_fields),
             )
             .exists()
         )
         derived_log_exists = (
-            session.query(LogEventDerivedLog.log_event_id)
+            select(LogEventDerivedLog.log_event_id)
             .join(DerivedLog, DerivedLog.id == LogEventDerivedLog.derived_log_id)
-            .filter(
+            .where(
                 LogEventDerivedLog.log_event_id == LogEvent.id,
                 DerivedLog.key.notin_(excluded_fields),
             )
@@ -1356,7 +1356,7 @@ def _get_logs_query(
                 )
 
             # Step 5: Build final query with sort info
-            base_event_q = session.query(relevant_log_events.c.id).select_from(
+            base_event_q = select(relevant_log_events.c.id).select_from(
                 joined_events,
             )
 
@@ -1421,7 +1421,7 @@ def _get_logs_query(
             session=session,
             relevant_log_events=paginated_ids_subq,
         )
-        max_updated_at = session.query(
+        max_updated_at = select(
             func.max(unified_logs_for_timestamp.c.updated_at),
         ).scalar()
         result = max_updated_at.isoformat() if max_updated_at else None
@@ -1433,7 +1433,7 @@ def _get_logs_query(
         paginated_ids_subq,
     )
 
-    filtered_logs_q = session.query(unified_logs_limited).filter(True)
+    filtered_logs_q = select(unified_logs_limited).where(True)
 
     context_len = 0
     exclude_params = False
@@ -1589,12 +1589,12 @@ def _get_logs_query_jsonb(
     # =========================================================================
     # STEP 2: Build base query (SELECT id, data, key_order, created_at FROM log_event)
     # =========================================================================
-    query = session.query(
+    query = select(
         LogEvent.id,
         LogEvent.data,
         LogEvent.key_order,
         LogEvent.created_at,
-    ).filter(
+    ).where(
         LogEvent.project_id == project_id,
     )
 
@@ -1610,7 +1610,7 @@ def _get_logs_query_jsonb(
                 detail=f"Context '{context}' not found",
             )
         context_id = context_obj[0][0].id
-        query = query.join(LogEventContext).filter(
+        query = query.join(LogEventContext).where(
             LogEventContext.context_id == context_id,
         )
     else:
@@ -1620,7 +1620,7 @@ def _get_logs_query_jsonb(
             context_id = context_obj[0][0].id
             # Also filter by context membership for default context
             # This ensures logs removed from default context aren't returned
-            query = query.join(LogEventContext).filter(
+            query = query.join(LogEventContext).where(
                 LogEventContext.context_id == context_id,
             )
         else:
@@ -1815,8 +1815,8 @@ def _get_logs_query_jsonb(
         # Also check Embedding table for vector fields (embeddings are stored separately)
         # Exclude soft-deleted embeddings from existence checks
         embedding_exists = (
-            session.query(Embedding.ref_id)
-            .filter(
+            select(Embedding.ref_id)
+            .where(
                 Embedding.ref_id == LogEvent.id,
                 Embedding.key.in_(allowed_fields),
                 Embedding.is_deleted
@@ -2031,7 +2031,7 @@ def _get_logs_query_jsonb(
                 # Fetch final results with data and created_at
                 # Join with paginated_ids_cte to preserve correct ordering via row_num
                 final_query = (
-                    session.query(LogEvent.id, LogEvent.data, LogEvent.created_at)
+                    select(LogEvent.id, LogEvent.data, LogEvent.created_at)
                     .join(paginated_ids_cte, LogEvent.id == paginated_ids_cte.c.id)
                     .order_by(paginated_ids_cte.c.row_num)
                 )
@@ -2847,7 +2847,7 @@ def _create_logs_internal_jsonb(
             for idx, (log_event_id, log_data, key_order) in enumerate(log_data_updates):
                 original_index = successful_indices[idx]
                 try:
-                    session.query(LogEvent).filter(LogEvent.id == log_event_id).update(
+                    select(LogEvent).where(LogEvent.id == log_event_id).update(
                         {"data": log_data, "key_order": key_order},
                         synchronize_session=False,
                     )
@@ -3531,7 +3531,7 @@ def _build_unified_logs_subquery(
 
     # get only the latest version of the logs
     base_logs_q = (
-        session.query(
+        select(
             Log.id.label("id"),
             LogEventLog.log_event_id.label("log_event_id"),
             Log.key.label("key"),
@@ -3549,7 +3549,7 @@ def _build_unified_logs_subquery(
     base_logs_q = _apply_event_filter(base_logs_q, Log)
 
     derived_logs_q = (
-        session.query(
+        select(
             DerivedLog.id.label("id"),
             LogEventDerivedLog.log_event_id.label("log_event_id"),
             DerivedLog.key.label("key"),
@@ -4006,7 +4006,7 @@ def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
 
     # -- Main query --------------------------------------------------------------
     final_logs_query = (
-        session.query(
+        select(
             filtered_logs_subq.c.id,
             filtered_logs_subq.c.log_event_id,
             filtered_logs_subq.c.key,
@@ -4144,7 +4144,7 @@ def _build_log_subquery(
         )
 
     # Start with a base query selecting log_event_id
-    base_query = session.query(LogEvent.id.label("log_event_id"))
+    base_query = select(LogEvent.id.label("log_event_id"))
 
     # Try to get field names from FieldTypeDAO
     log_keys = []
@@ -4170,21 +4170,21 @@ def _build_log_subquery(
     for key in log_keys:
         # Create a subquery that gets the value for this key from base logs
         base_log_subq = (
-            session.query(Log.value)
+            select(Log.value)
             .join(LogEventLog, LogEventLog.log_id == Log.id)
-            .filter(LogEventLog.log_event_id == LogEvent.id, Log.key == key)
+            .where(LogEventLog.log_event_id == LogEvent.id, Log.key == key)
             .limit(1)
             .scalar_subquery()
         )
 
         # Create scalar subqueries for derived log fields
         derived_log_subq = (
-            session.query(DerivedLog.value)
+            select(DerivedLog.value)
             .join(
                 LogEventDerivedLog,
                 LogEventDerivedLog.derived_log_id == DerivedLog.id,
             )
-            .filter(
+            .where(
                 LogEventDerivedLog.log_event_id == LogEvent.id,
                 DerivedLog.key == key,
             )
@@ -4194,12 +4194,12 @@ def _build_log_subquery(
 
         # Create scalar subqueries for metadata
         derived_log_equation_subq = (
-            session.query(DerivedLog.equation)
+            select(DerivedLog.equation)
             .join(
                 LogEventDerivedLog,
                 LogEventDerivedLog.derived_log_id == DerivedLog.id,
             )
-            .filter(
+            .where(
                 LogEventDerivedLog.log_event_id == LogEvent.id,
                 DerivedLog.key == key,
             )
@@ -4208,12 +4208,12 @@ def _build_log_subquery(
         )
 
         derived_log_referenced_logs_subq = (
-            session.query(DerivedLog.referenced_logs)
+            select(DerivedLog.referenced_logs)
             .join(
                 LogEventDerivedLog,
                 LogEventDerivedLog.derived_log_id == DerivedLog.id,
             )
-            .filter(
+            .where(
                 LogEventDerivedLog.log_event_id == LogEvent.id,
                 DerivedLog.key == key,
             )
@@ -4314,7 +4314,7 @@ def _build_log_subquery_jsonb(
         )
 
     # Build simple query selecting log_event_id and data column
-    base_query = session.query(
+    base_query = select(
         LogEvent.id.label("log_event_id"),
         LogEvent.data.label("data"),
     )
@@ -4793,8 +4793,8 @@ def _create_logs_from_joined_rows(
         for src_ctx in source_contexts.values():
             if src_ctx is not None:
                 fts = (
-                    session.query(FieldType)
-                    .filter(
+                    select(FieldType)
+                    .where(
                         FieldType.project_id == project_id,
                         FieldType.context_id == src_ctx,
                         FieldType.field_name.in_(list(all_field_names)),
@@ -4805,8 +4805,8 @@ def _create_logs_from_joined_rows(
                     source_ft_cache[(src_ctx, ft.field_name)] = ft
     # Global (context_id = None)
     fts_global = (
-        session.query(FieldType)
-        .filter(
+        select(FieldType)
+        .where(
             FieldType.project_id == project_id,
             FieldType.context_id.is_(None),
             FieldType.field_name.in_(list(all_field_names)),
@@ -4818,8 +4818,8 @@ def _create_logs_from_joined_rows(
 
     target_ft_cache: dict[str, FieldType] = {}
     fts_target = (
-        session.query(FieldType)
-        .filter(
+        select(FieldType)
+        .where(
             FieldType.project_id == project_id,
             FieldType.context_id == context_id,
             FieldType.field_name.in_(list(all_field_names)),
@@ -5000,8 +5000,8 @@ def _create_logs_from_joined_rows(
     # Exclude soft-deleted embeddings from copying operations
     if source_log_event_ids:
         source_embeddings = (
-            session.query(Embedding)
-            .filter(
+            select(Embedding)
+            .where(
                 Embedding.ref_id.in_(source_log_event_ids),
                 Embedding.is_deleted
                 == False,  # noqa: E712 - SQLAlchemy requires == for SQL generation
@@ -5225,8 +5225,8 @@ def _create_logs_from_joined_rows_jsonb(
         for src_ctx in source_contexts.values():
             if src_ctx is not None:
                 fts = (
-                    session.query(FieldType)
-                    .filter(
+                    select(FieldType)
+                    .where(
                         FieldType.project_id == project_id,
                         FieldType.context_id == src_ctx,
                         FieldType.field_name.in_(list(all_field_names)),
@@ -5238,8 +5238,8 @@ def _create_logs_from_joined_rows_jsonb(
 
     # Global field types (context_id = None)
     fts_global = (
-        session.query(FieldType)
-        .filter(
+        select(FieldType)
+        .where(
             FieldType.project_id == project_id,
             FieldType.context_id.is_(None),
             FieldType.field_name.in_(list(all_field_names)),
@@ -5252,8 +5252,8 @@ def _create_logs_from_joined_rows_jsonb(
     # Cache target context field types
     target_ft_cache: dict[str, FieldType] = {}
     fts_target = (
-        session.query(FieldType)
-        .filter(
+        select(FieldType)
+        .where(
             FieldType.project_id == project_id,
             FieldType.context_id == context_id,
             FieldType.field_name.in_(list(all_field_names)),
@@ -5434,8 +5434,8 @@ def _create_logs_from_joined_rows_jsonb(
         # Query all embeddings from source log events
         # Exclude soft-deleted embeddings from copying operations
         source_embeddings = (
-            session.query(Embedding)
-            .filter(
+            select(Embedding)
+            .where(
                 Embedding.ref_id.in_(source_log_event_ids),
                 Embedding.is_deleted
                 == False,  # noqa: E712 - SQLAlchemy requires == for SQL generation
@@ -5624,9 +5624,9 @@ def _create_logs_by_reference_eav(
 
                 # Find the original Log with this key from the source LogEvent
                 original_log = (
-                    session.query(Log)
+                    select(Log)
                     .join(LogEventLog)
-                    .filter(
+                    .where(
                         LogEventLog.log_event_id == source_log_event_id,
                         Log.key == original_col,
                     )
@@ -5635,9 +5635,9 @@ def _create_logs_by_reference_eav(
 
                 # Check if it's a derived log
                 original_derived_log = (
-                    session.query(DerivedLog)
+                    select(DerivedLog)
                     .join(LogEventDerivedLog)
-                    .filter(
+                    .where(
                         LogEventDerivedLog.log_event_id == source_log_event_id,
                         DerivedLog.key == original_col,
                     )
@@ -5697,9 +5697,9 @@ def _create_logs_by_reference_eav(
                     if source_log_event_id:
                         # Find the Log with this key from the source LogEvent
                         log = (
-                            session.query(Log)
+                            select(Log)
                             .join(LogEventLog)
-                            .filter(
+                            .where(
                                 LogEventLog.log_event_id == source_log_event_id,
                                 Log.key == original_col,
                             )
@@ -5708,9 +5708,9 @@ def _create_logs_by_reference_eav(
 
                         # Check if it's a derived log
                         derived_log = (
-                            session.query(DerivedLog)
+                            select(DerivedLog)
                             .join(LogEventDerivedLog)
-                            .filter(
+                            .where(
                                 LogEventDerivedLog.log_event_id == source_log_event_id,
                                 DerivedLog.key == original_col,
                             )

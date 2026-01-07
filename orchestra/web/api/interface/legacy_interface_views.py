@@ -1,9 +1,15 @@
 import json
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from orchestra.db.dependencies import get_db_session
+from orchestra.db.dao.async_context_dao import AsyncContextDAO
+from orchestra.db.dao.async_legacy_interface_dao import AsyncLegacyInterfaceDAO
+from orchestra.db.dao.async_organization_member_dao import AsyncOrganizationMemberDAO
+from orchestra.db.dao.async_project_dao import AsyncProjectDAO
+from orchestra.db.dao.async_temp_interface_dao import AsyncTempInterfaceDAO
+from orchestra.db.dependencies import get_async_db_session
 from orchestra.db.models.orchestra_models import Interface
 from orchestra.web.api.interface.schema import LegacyInterfaceConfig
 
@@ -53,16 +59,16 @@ router = APIRouter()
         },
     },
 )
-def create_interface(
+async def create_interface(
     request_fastapi: Request,
     request: LegacyInterfaceConfig,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    interface_dao = LegacyInterfaceDAO(session)
-    temp_interface_dao = TempInterfaceDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
+    interface_dao = AsyncLegacyInterfaceDAO(session)
+    temp_interface_dao = AsyncTempInterfaceDAO(session)
 
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     project = project_dao.get_by_user_and_name(
@@ -88,7 +94,7 @@ def create_interface(
 
     # Validate context if provided (non-empty string)
     if request.context and request.context.strip():
-        existing_contexts = context_dao.filter(
+        existing_contexts = await context_dao.filter(
             project_id=project.id,
             name=request.context,
         )
@@ -98,7 +104,7 @@ def create_interface(
                 detail=f"Context '{request.context}' not found in project.",
             )
 
-    # icon and order are accepted by both LegacyInterfaceDAO and TempInterfaceDAO implementations
+    # icon and order are accepted by both AsyncLegacyInterfaceDAO and AsyncTempInterfaceDAO implementations
     dao.create_interface(  # type: ignore[arg-type]
         name=request.name,
         items=json.dumps([item.model_dump() for item in request.items]),
@@ -111,12 +117,12 @@ def create_interface(
     )
 
     # Retrieve the newly created interface to return its ID
-    created_ifc = (
-        session.query(Interface)
-        .filter(Interface.project_id == project.id, Interface.name == request.name)
-        .order_by(Interface.created_at.desc())
-        .first()
+    result = await session.execute(
+        select(Interface)
+        .where(Interface.project_id == project.id, Interface.name == request.name)
+        .order_by(Interface.created_at.desc()),
     )
+    created_ifc = result.scalars().first()
 
     return {"id": str(created_ifc.id) if created_ifc else None}
 
@@ -160,16 +166,16 @@ def create_interface(
         },
     },
 )
-def update_interface(
+async def update_interface(
     request_fastapi: Request,
     request: LegacyInterfaceConfig,
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    interface_dao = LegacyInterfaceDAO(session)
-    temp_interface_dao = TempInterfaceDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
+    interface_dao = AsyncLegacyInterfaceDAO(session)
+    temp_interface_dao = AsyncTempInterfaceDAO(session)
 
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     project = project_dao.get_by_user_and_name(
@@ -195,7 +201,7 @@ def update_interface(
 
     # Validate context if provided (non-empty string)
     if request.context and request.context.strip():
-        existing_contexts = context_dao.filter(
+        existing_contexts = await context_dao.filter(
             project_id=project.id,
             name=request.context,
         )
@@ -274,18 +280,18 @@ def update_interface(
         },
     },
 )
-def get_interfaces(
+async def get_interfaces(
     request_fastapi: Request,
     name: str = Query(None),
     project: str = Query(...),
     temporary: bool = Query(False),
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    interface_dao = LegacyInterfaceDAO(session)
-    temp_interface_dao = TempInterfaceDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
+    interface_dao = AsyncLegacyInterfaceDAO(session)
+    temp_interface_dao = AsyncTempInterfaceDAO(session)
 
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     project_obj = project_dao.get_by_user_and_name(
@@ -388,18 +394,18 @@ def get_interfaces(
         },
     },
 )
-def delete_interface(
+async def delete_interface(
     request_fastapi: Request,
     name: str = Query(...),
     project: str = Query(...),
     temporary: bool = Query(False),
-    session: Session = Depends(get_db_session),
+    session: AsyncSession = Depends(get_async_db_session),
 ):
-    organization_member_dao = OrganizationMemberDAO(session)
-    context_dao = ContextDAO(session)
-    project_dao = ProjectDAO(session, organization_member_dao, context_dao)
-    interface_dao = LegacyInterfaceDAO(session)
-    temp_interface_dao = TempInterfaceDAO(session)
+    organization_member_dao = AsyncOrganizationMemberDAO(session)
+    context_dao = AsyncContextDAO(session)
+    project_dao = AsyncProjectDAO(session, organization_member_dao, context_dao)
+    interface_dao = AsyncLegacyInterfaceDAO(session)
+    temp_interface_dao = AsyncTempInterfaceDAO(session)
 
     organization_id = getattr(request_fastapi.state, "organization_id", None)
     project_obj = project_dao.get_by_user_and_name(

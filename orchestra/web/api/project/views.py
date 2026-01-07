@@ -7,7 +7,7 @@ from typing import List
 
 import sqlalchemy
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Async DAOs
@@ -402,25 +402,26 @@ async def create_favorite(
             position=favorite.position,
         )
 
-        favorite_project_dao.session.commit()
+        await session.commit()
 
-        new_id = (
-            favorite_project_dao.session.query(FavoriteProject)
-            .filter_by(user_id=user_id, project_id=project.id)
-            .first()
-            .id
+        result = await session.execute(
+            select(FavoriteProject).where(
+                FavoriteProject.user_id == user_id,
+                FavoriteProject.project_id == project.id,
+            ),
         )
+        new_favorite = result.scalars().first()
 
         return FavoriteProjectOut(
-            id=new_id,
+            id=new_favorite.id,
             project=favorite.project,
             position=favorite.position,
         )
     except ValueError:
-        favorite_project_dao.session.rollback()
+        await session.rollback()
         raise HTTPException(status_code=400, detail="Project is already in favorites")
     except Exception as e:
-        favorite_project_dao.session.rollback()
+        await session.rollback()
         raise HTTPException(
             status_code=500,
             detail=f"Failed to create favorite: {str(e)}",
@@ -923,14 +924,13 @@ async def delete_project(
     OWNER_ID = settings.orchestra_owner_id
     PROD_TRAFFIC_PROJECT_NAME = settings.orchestra_prod_traffic_name
     CHAT_COMPLETIONS_PROJECT_NAME = settings.chat_completions_project_name
-    orchestra_org = (
-        session.query(Organization)
-        .filter(
+    result = await session.execute(
+        select(Organization).where(
             Organization.name == ORGANIZATION_NAME,
             Organization.owner_id == OWNER_ID,
-        )
-        .first()
+        ),
     )
+    orchestra_org = result.scalars().first()
     try:
         if project.name == CHAT_COMPLETIONS_PROJECT_NAME:
             raise HTTPException(
@@ -1092,7 +1092,10 @@ async def transfer_project_to_organization(
     role_dao = AsyncRoleDAO(session)
 
     # Get project
-    project = session.query(Project).filter(Project.id == project_id).first()
+    result = await session.execute(
+        select(Project).where(Project.id == project_id),
+    )
+    project = result.scalars().first()
     if not project:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1137,14 +1140,13 @@ async def transfer_project_to_organization(
         )
 
     # Check for name conflict in target organization
-    existing_project = (
-        session.query(Project)
-        .filter(
+    result = await session.execute(
+        select(Project).where(
             Project.organization_id == transfer_request.organization_id,
             Project.name == project.name,
-        )
-        .first()
+        ),
     )
+    existing_project = result.scalars().first()
     if existing_project:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1249,7 +1251,10 @@ async def transfer_project_to_personal(
     resource_access_dao = AsyncResourceAccessDAO(session)
 
     # Get project
-    project = session.query(Project).filter(Project.id == project_id).first()
+    result = await session.execute(
+        select(Project).where(Project.id == project_id),
+    )
+    project = result.scalars().first()
     if not project:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1282,15 +1287,14 @@ async def transfer_project_to_personal(
         )
 
     # Check for name conflict in user's personal projects
-    existing_project = (
-        session.query(Project)
-        .filter(
+    result = await session.execute(
+        select(Project).where(
             Project.user_id == user_id,
             Project.organization_id.is_(None),
             Project.name == project.name,
-        )
-        .first()
+        ),
     )
+    existing_project = result.scalars().first()
     if existing_project:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -1299,10 +1303,14 @@ async def transfer_project_to_personal(
 
     try:
         # Delete all ResourceAccess entries for this project
-        session.query(ResourceAccess).filter(
-            ResourceAccess.resource_type == "project",
-            ResourceAccess.resource_id == project_id,
-        ).delete()
+        from sqlalchemy import delete
+
+        await session.execute(
+            delete(ResourceAccess).where(
+                ResourceAccess.resource_type == "project",
+                ResourceAccess.resource_id == project_id,
+            ),
+        )
 
         # Transfer the project to personal ownership (direct SQLAlchemy update to ensure None is set)
         project.user_id = user_id
@@ -2227,13 +2235,12 @@ async def admin_duplicate_project(
 
     # 6. Duplicate Field Types using bulk insert
     if context_id_map:
-        field_types = (
-            session.query(FieldType)
-            .filter(
+        result = await session.execute(
+            select(FieldType).where(
                 FieldType.context_id.in_(list(context_id_map.keys())),
-            )
-            .all()
+            ),
         )
+        field_types = result.scalars().all()
 
         field_type_values = []
         for ft in field_types:
@@ -2256,9 +2263,10 @@ async def admin_duplicate_project(
     # 7. Duplicate Log Events using bulk insert with RETURNING
     # In JSONB mode: copies data and key_order fields (primary storage)
     # In EAV mode: only copies metadata (data stored in Log/JSONLog tables)
-    log_events = (
-        session.query(LogEvent).filter(LogEvent.project_id == source_project.id).all()
+    result = await session.execute(
+        select(LogEvent).where(LogEvent.project_id == source_project.id),
     )
+    log_events = result.scalars().all()
     log_event_values = []
     old_log_event_ids = []
 
@@ -2300,14 +2308,13 @@ async def admin_duplicate_project(
             stats["json_logs_copied"] = 0  # Data is in LogEvent.data
             # Count derived_entry fields in source to estimate derived logs copied
             # In JSONB mode, derived values are stored in LogEvent.data
-            derived_field_count = (
-                session.query(func.count(FieldType.id))
-                .filter(
+            result = await session.execute(
+                select(func.count(FieldType.id)).where(
                     FieldType.project_id == source_project.id,
                     FieldType.field_category == "derived_entry",
-                )
-                .scalar()
+                ),
             )
+            derived_field_count = result.scalar()
             # If derived fields exist, derived values were copied with LogEvent.data
             stats["derived_logs_copied"] = (
                 len(log_event_values) if derived_field_count > 0 else 0
@@ -2315,13 +2322,12 @@ async def admin_duplicate_project(
 
     # 8. Duplicate Log Event Context relationships using bulk insert
     if log_event_id_map and context_id_map:
-        log_event_contexts = (
-            session.query(LogEventContext)
-            .filter(
+        result = await session.execute(
+            select(LogEventContext).where(
                 LogEventContext.log_event_id.in_(list(log_event_id_map.keys())),
-            )
-            .all()
+            ),
         )
+        log_event_contexts = result.scalars().all()
 
         lec_values = []
         for lec in log_event_contexts:
@@ -2345,14 +2351,14 @@ async def admin_duplicate_project(
     # In JSONB mode, log data is stored in LogEvent.data, so we skip EAV table copying
     if log_event_id_map and not settings.use_jsonb_queries:
         # Query for Log objects directly
-        logs = (
-            session.query(Log, LogEventLog.log_event_id)
+        result = await session.execute(
+            select(Log, LogEventLog.log_event_id)
             .join(LogEventLog, LogEventLog.log_id == Log.id)
-            .filter(
+            .where(
                 LogEventLog.log_event_id.in_(list(log_event_id_map.keys())),
-            )
-            .all()
+            ),
         )
+        logs = result.all()
 
         log_values = []
         log_id_map = {}  # Map old log id to new log id for LogEventLog associations
@@ -2408,14 +2414,14 @@ async def admin_duplicate_project(
     # In JSONB mode, JSON log data is stored in LogEvent.data, so we skip EAV table copying
     if log_event_id_map and not settings.use_jsonb_queries:
         # Query for JSONLog objects via LogEventJSONLog association
-        json_logs_with_event_ids = (
-            session.query(JSONLog, LogEventJSONLog.log_event_id)
+        result = await session.execute(
+            select(JSONLog, LogEventJSONLog.log_event_id)
             .join(LogEventJSONLog, LogEventJSONLog.json_log_id == JSONLog.id)
-            .filter(
+            .where(
                 LogEventJSONLog.log_event_id.in_(list(log_event_id_map.keys())),
-            )
-            .all()
+            ),
         )
+        json_logs_with_event_ids = result.all()
 
         # Prepare JSONLog values and associations
         json_log_values = []

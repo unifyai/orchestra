@@ -662,8 +662,8 @@ async def create_from_logs(
 
             # 2) Get the filtered log events
             log_event_ids_subq = (
-                session.query(LogEvent.id)
-                .filter(project_obj.id == LogEvent.project_id)
+                select(LogEvent.id)
+                .where(project_obj.id == LogEvent.project_id)
                 .subquery(name="log_event_ids_subq")
             )
 
@@ -776,10 +776,10 @@ async def create_from_logs(
 
                 # Get filtered log events
                 log_event_ids_subq = (
-                    session.query(LogEvent.id)
+                    select(LogEvent.id)
                     .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
-                    .filter(LogEvent.project_id == project_obj.id)
-                    .filter(
+                    .where(LogEvent.project_id == project_obj.id)
+                    .where(
                         LogEventContext.context_id == context_id,
                         LogEvent.id.in_(filtered_log_ids),
                     )
@@ -894,8 +894,8 @@ async def create_from_logs(
                 if body.derived:
                     # Create or update ActiveDerivedLog template for derived=True (default)
                     existing_template = (
-                        session.query(ActiveDerivedLog)
-                        .filter(
+                        select(ActiveDerivedLog)
+                        .where(
                             ActiveDerivedLog.project_id == project_obj.id,
                             ActiveDerivedLog.key == body.key,
                             ActiveDerivedLog.context_id == context_id,
@@ -998,10 +998,10 @@ async def create_from_logs(
 
             # Get the filtered log events scoped to provided IDs
             log_event_ids_subq = (
-                session.query(LogEvent.id)
+                select(LogEvent.id)
                 .join(LogEventContext, LogEvent.id == LogEventContext.log_event_id)
-                .filter(LogEvent.project_id == project_obj.id)
-                .filter(
+                .where(LogEvent.project_id == project_obj.id)
+                .where(
                     LogEventContext.context_id == context_id,
                     LogEvent.id.in_(filtered_log_ids),
                 )
@@ -1128,8 +1128,8 @@ async def create_from_logs(
             if is_filter_based:
                 # Check if a template already exists for this project and key
                 existing_template = (
-                    session.query(ActiveDerivedLog)
-                    .filter(
+                    select(ActiveDerivedLog)
+                    .where(
                         ActiveDerivedLog.project_id == project_obj.id,
                         ActiveDerivedLog.key == body.key,
                     )
@@ -1294,7 +1294,7 @@ async def update_derived_log(
     if settings.use_jsonb_queries:
         try:
             # Query ActiveDerivedLog templates matching the update criteria
-            template_query = session.query(ActiveDerivedLog).filter(
+            template_query = select(ActiveDerivedLog).where(
                 ActiveDerivedLog.project_id == project_id,
                 ActiveDerivedLog.context_id == context_id,
             )
@@ -1443,9 +1443,9 @@ async def update_derived_log(
     # Assumes referenced logs are of equal length
     derived_log_ids = [dlog_id for dlog_id in resolved_ids.values()][0]
     existing_derived_logs = (
-        session.query(DerivedLog)
+        select(DerivedLog)
         .join(LogEventDerivedLog, LogEventDerivedLog.derived_log_id == DerivedLog.id)
-        .filter(
+        .where(
             LogEventDerivedLog.log_event_id.in_(derived_log_ids),
             DerivedLog.key == updated_key,
         )
@@ -1479,12 +1479,12 @@ async def update_derived_log(
     if new_refs:
         # Use updated_key/equation if provided; otherwise, take them from one of the matched logs.
         valid_logs = (
-            session.query(DerivedLog)
+            select(DerivedLog)
             .join(
                 LogEventDerivedLog,
                 LogEventDerivedLog.derived_log_id == DerivedLog.id,
             )
-            .filter(
+            .where(
                 LogEventDerivedLog.log_event_id.in_(derived_log_ids),
                 DerivedLog.key == updated_key,
             )
@@ -1494,12 +1494,12 @@ async def update_derived_log(
         final_equation = updated_equation if updated_equation else valid_logs.equation
         # Delete all derived logs that were matched by the update filter.
         derived_logs_to_delete = (
-            session.query(DerivedLog.id)
+            select(DerivedLog.id)
             .join(
                 LogEventDerivedLog,
                 LogEventDerivedLog.derived_log_id == DerivedLog.id,
             )
-            .filter(
+            .where(
                 LogEventDerivedLog.log_event_id.in_(derived_log_ids),
                 DerivedLog.key == valid_logs.key,
             )
@@ -1507,7 +1507,7 @@ async def update_derived_log(
         )
         derived_log_ids_to_delete = [dlog[0] for dlog in derived_logs_to_delete]
         if derived_log_ids_to_delete:
-            session.query(DerivedLog).filter(
+            select(DerivedLog).where(
                 DerivedLog.id.in_(derived_log_ids_to_delete),
             ).delete(synchronize_session=False)
 
@@ -1570,9 +1570,9 @@ async def update_derived_log(
 
         # 5. Get the filtered log events for this project
         log_event_ids_subq = (
-            session.query(LogEvent.id)
-            .filter(project_id == LogEvent.project_id)
-            .filter(LogEvent.id.in_(new_derived_log_ids))
+            select(LogEvent.id)
+            .where(project_id == LogEvent.project_id)
+            .where(LogEvent.id.in_(new_derived_log_ids))
             .subquery(name="log_event_ids_subq")
         )
 
@@ -1957,9 +1957,7 @@ async def update_logs(
                 # JSONB mode: Query LogEvent.data directly
                 for log_id in ids_to_update:
                     log_event = (
-                        session.query(LogEvent.data)
-                        .filter(LogEvent.id == log_id)
-                        .one_or_none()
+                        select(LogEvent.data).where(LogEvent.id == log_id).one_or_none()
                     )
                     if log_event and log_event.data:
                         for key in columns_being_updated:
@@ -1977,9 +1975,9 @@ async def update_logs(
                 for log_id in ids_to_update:
                     # Query current log values for columns being updated
                     old_values_query = (
-                        session.query(Log.key, Log.value)
+                        select(Log.key, Log.value)
                         .join(LogEventLog, LogEventLog.log_id == Log.id)
-                        .filter(
+                        .where(
                             LogEventLog.log_event_id == log_id,
                             Log.key.in_(columns_being_updated),
                         )
@@ -2284,7 +2282,7 @@ async def update_logs(
                     for context_id in ctx_ids:
                         if context_id is not None:
                             ctx_obj = (
-                                context_dao.session.query(Context)
+                                context_dao.select(Context)
                                 .filter_by(id=context_id)
                                 .first()
                             )
@@ -2306,9 +2304,7 @@ async def update_logs(
                                     duplicate_found = True
                                     break
                 elif ctx_id is not None:
-                    ctx_obj = (
-                        context_dao.session.query(Context).filter_by(id=ctx_id).first()
-                    )
+                    ctx_obj = context_dao.select(Context).filter_by(id=ctx_id).first()
                     if ctx_obj and not ctx_obj.allow_duplicates:
                         duplicate = await context_dao.check_for_duplicates_subset(
                             context_id=ctx_id,
@@ -2374,7 +2370,7 @@ async def update_logs(
                     for context_id in ctx_ids:
                         if context_id is not None:
                             ctx_obj = (
-                                context_dao.session.query(Context)
+                                context_dao.select(Context)
                                 .filter_by(id=context_id)
                                 .first()
                             )
@@ -2395,9 +2391,7 @@ async def update_logs(
                                     )
                                     duplicate_found = True
                 elif ctx_id is not None:
-                    ctx_obj = (
-                        context_dao.session.query(Context).filter_by(id=ctx_id).first()
-                    )
+                    ctx_obj = context_dao.select(Context).filter_by(id=ctx_id).first()
                     if ctx_obj and not ctx_obj.allow_duplicates:
                         duplicate = await context_dao.check_for_duplicates_subset(
                             context_id=ctx_id,
@@ -2448,9 +2442,7 @@ async def update_logs(
         # Handle multiple contexts if we have a list
         for context_id in ctx_ids:
             if context_id is not None:
-                ctx_obj = (
-                    context_dao.session.query(Context).filter_by(id=context_id).first()
-                )
+                ctx_obj = context_dao.select(Context).filter_by(id=context_id).first()
                 if ctx_obj and ctx_obj.is_versioned and updates_by_log_id:
                     ctx_obj.updated_at = datetime.now(timezone.utc)
         # Commit all changes at once
@@ -2458,7 +2450,7 @@ async def update_logs(
             context_dao.session.commit()
     elif ctx_id is not None:
         # Original single context behavior
-        ctx_obj = context_dao.session.query(Context).filter_by(id=ctx_id).first()
+        ctx_obj = context_dao.select(Context).filter_by(id=ctx_id).first()
         if ctx_obj and ctx_obj.is_versioned and updates_by_log_id:
             ctx_obj.updated_at = datetime.now(timezone.utc)
             context_dao.session.commit()
@@ -2476,13 +2468,13 @@ async def update_logs(
         try:
             event_ids = [value for (_, value) in updated_ids]
             derived_logs_to_recompute = (
-                session.query(DerivedLog)
+                select(DerivedLog)
                 .join(
                     LogEventDerivedLog,
                     LogEventDerivedLog.derived_log_id == DerivedLog.id,
                 )
                 .join(LogEvent, LogEvent.id == LogEventDerivedLog.log_event_id)
-                .filter(
+                .where(
                     LogEvent.project_id == project_id,
                     LogEventDerivedLog.log_event_id.in_(event_ids),
                 )
@@ -2729,7 +2721,7 @@ async def _update_logs_jsonb(
 
     # Populate context object cache for duplicate checks (single query, reused later)
     if ctx_id is not None:
-        ctx_obj_cache = context_dao.session.query(Context).filter_by(id=ctx_id).first()
+        ctx_obj_cache = context_dao.select(Context).filter_by(id=ctx_id).first()
 
     # Fetch field types once
     try:
@@ -2966,9 +2958,7 @@ async def _update_logs_jsonb(
         # Get OLD values for these columns from logs being updated
         columns_values_map: Dict[str, List[Any]] = {}
         for log_id in log_ids_being_updated:
-            log_event = (
-                session.query(LogEvent.data).filter(LogEvent.id == log_id).one_or_none()
-            )
+            log_event = select(LogEvent.data).where(LogEvent.id == log_id).one_or_none()
             if log_event and log_event.data:
                 for key in columns_being_updated:
                     if key in log_event.data and log_event.data[key] is not None:
@@ -3088,7 +3078,7 @@ async def _update_logs_jsonb(
 
     # Update context version if needed
     if ctx_id is not None:
-        ctx_obj = context_dao.session.query(Context).filter_by(id=ctx_id).first()
+        ctx_obj = context_dao.select(Context).filter_by(id=ctx_id).first()
         if ctx_obj and ctx_obj.is_versioned and updates_by_log_id:
             ctx_obj.updated_at = datetime.now(timezone.utc)
             context_dao.session.commit()
@@ -3123,8 +3113,8 @@ async def _update_logs_jsonb(
 
                         # Single batch query to find ALL templates referencing ANY modified key
                         dependent_templates = (
-                            session.query(ActiveDerivedLog)
-                            .filter(
+                            select(ActiveDerivedLog)
+                            .where(
                                 ActiveDerivedLog.project_id == project_id,
                                 ActiveDerivedLog.context_id == ctx_id,
                                 ActiveDerivedLog.is_active == True,
@@ -3164,13 +3154,13 @@ async def _update_logs_jsonb(
             else:
                 # EAV Mode: Recompute derived logs using traditional method
                 derived_logs_to_recompute = (
-                    session.query(DerivedLog)
+                    select(DerivedLog)
                     .join(
                         LogEventDerivedLog,
                         LogEventDerivedLog.derived_log_id == DerivedLog.id,
                     )
                     .join(LogEvent, LogEvent.id == LogEventDerivedLog.log_event_id)
-                    .filter(
+                    .where(
                         LogEvent.project_id == project_id,
                         LogEventDerivedLog.log_event_id.in_(event_ids),
                     )
@@ -3257,8 +3247,8 @@ async def _delete_logs_jsonb(
         # Get all derived field keys from ActiveDerivedLog templates for this project/context
         derived_field_keys = [
             template.key
-            for template in session.query(ActiveDerivedLog)
-            .filter(
+            for template in select(ActiveDerivedLog)
+            .where(
                 ActiveDerivedLog.project_id == project_id,
                 ActiveDerivedLog.context_id == context_id,
                 ActiveDerivedLog.is_active == True,
@@ -3287,8 +3277,8 @@ async def _delete_logs_jsonb(
     # Get all log_event_ids in this context for validation
     context_log_ids = [
         row[0]
-        for row in session.query(LogEventContext.log_event_id)
-        .filter(LogEventContext.context_id == context_id)
+        for row in select(LogEventContext.log_event_id)
+        .where(LogEventContext.context_id == context_id)
         .all()
     ]
 
@@ -3316,9 +3306,7 @@ async def _delete_logs_jsonb(
 
         # Apply FK CASCADE and SET NULL actions before deletion
         columns_values_to_delete: Dict[str, List[Any]] = {}
-        logs_data = (
-            session.query(LogEvent.data).filter(LogEvent.id.in_(context_log_ids)).all()
-        )
+        logs_data = select(LogEvent.data).where(LogEvent.id.in_(context_log_ids)).all()
         for (data,) in logs_data:
             if data:
                 for key in fields:
@@ -3345,8 +3333,8 @@ async def _delete_logs_jsonb(
         # PostgreSQL: data - ARRAY['field1', 'field2', ...] removes multiple keys at once
         fields_array = cast(fields, ARRAY(TEXT))
         deleted_count = (
-            session.query(LogEvent)
-            .filter(
+            select(LogEvent)
+            .where(
                 LogEvent.project_id == project_id,
                 LogEvent.id.in_(context_log_ids),
             )
@@ -3423,8 +3411,8 @@ async def _delete_logs_jsonb(
             exclude_context_ids = [context_id] + sibling_context_map.get(log_id, [])
 
             other_contexts = (
-                session.query(LogEventContext.context_id)
-                .filter(
+                select(LogEventContext.context_id)
+                .where(
                     LogEventContext.log_event_id == log_id,
                     LogEventContext.context_id.notin_(exclude_context_ids),
                 )
@@ -3439,8 +3427,8 @@ async def _delete_logs_jsonb(
         # Remove logs from current context
         if logs_in_other_contexts:
             removed_count = (
-                session.query(LogEventContext)
-                .filter(
+                select(LogEventContext)
+                .where(
                     LogEventContext.log_event_id.in_(logs_in_other_contexts),
                     LogEventContext.context_id == context_id,
                 )
@@ -3467,8 +3455,8 @@ async def _delete_logs_jsonb(
 
                 for sib_ctx_id, log_ids in sibling_ctx_to_logs.items():
                     sibling_removed = (
-                        session.query(LogEventContext)
-                        .filter(
+                        select(LogEventContext)
+                        .where(
                             LogEventContext.log_event_id.in_(log_ids),
                             LogEventContext.context_id == sib_ctx_id,
                         )
@@ -3491,9 +3479,7 @@ async def _delete_logs_jsonb(
             # Collect all field values from logs being deleted for FK cascade
             columns_values_to_delete: Dict[str, List[Any]] = {}
             logs_data = (
-                session.query(LogEvent.data)
-                .filter(LogEvent.id.in_(logs_to_delete))
-                .all()
+                select(LogEvent.data).where(LogEvent.id.in_(logs_to_delete)).all()
             )
             for (data,) in logs_data:
                 if data:
@@ -3513,8 +3499,8 @@ async def _delete_logs_jsonb(
         # Delete logs that don't exist in other contexts
         if logs_to_delete:
             deleted_count = (
-                session.query(LogEvent)
-                .filter(LogEvent.id.in_(logs_to_delete))
+                select(LogEvent)
+                .where(LogEvent.id.in_(logs_to_delete))
                 .delete(synchronize_session=False)
             )
             if deleted_count > 0:
@@ -3539,8 +3525,8 @@ async def _delete_logs_jsonb(
         # Query all LogEvents to get their project ownership in one query
         valid_log_ids = set(
             row[0]
-            for row in session.query(LogEvent.id)
-            .filter(
+            for row in select(LogEvent.id)
+            .where(
                 LogEvent.id.in_(partial_log_ids),
                 LogEvent.project_id == project_id,  # Validates ownership via project
             )
@@ -3570,8 +3556,8 @@ async def _delete_logs_jsonb(
             # Apply FK CASCADE and SET NULL actions before deletion
             columns_values_to_delete: Dict[str, List[Any]] = {}
             logs_data = (
-                session.query(LogEvent.id, LogEvent.data)
-                .filter(LogEvent.id.in_(potential_empty_logs))
+                select(LogEvent.id, LogEvent.data)
+                .where(LogEvent.id.in_(potential_empty_logs))
                 .all()
             )
             for log_id, data in logs_data:
@@ -3609,7 +3595,7 @@ async def _delete_logs_jsonb(
             for field_set, log_ids in fields_to_logs.items():
                 fields_list = list(field_set)
                 fields_array = cast(fields_list, ARRAY(TEXT))
-                session.query(LogEvent).filter(LogEvent.id.in_(log_ids)).update(
+                select(LogEvent).where(LogEvent.id.in_(log_ids)).update(
                     {LogEvent.data: LogEvent.data.op("-")(fields_array)},
                     synchronize_session=False,
                 )
@@ -3625,8 +3611,8 @@ async def _delete_logs_jsonb(
     if body.delete_empty_logs and potential_empty_logs:
         # Find logs where data is empty (equals '{}')
         empty_logs = (
-            session.query(LogEvent.id)
-            .filter(
+            select(LogEvent.id)
+            .where(
                 LogEvent.id.in_(potential_empty_logs),
                 LogEvent.data == {},
             )
@@ -3638,8 +3624,8 @@ async def _delete_logs_jsonb(
             # Check which logs exist in other contexts using a SINGLE BULK QUERY
             logs_with_other_contexts = set(
                 row[0]
-                for row in session.query(LogEventContext.log_event_id)
-                .filter(
+                for row in select(LogEventContext.log_event_id)
+                .where(
                     LogEventContext.log_event_id.in_(empty_log_ids),
                     LogEventContext.context_id != context_id,
                 )
@@ -3660,8 +3646,8 @@ async def _delete_logs_jsonb(
             # Remove logs from this context only - BULK DELETE
             if logs_in_other_contexts:
                 removed_count = (
-                    session.query(LogEventContext)
-                    .filter(
+                    select(LogEventContext)
+                    .where(
                         LogEventContext.log_event_id.in_(logs_in_other_contexts),
                         LogEventContext.context_id == context_id,
                     )
@@ -3676,8 +3662,8 @@ async def _delete_logs_jsonb(
             # Delete logs that don't exist in other contexts - BULK DELETE
             if logs_to_delete:
                 deleted_count = (
-                    session.query(LogEvent)
-                    .filter(LogEvent.id.in_(logs_to_delete))
+                    select(LogEvent)
+                    .where(LogEvent.id.in_(logs_to_delete))
                     .delete(synchronize_session=False)
                 )
                 if deleted_count > 0:
@@ -3690,9 +3676,7 @@ async def _delete_logs_jsonb(
     # Handle versioned contexts - update timestamp after all deletions
     # =========================================================================
     if context_updated and context_id:
-        context_obj = (
-            context_dao.session.query(Context).filter_by(id=context_id).first()
-        )
+        context_obj = context_dao.select(Context).filter_by(id=context_id).first()
         if context_obj:
             context_obj.updated_at = datetime.now(timezone.utc)
 
@@ -3714,8 +3698,8 @@ async def _delete_logs_jsonb(
 
         # Query all distinct keys present in any LogEvent.data for this project
         existing_keys_query = (
-            session.query(sa_func.jsonb_object_keys(LogEvent.data))
-            .filter(LogEvent.project_id == project_id)
+            select(sa_func.jsonb_object_keys(LogEvent.data))
+            .where(LogEvent.project_id == project_id)
             .distinct()
         )
         existing_keys = set(row[0] for row in existing_keys_query.all())
@@ -3898,11 +3882,11 @@ async def delete_logs(
             # Get all values for these fields in the context
             for field in global_fields:
                 values_query = (
-                    session.query(Log.value)
+                    select(Log.value)
                     .join(LogEventLog, LogEventLog.log_id == Log.id)
                     .join(LogEvent, LogEvent.id == LogEventLog.log_event_id)
                     .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
-                    .filter(
+                    .where(
                         LogEvent.project_id == project_id,
                         LogEventContext.context_id == context_id,
                         Log.key == field,
@@ -3925,9 +3909,9 @@ async def delete_logs(
                 if not fields:
                     # Get all fields for this log event
                     all_fields_query = (
-                        session.query(Log.key, Log.value)
+                        select(Log.key, Log.value)
                         .join(LogEventLog, LogEventLog.log_id == Log.id)
-                        .filter(LogEventLog.log_event_id == log_id)
+                        .where(LogEventLog.log_event_id == log_id)
                     )
                     for key, value in all_fields_query.all():
                         if value is not None:
@@ -3935,9 +3919,9 @@ async def delete_logs(
                 else:
                     # Get values for specific fields
                     fields_values_query = (
-                        session.query(Log.key, Log.value)
+                        select(Log.key, Log.value)
                         .join(LogEventLog, LogEventLog.log_id == Log.id)
-                        .filter(
+                        .where(
                             LogEventLog.log_event_id == log_id,
                             Log.key.in_(fields),
                         )
@@ -3985,8 +3969,8 @@ async def delete_logs(
 
         # Get all log events for this project
         all_log_events_subq = select(
-            session.query(LogEvent.id)
-            .filter(LogEvent.project_id == project_id)
+            select(LogEvent.id)
+            .where(LogEvent.project_id == project_id)
             .subquery(name="all_log_events"),
         )
 
@@ -3997,12 +3981,12 @@ async def delete_logs(
         if body.source_type in ("all", "base"):
             # Find log IDs to delete using a subquery
             log_ids_to_delete = (
-                session.query(Log.id)
+                select(Log.id)
                 .join(
                     LogEventLog,
                     LogEventLog.log_id == Log.id,
                 )
-                .filter(
+                .where(
                     LogEventLog.log_event_id.in_(all_log_events_subq),
                     Log.key.in_(fields),
                 )
@@ -4010,15 +3994,15 @@ async def delete_logs(
             )
 
             # Delete GCS files BEFORE deleting DB records
-            deletion_query = session.query(Log).filter(
+            deletion_query = select(Log).where(
                 Log.id.in_(select(log_ids_to_delete)),
             )
             log_dao._bulk_delete_gcs_media(deletion_query)
 
             # Now delete the logs without joins
             deleted_count = (
-                session.query(Log)
-                .filter(
+                select(Log)
+                .where(
                     Log.id.in_(select(log_ids_to_delete)),
                 )
                 .delete(synchronize_session=False)
@@ -4033,12 +4017,12 @@ async def delete_logs(
             # Use a single DELETE statement for all fields
             # Find derived logs to delete
             derived_logs_to_delete = (
-                session.query(DerivedLog.id)
+                select(DerivedLog.id)
                 .join(
                     LogEventDerivedLog,
                     LogEventDerivedLog.derived_log_id == DerivedLog.id,
                 )
-                .filter(
+                .where(
                     LogEventDerivedLog.log_event_id.in_(all_log_events_subq),
                     DerivedLog.key.in_(fields),
                 )
@@ -4048,8 +4032,8 @@ async def delete_logs(
             deleted_count = 0
             if derived_log_ids_to_delete:
                 deleted_count = (
-                    session.query(DerivedLog)
-                    .filter(DerivedLog.id.in_(derived_log_ids_to_delete))
+                    select(DerivedLog)
+                    .where(DerivedLog.id.in_(derived_log_ids_to_delete))
                     .delete(synchronize_session=False)
                 )
             if deleted_count > 0:
@@ -4114,8 +4098,8 @@ async def delete_logs(
 
             # Check if this log exists in any other context (besides current and siblings)
             other_contexts = (
-                session.query(LogEventContext.context_id)
-                .filter(
+                select(LogEventContext.context_id)
+                .where(
                     LogEventContext.log_event_id == log_id,
                     LogEventContext.context_id.notin_(exclude_context_ids),
                 )
@@ -4132,8 +4116,8 @@ async def delete_logs(
         # Remove logs from this context only
         if logs_in_other_contexts:
             removed_count = (
-                session.query(LogEventContext)
-                .filter(
+                select(LogEventContext)
+                .where(
                     LogEventContext.log_event_id.in_(logs_in_other_contexts),
                     LogEventContext.context_id == context_id,
                 )
@@ -4161,8 +4145,8 @@ async def delete_logs(
 
                 for sib_ctx_id, log_ids in sibling_ctx_to_logs.items():
                     sibling_removed = (
-                        session.query(LogEventContext)
-                        .filter(
+                        select(LogEventContext)
+                        .where(
                             LogEventContext.log_event_id.in_(log_ids),
                             LogEventContext.context_id == sib_ctx_id,
                         )
@@ -4184,8 +4168,8 @@ async def delete_logs(
         # Delete logs that don't exist in other contexts
         if logs_to_delete:
             deleted_count = (
-                session.query(LogEvent)
-                .filter(LogEvent.id.in_(logs_to_delete))
+                select(LogEvent)
+                .where(LogEvent.id.in_(logs_to_delete))
                 .delete(synchronize_session=False)
             )
             if deleted_count > 0:
@@ -4235,7 +4219,7 @@ async def delete_logs(
 
         # Delete GCS files BEFORE deleting DB records
         # Build a query to find logs by their log_event_id and key
-        logs_to_delete_query = session.query(Log).join(
+        logs_to_delete_query = select(Log).join(
             LogEventLog,
             LogEventLog.log_id == Log.id,
         )
@@ -4259,9 +4243,9 @@ async def delete_logs(
             try:
                 # First find the logs to delete
                 logs_to_delete = (
-                    session.query(Log.id)
+                    select(Log.id)
                     .join(LogEventLog, LogEventLog.log_id == Log.id)
-                    .filter(
+                    .where(
                         Log.key == key,
                         LogEventLog.log_event_id.in_(event_ids),
                     )
@@ -4272,8 +4256,8 @@ async def delete_logs(
                 if logs_to_delete:
                     log_ids_to_delete = [log_id[0] for log_id in logs_to_delete]
                     deleted_count = (
-                        session.query(Log)
-                        .filter(Log.id.in_(log_ids_to_delete))
+                        select(Log)
+                        .where(Log.id.in_(log_ids_to_delete))
                         .delete(synchronize_session=False)
                     )
                 else:
@@ -4298,12 +4282,12 @@ async def delete_logs(
             try:
                 # Find derived logs to delete
                 derived_logs_to_delete = (
-                    session.query(DerivedLog.id)
+                    select(DerivedLog.id)
                     .join(
                         LogEventDerivedLog,
                         LogEventDerivedLog.derived_log_id == DerivedLog.id,
                     )
-                    .filter(
+                    .where(
                         DerivedLog.key == key,
                         LogEventDerivedLog.log_event_id.in_(event_ids),
                     )
@@ -4312,8 +4296,8 @@ async def delete_logs(
                 derived_log_ids_to_delete = [dlog[0] for dlog in derived_logs_to_delete]
                 if derived_log_ids_to_delete:
                     deleted_count = (
-                        session.query(DerivedLog)
-                        .filter(DerivedLog.id.in_(derived_log_ids_to_delete))
+                        select(DerivedLog)
+                        .where(DerivedLog.id.in_(derived_log_ids_to_delete))
                         .delete(synchronize_session=False)
                     )
                 else:
@@ -4332,17 +4316,17 @@ async def delete_logs(
         # Get all log_event_ids that still have logs in a single query
         still_used_base_ids = set(
             row[0]
-            for row in session.query(LogEventLog.log_event_id)
+            for row in select(LogEventLog.log_event_id)
             .join(Log, Log.id == LogEventLog.log_id)
-            .filter(LogEventLog.log_event_id.in_(potential_empty_logs))
+            .where(LogEventLog.log_event_id.in_(potential_empty_logs))
             .distinct()
         )
 
         still_used_derived_ids = set(
             row[0]
-            for row in session.query(LogEventDerivedLog.log_event_id)
+            for row in select(LogEventDerivedLog.log_event_id)
             .join(DerivedLog, DerivedLog.id == LogEventDerivedLog.derived_log_id)
-            .filter(LogEventDerivedLog.log_event_id.in_(potential_empty_logs))
+            .where(LogEventDerivedLog.log_event_id.in_(potential_empty_logs))
             .distinct()
         )
 
@@ -4378,8 +4362,8 @@ async def delete_logs(
 
                 # Check if this log exists in any other context (besides current and siblings)
                 other_contexts = (
-                    session.query(LogEventContext.context_id)
-                    .filter(
+                    select(LogEventContext.context_id)
+                    .where(
                         LogEventContext.log_event_id == log_id,
                         LogEventContext.context_id.notin_(exclude_context_ids),
                     )
@@ -4396,8 +4380,8 @@ async def delete_logs(
             # Remove logs from this context only
             if logs_in_other_contexts:
                 removed_count = (
-                    session.query(LogEventContext)
-                    .filter(
+                    select(LogEventContext)
+                    .where(
                         LogEventContext.log_event_id.in_(logs_in_other_contexts),
                         LogEventContext.context_id == context_id,
                     )
@@ -4427,8 +4411,8 @@ async def delete_logs(
 
                     for sib_ctx_id, log_ids in sibling_ctx_to_logs.items():
                         sibling_removed = (
-                            session.query(LogEventContext)
-                            .filter(
+                            select(LogEventContext)
+                            .where(
                                 LogEventContext.log_event_id.in_(log_ids),
                                 LogEventContext.context_id == sib_ctx_id,
                             )
@@ -4450,8 +4434,8 @@ async def delete_logs(
             # Delete logs that don't exist in other contexts
             if logs_to_delete:
                 deleted_count = (
-                    session.query(LogEvent)
-                    .filter(LogEvent.id.in_(logs_to_delete))
+                    select(LogEvent)
+                    .where(LogEvent.id.in_(logs_to_delete))
                     .delete(synchronize_session=False)
                 )
                 if deleted_count > 0:
@@ -4462,9 +4446,7 @@ async def delete_logs(
 
     # Handle versioned contexts - do this only once after all deletions
     if context_updated and context_id:
-        context_obj = (
-            context_dao.session.query(Context).filter_by(id=context_id).first()
-        )
+        context_obj = context_dao.select(Context).filter_by(id=context_id).first()
         context_obj.updated_at = datetime.now(timezone.utc)
 
     # Handle cases where some logs or entries were not found
@@ -4484,21 +4466,21 @@ async def delete_logs(
     if deleted_fields and body.delete_empty_fields:
         # Get all fields that still exist in any logs with two efficient queries
         existing_base_fields = (
-            session.query(Log.key)
+            select(Log.key)
             .join(LogEventLog, LogEventLog.log_id == Log.id)
             .join(LogEvent, LogEvent.id == LogEventLog.log_event_id)
-            .filter(LogEvent.project_id == project_id)
+            .where(LogEvent.project_id == project_id)
             .distinct()
             .all()
         )
         existing_derived_fields = (
-            session.query(DerivedLog.key)
+            select(DerivedLog.key)
             .join(
                 LogEventDerivedLog,
                 LogEventDerivedLog.derived_log_id == DerivedLog.id,
             )
             .join(LogEvent, LogEvent.id == LogEventDerivedLog.log_event_id)
-            .filter(LogEvent.project_id == project_id)
+            .where(LogEvent.project_id == project_id)
             .distinct()
             .all()
         )
@@ -4938,7 +4920,7 @@ async def get_logs(
             context_id=context_id,
         )
         if return_ids_only:
-            all_ids = session.query(event_ids_subq).all()  # each row is a tuple (id,)
+            all_ids = select(event_ids_subq).all()  # each row is a tuple (id,)
             event_ids = [r[0] for r in all_ids]
             return list(dict.fromkeys(event_ids))
 
@@ -5042,7 +5024,7 @@ async def get_logs(
                     )
                     value_to_ids[val] = subset_ids
                     used_ids.update(subset_ids)
-                all_ids = session.query(event_ids_subq).all()
+                all_ids = select(event_ids_subq).all()
                 event_ids = [r[0] for r in all_ids]
                 missing_ids = list(set(event_ids) - used_ids)
                 if missing_ids:
@@ -6398,10 +6380,10 @@ async def get_fields(
 
     # Query DerivedLog table (EAV mode)
     derived_fields = (
-        session.query(DerivedLog.key, DerivedLog.equation)
+        select(DerivedLog.key, DerivedLog.equation)
         .join(LogEventDerivedLog, LogEventDerivedLog.derived_log_id == DerivedLog.id)
         .join(LogEvent, LogEvent.id == LogEventDerivedLog.log_event_id)
-        .filter(LogEvent.project_id == project_obj.id)
+        .where(LogEvent.project_id == project_obj.id)
         .distinct()
         .all()
     )
@@ -6411,8 +6393,8 @@ async def get_fields(
     # Also query ActiveDerivedLog table (JSONB mode)
     # This is where equations are stored in JSONB mode
     active_derived_fields = (
-        session.query(ActiveDerivedLog.key, ActiveDerivedLog.equation)
-        .filter(ActiveDerivedLog.project_id == project_obj.id)
+        select(ActiveDerivedLog.key, ActiveDerivedLog.equation)
+        .where(ActiveDerivedLog.project_id == project_obj.id)
         .all()
     )
     for key, equation in active_derived_fields:
@@ -6589,9 +6571,9 @@ async def create_fields(
         try:
             # Get all log events in this context
             le_rows = (
-                session.query(LogEvent.id)
+                select(LogEvent.id)
                 .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
-                .filter(
+                .where(
                     LogEvent.project_id == project_id,
                     LogEventContext.context_id == context_id,
                 )
@@ -6605,9 +6587,9 @@ async def create_fields(
 
                 # Query existing base (log_event_id, key) pairs in one shot
                 existing_base_pairs = (
-                    session.query(LogEventLog.log_event_id, Log.key)
+                    select(LogEventLog.log_event_id, Log.key)
                     .join(Log, Log.id == LogEventLog.log_id)
-                    .filter(
+                    .where(
                         LogEventLog.log_event_id.in_(log_event_ids),
                         Log.key.in_(field_names),
                     )
@@ -6616,12 +6598,12 @@ async def create_fields(
 
                 # Query existing derived (log_event_id, key) pairs in one shot
                 existing_derived_pairs = (
-                    session.query(LogEventDerivedLog.log_event_id, DerivedLog.key)
+                    select(LogEventDerivedLog.log_event_id, DerivedLog.key)
                     .join(
                         DerivedLog,
                         DerivedLog.id == LogEventDerivedLog.derived_log_id,
                     )
-                    .filter(
+                    .where(
                         LogEventDerivedLog.log_event_id.in_(log_event_ids),
                         DerivedLog.key.in_(field_names),
                     )
@@ -6826,10 +6808,10 @@ async def delete_fields(
         try:
             # Get all log event IDs that have this field in either base logs or derived logs
             base_log_events = (
-                session.query(LogEventLog.log_event_id)
+                select(LogEventLog.log_event_id)
                 .join(Log, Log.id == LogEventLog.log_id)
                 .join(LogEvent, LogEvent.id == LogEventLog.log_event_id)
-                .filter(
+                .where(
                     LogEvent.project_id == project_id,
                     Log.key == field_name,
                 )
@@ -6837,10 +6819,10 @@ async def delete_fields(
             )
 
             derived_log_events = (
-                session.query(LogEventDerivedLog.log_event_id)
+                select(LogEventDerivedLog.log_event_id)
                 .join(DerivedLog, DerivedLog.id == LogEventDerivedLog.derived_log_id)
                 .join(LogEvent, LogEvent.id == LogEventDerivedLog.log_event_id)
-                .filter(
+                .where(
                     LogEvent.project_id == project_id,
                     DerivedLog.key == field_name,
                 )
@@ -6851,9 +6833,9 @@ async def delete_fields(
             # Only executed when JSONB mode is enabled to maintain EAV/JSONB separation
             if settings.use_jsonb_queries:
                 jsonb_log_events = (
-                    session.query(LogEvent.id)
+                    select(LogEvent.id)
                     .join(LogEventContext, LogEventContext.log_event_id == LogEvent.id)
-                    .filter(
+                    .where(
                         LogEvent.project_id == project_id,
                         LogEventContext.context_id == context_id,
                         LogEvent.data.has_key(field_name),
@@ -6874,12 +6856,12 @@ async def delete_fields(
             if event_ids:
                 # First, find the Log IDs to delete
                 logs_to_delete_ids = (
-                    session.query(Log.id)
+                    select(Log.id)
                     .join(
                         LogEventLog,
                         LogEventLog.log_id == Log.id,
                     )
-                    .filter(
+                    .where(
                         LogEventLog.log_event_id.in_(event_ids),
                         Log.key == field_name,
                     )
@@ -6889,7 +6871,7 @@ async def delete_fields(
 
                 if log_ids:
                     # Query for Log entries to delete (for GCS cleanup)
-                    logs_to_delete_query = session.query(Log).filter(
+                    logs_to_delete_query = select(Log).where(
                         Log.id.in_(log_ids),
                     )
 
@@ -6907,12 +6889,12 @@ async def delete_fields(
                 # Delete the DerivedLog entries
                 # First, find the DerivedLog IDs to delete
                 derived_logs_to_delete_ids = (
-                    session.query(DerivedLog.id)
+                    select(DerivedLog.id)
                     .join(
                         LogEventDerivedLog,
                         LogEventDerivedLog.derived_log_id == DerivedLog.id,
                     )
-                    .filter(
+                    .where(
                         LogEventDerivedLog.log_event_id.in_(event_ids),
                         DerivedLog.key == field_name,
                     )
@@ -6924,8 +6906,8 @@ async def delete_fields(
                 deleted_derived_logs_count = 0
                 if derived_log_ids:
                     deleted_derived_logs_count = (
-                        session.query(DerivedLog)
-                        .filter(DerivedLog.id.in_(derived_log_ids))
+                        select(DerivedLog)
+                        .where(DerivedLog.id.in_(derived_log_ids))
                         .delete(synchronize_session=False)
                     )
                 total_deleted_derived_logs += deleted_derived_logs_count
@@ -7022,9 +7004,7 @@ async def update_active_derived_logs(
     try:
         # Get all active templates
         active_templates = (
-            session.query(ActiveDerivedLog)
-            .filter(ActiveDerivedLog.is_active == True)
-            .all()
+            select(ActiveDerivedLog).where(ActiveDerivedLog.is_active == True).all()
         )
 
         if not active_templates:
@@ -7044,12 +7024,12 @@ async def update_active_derived_logs(
 
                     # Get log events in this template's project/context that don't have the field
                     new_log_events_query = (
-                        session.query(LogEvent.id)
+                        select(LogEvent.id)
                         .join(
                             LogEventContext,
                             LogEventContext.log_event_id == LogEvent.id,
                         )
-                        .filter(
+                        .where(
                             LogEvent.project_id == template.project_id,
                             LogEventContext.context_id == template.context_id,
                             # Use JSONB '?' operator: NOT (data ? 'key')
@@ -7083,9 +7063,9 @@ async def update_active_derived_logs(
                                     )
 
                                     if isinstance(condition, Subquery):
-                                        new_log_events_query = session.query(
+                                        new_log_events_query = select(
                                             LogEvent.id,
-                                        ).filter(
+                                        ).where(
                                             LogEvent.id.in_(
                                                 select(
                                                     new_log_events_query.subquery().c.id,
@@ -7150,16 +7130,16 @@ async def update_active_derived_logs(
             # Find log events that don't already have this derived log
             # First, get all log events for this project
             all_log_events = (
-                session.query(LogEvent.id)
-                .filter(LogEvent.project_id == template.project_id)
+                select(LogEvent.id)
+                .where(LogEvent.project_id == template.project_id)
                 .subquery(name="all_log_events")
             )
 
             # Then, get log events that already have this derived log
             existing_derived_logs = (
-                session.query(LogEventDerivedLog.log_event_id)
+                select(LogEventDerivedLog.log_event_id)
                 .join(DerivedLog, DerivedLog.id == LogEventDerivedLog.derived_log_id)
-                .filter(
+                .where(
                     DerivedLog.key == template.key,
                     LogEventDerivedLog.log_event_id.in_(select(all_log_events.c.id)),
                 )
@@ -7168,8 +7148,8 @@ async def update_active_derived_logs(
 
             # Find log events that don't have this derived log yet
             new_log_events = (
-                session.query(LogEvent.id)
-                .filter(
+                select(LogEvent.id)
+                .where(
                     LogEvent.id.in_(select(all_log_events.c.id)),
                     ~LogEvent.id.in_(select(existing_derived_logs.c.log_event_id)),
                 )
@@ -7177,15 +7157,15 @@ async def update_active_derived_logs(
             )
 
             # If there are no new log events, skip this template
-            if session.query(new_log_events).count() == 0:
+            if select(new_log_events).count() == 0:
                 continue
 
             # Prepare the filter expression
             try:
                 # Get all log events that match the filter expression
                 log_event_ids_subq = (
-                    session.query(LogEvent.id)
-                    .filter(
+                    select(LogEvent.id)
+                    .where(
                         LogEvent.project_id == template.project_id,
                         LogEvent.id.in_(select(new_log_events.c.id)),
                     )
@@ -7224,8 +7204,8 @@ async def update_active_derived_logs(
                             # Get the log event IDs that match the filter
                             if isinstance(condition, Subquery):
                                 matching_log_events = (
-                                    session.query(LogEvent.id)
-                                    .filter(
+                                    select(LogEvent.id)
+                                    .where(
                                         LogEvent.id.in_(
                                             select(log_event_ids_subq.c.id),
                                         ),
@@ -7244,7 +7224,7 @@ async def update_active_derived_logs(
                                     .all()
                                 )
                             else:
-                                matching_log_events = session.query(
+                                matching_log_events = select(
                                     log_event_ids_subq.c.id,
                                 ).all()
 

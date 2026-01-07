@@ -5,7 +5,7 @@ Includes endpoints related to context management within projects.
 from typing import Dict, List, Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
-from sqlalchemy import or_
+from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -572,17 +572,16 @@ async def delete_context(
         # Find contexts to delete
         if include_children:
             # Find exact match OR children (name starts with context_name/)
-            contexts_to_delete = (
-                session.query(Context)
-                .filter(
+            result = await session.execute(
+                select(Context).where(
                     Context.project_id == project_id,
                     or_(
                         Context.name == context_name,
                         Context.name.like(f"{context_name}/%"),
                     ),
-                )
-                .all()
+                ),
             )
+            contexts_to_delete = result.scalars().all()
         else:
             # Exact match only
             context_result = await context_dao.filter(
@@ -812,14 +811,13 @@ async def add_logs_to_context(
             # JSONB mode: query LogEvent.data directly
             from orchestra.db.models.orchestra_models import LogEvent
 
-            log_events = (
-                session.query(LogEvent.id, LogEvent.data, LogEvent.key_order)
-                .filter(
+            result = await session.execute(
+                select(LogEvent.id, LogEvent.data, LogEvent.key_order).where(
                     LogEvent.id.in_(log_ids),
                     LogEvent.project_id == project_id,
-                )
-                .all()
+                ),
             )
+            log_events = result.all()
             # Create field types for each field found in LogEvent.data
             for log_event_id, data, key_order in log_events:
                 if not data:

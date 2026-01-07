@@ -20,6 +20,7 @@ from sqlalchemy import (
     select,
 )
 from sqlalchemy.dialects.postgresql import BOOLEAN, JSONB
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql.selectable import Subquery
 
@@ -693,7 +694,7 @@ def _build_jsonb_cast_expr(
         ).label("value_as_float")
 
 
-def _compute_metric_for_key_grouped(
+async def _compute_metric_for_key_grouped(
     key: str,
     metric: str,
     project_obj,
@@ -703,7 +704,7 @@ def _compute_metric_for_key_grouped(
     key_filter_expr: Optional[str] = None,
     key_from_ids: Optional[str] = None,
     key_exclude_ids: Optional[str] = None,
-    session=None,
+    session: AsyncSession = None,
 ) -> Dict[str, Any]:
     """
     Compute a metric for a single key, grouped by another field.
@@ -718,7 +719,7 @@ def _compute_metric_for_key_grouped(
         key_filter_expr: Key-specific filter expression
         key_from_ids: Key-specific from_ids
         key_exclude_ids: Key-specific exclude_ids
-        session: Database session
+        session: Async database session
 
     Returns:
         Dict mapping group values to computed metric values
@@ -726,7 +727,7 @@ def _compute_metric_for_key_grouped(
     from orchestra.settings import settings
 
     if settings.use_jsonb_queries:
-        return _compute_metric_for_key_grouped_jsonb(
+        return await _compute_metric_for_key_grouped_jsonb(
             key,
             metric,
             project_obj,
@@ -754,9 +755,9 @@ def _compute_metric_for_key_grouped(
         group_by_info.append((actual_field, is_param))
 
     # 1) Build initial query to find matching LogEvent IDs (scoped to context when provided)
-    query = session.query(LogEvent.id).filter(LogEvent.project_id == project_obj.id)
+    query = select(LogEvent.id).where(LogEvent.project_id == project_obj.id)
     if context_id is not None:
-        query = query.join(LogEventContext).filter(
+        query = query.join(LogEventContext).where(
             LogEventContext.context_id == context_id,
         )
 
@@ -806,27 +807,27 @@ def _compute_metric_for_key_grouped(
 
     # 2) Build subquery for the aggregator key (both base and derived logs)
     agg_log_q = (
-        session.query(
+        select(
             LogEventLog.log_event_id.label("log_event_id"),
             Log.value.label("value"),
             Log.inferred_type.label("inferred_type"),
         )
         .join(LogEventLog, LogEventLog.log_id == Log.id)
-        .filter(Log.key == key)
+        .where(Log.key == key)
         .join(LogEvent, LogEventLog.log_event_id == LogEvent.id)
-        .filter(LogEvent.project_id == project_obj.id)
+        .where(LogEvent.project_id == project_obj.id)
     )
 
     agg_derived_q = (
-        session.query(
+        select(
             LogEventDerivedLog.log_event_id.label("log_event_id"),
             DerivedLog.value.label("value"),
             DerivedLog.inferred_type.label("inferred_type"),
         )
         .join(LogEventDerivedLog, LogEventDerivedLog.derived_log_id == DerivedLog.id)
-        .filter(DerivedLog.key == key)
+        .where(DerivedLog.key == key)
         .join(LogEvent, LogEventDerivedLog.log_event_id == LogEvent.id)
-        .filter(LogEvent.project_id == project_obj.id)
+        .where(LogEvent.project_id == project_obj.id)
     )
 
     # Union them for the aggregator key
@@ -839,33 +840,33 @@ def _compute_metric_for_key_grouped(
         if is_param:
             # For parameters, use only base logs with version
             group_q = (
-                session.query(
+                select(
                     LogEventLog.log_event_id.label("log_event_id"),
                     Log.param_version.label("value"),
                     literal("int").label("inferred_type"),
                 )
                 .join(LogEventLog, LogEventLog.log_id == Log.id)
-                .filter(Log.key == group_field)
+                .where(Log.key == group_field)
                 .join(LogEvent, LogEventLog.log_event_id == LogEvent.id)
-                .filter(LogEvent.project_id == project_obj.id)
+                .where(LogEvent.project_id == project_obj.id)
             )
             group_subq = group_q.subquery(f"group_{idx}")
         else:
             # For non-parameters, union base logs and derived logs
             group_log_q = (
-                session.query(
+                select(
                     LogEventLog.log_event_id.label("log_event_id"),
                     Log.value.label("value"),
                     Log.inferred_type.label("inferred_type"),
                 )
                 .join(LogEventLog, LogEventLog.log_id == Log.id)
-                .filter(Log.key == group_field)
+                .where(Log.key == group_field)
                 .join(LogEvent, LogEventLog.log_event_id == LogEvent.id)
-                .filter(LogEvent.project_id == project_obj.id)
+                .where(LogEvent.project_id == project_obj.id)
             )
 
             group_derived_q = (
-                session.query(
+                select(
                     LogEventDerivedLog.log_event_id.label("log_event_id"),
                     DerivedLog.value.label("value"),
                     DerivedLog.inferred_type.label("inferred_type"),
@@ -874,9 +875,9 @@ def _compute_metric_for_key_grouped(
                     LogEventDerivedLog,
                     LogEventDerivedLog.derived_log_id == DerivedLog.id,
                 )
-                .filter(DerivedLog.key == group_field)
+                .where(DerivedLog.key == group_field)
                 .join(LogEvent, LogEventDerivedLog.log_event_id == LogEvent.id)
-                .filter(LogEvent.project_id == project_obj.id)
+                .where(LogEvent.project_id == project_obj.id)
             )
 
             group_subq = group_log_q.union_all(group_derived_q).subquery(f"group_{idx}")
@@ -1074,7 +1075,7 @@ def _compute_metric_for_key_grouped(
         group_columns.append(group_expr)
 
     # 6 i) build the base query with the aggregator key
-    query = session.query(
+    query = select(
         # group columns
         *group_columns,
         # aggregator
@@ -1095,7 +1096,7 @@ def _compute_metric_for_key_grouped(
             ),
         )
     # iii) filter by the filtered events
-    query = query.filter(
+    query = query.where(
         X.c.log_event_id.in_(select(filtered_events_subq.c.id)),
     )
 
@@ -1103,7 +1104,8 @@ def _compute_metric_for_key_grouped(
     query = query.group_by(*group_columns)
 
     # 7) Execute the query and build the result dictionary
-    rows = query.all()
+    result = await session.execute(query)
+    rows = result.all()
 
     # Get the field type for post-processing
     field_type = field_types.get(key)
@@ -1170,7 +1172,7 @@ def _compute_metric_for_key_grouped(
     return result
 
 
-def _compute_metric_for_key_grouped_jsonb(
+async def _compute_metric_for_key_grouped_jsonb(
     key: str,
     metric: str,
     project_obj,
@@ -1180,7 +1182,7 @@ def _compute_metric_for_key_grouped_jsonb(
     key_filter_expr: Optional[str] = None,
     key_from_ids: Optional[str] = None,
     key_exclude_ids: Optional[str] = None,
-    session=None,
+    session: AsyncSession = None,
 ) -> Dict[str, Any]:
     """
     JSONB-based implementation of _compute_metric_for_key_grouped.
@@ -1216,9 +1218,9 @@ def _compute_metric_for_key_grouped_jsonb(
             group_by_fields.append(field)
 
     # 1) Build initial query to find matching LogEvent IDs (scoped to context when provided)
-    query = session.query(LogEvent.id).filter(LogEvent.project_id == project_obj.id)
+    query = select(LogEvent.id).where(LogEvent.project_id == project_obj.id)
     if context_id is not None:
-        query = query.join(LogEventContext).filter(
+        query = query.join(LogEventContext).where(
             LogEventContext.context_id == context_id,
         )
 
@@ -1250,7 +1252,7 @@ def _compute_metric_for_key_grouped_jsonb(
                 context_id=context_id,
             )
             if isinstance(condition, Subquery):
-                query = query.filter(
+                query = query.where(
                     exists(
                         select(1)
                         .select_from(condition)
@@ -1297,20 +1299,21 @@ def _compute_metric_for_key_grouped_jsonb(
 
     # 6) Build the query with grouping
     query = (
-        session.query(
+        select(
             *group_exprs,
             reduction_methods[metric](agg_cast_expr).label("agg_value"),
             func.array_agg(raw_value_expr).label("raw_values"),
         )
         .select_from(LogEvent)
-        .filter(LogEvent.id.in_(select(filtered_events_subq.c.id)))
+        .where(LogEvent.id.in_(select(filtered_events_subq.c.id)))
         # Filter to only rows where the aggregation key exists
-        .filter(LogEvent.data.op("?")(literal(key)))
+        .where(LogEvent.data.op("?")(literal(key)))
         .group_by(*group_exprs)
     )
 
     # 7) Execute the query and build the result dictionary
-    rows = query.all()
+    result = await session.execute(query)
+    rows = result.all()
 
     # Get the field type for post-processing
     field_type = field_types.get(key)
@@ -1397,7 +1400,7 @@ def _compute_metric_for_key_grouped_jsonb(
     return result
 
 
-def compute_metric_for_key(
+async def compute_metric_for_key(
     key: str,
     metric: str,
     project_obj,
@@ -1406,7 +1409,7 @@ def compute_metric_for_key(
     key_filter_expr: Optional[str] = None,
     key_from_ids: Optional[str] = None,
     key_exclude_ids: Optional[str] = None,
-    session=None,
+    session: AsyncSession = None,
 ) -> Union[float, int, bool, str, None]:
     """
     Compute a metric for a single key.
@@ -1420,7 +1423,7 @@ def compute_metric_for_key(
         key_filter_expr: Key-specific filter expression
         key_from_ids: Key-specific from_ids
         key_exclude_ids: Key-specific exclude_ids
-        session: Database session
+        session: Async database session
 
     Returns:
         The computed metric value
@@ -1428,7 +1431,7 @@ def compute_metric_for_key(
     from orchestra.settings import settings
 
     if settings.use_jsonb_queries:
-        return compute_metric_for_key_jsonb(
+        return await compute_metric_for_key_jsonb(
             key,
             metric,
             project_obj,
@@ -1441,9 +1444,9 @@ def compute_metric_for_key(
         )
 
     # 1) Build initial query to find matching LogEvent IDs (scoped to context when provided)
-    query = session.query(LogEvent.id).filter(LogEvent.project_id == project_obj.id)
+    query = select(LogEvent.id).where(LogEvent.project_id == project_obj.id)
     if context_id is not None:
-        query = query.join(LogEventContext).filter(
+        query = query.join(LogEventContext).where(
             LogEventContext.context_id == context_id,
         )
 
@@ -1473,7 +1476,7 @@ def compute_metric_for_key(
                 log_event_ids=event_ids_subq,
             )
             if isinstance(condition, Subquery):
-                query = query.filter(
+                query = query.where(
                     exists(
                         select(1)
                         .select_from(condition)
@@ -1494,28 +1497,28 @@ def compute_metric_for_key(
     # 2) retrieve rows from Log and DerivedLog for the requested `key`.
     # Base logs
     log_q = (
-        session.query(
+        select(
             LogEventLog.log_event_id.label("log_event_id"),
             Log.value.label("value"),
             Log.inferred_type.label("inferred_type"),
         )
         .join(LogEventLog, LogEventLog.log_id == Log.id)
-        .filter(Log.key == key)
+        .where(Log.key == key)
         .join(LogEvent, LogEventLog.log_event_id == LogEvent.id)
-        .filter(LogEvent.project_id == project_obj.id)
+        .where(LogEvent.project_id == project_obj.id)
     )
 
     # Derived logs
     derived_q = (
-        session.query(
+        select(
             LogEventDerivedLog.log_event_id.label("log_event_id"),
             DerivedLog.value.label("value"),
             DerivedLog.inferred_type.label("inferred_type"),
         )
         .join(LogEventDerivedLog, LogEventDerivedLog.derived_log_id == DerivedLog.id)
-        .filter(DerivedLog.key == key)
+        .where(DerivedLog.key == key)
         .join(LogEvent, LogEventDerivedLog.log_event_id == LogEvent.id)
-        .filter(LogEvent.project_id == project_obj.id)
+        .where(LogEvent.project_id == project_obj.id)
     )
 
     # Union them
@@ -1698,14 +1701,15 @@ def compute_metric_for_key(
 
     # Filter the subquery by the log_event_ids that survived above filters
     metric_query = (
-        session.query(
+        select(
             reduction_methods[metric](cast_expr),
         )
         .select_from(X)
-        .filter(X.c.log_event_id.in_(select(subquery)))
+        .where(X.c.log_event_id.in_(select(subquery)))
     )
 
-    reduced_query = metric_query.scalar()
+    result = await session.execute(metric_query)
+    reduced_query = result.scalar()
 
     # Post-process based on field type
     field_type = field_types.get(key)
@@ -1718,7 +1722,7 @@ def compute_metric_for_key(
     return processed_value
 
 
-def compute_metric_for_key_jsonb(
+async def compute_metric_for_key_jsonb(
     key: str,
     metric: str,
     project_obj,
@@ -1727,7 +1731,7 @@ def compute_metric_for_key_jsonb(
     key_filter_expr: Optional[str] = None,
     key_from_ids: Optional[str] = None,
     key_exclude_ids: Optional[str] = None,
-    session=None,
+    session: AsyncSession = None,
 ) -> Union[float, int, bool, str, None]:
     """
     JSONB-based implementation of compute_metric_for_key.
@@ -1748,9 +1752,9 @@ def compute_metric_for_key_jsonb(
     }
 
     # 1) Build initial query to find matching LogEvent IDs (scoped to context when provided)
-    query = session.query(LogEvent.id).filter(LogEvent.project_id == project_obj.id)
+    query = select(LogEvent.id).where(LogEvent.project_id == project_obj.id)
     if context_id is not None:
-        query = query.join(LogEventContext).filter(
+        query = query.join(LogEventContext).where(
             LogEventContext.context_id == context_id,
         )
 
@@ -1782,7 +1786,7 @@ def compute_metric_for_key_jsonb(
                 context_id=context_id,
             )
             if isinstance(condition, Subquery):
-                query = query.filter(
+                query = query.where(
                     exists(
                         select(1)
                         .select_from(condition)
@@ -1795,7 +1799,7 @@ def compute_metric_for_key_jsonb(
                     ),
                 )
             else:
-                query = query.filter(condition)
+                query = query.where(condition)
 
     # Subquery of filtered LogEvents
     filtered_events_subq = query.subquery()
@@ -1805,11 +1809,11 @@ def compute_metric_for_key_jsonb(
 
     # 3) Build and execute the aggregation query directly on LogEvent
     metric_query = (
-        session.query(reduction_methods[metric](cast_expr))
+        select(reduction_methods[metric](cast_expr))
         .select_from(LogEvent)
-        .filter(LogEvent.id.in_(select(filtered_events_subq.c.id)))
+        .where(LogEvent.id.in_(select(filtered_events_subq.c.id)))
         # Filter to only rows where the key exists
-        .filter(LogEvent.data.op("?")(literal(key)))
+        .where(LogEvent.data.op("?")(literal(key)))
     )
 
     # Capture SQL for test analysis (if enabled)
@@ -1854,7 +1858,8 @@ def compute_metric_for_key_jsonb(
     except Exception:
         pass  # Silently ignore capture errors
 
-    reduced_query = metric_query.scalar()
+    result = await session.execute(metric_query)
+    reduced_query = result.scalar()
 
     # Post-process based on field type
     field_type = field_types.get(key)
@@ -1867,7 +1872,7 @@ def compute_metric_for_key_jsonb(
     return processed_value
 
 
-def compute_metric_bulk(
+async def compute_metric_bulk(
     keys: Sequence[str],
     metric: str,
     project_id: int,
@@ -1876,7 +1881,7 @@ def compute_metric_bulk(
     filter_expr: Optional[str] = None,
     from_ids: Optional[str] = None,
     exclude_ids: Optional[str] = None,
-    session=None,
+    session: AsyncSession = None,
 ) -> Dict[str, Union[float, int, bool, str, None]]:
     """
     Compute a metric for multiple keys in a single GROUP BY SQL query.
@@ -1888,7 +1893,7 @@ def compute_metric_bulk(
         filter_expr: Filter expression
         from_ids: IDs to include
         exclude_ids: IDs to exclude
-        session: Database session
+        session: Async database session
 
     Returns:
         Dict mapping keys to their computed metric values
@@ -1896,7 +1901,7 @@ def compute_metric_bulk(
     from orchestra.settings import settings
 
     if settings.use_jsonb_queries:
-        return compute_metric_bulk_jsonb(
+        return await compute_metric_bulk_jsonb(
             keys,
             metric,
             project_id,
@@ -1912,9 +1917,9 @@ def compute_metric_bulk(
         return {}
 
     # 1) Build initial query to find matching LogEvent IDs (scoped to context when provided)
-    query = session.query(LogEvent.id).filter(LogEvent.project_id == project_id)
+    query = select(LogEvent.id).where(LogEvent.project_id == project_id)
     if context_id is not None:
-        query = query.join(LogEventContext).filter(
+        query = query.join(LogEventContext).where(
             LogEventContext.context_id == context_id,
         )
 
@@ -2198,7 +2203,7 @@ def compute_metric_bulk(
     return result
 
 
-def compute_metric_bulk_jsonb(
+async def compute_metric_bulk_jsonb(
     keys: Sequence[str],
     metric: str,
     project_id: int,
@@ -2207,7 +2212,7 @@ def compute_metric_bulk_jsonb(
     filter_expr: Optional[str] = None,
     from_ids: Optional[str] = None,
     exclude_ids: Optional[str] = None,
-    session=None,
+    session: AsyncSession = None,
 ) -> Dict[str, Union[float, int, bool, str, None]]:
     """
     JSONB-based implementation of compute_metric_bulk.
@@ -2219,9 +2224,9 @@ def compute_metric_bulk_jsonb(
         return {}
 
     # 1) Build initial query to find matching LogEvent IDs (scoped to context when provided)
-    query = session.query(LogEvent.id).filter(LogEvent.project_id == project_id)
+    query = select(LogEvent.id).where(LogEvent.project_id == project_id)
     if context_id is not None:
-        query = query.join(LogEventContext).filter(
+        query = query.join(LogEventContext).where(
             LogEventContext.context_id == context_id,
         )
 
@@ -2253,7 +2258,7 @@ def compute_metric_bulk_jsonb(
                 context_id=context_id,
             )
             if isinstance(condition, Subquery):
-                query = query.filter(
+                query = query.where(
                     exists(
                         select(1)
                         .select_from(condition)
@@ -2307,9 +2312,9 @@ def compute_metric_bulk_jsonb(
 
     # 5) Construct the single batched query
     metric_query = (
-        session.query(*aggregate_columns)
+        select(*aggregate_columns)
         .select_from(LogEvent)
-        .filter(LogEvent.id.in_(select(filtered_events_subq.c.id)))
+        .where(LogEvent.id.in_(select(filtered_events_subq.c.id)))
     )
 
     # Capture SQL for test analysis (if enabled) - ONCE for the batched query
@@ -2327,7 +2332,7 @@ def compute_metric_bulk_jsonb(
 
             mode = "jsonb" if settings.use_jsonb_queries else "eav"
             # Compile SQL for capture
-            compiled_sql = metric_query.statement.compile(
+            compiled_sql = metric_query.compile(
                 dialect=session.bind.dialect,
                 compile_kwargs={"literal_binds": True},
             ).string
@@ -2336,7 +2341,7 @@ def compute_metric_bulk_jsonb(
                 "EXPLAIN (ANALYZE, BUFFERS, TIMING, COSTS, VERBOSE, FORMAT JSON) "
                 + compiled_sql
             )
-            explain_result = session.execute(text(explain_sql))
+            explain_result = await session.execute(text(explain_sql))
             explain_output = explain_result.fetchone()[0]
             # Set context with all keys
             keys_str = ", ".join(keys)
@@ -2356,7 +2361,8 @@ def compute_metric_bulk_jsonb(
         pass  # Silently ignore capture errors
 
     # 6) Execute the batched query once
-    row = metric_query.first()
+    result = await session.execute(metric_query)
+    row = result.first()
 
     # 7) Extract and post-process results for each key
     result = {}
