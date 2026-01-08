@@ -137,11 +137,6 @@ class AssistantCreate(BaseModel):
         description="Whether to create the infrastructure for the assistant",
         exclude=True,
     )
-    phone: Optional[str] = Field(
-        None,
-        description="Phone number of the assistant (just for testing purposes)",
-        exclude=True,
-    )
     phone_country: Optional[str] = Field(
         "US",
         description="Country code for phone number provisioning (e.g., US, GB)",

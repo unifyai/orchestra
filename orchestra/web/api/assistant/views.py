@@ -314,7 +314,7 @@ async def create_assistant(
             voice_id=assistant_in.voice_id,
             voice_provider=assistant_in.voice_provider,
             voice_mode=assistant_in.voice_mode,
-            phone=assistant_in.phone,
+            phone=None,
             email=assistant_in.email,
             phone_country=assistant_in.phone_country,
             user_whatsapp_number=assistant_in.user_whatsapp_number,
