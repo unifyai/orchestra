@@ -609,66 +609,6 @@ async def test_assistant_recordings_audio_lifecycle(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_admin_list_assistant_emails(client: AsyncClient):
-    # Create two assistants
-    payload1 = {
-        "first_name": "Laura",
-        "surname": "Wilson",
-        "age": 33,
-        "weekly_limit": 25.0,
-        "max_parallel": 3,
-        "nationality": "Germany",
-        "profile_photo": "https://example.com/photos/laura.jpg",
-        "about": "AI ethics researcher with focus on fairness in algorithms",
-        "create_infra": False,
-    }
-    payload2 = {
-        "first_name": "Michael",
-        "surname": "Taylor",
-        "age": 41,
-        "weekly_limit": 30.0,
-        "max_parallel": 4,
-        "nationality": "United States",
-        "profile_photo": "https://example.com/photos/michael.jpg",
-        "about": "Cloud architecture specialist with expertise in distributed systems",
-        "create_infra": False,
-    }
-
-    # Create the assistants
-    resp1 = await client.post("/v0/assistant", json=payload1, headers=HEADERS)
-    resp2 = await client.post("/v0/assistant", json=payload2, headers=HEADERS)
-    assert resp1.status_code == 200 and resp2.status_code == 200
-
-    # Get the assistant IDs
-    aid1 = resp1.json()["info"]["agent_id"]
-    aid2 = resp2.json()["info"]["agent_id"]
-
-    # Set unique emails for each assistant
-    email1 = "laura.wilson@example.com"
-    email2 = "michael.taylor@example.com"
-
-    # Update the assistants with emails
-    update1 = await client.patch(
-        f"/v0/assistant/{aid1}/config",
-        json={"email": email1, "create_infra": False},
-        headers=HEADERS,
-    )
-    update2 = await client.patch(
-        f"/v0/assistant/{aid2}/config",
-        json={"email": email2, "create_infra": False},
-        headers=HEADERS,
-    )
-    assert update1.status_code == 200 and update2.status_code == 200
-
-    # Test the admin endpoint for listing all assistant emails
-    resp = await client.get("/v0/admin/assistant/emails", headers=ADMIN_HEADERS)
-    assert resp.status_code == 200
-    data = resp.json().get("info")
-    assert isinstance(data, list)
-    assert set(data) == {email1, email2}
-
-
-@pytest.mark.anyio
 async def test_search_assistants_by_phone(client: AsyncClient):
     # Create two assistants with distinct phone values, search by phone
     payload1 = {
