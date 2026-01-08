@@ -453,14 +453,13 @@ start_orchestra_server() {
   export ORCHESTRA_RELOAD=false
   export ORCHESTRA_WORKERS_COUNT=1
 
-  # GCP credentials for BucketService
-  if [[ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]]; then
-    export ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON="$GOOGLE_APPLICATION_CREDENTIALS"
-  fi
-
   # API keys for embedding and LLM operations
+  # Orchestra Python code uses get_env() which checks ORCHESTRA_* prefix first, then
+  # falls back to standard names (OPENAI_API_KEY, ANTHROPIC_API_KEY).
+  # litellm uses the standard names directly, so we export them if set.
   [[ -n "${OPENAI_API_KEY:-}" ]] && export OPENAI_API_KEY
   [[ -n "${ANTHROPIC_API_KEY:-}" ]] && export ANTHROPIC_API_KEY
+  [[ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]] && export GOOGLE_APPLICATION_CREDENTIALS
 
   # Optional logging directories
   if [[ -n "${ORCHESTRA_LOG_DIR:-}" ]]; then
