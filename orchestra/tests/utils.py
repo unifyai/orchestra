@@ -250,3 +250,18 @@ def get_chat_completions_payload_tool_use(model_str):
     )
     payload = {"messages": messages, "tools": tools, "model": model_str}
     return payload
+
+
+# Project/Context helpers for tests
+def _create_project(client: AsyncClient, project: str):
+    """Create a project for testing."""
+    return client.post("/v0/project", json={"name": project}, headers=HEADERS)
+
+
+def _create_context(client: AsyncClient, project: str, name: str, description: str):
+    """Create a context within a project for testing."""
+    return client.post(
+        f"/v0/project/{project}/contexts",
+        json={"name": name, "description": description},
+        headers=HEADERS,
+    )
