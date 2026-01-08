@@ -1254,3 +1254,16 @@ class AdminUpdateAssistantResponse(BaseModel):
         ...,
         description="List of fields that were updated.",
     )
+
+
+class Contact(BaseModel):
+    """Contact schema for admin_list_contacts endpoint."""
+
+    user_id: Optional[str] = None
+    first_name: Optional[str] = None
+    surname: Optional[str] = None
+    email_address: Optional[str] = None
+    phone_number: Optional[str] = None
+    whatsapp_number: Optional[str] = None
+    description: Optional[str] = None
+    custom_fields: Dict[str, Any] = {}
