@@ -1,6 +1,7 @@
 import os
 
 from fastapi import Depends
+from fastapi.responses import RedirectResponse
 from fastapi.routing import APIRouter
 
 from orchestra.web.api import (  # noqa: WPS235
@@ -8,11 +9,9 @@ from orchestra.web.api import (  # noqa: WPS235
     api_keys,
     context,
     credits,
-    docs,
     interface,
     llm_queries,
     log,
-    monitoring,
     organization,
     project,
     roles,
@@ -177,6 +176,16 @@ api_router.include_router(
 
 # NO AUTH
 
-api_router.include_router(monitoring.router)
-api_router.include_router(docs.router)
 api_router.include_router(stripe_webhooks.router)
+
+
+# Simple system endpoints (no auth required)
+@api_router.get("/health", include_in_schema=False)
+def health_check() -> None:
+    """Health check endpoint. Returns 200 if the service is healthy."""
+
+
+@api_router.get("/docs", include_in_schema=False)
+def redirect_docs():
+    """Redirect to API documentation."""
+    return RedirectResponse(url="https://docs.unify.ai/api-reference")
