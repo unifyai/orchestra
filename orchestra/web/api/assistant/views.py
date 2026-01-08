@@ -4032,20 +4032,6 @@ def cancel_animation_prediction(
 
 
 @admin_router.get(
-    "/assistant/emails",
-    response_model=InfoResponse[List[str]],
-    summary="Admin: list all assistant email addresses",
-)
-async def admin_list_assistant_emails(
-    session: Session = Depends(get_db_session),
-) -> InfoResponse[List[str]]:
-    dao = AssistantDAO(session)
-    """Return every non-null email address that has been set on an Assistant."""
-    emails = dao.list_all_assistant_emails()
-    return InfoResponse(info=emails)
-
-
-@admin_router.get(
     "/assistant/{assistant_id}/status",
     response_model=InfoResponse[AssistantStatus],
     status_code=status.HTTP_200_OK,
