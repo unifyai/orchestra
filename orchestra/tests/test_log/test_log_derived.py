@@ -15,6 +15,7 @@ from . import (
     _create_project,
     _create_several_logs,
     _delete_logs,
+    wait_for_gcs_images,
 )
 
 # Fixture use_jsonb_mode is provided by conftest.py
@@ -1532,6 +1533,9 @@ async def test_derived_image_embedding_and_filtering(
 
     log_ids = [cat_log_id, dog_log_id, car_log_id]
 
+    # Wait for GCS images to become available before computing embeddings
+    await wait_for_gcs_images(client, project, context, image_col_name="screenshot")
+
     # 2) Create derived column with embed_image() to generate embeddings
     key = "screenshot_embedding"
     equation = "embed_image({log:screenshot})"
@@ -2078,127 +2082,7 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient, use_jsonb_mode):
         log_ids_map[name] = response.json()["log_event_ids"][0]
 
     # 2. Pre-flight check: Wait for all images to be available in GCS
-    # GCS has eventual consistency, so images may not be immediately readable after upload.
-    # We verify each image is fetchable before proceeding to pHash computation.
-    import asyncio
-    import logging
-
-    from orchestra.services.bucket_service import BucketService
-
-    bucket_service = BucketService()
-
-    # Get the image URLs from the logs
-    response = await client.get(
-        f"/v0/logs?project_name={project_name}&context={context_name}",
-        headers=HEADERS,
-    )
-    assert response.status_code == 200, response.json()
-    all_logs = response.json()["logs"]
-
-    # Extract image URLs and verify each is available in GCS
-    # Use exponential backoff: 1, 2, 4, 8, 10, 10, 10... (capped at 10s)
-    # Total max wait: ~60 seconds (vs 30s before)
-    max_availability_retries = 12
-    base_delay = 1  # Start with 1 second
-    max_delay = 10  # Cap at 10 seconds per retry
-    total_wait_time = 0
-
-    # Track diagnostic info for debugging intermittent failures
-    diagnostic_info: dict[str, dict] = {}
-
-    for attempt in range(max_availability_retries):
-        unavailable_images = []
-        for log in all_logs:
-            log_name = log["entries"]["name"]
-            image_value = log["entries"].get("img")
-
-            # Collect diagnostic info on first attempt
-            if attempt == 0:
-                if image_value is None:
-                    diagnostic_info[log_name] = {
-                        "status": "no_img_field",
-                        "value_preview": None,
-                    }
-                elif image_value.startswith("data:"):
-                    diagnostic_info[log_name] = {
-                        "status": "base64_data_uri",
-                        "value_preview": image_value[:80] + "...",
-                    }
-                elif (
-                    image_value.startswith("gs://")
-                    or "storage.googleapis.com" in image_value
-                ):
-                    diagnostic_info[log_name] = {
-                        "status": "gcs_url",
-                        "full_url": image_value,
-                        "extracted_filename": image_value.split("/")[-1],
-                    }
-                else:
-                    diagnostic_info[log_name] = {
-                        "status": "unknown_format",
-                        "value_preview": image_value[:80] + "..."
-                        if len(image_value) > 80
-                        else image_value,
-                    }
-
-            if image_value:
-                # Check if this is a GCS URL or inline Base64 data
-                # GCS URLs start with "gs://" or contain "storage.googleapis.com"
-                if (
-                    image_value.startswith("gs://")
-                    or "storage.googleapis.com" in image_value
-                ):
-                    # Extract filename from URL
-                    filename = image_value.split("/")[-1]
-                    try:
-                        result = bucket_service.get_media(filename)
-                        if result is None:
-                            unavailable_images.append(log_name)
-                            if attempt == 0:
-                                diagnostic_info[log_name][
-                                    "error"
-                                ] = "get_media returned None (NotFound)"
-                    except Exception as e:
-                        unavailable_images.append(log_name)
-                        if attempt == 0:
-                            diagnostic_info[log_name][
-                                "error"
-                            ] = f"Exception: {type(e).__name__}: {e}"
-                # else: it's inline Base64 data, no GCS fetch needed
-
-        if not unavailable_images:
-            logging.info(
-                f"All {len(all_logs)} images available in GCS after {attempt + 1} attempts "
-                f"({total_wait_time}s total wait)",
-            )
-            break
-
-        if attempt < max_availability_retries - 1:
-            # Exponential backoff with cap
-            delay = min(base_delay * (2**attempt), max_delay)
-            total_wait_time += delay
-            logging.warning(
-                f"GCS pre-flight check: {len(unavailable_images)} images not yet available "
-                f"({unavailable_images}), retrying in {delay}s "
-                f"(attempt {attempt + 1}/{max_availability_retries})",
-            )
-            await asyncio.sleep(delay)
-        else:
-            # Build detailed diagnostic message
-            import json
-
-            diag_str = json.dumps(diagnostic_info, indent=2)
-            pytest.fail(
-                f"GCS pre-flight check failed: Images {unavailable_images} not available "
-                f"after {max_availability_retries} attempts "
-                f"({total_wait_time}s total wait time).\n\n"
-                f"=== DIAGNOSTIC INFO ===\n{diag_str}\n"
-                f"=== END DIAGNOSTIC INFO ===\n\n"
-                f"This will help debug whether the issue is:\n"
-                f"- GCS URLs not being stored (check 'status' field)\n"
-                f"- Wrong filename extraction (check 'extracted_filename')\n"
-                f"- GCS read failures (check 'error' field)",
-            )
+    await wait_for_gcs_images(client, project_name, context_name, image_col_name="img")
 
     # 3. Create pHash derived logs (images are now confirmed available)
     phash_key = "image_phash"
@@ -2315,6 +2199,9 @@ async def test_phash_distance_with_raw_image_literal(
         ), f"Failed to create log for {name}: {response.text}"
         log_ids_map[name] = response.json()["log_event_ids"][0]
 
+    # Wait for GCS images to become available before computing pHash
+    await wait_for_gcs_images(client, project_name, context_name, image_col_name="img")
+
     response = await _create_derived_entry(
         client,
         project_name,
@@ -2324,9 +2211,7 @@ async def test_phash_distance_with_raw_image_literal(
         context=context_name,
         user=user_id,
     )
-    assert (
-        response.status_code == 200
-    ), f"Failed to create pHash for {name}: {response.text}"
+    assert response.status_code == 200, f"Failed to create pHash: {response.text}"
 
     # 2. Get the raw base64 data URI for the 'cat' image to use in the query
     cat_image_path = os.path.join(
