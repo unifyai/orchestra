@@ -3,7 +3,16 @@
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, validator
+
+from orchestra.web.api.plot.validation import (
+    VALID_AGGREGATES,
+    VALID_METRICS,
+    VALID_PLOT_TYPES,
+    VALID_SCALES,
+    VALID_SORT_ORDER,
+    validate_hex_color,
+)
 
 # =============================================================================
 # Input Schemas
@@ -59,13 +68,9 @@ class PlotConfigInput(BaseModel):
         None,
         description="Custom colors for groups: {group_value: hex_color}",
     )
-    sort_by: Optional[str] = Field(
-        None,
-        description="Field to sort by: x, y, value, name, count (bar charts)",
-    )
     sort_order: Optional[str] = Field(
         None,
-        description="Sort order: asc or desc",
+        description="Sort order: unsorted, asc, or desc",
     )
     title: Optional[str] = Field(
         None,
@@ -79,6 +84,70 @@ class PlotConfigInput(BaseModel):
         None,
         description="Label for the y-axis (can be inferred by LLM)",
     )
+
+    # =========================================================================
+    # Validators
+    # =========================================================================
+
+    @validator("type")
+    def validate_type(cls, v: Optional[str]) -> Optional[str]:
+        """Validate plot type is one of the allowed values."""
+        if v is not None and v not in VALID_PLOT_TYPES:
+            raise ValueError(
+                f"Invalid plot type '{v}'. Must be one of: {', '.join(VALID_PLOT_TYPES)}",
+            )
+        return v
+
+    @validator("scale_x", "scale_y")
+    def validate_scale(cls, v: Optional[str]) -> Optional[str]:
+        """Validate scale is linear or log."""
+        if v is not None and v not in VALID_SCALES:
+            raise ValueError(
+                f"Invalid scale '{v}'. Must be one of: {', '.join(VALID_SCALES)}",
+            )
+        return v
+
+    @validator("aggregate")
+    def validate_aggregate(cls, v: Optional[str]) -> Optional[str]:
+        """Validate aggregate function is one of the allowed values."""
+        if v is not None and v not in VALID_AGGREGATES:
+            raise ValueError(
+                f"Invalid aggregate '{v}'. Must be one of: {', '.join(VALID_AGGREGATES)}",
+            )
+        return v
+
+    @validator("metric")
+    def validate_metric(cls, v: Optional[str]) -> Optional[str]:
+        """Validate metric is one of the allowed values."""
+        if v is not None and v not in VALID_METRICS:
+            raise ValueError(
+                f"Invalid metric '{v}'. Must be one of: {', '.join(VALID_METRICS)}",
+            )
+        return v
+
+    @validator("sort_order")
+    def validate_sort_order(cls, v: Optional[str]) -> Optional[str]:
+        """Validate sort order is one of the allowed values."""
+        if v is not None and v not in VALID_SORT_ORDER:
+            raise ValueError(
+                f"Invalid sort_order '{v}'. Must be one of: {', '.join(VALID_SORT_ORDER)}",
+            )
+        return v
+
+    @validator("colors")
+    def validate_colors(cls, v: Optional[Dict[str, str]]) -> Optional[Dict[str, str]]:
+        """Validate all color values are valid hex colors."""
+        if v is not None:
+            invalid_colors = []
+            for key, color in v.items():
+                if not validate_hex_color(color):
+                    invalid_colors.append(f"{key}: {color}")
+            if invalid_colors:
+                raise ValueError(
+                    f"Invalid hex color(s): {', '.join(invalid_colors)}. "
+                    "Colors must be in #RGB or #RRGGBB format.",
+                )
+        return v
 
 
 class ProjectConfigInput(BaseModel):
@@ -267,7 +336,6 @@ class InferredConfigResponse(BaseModel):
         None,
         description="Inferred show regression (scatter)",
     )
-    sort_by: Optional[str] = Field(None, description="Inferred sort field (bar)")
     sort_order: Optional[str] = Field(None, description="Inferred sort order (bar)")
     title: Optional[str] = Field(None, description="LLM-suggested plot title")
     x_label: Optional[str] = Field(None, description="LLM-suggested x-axis label")

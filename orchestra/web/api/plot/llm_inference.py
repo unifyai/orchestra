@@ -10,64 +10,16 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
+from orchestra.web.api.plot.validation import (
+    PLOT_TYPE_REQUIREMENTS,
+    VALID_AGGREGATES,
+    VALID_METRICS,
+    VALID_PLOT_TYPES,
+    VALID_SCALES,
+    VALID_SORT_ORDER,
+)
+
 logger = logging.getLogger(__name__)
-
-
-# Valid values for plot configuration
-VALID_PLOT_TYPES = ["scatter", "bar", "histogram", "line"]
-VALID_SCALES = ["linear", "log"]
-VALID_AGGREGATES = ["sum", "mean", "count", "min", "max"]
-VALID_METRICS = ["mean", "sum", "count", "min", "max"]
-VALID_SORT_BY = ["x", "y", "value", "name", "count"]
-VALID_SORT_ORDER = ["asc", "desc"]
-
-# Requirements per plot type
-PLOT_TYPE_REQUIREMENTS: Dict[str, Dict[str, Any]] = {
-    "scatter": {
-        "required": ["x_axis", "y_axis"],
-        "optional": [
-            "group_by",
-            "show_regression",
-            "scale_x",
-            "scale_y",
-            "title",
-            "x_label",
-            "y_label",
-        ],
-        "numeric_required": ["x_axis", "y_axis"],
-    },
-    "bar": {
-        "required": ["x_axis", "y_axis"],
-        "optional": [
-            "aggregate",
-            "group_by",
-            "metric",
-            "sort_by",
-            "sort_order",
-            "title",
-            "x_label",
-            "y_label",
-        ],
-        "numeric_required": [],
-    },
-    "histogram": {
-        "required": ["x_axis"],
-        "optional": ["bin_count", "scale_x", "title", "x_label", "y_label"],
-        "numeric_required": ["x_axis"],
-    },
-    "line": {
-        "required": ["x_axis", "y_axis"],
-        "optional": [
-            "group_by",
-            "scale_x",
-            "scale_y",
-            "title",
-            "x_label",
-            "y_label",
-        ],
-        "numeric_required": ["y_axis"],
-    },
-}
 
 
 SYSTEM_PROMPT = """You are a data visualization expert. Given a user's description and available data fields, determine the best plot configuration.
@@ -97,8 +49,7 @@ Respond with ONLY valid JSON (no markdown, no code blocks):
   "metric": "mean|sum|count|min|max or null",
   "show_regression": true/false (scatter only, true if user wants trends/correlation),
   "bin_count": 10-50 or null (histogram only, more bins for larger datasets)",
-  "sort_by": "x|y|value|name|count or null (for bar charts)",
-  "sort_order": "asc|desc or null",
+  "sort_order": "unsorted|asc|desc or null (for bar charts)",
   "title": "Suggested descriptive title for the plot",
   "x_label": "Label for x-axis based on the field and context",
   "y_label": "Label for y-axis based on the field and context",
@@ -344,19 +295,15 @@ def validate_plot_config(
             validated["bin_count"] = 10
         elif not isinstance(bin_count, int) or bin_count < 1 or bin_count > 100:
             validated["bin_count"] = max(
-                1, min(100, int(bin_count) if bin_count else 10)
+                1,
+                min(100, int(bin_count) if bin_count else 10),
             )
             warnings.append(
-                f"bin_count clamped to valid range: {validated['bin_count']}"
+                f"bin_count clamped to valid range: {validated['bin_count']}",
             )
 
-    # 9. Validate sort_by and sort_order (bar charts)
+    # 9. Validate sort_order (bar charts)
     if plot_type == "bar":
-        if config.get("sort_by") and config["sort_by"] not in VALID_SORT_BY:
-            validated["sort_by"] = None
-            warnings.append(
-                f"Invalid sort_by '{config['sort_by']}', ignoring",
-            )
         if config.get("sort_order") and config["sort_order"] not in VALID_SORT_ORDER:
             validated["sort_order"] = "desc"
             warnings.append(

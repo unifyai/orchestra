@@ -200,22 +200,36 @@ async def create_plot(
             detail="You do not have read access to this project",
         )
 
+    # Validate context exists if specified
+    context_dao = ContextDAO(session)
+    context_id = None
+    if body.project_config.context:
+        contexts = context_dao.filter(
+            project_id=project.id,
+            name=body.project_config.context,
+        )
+        if not contexts:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Context '{body.project_config.context}' not found in project '{project_name}'",
+            )
+        context_id = contexts[0][0].id
+
+    # Fetch available fields for validation
+    # If a context is specified, fetch fields for that context; otherwise fetch all project fields
+    field_type_dao = FieldTypeDAO(session)
+    field_types_dict = field_type_dao.get_field_types(
+        project_id=project.id,
+        context_id=context_id,
+    )
+    available_fields = list(field_types_dict.keys())
+
     # Determine plot config (direct or inferred)
     plot_config_dict = None
     inferred_config = None
 
     if body.description and not body.plot_config:
         # LLM inference mode
-        # Fetch available fields
-        field_type_dao = FieldTypeDAO(session)
-        field_types = field_type_dao.filter(
-            project_id=project.id,
-            context_id=None,
-        )
-
-        available_fields = [ft.field_name for ft in field_types]
-        field_types_dict = {ft.field_name: ft.field_type for ft in field_types}
-
         if not available_fields:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -283,6 +297,41 @@ async def create_plot(
             )
     else:
         # Direct config mode
+        # Validate that referenced fields exist in the project
+        if available_fields:
+            # Validate x_axis
+            if body.plot_config.x_axis not in available_fields:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Field '{body.plot_config.x_axis}' not found in project. "
+                    f"Available fields: {', '.join(available_fields[:10])}"
+                    + ("..." if len(available_fields) > 10 else ""),
+                )
+
+            # Validate y_axis if provided
+            if (
+                body.plot_config.y_axis
+                and body.plot_config.y_axis not in available_fields
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Field '{body.plot_config.y_axis}' not found in project. "
+                    f"Available fields: {', '.join(available_fields[:10])}"
+                    + ("..." if len(available_fields) > 10 else ""),
+                )
+
+            # Validate group_by if provided
+            if (
+                body.plot_config.group_by
+                and body.plot_config.group_by not in available_fields
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Field '{body.plot_config.group_by}' not found in project. "
+                    f"Available fields: {', '.join(available_fields[:10])}"
+                    + ("..." if len(available_fields) > 10 else ""),
+                )
+
         plot_config_dict = body.plot_config.model_dump(exclude_none=True)
 
     # Build project config dict

@@ -1027,13 +1027,12 @@ def test_validate_plot_config_invalid_group_by_ignored():
     assert result["group_by"] is None
 
 
-def test_validate_plot_config_sort_by_and_order():
-    """Test validation of sort_by and sort_order for bar charts."""
+def test_validate_plot_config_sort_order():
+    """Test validation of sort_order for bar charts."""
     config = {
         "type": "bar",
         "x_axis": "model",
         "y_axis": "count",
-        "sort_by": "y",
         "sort_order": "desc",
         "confidence": 0.9,
     }
@@ -1041,24 +1040,23 @@ def test_validate_plot_config_sort_by_and_order():
 
     result = validate_plot_config(config, available_fields)
 
-    assert result["sort_by"] == "y"
     assert result["sort_order"] == "desc"
 
 
-def test_validate_plot_config_invalid_sort_by():
-    """Test that invalid sort_by is set to None."""
+def test_validate_plot_config_sort_order_unsorted():
+    """Test validation of sort_order with unsorted value."""
     config = {
         "type": "bar",
         "x_axis": "model",
         "y_axis": "count",
-        "sort_by": "invalid_sort",
+        "sort_order": "unsorted",
         "confidence": 0.9,
     }
     available_fields = ["model", "count"]
 
     result = validate_plot_config(config, available_fields)
 
-    assert result["sort_by"] is None
+    assert result["sort_order"] == "unsorted"
 
 
 def test_validate_plot_config_invalid_sort_order():
@@ -1508,7 +1506,6 @@ async def test_create_plot_with_extended_config(client: AsyncClient, dbsession):
                 "aggregate": "mean",
                 "scale_y": "log",
                 "metric": "sum",
-                "sort_by": "y",
                 "sort_order": "desc",
                 "title": "Model Performance by Status",
                 "x_label": "Model Name",
@@ -1524,7 +1521,6 @@ async def test_create_plot_with_extended_config(client: AsyncClient, dbsession):
 
     assert data["plot_config"]["type"] == "bar"
     assert data["plot_config"]["aggregate"] == "mean"
-    assert data["plot_config"]["sort_by"] == "y"
     assert data["plot_config"]["sort_order"] == "desc"
     assert data["plot_config"]["title"] == "Model Performance by Status"
     assert data["plot_config"]["x_label"] == "Model Name"
@@ -1762,11 +1758,24 @@ async def test_list_plots_by_context(client: AsyncClient, dbsession):
     user = await create_test_user(client, "plot_list_context@test.com")
 
     # Create project
-    await client.post(
-        "/v0/project",
-        json={"name": "plot-context-project"},
-        headers=user["headers"],
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    context_dao = ContextDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    project_dao.create(
+        name="plot-context-project",
+        user_id=user["id"],
+        organization_id=None,
     )
+    dbsession.commit()
+
+    projects = project_dao.filter(user_id=user["id"], name="plot-context-project")
+    project = projects[0][0]
+
+    # Create contexts first
+    context_dao.create(project_id=project.id, name="context-a", description="Context A")
+    context_dao.create(project_id=project.id, name="context-b", description="Context B")
+    dbsession.commit()
 
     # Create plots with different contexts
     await client.post(
@@ -1826,17 +1835,45 @@ async def test_list_plots_context_without_project(client: AsyncClient, dbsession
     """Test listing plots by context without project filter."""
     user = await create_test_user(client, "plot_list_context_only@test.com")
 
-    # Create two projects
-    await client.post(
-        "/v0/project",
-        json={"name": "plot-ctx-project-1"},
-        headers=user["headers"],
+    # Create two projects with contexts
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    context_dao = ContextDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    project_dao.create(
+        name="plot-ctx-project-1",
+        user_id=user["id"],
+        organization_id=None,
     )
-    await client.post(
-        "/v0/project",
-        json={"name": "plot-ctx-project-2"},
-        headers=user["headers"],
+    project_dao.create(
+        name="plot-ctx-project-2",
+        user_id=user["id"],
+        organization_id=None,
     )
+    dbsession.commit()
+
+    projects1 = project_dao.filter(user_id=user["id"], name="plot-ctx-project-1")
+    project1 = projects1[0][0]
+    projects2 = project_dao.filter(user_id=user["id"], name="plot-ctx-project-2")
+    project2 = projects2[0][0]
+
+    # Create contexts
+    context_dao.create(
+        project_id=project1.id,
+        name="shared-context",
+        description="Shared context",
+    )
+    context_dao.create(
+        project_id=project1.id,
+        name="other-context",
+        description="Other context",
+    )
+    context_dao.create(
+        project_id=project2.id,
+        name="shared-context",
+        description="Shared context",
+    )
+    dbsession.commit()
 
     # Create plots in different projects with same context
     await client.post(
@@ -2029,12 +2066,28 @@ async def test_delete_plots_by_project_and_context(client: AsyncClient, dbsessio
     """Test batch deleting plots for a specific project/context pair."""
     user = await create_test_user(client, "plot_batch_ctx_delete@test.com")
 
-    # Create project
-    await client.post(
-        "/v0/project",
-        json={"name": "plot-batch-ctx-project"},
-        headers=user["headers"],
+    # Create project and contexts
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    context_dao = ContextDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    project_dao.create(
+        name="plot-batch-ctx-project",
+        user_id=user["id"],
+        organization_id=None,
     )
+    dbsession.commit()
+
+    projects = project_dao.filter(user_id=user["id"], name="plot-batch-ctx-project")
+    project = projects[0][0]
+
+    context_dao.create(
+        project_id=project.id,
+        name="delete-me",
+        description="To be deleted",
+    )
+    context_dao.create(project_id=project.id, name="keep-me", description="To be kept")
+    dbsession.commit()
 
     # Create plots with different contexts
     for i in range(3):
@@ -2282,3 +2335,544 @@ async def test_plot_dao_delete_by_project_with_context(client: AsyncClient, dbse
     assert len(remaining_plots) == 2
     for plot in remaining_plots:
         assert plot.project_config.get("context") == "ctx-to-keep"
+
+
+# ==================== Schema Validation Tests ====================
+
+
+def test_plot_config_input_valid_type():
+    """Test PlotConfigInput accepts valid plot types."""
+    from orchestra.web.api.plot.schema import PlotConfigInput
+
+    # Valid types should work
+    for plot_type in ["scatter", "bar", "histogram", "line"]:
+        config = PlotConfigInput(type=plot_type, x_axis="x", y_axis="y")
+        assert config.type == plot_type
+
+
+def test_plot_config_input_invalid_type():
+    """Test PlotConfigInput rejects invalid plot types."""
+    from pydantic import ValidationError
+
+    from orchestra.web.api.plot.schema import PlotConfigInput
+
+    with pytest.raises(ValidationError) as exc_info:
+        PlotConfigInput(type="invalid", x_axis="x", y_axis="y")
+
+    assert "Invalid plot type" in str(exc_info.value)
+
+
+def test_plot_config_input_valid_scales():
+    """Test PlotConfigInput accepts valid scale values."""
+    from orchestra.web.api.plot.schema import PlotConfigInput
+
+    config = PlotConfigInput(x_axis="x", y_axis="y", scale_x="log", scale_y="linear")
+    assert config.scale_x == "log"
+    assert config.scale_y == "linear"
+
+
+def test_plot_config_input_invalid_scale():
+    """Test PlotConfigInput rejects invalid scale values."""
+    from pydantic import ValidationError
+
+    from orchestra.web.api.plot.schema import PlotConfigInput
+
+    with pytest.raises(ValidationError) as exc_info:
+        PlotConfigInput(x_axis="x", y_axis="y", scale_x="invalid")
+
+    assert "Invalid scale" in str(exc_info.value)
+
+
+def test_plot_config_input_valid_aggregate():
+    """Test PlotConfigInput accepts valid aggregate values."""
+    from orchestra.web.api.plot.schema import PlotConfigInput
+
+    for agg in ["sum", "mean", "count", "min", "max"]:
+        config = PlotConfigInput(x_axis="x", y_axis="y", aggregate=agg)
+        assert config.aggregate == agg
+
+
+def test_plot_config_input_invalid_aggregate():
+    """Test PlotConfigInput rejects invalid aggregate values."""
+    from pydantic import ValidationError
+
+    from orchestra.web.api.plot.schema import PlotConfigInput
+
+    with pytest.raises(ValidationError) as exc_info:
+        PlotConfigInput(x_axis="x", y_axis="y", aggregate="invalid")
+
+    assert "Invalid aggregate" in str(exc_info.value)
+
+
+def test_plot_config_input_valid_metric():
+    """Test PlotConfigInput accepts valid metric values."""
+    from orchestra.web.api.plot.schema import PlotConfigInput
+
+    for metric in ["mean", "sum", "count", "min", "max"]:
+        config = PlotConfigInput(x_axis="x", y_axis="y", metric=metric)
+        assert config.metric == metric
+
+
+def test_plot_config_input_invalid_metric():
+    """Test PlotConfigInput rejects invalid metric values."""
+    from pydantic import ValidationError
+
+    from orchestra.web.api.plot.schema import PlotConfigInput
+
+    with pytest.raises(ValidationError) as exc_info:
+        PlotConfigInput(x_axis="x", y_axis="y", metric="invalid")
+
+    assert "Invalid metric" in str(exc_info.value)
+
+
+def test_plot_config_input_valid_sort_order():
+    """Test PlotConfigInput accepts valid sort_order values."""
+    from orchestra.web.api.plot.schema import PlotConfigInput
+
+    for order in ["unsorted", "asc", "desc"]:
+        config = PlotConfigInput(x_axis="x", y_axis="y", sort_order=order)
+        assert config.sort_order == order
+
+
+def test_plot_config_input_invalid_sort_order():
+    """Test PlotConfigInput rejects invalid sort_order values."""
+    from pydantic import ValidationError
+
+    from orchestra.web.api.plot.schema import PlotConfigInput
+
+    with pytest.raises(ValidationError) as exc_info:
+        PlotConfigInput(x_axis="x", y_axis="y", sort_order="invalid")
+
+    assert "Invalid sort_order" in str(exc_info.value)
+
+
+def test_plot_config_input_valid_colors():
+    """Test PlotConfigInput accepts valid hex colors."""
+    from orchestra.web.api.plot.schema import PlotConfigInput
+
+    config = PlotConfigInput(
+        x_axis="x",
+        y_axis="y",
+        colors={"group1": "#FF0000", "group2": "#00FF00", "group3": "#00F"},
+    )
+    assert config.colors == {"group1": "#FF0000", "group2": "#00FF00", "group3": "#00F"}
+
+
+def test_plot_config_input_invalid_colors():
+    """Test PlotConfigInput rejects invalid hex colors."""
+    from pydantic import ValidationError
+
+    from orchestra.web.api.plot.schema import PlotConfigInput
+
+    with pytest.raises(ValidationError) as exc_info:
+        PlotConfigInput(
+            x_axis="x",
+            y_axis="y",
+            colors={"group1": "red", "group2": "invalid"},  # Not hex format
+        )
+
+    assert "Invalid hex color" in str(exc_info.value)
+
+
+# ==================== Validation Module Tests ====================
+
+
+def test_validate_hex_color_valid():
+    """Test validate_hex_color accepts valid colors."""
+    from orchestra.web.api.plot.validation import validate_hex_color
+
+    # 6-digit hex
+    assert validate_hex_color("#FF0000") is True
+    assert validate_hex_color("#00ff00") is True
+    assert validate_hex_color("#123ABC") is True
+
+    # 3-digit hex
+    assert validate_hex_color("#F00") is True
+    assert validate_hex_color("#0f0") is True
+    assert validate_hex_color("#1AB") is True
+
+
+def test_validate_hex_color_invalid():
+    """Test validate_hex_color rejects invalid colors."""
+    from orchestra.web.api.plot.validation import validate_hex_color
+
+    assert validate_hex_color("red") is False
+    assert validate_hex_color("#GG0000") is False  # Invalid hex char
+    assert validate_hex_color("FF0000") is False  # Missing #
+    assert validate_hex_color("#FF00") is False  # Wrong length
+    assert validate_hex_color("#FF00000") is False  # Too long
+
+
+def test_validate_colors_dict():
+    """Test validate_colors_dict returns invalid colors."""
+    from orchestra.web.api.plot.validation import validate_colors_dict
+
+    # All valid
+    colors = {"a": "#FF0000", "b": "#00FF00"}
+    assert validate_colors_dict(colors) == []
+
+    # Some invalid
+    colors = {"a": "#FF0000", "b": "red", "c": "invalid"}
+    invalid = validate_colors_dict(colors)
+    assert len(invalid) == 2
+    assert "b: red" in invalid
+    assert "c: invalid" in invalid
+
+
+# ==================== Context Validation Tests ====================
+
+
+@pytest.mark.anyio
+async def test_create_plot_nonexistent_context_fails(client: AsyncClient, dbsession):
+    """Test that creating a plot with a non-existent context fails."""
+    user = await create_test_user(client, "plot_ctx_validate@test.com")
+
+    # Create project
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    project_dao.create(
+        name="Plot_Context_Validation",
+        user_id=user["id"],
+        organization_id=None,
+    )
+    dbsession.commit()
+
+    # Try to create plot with non-existent context
+    response = await client.post(
+        "/v0/logs/plot",
+        headers=user["headers"],
+        json={
+            "plot_config": {
+                "type": "scatter",
+                "x_axis": "x",
+                "y_axis": "y",
+            },
+            "project_config": {
+                "project_name": "Plot_Context_Validation",
+                "context": "nonexistent_context",
+            },
+        },
+    )
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert "not found" in response.json()["detail"].lower()
+    assert "nonexistent_context" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_create_plot_existing_context_succeeds(client: AsyncClient, dbsession):
+    """Test that creating a plot with an existing context succeeds."""
+    user = await create_test_user(client, "plot_ctx_valid@test.com")
+
+    # Create project and context
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    project_dao.create(
+        name="Plot_Context_Valid",
+        user_id=user["id"],
+        organization_id=None,
+    )
+    dbsession.commit()
+
+    projects = project_dao.filter(user_id=user["id"], name="Plot_Context_Valid")
+    project = projects[0][0]
+
+    # Create a context
+    context_dao.create(
+        project_id=project.id,
+        name="valid_context",
+        description="A valid context",
+    )
+    dbsession.commit()
+
+    # Also need to add fields so field validation passes
+    from orchestra.db.models.orchestra_models import FieldType
+
+    dbsession.add(
+        FieldType(
+            project_id=project.id,
+            field_name="x",
+            field_type="float",
+        ),
+    )
+    dbsession.add(
+        FieldType(
+            project_id=project.id,
+            field_name="y",
+            field_type="float",
+        ),
+    )
+    dbsession.commit()
+
+    # Create plot with valid context
+    response = await client.post(
+        "/v0/logs/plot",
+        headers=user["headers"],
+        json={
+            "plot_config": {
+                "type": "scatter",
+                "x_axis": "x",
+                "y_axis": "y",
+            },
+            "project_config": {
+                "project_name": "Plot_Context_Valid",
+                "context": "valid_context",
+            },
+        },
+    )
+
+    assert response.status_code == status.HTTP_201_CREATED
+
+
+# ==================== Field Validation Tests ====================
+
+
+@pytest.mark.anyio
+async def test_create_plot_nonexistent_x_axis_fails(client: AsyncClient, dbsession):
+    """Test that creating a plot with a non-existent x_axis field fails."""
+    user = await create_test_user(client, "plot_field_x@test.com")
+
+    # Create project with some fields
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    project_dao.create(
+        name="Plot_Field_X_Validation",
+        user_id=user["id"],
+        organization_id=None,
+    )
+    dbsession.commit()
+
+    projects = project_dao.filter(user_id=user["id"], name="Plot_Field_X_Validation")
+    project = projects[0][0]
+
+    # Add some fields (but not the one we'll reference)
+    from orchestra.db.models.orchestra_models import FieldType
+
+    dbsession.add(
+        FieldType(
+            project_id=project.id,
+            field_name="existing_field",
+            field_type="float",
+        ),
+    )
+    dbsession.commit()
+
+    # Try to create plot with non-existent x_axis
+    response = await client.post(
+        "/v0/logs/plot",
+        headers=user["headers"],
+        json={
+            "plot_config": {
+                "type": "histogram",
+                "x_axis": "nonexistent_field",
+            },
+            "project_config": {
+                "project_name": "Plot_Field_X_Validation",
+            },
+        },
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "not found" in response.json()["detail"].lower()
+    assert "nonexistent_field" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_create_plot_nonexistent_y_axis_fails(client: AsyncClient, dbsession):
+    """Test that creating a plot with a non-existent y_axis field fails."""
+    user = await create_test_user(client, "plot_field_y@test.com")
+
+    # Create project with some fields
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    project_dao.create(
+        name="Plot_Field_Y_Validation",
+        user_id=user["id"],
+        organization_id=None,
+    )
+    dbsession.commit()
+
+    projects = project_dao.filter(user_id=user["id"], name="Plot_Field_Y_Validation")
+    project = projects[0][0]
+
+    from orchestra.db.models.orchestra_models import FieldType
+
+    dbsession.add(
+        FieldType(
+            project_id=project.id,
+            field_name="x",
+            field_type="float",
+        ),
+    )
+    dbsession.add(
+        FieldType(
+            project_id=project.id,
+            field_name="existing_y",
+            field_type="float",
+        ),
+    )
+    dbsession.commit()
+
+    # Try to create plot with non-existent y_axis
+    response = await client.post(
+        "/v0/logs/plot",
+        headers=user["headers"],
+        json={
+            "plot_config": {
+                "type": "scatter",
+                "x_axis": "x",
+                "y_axis": "nonexistent_y",
+            },
+            "project_config": {
+                "project_name": "Plot_Field_Y_Validation",
+            },
+        },
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "not found" in response.json()["detail"].lower()
+    assert "nonexistent_y" in response.json()["detail"]
+
+
+@pytest.mark.anyio
+async def test_create_plot_nonexistent_group_by_fails(client: AsyncClient, dbsession):
+    """Test that creating a plot with a non-existent group_by field fails."""
+    user = await create_test_user(client, "plot_field_group@test.com")
+
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    project_dao.create(
+        name="Plot_Field_Group_Validation",
+        user_id=user["id"],
+        organization_id=None,
+    )
+    dbsession.commit()
+
+    projects = project_dao.filter(
+        user_id=user["id"],
+        name="Plot_Field_Group_Validation",
+    )
+    project = projects[0][0]
+
+    from orchestra.db.models.orchestra_models import FieldType
+
+    dbsession.add(
+        FieldType(
+            project_id=project.id,
+            field_name="x",
+            field_type="float",
+        ),
+    )
+    dbsession.add(
+        FieldType(
+            project_id=project.id,
+            field_name="y",
+            field_type="float",
+        ),
+    )
+    dbsession.commit()
+
+    # Try to create plot with non-existent group_by
+    response = await client.post(
+        "/v0/logs/plot",
+        headers=user["headers"],
+        json={
+            "plot_config": {
+                "type": "scatter",
+                "x_axis": "x",
+                "y_axis": "y",
+                "group_by": "nonexistent_group",
+            },
+            "project_config": {
+                "project_name": "Plot_Field_Group_Validation",
+            },
+        },
+    )
+
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "not found" in response.json()["detail"].lower()
+    assert "nonexistent_group" in response.json()["detail"]
+
+
+# ==================== Context Deletion Cascade Tests ====================
+
+
+@pytest.mark.anyio
+async def test_plots_deleted_on_context_deletion(client: AsyncClient, dbsession):
+    """Test that plots are deleted when their context is deleted."""
+    user = await create_test_user(client, "plot_ctx_cascade@test.com")
+
+    # Create project
+    context_dao = ContextDAO(dbsession)
+    org_member_dao = OrganizationMemberDAO(dbsession)
+    project_dao = ProjectDAO(dbsession, org_member_dao, context_dao)
+
+    project_dao.create(
+        name="Plot_Context_Cascade",
+        user_id=user["id"],
+        organization_id=None,
+    )
+    dbsession.commit()
+
+    projects = project_dao.filter(user_id=user["id"], name="Plot_Context_Cascade")
+    project = projects[0][0]
+
+    # Create context
+    context_id = context_dao.create(
+        project_id=project.id,
+        name="deletable_context",
+        description="Will be deleted",
+    )
+    dbsession.commit()
+
+    # Create plots - some with the context, some without
+    plot_dao = PlotDAO(dbsession)
+    plot_with_context = plot_dao.create(
+        project_id=project.id,
+        user_id=user["id"],
+        organization_id=None,
+        plot_config={"type": "histogram", "x_axis": "value"},
+        project_config={
+            "project_name": "Plot_Context_Cascade",
+            "context": "deletable_context",
+        },
+        title="Plot With Context",
+    )
+    plot_without_context = plot_dao.create(
+        project_id=project.id,
+        user_id=user["id"],
+        organization_id=None,
+        plot_config={"type": "histogram", "x_axis": "value"},
+        project_config={"project_name": "Plot_Context_Cascade"},
+        title="Plot Without Context",
+    )
+    dbsession.commit()
+
+    token_with_ctx = plot_with_context.token
+    token_without_ctx = plot_without_context.token
+
+    # Verify both plots exist
+    assert plot_dao.get_by_token(token_with_ctx) is not None
+    assert plot_dao.get_by_token(token_without_ctx) is not None
+
+    # Delete the context
+    context_dao.delete(context_id)
+
+    # Refresh session to see changes
+    dbsession.expire_all()
+
+    # Plot with context should be deleted
+    assert plot_dao.get_by_token(token_with_ctx) is None
+
+    # Plot without context should still exist
+    assert plot_dao.get_by_token(token_without_ctx) is not None
