@@ -5,7 +5,6 @@ import io
 import json
 import logging
 import math
-import os
 import re
 import threading
 from typing import Optional, Union
@@ -38,6 +37,7 @@ from sqlalchemy import (
     select,
 )
 
+from orchestra.env import get_env
 from orchestra.lib.parallel import threaded_map
 
 load_dotenv()
@@ -84,7 +84,8 @@ __all__ = [
 ]
 
 # OpenAI API key for embeddings
-OPENAI_API_KEY = os.getenv("ORCHESTRA_OPENAI_API_KEY")
+# Uses get_env for fallback: ORCHESTRA_OPENAI_API_KEY -> OPENAI_API_KEY
+OPENAI_API_KEY = get_env("ORCHESTRA_OPENAI_API_KEY")
 
 # Global sync OpenAI client. Thread-safe via httpx.Client's connection pooling.
 _openai_client: OpenAI | None = None
@@ -121,8 +122,9 @@ MAX_TOKENS_PER_REQUEST = 2970000
 MAX_TOKENS_PER_INPUT = 8000
 
 # Vertex AI configuration
-VERTEXAI_PROJECT = os.getenv("ORCHESTRA_VERTEXAI_PROJECT")
-VERTEXAI_LOCATION = os.getenv("ORCHESTRA_VERTEXAI_LOCATION", "us-central1")
+# Uses get_env for fallback: ORCHESTRA_VERTEXAI_PROJECT -> GCP_PROJECT_ID
+VERTEXAI_PROJECT = get_env("ORCHESTRA_VERTEXAI_PROJECT")
+VERTEXAI_LOCATION = get_env("ORCHESTRA_VERTEXAI_LOCATION", "us-central1")
 
 # Cache for Google Cloud credentials
 _vertexai_credentials = None
@@ -160,7 +162,7 @@ def _get_vertexai_credentials():
                 try:
                     if not VERTEXAI_PROJECT:
                         raise RuntimeError(
-                            "ORCHESTRA_VERTEXAI_PROJECT environment variable must be set to use image embeddings",
+                            "GCP_PROJECT_ID or ORCHESTRA_VERTEXAI_PROJECT environment variable must be set to use image embeddings",
                         )
 
                     # Get credentials with proper scopes for Vertex AI
@@ -264,7 +266,7 @@ def _get_embeddings_batch(
 
     if not OPENAI_API_KEY:
         raise ValueError(
-            "OPENAI_API_KEY environment variable must be set to use embed()",
+            "OPENAI_API_KEY or ORCHESTRA_OPENAI_API_KEY environment variable must be set to use embed()",
         )
 
     model = model or DEFAULT_EMBEDDING_MODEL
