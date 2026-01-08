@@ -9,10 +9,6 @@ from orchestra.tests.test_interface.test_interface import (
     _list_interfaces,
     _update_interface,
 )
-from orchestra.tests.test_interface.test_legacy_interface import (
-    _create_context,
-    _create_project,
-)
 from orchestra.tests.test_interface.test_tab import (
     _create_test_tab,
     _list_tabs,
@@ -28,6 +24,7 @@ from orchestra.tests.test_interface.test_tile import (
     _update_tile,
 )
 from orchestra.tests.test_log import _create_derived_entry, _create_log, _update_logs
+from orchestra.tests.utils import _create_context, _create_project
 
 api_key = str(os.getenv("AUTH_ACCOUNT_API_KEY"))
 
