@@ -10,6 +10,7 @@ from openai import AsyncStream, OpenAI, Stream
 
 # from litellm.utils import get_model_info  # Uncomment later
 from orchestra.db.models.orchestra_models import CustomEndpoint
+from orchestra.env import get_env
 from orchestra.web.api.utils.exceptions import (
     APIConnectionError,
     APIError,
@@ -117,9 +118,10 @@ class BaseCompletionProvider:
     def api_key(self) -> str:  # noqa: D102
         if self.custom_api_key:
             return self.custom_api_key
-        key = os.getenv(self.api_key_var)
+        # Uses get_env for fallback support (ORCHESTRA_X_API_KEY -> X_API_KEY)
+        key = get_env(self.api_key_var)
         if key is None:
-            raise ValueError("ENV VAR {self.api_key_var} not found.")
+            raise ValueError(f"ENV VAR {self.api_key_var} not found.")
         return key
 
     @property

@@ -25,6 +25,7 @@ from orchestra.db.models.orchestra_models import (
     RechargeType,
     Users,
 )
+from orchestra.env import get_env
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
     CreditCardFingerprintModelResponse,
     FileUploadUrlRequest,
@@ -1054,8 +1055,9 @@ def create_download_url(
         raise HTTPException(status_code=400, detail="Invalid path")
 
     try:
+        # Uses get_env for fallback: ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON -> GOOGLE_APPLICATION_CREDENTIALS
         creds = Credentials.from_service_account_file(
-            os.getenv("ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON"),
+            get_env("ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON"),
         )
         client = Client(credentials=creds)
         bucket = client.bucket(
