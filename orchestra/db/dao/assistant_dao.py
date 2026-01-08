@@ -413,11 +413,3 @@ class AssistantDAO:
             stmt = stmt.where(Assistant.agent_id == agent_id)
         result = self.session.execute(stmt).scalars().all()
         return result
-
-    def list_all_assistant_emails(self) -> List[str]:
-        """
-        List all non-null email addresses from all Assistants.
-        """
-        stmt = select(Assistant.email).where(Assistant.email.is_not(None))
-        result = self.session.execute(stmt).scalars().all()
-        return result

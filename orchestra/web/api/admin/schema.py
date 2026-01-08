@@ -1,5 +1,5 @@
 import datetime
-from typing import Any, Dict, Optional
+from typing import Optional
 
 from pydantic import BaseModel
 
@@ -119,19 +119,6 @@ class FileUploadUrlRequest(BaseModel):
     path: str
     content_type: Optional[str] = None
     staging: bool = False
-
-
-# Contact schema for admin_list_contacts endpoint
-class Contact(BaseModel):
-    # the ID of the user who owns this contact log
-    user_id: Optional[str]
-    first_name: Optional[str]
-    surname: Optional[str]
-    email_address: Optional[str]
-    phone_number: Optional[str]
-    whatsapp_number: Optional[str]
-    description: Optional[str]
-    custom_fields: Dict[str, Any] = {}
 
 
 # Organization list schemas for admin endpoint
