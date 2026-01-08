@@ -2103,10 +2103,44 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient, use_jsonb_mode):
     max_delay = 10  # Cap at 10 seconds per retry
     total_wait_time = 0
 
+    # Track diagnostic info for debugging intermittent failures
+    diagnostic_info: dict[str, dict] = {}
+
     for attempt in range(max_availability_retries):
         unavailable_images = []
         for log in all_logs:
+            log_name = log["entries"]["name"]
             image_value = log["entries"].get("img")
+
+            # Collect diagnostic info on first attempt
+            if attempt == 0:
+                if image_value is None:
+                    diagnostic_info[log_name] = {
+                        "status": "no_img_field",
+                        "value_preview": None,
+                    }
+                elif image_value.startswith("data:"):
+                    diagnostic_info[log_name] = {
+                        "status": "base64_data_uri",
+                        "value_preview": image_value[:80] + "...",
+                    }
+                elif (
+                    image_value.startswith("gs://")
+                    or "storage.googleapis.com" in image_value
+                ):
+                    diagnostic_info[log_name] = {
+                        "status": "gcs_url",
+                        "full_url": image_value,
+                        "extracted_filename": image_value.split("/")[-1],
+                    }
+                else:
+                    diagnostic_info[log_name] = {
+                        "status": "unknown_format",
+                        "value_preview": image_value[:80] + "..."
+                        if len(image_value) > 80
+                        else image_value,
+                    }
+
             if image_value:
                 # Check if this is a GCS URL or inline Base64 data
                 # GCS URLs start with "gs://" or contain "storage.googleapis.com"
@@ -2119,9 +2153,17 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient, use_jsonb_mode):
                     try:
                         result = bucket_service.get_media(filename)
                         if result is None:
-                            unavailable_images.append(log["entries"]["name"])
-                    except Exception:
-                        unavailable_images.append(log["entries"]["name"])
+                            unavailable_images.append(log_name)
+                            if attempt == 0:
+                                diagnostic_info[log_name][
+                                    "error"
+                                ] = "get_media returned None (NotFound)"
+                    except Exception as e:
+                        unavailable_images.append(log_name)
+                        if attempt == 0:
+                            diagnostic_info[log_name][
+                                "error"
+                            ] = f"Exception: {type(e).__name__}: {e}"
                 # else: it's inline Base64 data, no GCS fetch needed
 
         if not unavailable_images:
@@ -2142,11 +2184,20 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient, use_jsonb_mode):
             )
             await asyncio.sleep(delay)
         else:
+            # Build detailed diagnostic message
+            import json
+
+            diag_str = json.dumps(diagnostic_info, indent=2)
             pytest.fail(
                 f"GCS pre-flight check failed: Images {unavailable_images} not available "
                 f"after {max_availability_retries} attempts "
-                f"({total_wait_time}s total wait time). "
-                f"This indicates severe GCS eventual consistency issues.",
+                f"({total_wait_time}s total wait time).\n\n"
+                f"=== DIAGNOSTIC INFO ===\n{diag_str}\n"
+                f"=== END DIAGNOSTIC INFO ===\n\n"
+                f"This will help debug whether the issue is:\n"
+                f"- GCS URLs not being stored (check 'status' field)\n"
+                f"- Wrong filename extraction (check 'extracted_filename')\n"
+                f"- GCS read failures (check 'error' field)",
             )
 
     # 3. Create pHash derived logs (images are now confirmed available)
