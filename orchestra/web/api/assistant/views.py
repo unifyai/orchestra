@@ -439,6 +439,7 @@ async def create_assistant(
         assigned_whatsapp = None
 
         if assistant_in.create_infra:
+            current_infra_step = "initializing"
             try:
                 # Step 1 & 2: create and watch email
                 if assistant_in.email:
@@ -447,6 +448,7 @@ async def create_assistant(
                         if "@" in assistant_in.email
                         else assistant_in.email
                     )
+                    current_infra_step = "create_email"
                     email_response = await create_email(
                         email_local,
                         assistant_in.first_name,
@@ -460,6 +462,7 @@ async def create_assistant(
                     print(f"EMAIL CREATED: {created_email}")
 
                     await asyncio.sleep(10)
+                    current_infra_step = "watch_email"
                     watch_response = await watch_email(
                         created_email,
                         is_staging=settings.is_staging,
@@ -478,6 +481,7 @@ async def create_assistant(
                         if assistant_in.phone_country
                         else "US"
                     )
+                    current_infra_step = "create_phone_number"
                     phone_response = await create_phone_number(
                         phone_country=phone_country,
                         is_staging=settings.is_staging,
@@ -491,6 +495,7 @@ async def create_assistant(
 
                 # Step 4: assign whatsapp sender if whatsapp number is provided
                 if assistant_in.user_whatsapp_number:
+                    current_infra_step = "assign_whatsapp_sender"
                     assigned_whatsapp = (
                         await assign_whatsapp_sender(
                             assistant_in.user_whatsapp_number,
@@ -499,6 +504,7 @@ async def create_assistant(
                     )["whatsapp_number"]
 
                 # Step 5: create pubsub topic
+                current_infra_step = "create_pubsub_topic"
                 pubsub_response = await create_pubsub_topic(
                     str(assistant_id),
                     is_staging=settings.is_staging,
@@ -544,7 +550,10 @@ async def create_assistant(
 
             except Exception as infra_error:
                 # Use repr() to always show exception type, even if str() is empty
-                print(f"INFRA ERROR: {type(infra_error).__name__}: {infra_error!r}")
+                print(
+                    f"INFRA ERROR at step '{current_infra_step}': "
+                    f"{type(infra_error).__name__}: {infra_error!r}",
+                )
 
                 # can't rollback infra if the setup isn't complete so need to wait
                 time.sleep(10)
