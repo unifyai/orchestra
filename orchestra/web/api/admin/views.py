@@ -1,8 +1,5 @@
 import base64
 import os
-import subprocess
-import sys
-import tempfile
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -17,73 +14,42 @@ from orchestra.db.dao.api_key_dao import ApiKeyDAO
 from orchestra.db.dao.assistant_dao import AssistantDAO
 from orchestra.db.dao.assistant_secret_dao import AssistantSecretDAO
 from orchestra.db.dao.auth_user_dao import AuthUserDAO
-from orchestra.db.dao.benchmark_run_dao import BenchmarkRunDAO
 from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.credit_card_fingerprint import CreditCardFingerprintDAO
-from orchestra.db.dao.custom_router_dao import CustomRouterDAO
-from orchestra.db.dao.datapoint_dao import DatapointDAO
-from orchestra.db.dao.endpoint_dao import EndpointDAO
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
-from orchestra.db.dao.metric_dao import MetricDAO
-from orchestra.db.dao.modality_dao import ModalityDAO
-from orchestra.db.dao.model_dao import ModelDAO
 from orchestra.db.dao.organization_invite_dao import OrganizationInviteDAO
 from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
-from orchestra.db.dao.provider_dao import ProviderDAO
 from orchestra.db.dao.recharge_dao import RechargeDAO
 from orchestra.db.dao.recharge_type_dao import RechargeTypeDAO
-from orchestra.db.dao.task_dao import TaskDAO
 from orchestra.db.dao.users_dao import UsersDAO
 from orchestra.db.dao.voice_dao import VoiceDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
-    BenchmarkRun,
     Context,
     CreditCardFingerprint,
-    Datapoint,
-    Endpoint,
     Log,
     LogEvent,
     LogEventLog,
-    Metric,
-    Modality,
     Project,
     Recharge,
     RechargeStatus,
     RechargeType,
-    Task,
     Users,
 )
 from orchestra.settings import settings
 from orchestra.web.api.admin.schema import (  # noqa: WPS235
-    BenchmarkRunModelResponse,
     Contact,
     CreditCardFingerprintModelResponse,
-    CustomRouterRequest,
-    DatapointModelRequest,
-    DatapointModelResponse,
-    DatasetEvaluationModelRequest,
-    DemoModelRequest,
-    EndpointModelRequest,
-    EndpointModelResponse,
     FileUploadUrlRequest,
     FileWriteRequest,
-    MetricModelRequest,
-    MetricModelResponse,
-    ModalityModelRequest,
-    ModalityModelResponse,
-    ModelRequest,
     OrganizationListItem,
     OrganizationListResponse,
-    ProviderModelRequest,
     RechargeModelRequest,
     RechargeModelResponse,
     RechargeTypeModelRequest,
     RechargeTypeModelResponse,
-    TaskModelRequest,
-    TaskModelResponse,
     UsersModelResponse,
 )
 from orchestra.web.api.assistant.schema import AssistantRead, InfoResponse
@@ -251,269 +217,6 @@ def get_recharge(  # noqa: WPS211
         quantity=quantity,
         type=type,
     )
-
-
-@router.get("/get_all_benchmark_runs", response_model=List[BenchmarkRunModelResponse])
-def get_benchmark_run_models(
-    limit: int = 10,
-    offset: int = 0,
-    session=Depends(get_db_session),
-) -> List[BenchmarkRun]:
-    """
-    Retrieve all benchmark_run objects from the database.
-
-    :param limit: limit of benchmark_run objects, defaults to 10.
-    :param offset: offset of benchmark_run objects, defaults to 0.
-    :param benchmark_run_dao: DAO for benchmark_run models.
-    :return: list of benchmark_run objects from database.
-    """
-    benchmark_run_dao = BenchmarkRunDAO(session)
-    return benchmark_run_dao.get_all_benchmark_runs(limit=limit, offset=offset)
-
-
-@router.get("/get_benchmark_run", response_model=List[BenchmarkRunModelResponse])
-def get_benchmark_run(  # noqa: WPS211
-    id: Optional[int] = None,  # noqa: WPS125
-    endpoint_id: Optional[int] = None,
-    regime: Optional[str] = None,
-    region: Optional[str] = None,
-    seq_len: Optional[str] = None,
-    measured_at: Optional[datetime] = None,
-    session=Depends(get_db_session),
-) -> List[BenchmarkRun]:
-    """
-    Retrieve specific benchmark_run object from the database.
-
-    :param id: id of benchmark_run object.
-    :param endpoint_id: endpoint_id of benchmark_run object.
-    :param regime: regime of benchmark_run object.
-    :param region: region of benchmark_run object.
-    :param seq_len: seq_len of benchmark_run object.
-    :param measured_at: measured_at of benchmark_run object.
-    :param benchmark_run_dao: DAO for benchmark_run models.
-    :return: benchmark_run object from database.
-    """
-    benchmark_run_dao = BenchmarkRunDAO(session)
-    return benchmark_run_dao.filter(
-        id=id,
-        endpoint_id=endpoint_id,
-        regime=regime,
-        region=region,
-        seq_len=seq_len,
-        measured_at=measured_at,
-    )
-
-
-@router.get("/get_all_datapoints", response_model=List[DatapointModelResponse])
-def get_datapoint_models(
-    limit: int = 10,
-    offset: int = 0,
-    session=Depends(get_db_session),
-) -> List[Datapoint]:
-    """
-    Retrieve all datapoint objects from the database.
-
-    :param limit: limit of datapoint objects, defaults to 10.
-    :param offset: offset of datapoint objects, defaults to 0.
-    :param datapoint_dao: DAO for datapoint models.
-    :return: list of datapoint objects from database.
-    """
-    datapoint_dao = DatapointDAO(session)
-    return datapoint_dao.get_all_datapoints(limit=limit, offset=offset)
-
-
-@router.get("/get_datapoint", response_model=List[DatapointModelResponse])
-def get_datapoint(  # noqa: WPS211
-    id: Optional[int] = None,  # noqa: WPS125
-    benchmark_run_id: Optional[int] = None,
-    metric_name: Optional[str] = None,
-    value: Optional[float] = None,
-    measured_at: Optional[datetime] = None,
-    session=Depends(get_db_session),
-) -> List[Datapoint]:
-    """
-    Retrieve specific datapoint object from the database.
-
-    :param id: id of datapoint object.
-    :param benchmark_run_id: benchmark_run_id of datapoint object.
-    :param metric_name: metric_name of datapoint object.
-    :param value: value of datapoint object.
-    :param measured_at: measured_at of datapoint object.
-    :param datapoint_dao: DAO for datapoint models.
-    :return: datapoint object from database.
-    """
-    datapoint_dao = DatapointDAO(session)
-    return datapoint_dao.filter(
-        id=id,
-        benchmark_run_id=benchmark_run_id,
-        metric_name=metric_name,
-        value=value,
-        measured_at=measured_at,
-    )
-
-
-@router.get("/get_all_endpoints_raw", response_model=List[EndpointModelResponse])
-def get_endpoint_models(
-    limit: int = 10,
-    offset: int = 0,
-    session=Depends(get_db_session),
-) -> List[Endpoint]:
-    """
-    Retrieve all endpoint objects from the database.
-
-    :param limit: limit of endpoint objects, defaults to 10.
-    :param offset: offset of endpoint objects, defaults to 0.
-    :param endpoint_dao: DAO for endpoint models.
-    :return: list of endpoint objects from database.
-    """
-    endpoint_dao = EndpointDAO(session)
-    return endpoint_dao.get_all_endpoints_raw(limit=limit, offset=offset)
-
-
-@router.get("/get_endpoint", response_model=List[EndpointModelResponse])
-def get_endpoint(
-    id: Optional[int] = None,  # noqa: WPS125
-    mdl_id: Optional[int] = None,
-    provider_id: Optional[int] = None,
-    created_at: Optional[datetime] = None,
-    session=Depends(get_db_session),
-) -> List[Endpoint]:
-    """
-    Retrieve specific endpoint object from the database.
-
-    :param id: id of endpoint object.
-    :param mdl_id: mdl_id of endpoint object.
-    :param provider_id: provider_id of endpoint object.
-    :param created_at: created_at of endpoint object.
-    :param endpoint_dao: DAO for endpoint models.
-    :return: endpoint object from database.
-    """
-    endpoint_dao = EndpointDAO(session)
-    return endpoint_dao.filter(
-        id=id,
-        mdl_id=mdl_id,
-        provider_id=provider_id,
-        created_at=created_at,
-    )
-
-
-@router.get("/get_all_metrics", response_model=List[MetricModelResponse])
-def get_metric_models(
-    limit: int = 10,
-    offset: int = 0,
-    session=Depends(get_db_session),
-) -> List[Metric]:
-    """
-    Retrieve all metric objects from the database.
-
-    :param limit: limit of metric objects, defaults to 10.
-    :param offset: offset of metric objects, defaults to 0.
-    :param metric_dao: DAO for metric models.
-    :return: list of metric objects from database.
-    """
-    metric_dao = MetricDAO(session)
-    return metric_dao.get_all_metrics(limit=limit, offset=offset)
-
-
-@router.get("/get_metric", response_model=List[MetricModelResponse])
-def get_metric(  # noqa: WPS211
-    name: str,
-    units: str,
-    display_name: str,
-    tooltip: str,
-    priority: int,
-    plottable: bool,
-    session=Depends(get_db_session),
-) -> List[Metric]:
-    """
-    Retrieve specific metric object from the database.
-
-    :param name: name of metric instance.
-    :param units: units of metric instance.
-    :param display_name: display_name of metric instance.
-    :param tooltip: tooltip of metric instance.
-    :param priority: priority of metric instance.
-    :param plottable: plottable of metric instance.
-    :param metric_dao: DAO for metric models.
-    :return: list of metric objects from database.
-    """
-    metric_dao = MetricDAO(session)
-    return metric_dao.filter(
-        name=name,
-        units=units,
-        display_name=display_name,
-        tooltip=tooltip,
-        priority=priority,
-        plottable=plottable,
-    )
-
-
-@router.get("/get_all_modalities", response_model=List[ModalityModelResponse])
-def get_modality_models(
-    limit: int = 10,
-    offset: int = 0,
-    session=Depends(get_db_session),
-) -> List[Modality]:
-    """
-    Retrieve all modality objects from the database.
-
-    :param limit: limit of modality objects, defaults to 10.
-    :param offset: offset of modality objects, defaults to 0.
-    :param modality_dao: DAO for modality models.
-    :return: list of modality objects from database.
-    """
-    modality_dao = ModalityDAO(session)
-    return modality_dao.get_all_modalities(limit=limit, offset=offset)
-
-
-@router.get("/get_modality", response_model=List[ModalityModelResponse])
-def get_modality(
-    name: str,
-    session=Depends(get_db_session),
-) -> List[Modality]:
-    """
-    Retrieve specific modality object from the database.
-
-    :param name: name of modality object.
-    :param modality_dao: DAO for modality models.
-    :return: modality object from database.
-    """
-    modality_dao = ModalityDAO(session)
-    return modality_dao.filter(name=name)
-
-
-@router.get("/get_all_tasks", response_model=List[TaskModelResponse])
-def get_task_models(
-    limit: int = 10,
-    offset: int = 0,
-    session=Depends(get_db_session),
-) -> List[Task]:
-    """
-    Retrieve all task objects from the database.
-
-    :param limit: limit of task objects, defaults to 10.
-    :param offset: offset of task objects, defaults to 0.
-    :param task_dao: DAO for task models.
-    :return: list of task objects from database.
-    """
-    task_dao = TaskDAO(session)
-    return task_dao.get_all_tasks(limit=limit, offset=offset)
-
-
-@router.get("/get_task", response_model=List[TaskModelResponse])
-def get_task(
-    name: str,
-    session=Depends(get_db_session),
-) -> List[Task]:
-    """
-    Retrieve specific task object from the database.
-
-    :param name: name of task object.
-    :param task_dao: DAO for task models.
-    :return: task object from database.
-    """
-    task_dao = TaskDAO(session)
-    return task_dao.filter(name=name)
 
 
 @router.get(
@@ -991,155 +694,6 @@ def admin_list_contacts(
     return results
 
 
-@router.put("/create_datapoint")
-def create_datapoint_model(
-    new_datapoint_object: DatapointModelRequest,
-    session=Depends(get_db_session),
-) -> None:
-    """
-    Creates datapoint model in the database.
-
-    :param new_datapoint_object: new datapoint model item.
-    :param datapoint_dao: DAO for datapoint models.
-    """
-    datapoint_dao = DatapointDAO(session)
-    datapoint_dao.create_datapoint(
-        benchmark_run_id=new_datapoint_object.benchmark_run_id,
-        measured_at=new_datapoint_object.measured_at,
-        metric_name=new_datapoint_object.metric_name,
-        value=new_datapoint_object.value,
-        tooltip=new_datapoint_object.tooltip,
-    )
-
-
-@router.put("/create_endpoint")
-def create_endpoint_model(
-    new_endpoint_object: EndpointModelRequest,
-    session=Depends(get_db_session),
-) -> None:
-    """
-    Creates endpoint model in the database.
-
-    :param new_endpoint_object: new endpoint model item.
-    :param endpoint_dao: DAO for endpoint models.
-    """
-    created_at = datetime.now(timezone.utc)
-    endpoint_dao = EndpointDAO(session)
-    endpoint_dao.create_endpoint(
-        mdl_id=new_endpoint_object.mdl_id,
-        provider_id=new_endpoint_object.provider_id,
-        created_at=created_at,
-    )
-
-
-@router.put("/create_metric")
-def create_metric_model(
-    new_metric_object: MetricModelRequest,
-    session=Depends(get_db_session),
-) -> None:
-    """
-    Creates metric model in the database.
-
-    :param new_metric_object: new metric model item.
-    :param metric_dao: DAO for metric models.
-    """
-    metric_dao = MetricDAO(session)
-    metric_dao.create_metric(
-        name=new_metric_object.name,
-        units=new_metric_object.units,
-        display_name=new_metric_object.display_name,
-        tooltip=new_metric_object.tooltip,
-        priority=new_metric_object.priority,
-        plottable=new_metric_object.plottable,
-    )
-
-
-@router.put("/create_modality")
-def create_modality_model(
-    new_modality_object: ModalityModelRequest,
-    session=Depends(get_db_session),
-) -> None:
-    """
-    Creates modality model in the database.
-
-    :param new_modality_object: new modality model item.
-    :param modality_dao: DAO for modality models.
-    """
-    modality_dao = ModalityDAO(session)
-    modality_dao.create_modality(
-        name=new_modality_object.name,
-    )
-
-
-@router.put("/create_model")
-def create_model(
-    new_model_object: ModelRequest,
-    session=Depends(get_db_session),
-) -> None:
-    """
-    Creates model model in the database.
-
-    :param new_model_object: new model model item.
-    :param model_dao: DAO for model models.
-    """
-    uploaded_at = datetime.now(timezone.utc)
-    model_dao = ModelDAO(session)
-    model_dao.create_model(
-        mdl_code=new_model_object.mdl_code,
-        uploaded_at=uploaded_at,
-        task=new_model_object.task,
-        active=new_model_object.active,
-    )
-
-
-@router.put("/update_model")
-def update_model(  # noqa: WPS211
-    id: int,  # noqa: WPS125
-    mdl_code: Optional[str] = None,
-    uploaded_at: Optional[datetime] = None,
-    task: Optional[str] = None,
-    active: Optional[bool] = None,
-    session=Depends(get_db_session),
-) -> None:
-    """
-    Update specific model model.
-
-    :param id: id of model instance.
-    :param mdl_code: mdl_code of model instance.
-    :param uploaded_at: uploaded_at of model instance.
-    :param task: task of model instance.
-    :param active: is model instance active.
-    :param model_dao: DAO for model models.
-    """
-    model_dao = ModelDAO(session)
-    model_dao.update_model(
-        id=id,
-        mdl_code=mdl_code,
-        uploaded_at=uploaded_at,
-        task=task,
-        active=active,
-    )
-
-
-@router.put("/create_provider")
-def create_provider_model(
-    new_provider_object: ProviderModelRequest,
-    session=Depends(get_db_session),
-) -> None:
-    """
-    Creates provider model in the database.
-
-    :param new_provider_object: new provider model item.
-    :param provider_dao: DAO for provider models.
-    """
-    provider_dao = ProviderDAO(session)
-    provider_dao.create_provider(
-        name=new_provider_object.name,
-        image_url=new_provider_object.image_url,
-        description=new_provider_object.description,
-    )
-
-
 @router.post("/create_recharge")
 def create_recharge_model(
     new_recharge_object: RechargeModelRequest,
@@ -1358,87 +912,6 @@ def create_recharge_type_model(
     )
 
 
-@router.put("/create_task")
-def create_task_model(
-    new_task_object: TaskModelRequest,
-    session=Depends(get_db_session),
-) -> None:
-    """
-    Create new task model in the database.
-
-    :param new_task_object: new task model item.
-    :param task_dao: DAO for task models.
-    """
-    task_dao = TaskDAO(session)
-    task_dao.create_task_model(
-        name=new_task_object.name,
-    )
-
-
-@router.put("/update_benchmark_run")
-def update_benchmark_run(  # noqa: WPS211
-    id: int,  # noqa: WPS125
-    endpoint_id: Optional[int] = None,
-    regime: Optional[str] = None,
-    region: Optional[str] = None,
-    seq_len: Optional[str] = None,
-    measured_at: Optional[datetime] = None,
-    session=Depends(get_db_session),
-) -> None:
-    """
-    Update specific benchmark_run model.
-
-    :param id: id of benchmark_run instance.
-    :param endpoint_id: endpoint_id of benchmark_run instance.
-    :param regime: regime of benchmark_run instance.
-    :param region: region of benchmark_run instance.
-    :param seq_len: seq_len of benchmark_run instance.
-    :param measured_at: measured_at of benchmark_run instance.
-    :param benchmark_run_dao: DAO for benchmark_run models.
-    """
-    benchmark_run_dao = BenchmarkRunDAO(session)
-    benchmark_run_dao.update_benchmark_run(
-        id=id,
-        endpoint_id=endpoint_id,
-        regime=regime,
-        region=region,
-        seq_len=seq_len,
-        measured_at=measured_at,
-    )
-
-
-@router.put("/update_datapoint")
-def update_datapoint(  # noqa: WPS211
-    id: int,  # noqa: WPS125
-    benchmark_run_id: Optional[int] = None,
-    metric_name: Optional[str] = None,
-    value: Optional[float] = None,
-    tooltip: Optional[str] = None,
-    measured_at: Optional[datetime] = None,
-    session=Depends(get_db_session),
-) -> None:
-    """
-    Update specific datapoint model.
-
-    :param id: id of datapoint instance.
-    :param benchmark_run_id: benchmark_run_id of datapoint instance.
-    :param metric_name: metric_name of datapoint instance.
-    :param value: value of datapoint instance.
-    :param tooltip: tooltip of datapoint instance.
-    :param measured_at: measured_at of datapoint instance.
-    :param datapoint_dao: DAO for datapoint models.
-    """
-    datapoint_dao = DatapointDAO(session)
-    datapoint_dao.update_datapoint(
-        id=id,
-        benchmark_run_id=benchmark_run_id,
-        metric_name=metric_name,
-        value=value,
-        tooltip=tooltip,
-        measured_at=measured_at,
-    )
-
-
 @router.put("/stripe_customer_id")
 def update_user_stripe_customer_id(  # noqa: WPS211
     id: str,  # noqa: WPS125
@@ -1523,22 +996,6 @@ def update_user_autorecharge_qty(  # noqa: WPS211
         raise e
 
 
-@router.put("/create_custom_router")
-def create_custom_router(
-    custom_router_object: CustomRouterRequest,
-    session=Depends(get_db_session),
-) -> None:
-    """
-    Creates a custom router in the database.
-    """
-    custom_router_dao = CustomRouterDAO(session)
-    custom_router_dao.create_custom_router(
-        user_id=custom_router_object.user_id,
-        router_name=custom_router_object.router_name,
-        router_id=custom_router_object.router_id,
-    )
-
-
 @router.put("/update_user_prompt_telemetry")
 def update_user_prompt_telemetry(
     user_id: str,
@@ -1607,84 +1064,6 @@ def get_credit_card_fingerprint(
     """
     credit_card_fingerprint_dao = CreditCardFingerprintDAO(session)
     return credit_card_fingerprint_dao.filter(user_id=user_id)
-
-
-@router.post("/run_demo")
-def run_demo(
-    demo_object: DemoModelRequest,
-    session=Depends(get_db_session),
-) -> None:
-    """
-    Run a given demo for the user in an isolated process.
-    """
-    api_key_dao = ApiKeyDAO(session)
-    api_key = api_key_dao.filter(user_id=demo_object.user_id)
-    if not api_key:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
-    try:
-        # Create a temporary file with the demo code
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".py") as tf:
-            tf.write(demo_object.code)
-            tf.flush()
-
-            # Run the code in a separate process with its own environment
-            env = dict(os.environ)
-            env["UNIFY_KEY"] = api_key[0][0].key
-
-            if demo_object.staging:
-                env[
-                    "UNIFY_BASE_URL"
-                ] = "https://orchestra-staging-lz5fmz6i7q-ew.a.run.app/v0"
-
-            # This will block until the subprocess completes
-            result = subprocess.run(
-                [sys.executable, tf.name],
-                env=env,
-                capture_output=True,
-                text=True,
-                check=True,  # Raises CalledProcessError if return code != 0
-            )
-
-            return {
-                "info": "Demo run successfully",
-                "stdout": result.stdout,
-                "stderr": result.stderr,
-            }
-
-    except subprocess.TimeoutExpired as e:
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "Timeout",
-                "timeout": e.timeout,
-                "stdout": e.stdout.decode() if e.stdout else None,
-                "stderr": e.stderr.decode() if e.stderr else None,
-            },
-        )
-    except subprocess.CalledProcessError as e:
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": "Process Error",
-                "return_code": e.returncode,
-                "stdout": e.stdout,
-                "stderr": e.stderr,
-                "cmd": e.cmd,
-            },
-        )
-    except Exception as e:
-        # Catch any other exceptions and include full traceback
-        import traceback
-
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": str(e),
-                "error_type": type(e).__name__,
-                "traceback": traceback.format_exc(),
-            },
-        )
 
 
 @router.post(
