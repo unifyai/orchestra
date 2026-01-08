@@ -540,7 +540,8 @@ async def create_assistant(
                 )
 
             except Exception as infra_error:
-                print(f"INFRA ERROR: {infra_error}")
+                # Use repr() to always show exception type, even if str() is empty
+                print(f"INFRA ERROR: {type(infra_error).__name__}: {infra_error!r}")
 
                 # can't rollback infra if the setup isn't complete so need to wait
                 time.sleep(10)
