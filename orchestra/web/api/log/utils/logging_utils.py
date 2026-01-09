@@ -32,7 +32,6 @@ from orchestra.db.dao.context_dao import ContextDAO
 from orchestra.db.dao.field_type_dao import FieldTypeDAO
 from orchestra.db.dao.log_dao import LogDAO
 from orchestra.db.dao.log_event_dao import LogEventDAO
-from orchestra.db.dao.organization_member_dao import OrganizationMemberDAO
 from orchestra.db.dao.project_dao import ProjectDAO
 from orchestra.db.dependencies import get_db_session
 from orchestra.db.models.orchestra_models import (
@@ -49,7 +48,6 @@ from orchestra.db.models.orchestra_models import (
     LogEventJSONLog,
     LogEventJSONLogHistory,
     LogEventLog,
-    Project,
 )
 from orchestra.settings import settings
 from orchestra.web.api.log.python2SQL.operators import _create_truthiness_condition
@@ -73,8 +71,6 @@ __all__ = [
     "is_image_field",
     "is_audio_field",
     "_join_logs",
-    "get_or_create_usage_project",
-    "log_chat_completion_event",
     "extract_key_order",
     "reorder_nested_dict",
 ]
@@ -435,108 +431,6 @@ def _paginate_events(
 #########################
 # Logs Utils            #
 #########################
-
-
-def get_or_create_usage_project(
-    project_dao: ProjectDAO,
-    user_id: str,
-) -> Project:
-    """
-    Get or create the Usage project for a user.
-
-    Args:
-        project_dao: The project data access object
-        user_id: The ID of the user
-
-    Returns:
-        The Project instance for the Usage project
-    """
-    # Usage project is always personal (organization_id=None)
-    project = project_dao.get_by_user_and_name(
-        user_id=user_id,
-        name=settings.chat_completions_project_name,
-        organization_id=None,
-    )
-    if not project:
-        project_dao.create(user_id=user_id, name=settings.chat_completions_project_name)
-        project_dao.session.commit()
-        project = project_dao.get_by_user_and_name(
-            user_id=user_id,
-            name=settings.chat_completions_project_name,
-            organization_id=None,
-        )
-    return project
-
-
-def log_chat_completion_event(
-    user_id: str,
-    session,
-    **kwargs,
-) -> List[int]:
-    """
-    Log a chat completion event to the Usage project.
-
-    Args:
-        user_id: The ID of the user
-        model: The model used for the completion
-        provider: The provider of the model
-        request_body: The request body sent to the model
-        response_body: The response received from the model
-        usage: Usage statistics for the completion
-        timestamp: The timestamp of the completion
-
-    Returns:
-        List of created log event IDs
-    """
-    try:
-        # Initialize DAOs
-        organization_member_dao = OrganizationMemberDAO(session=session)
-        context_dao = ContextDAO(session=session)
-        project_dao = ProjectDAO(
-            session=session,
-            organization_member_dao=organization_member_dao,
-            context_dao=context_dao,
-        )
-        field_type_dao = FieldTypeDAO(session=session)
-        log_event_dao = LogEventDAO(session=session)
-        log_dao = LogDAO(session=session, context_dao=context_dao)
-
-        # Get or create the Usage project
-        project = get_or_create_usage_project(project_dao, user_id)
-
-        # Create the log config
-        at = datetime.now(timezone.utc)
-        config = CreateLogConfig(
-            project_name=settings.chat_completions_project_name,
-            entries={**kwargs, "user_id": user_id, "at": at.isoformat()},
-            params={},
-        )
-        context_id = context_dao.get_or_create(
-            project.id,
-            name="",
-        )
-        context_obj = session.get(Context, context_id)
-        # Create the logs
-        log_event_ids = create_logs_internal(
-            request=config,
-            project_id=project.id,
-            context_id=context_id,
-            context_obj=context_obj,
-            project_dao=project_dao,
-            field_type_dao=field_type_dao,
-            log_event_dao=log_event_dao,
-            log_dao=log_dao,
-            context_dao=context_dao,
-        )
-
-        # Commit the session
-        session.commit()
-
-        return log_event_ids
-    except Exception as e:
-        session.rollback()
-    finally:
-        session.close()
 
 
 def _build_unified_logs_limited(
