@@ -194,8 +194,27 @@ def _create_log(
     _headers = HEADERS if user == 1 else HEADERS_2
     if entries is None:
         entries = log_data["log"]
-    if params is None:
-        params = {"a/b/param1": "test"}
+
+    # Merge params into entries for backwards compatibility
+    # The params argument is deprecated but still accepted for existing tests
+    if params is not None:
+        if isinstance(entries, dict) and isinstance(params, dict):
+            # Merge params into entries (entries takes precedence)
+            merged = {**params}
+            merged.update(entries)
+            entries = merged
+        elif isinstance(entries, list) and isinstance(params, list):
+            # Merge each params dict into corresponding entries dict
+            entries = [
+                {**params[i], **entries[i]} if i < len(params) else entries[i]
+                for i in range(len(entries))
+            ]
+        elif isinstance(entries, list) and isinstance(params, dict):
+            # Apply same params to all entries
+            entries = [{**params, **entry} for entry in entries]
+        elif isinstance(entries, dict) and isinstance(params, list):
+            # Apply entries to all params
+            entries = [{**param, **entries} for param in params]
 
     # Handle both single dict and list of dicts for entries
     if isinstance(entries, dict):
@@ -230,44 +249,10 @@ def _create_log(
                     ):
                         entry["explicit_types"][k]["mutable"] = True
 
-    # Handle both single dict and list of dicts for params
-    if isinstance(params, dict):
-        # set all params to be mutable (backwards compatibility)
-        if "explicit_types" not in params:
-            explicit_types_params = {k: {"mutable": True} for k in params.keys()}
-            params["explicit_types"] = explicit_types_params
-        else:
-            # Preserve existing explicit_types but ensure mutable=True for backward compatibility
-            for k in params.keys():
-                if k != "explicit_types" and k not in params["explicit_types"]:
-                    params["explicit_types"][k] = {"mutable": True}
-                elif (
-                    k != "explicit_types"
-                    and "mutable" not in params["explicit_types"][k]
-                ):
-                    params["explicit_types"][k]["mutable"] = True
-    elif isinstance(params, list):
-        # Handle list of params
-        for param in params:
-            if "explicit_types" not in param:
-                explicit_types_params = {k: {"mutable": True} for k in param.keys()}
-                param["explicit_types"] = explicit_types_params
-            else:
-                # Preserve existing explicit_types but ensure mutable=True for backward compatibility
-                for k in param.keys():
-                    if k != "explicit_types" and k not in param["explicit_types"]:
-                        param["explicit_types"][k] = {"mutable": True}
-                    elif (
-                        k != "explicit_types"
-                        and "mutable" not in param["explicit_types"][k]
-                    ):
-                        param["explicit_types"][k]["mutable"] = True
-
     return client.post(
         "/v0/logs",
         json={
             "project_name": project_name,
-            "params": params,
             "entries": entries,
             "context": context,
         },
