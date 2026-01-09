@@ -486,7 +486,6 @@ async def test_assistant_whatsapp_conflict_none_non_sharing_contact(
         json={
             "project_name": project,
             "context": "Contacts",
-            "params": {},
             "entries": [contact],
         },
         headers=HEADERS,
@@ -583,7 +582,6 @@ async def test_assistant_whatsapp_conflict_single_sharing_contact(client: AsyncC
         json={
             "project_name": project,
             "context": "Contacts",
-            "params": {},
             "entries": [contact],
         },
         headers=HEADERS,

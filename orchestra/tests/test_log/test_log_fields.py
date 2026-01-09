@@ -9,12 +9,15 @@ async def test_get_fields_with_derived_entries(client: AsyncClient, use_jsonb_mo
     project_name = f"test_project_derived-{'jsonb' if use_jsonb_mode else 'eav'}"
     _ = await _create_project(client, project_name)
 
-    # Implicit creation for base and params - types inferred from values
+    # Implicit creation for entries - types inferred from values
     response = await _create_log(
         client,
         project_name,
-        params={"param1_implicit": "test"},
-        entries={"base_field_implicit": 100, "temperature_implicit": 25.5},
+        entries={
+            "base_field_implicit": 100,
+            "temperature_implicit": 25.5,
+            "param1_implicit": "test",
+        },
     )
     assert response.status_code == 200
     log_id = response.json()["log_event_ids"][0]
@@ -26,7 +29,9 @@ async def test_get_fields_with_derived_entries(client: AsyncClient, use_jsonb_mo
     )
     assert resp_fields_implicit.status_code == 200
     f_implicit = resp_fields_implicit.json()
-    assert f_implicit["param1_implicit"]["field_type"] == "param"
+    assert (
+        f_implicit["param1_implicit"]["field_type"] == "entry"
+    )  # All fields are entries now
     assert (
         f_implicit["param1_implicit"]["data_type"] == "str"
     )  # Type inferred from value
@@ -88,8 +93,10 @@ async def test_get_fields_with_derived_entries(client: AsyncClient, use_jsonb_mo
     assert fields["temperature_implicit"]["created_at"] is not None
     assert fields["temperature_implicit"]["mutable"] is True
 
-    # Verify params (implicit fields infer types from values)
-    assert fields["param1_implicit"]["field_type"] == "param"
+    # Verify implicit fields infer types from values
+    assert (
+        fields["param1_implicit"]["field_type"] == "entry"
+    )  # All fields are entries now
     assert fields["param1_implicit"]["data_type"] == "str"  # Type inferred from value
     assert fields["param1_implicit"]["artifacts"] == ""
     assert fields["param1_implicit"]["created_at"] is not None
@@ -120,7 +127,6 @@ async def test_get_fields_with_derived_entries(client: AsyncClient, use_jsonb_mo
     response_explicit = await _create_log(
         client,
         project_name,
-        params={},
         entries={
             "base_field": 100,
             "temperature": 25.5,
@@ -311,29 +317,17 @@ async def test_field_type_constraints_and_mutability(
     client: AsyncClient,
     use_jsonb_mode,
 ):
-    """Test that fields maintain their type (entry/param/derived) consistently and respect mutability."""
+    """Test that fields maintain their type (entry/derived) consistently and respect mutability."""
     project_name = f"test_field_type_constraints-{'jsonb' if use_jsonb_mode else 'eav'}"
     await _create_project(client, project_name)
 
-    # Create a parameter
-    param_response = await _create_log(
-        client,
-        project_name,
-        params={"test_field": "value"},
-        entries={},
-    )
-    assert param_response.status_code == 200, param_response.json()
-
-    # Try to create an entry with the same name (should fail)
+    # Create an entry field
     entry_response = await _create_log(
         client,
         project_name,
         entries={"test_field": "value"},
-        params={},
     )
-    assert entry_response.status_code == 400, entry_response.json()
-    assert "already exists as a param" in entry_response.json()["detail"]
-    assert "Cannot create it as an entry" in entry_response.json()["detail"]
+    assert entry_response.status_code == 200, entry_response.json()
 
     # Verify field type and mutability in field types
     field_types_response = await client.get(
@@ -343,29 +337,25 @@ async def test_field_type_constraints_and_mutability(
     assert field_types_response.status_code == 200
     field_types = field_types_response.json()
 
-    assert field_types["test_field"]["field_type"] == "param"
+    assert field_types["test_field"]["field_type"] == "entry"
     assert field_types["test_field"]["mutable"] is True
     assert field_types["test_field"]["created_at"] is not None
 
-    # Create an entry
+    # Create another entry
     entry_response = await _create_log(
         client,
         project_name,
         entries={"entry_field": "value"},
-        params={},
     )
     assert entry_response.status_code == 200, entry_response.json()
 
-    # Try to create a parameter with the same name (should fail)
-    param_response = await _create_log(
+    # Creating another log with the same field name is allowed (it's the same entry)
+    entry_response = await _create_log(
         client,
         project_name,
-        params={"entry_field": "value"},
-        entries={},
+        entries={"entry_field": "another_value"},
     )
-    assert param_response.status_code == 400, param_response.json()
-    assert "already exists as an entry" in param_response.json()["detail"]
-    assert "Cannot create it as a param" in param_response.json()["detail"]
+    assert entry_response.status_code == 200, entry_response.json()
 
     # Create a derived entry
     derived_response = await _create_derived_entry(
@@ -373,7 +363,7 @@ async def test_field_type_constraints_and_mutability(
         project_name,
         key="derived_field",
         equation="{x:entry_field}",
-        referenced_logs={"x": [3]},
+        referenced_logs={"x": [2]},
     )
     assert derived_response.status_code == 200, derived_response.json()
 
@@ -382,42 +372,30 @@ async def test_field_type_constraints_and_mutability(
         client,
         project_name,
         entries={"derived_field": "value"},
-        params={},
     )
     assert entry_response.status_code == 400, entry_response.json()
     assert "already exists as a derived_entry" in entry_response.json()["detail"]
     assert "Cannot create it as an entry" in entry_response.json()["detail"]
 
-    # Try to create a param with the same name as derived (should fail)
-    param_response = await _create_log(
-        client,
-        project_name,
-        params={"derived_field": "value"},
-        entries={},
-    )
-    assert param_response.status_code == 400, param_response.json()
-    assert "already exists as a derived_entry" in param_response.json()["detail"]
-    assert "Cannot create it as a param" in param_response.json()["detail"]
-
-    # Try to create a derived entry with same name as param (should fail)
+    # Try to create a derived entry with same name as entry (should fail)
     derived_response = await _create_derived_entry(
         client,
         project_name,
-        key="test_field",  # This is already a param
+        key="test_field",  # This is already an entry
         equation="{x:entry_field}",
-        referenced_logs={"x": [3]},
+        referenced_logs={"x": [1]},
     )
     assert derived_response.status_code == 500, derived_response.json()
-    assert "already exists as a param" in derived_response.json()["detail"]
+    assert "already exists as an entry" in derived_response.json()["detail"]
     assert "Cannot create it as a derived_entry" in derived_response.json()["detail"]
 
-    # Try to create a derived entry with same name as entry (should fail)
+    # Try to create a derived entry with same name as another entry (should fail)
     derived_response = await _create_derived_entry(
         client,
         project_name,
         key="entry_field",  # This is already an entry
         equation="{x:entry_field}",
-        referenced_logs={"x": [3]},
+        referenced_logs={"x": [2]},
     )
     assert derived_response.status_code == 500, derived_response.json()
     assert "already exists as an entry" in derived_response.json()["detail"]

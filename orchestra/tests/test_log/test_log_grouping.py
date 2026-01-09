@@ -2329,7 +2329,7 @@ async def test_grouping_sets_integration_depth_0(client: AsyncClient, use_jsonb_
     ]
 
     for entry in test_data:
-        response = await _create_log(client, project_name, params={}, entries=entry)
+        response = await _create_log(client, project_name, entries=entry)
         assert response.status_code == 200
 
     # Query with group_depth=0 (should use GROUPING SETS optimization)
@@ -2381,7 +2381,7 @@ async def test_grouping_sets_integration_depth_1(client: AsyncClient, use_jsonb_
     ]
 
     for entry in test_data:
-        response = await _create_log(client, project_name, params={}, entries=entry)
+        response = await _create_log(client, project_name, entries=entry)
         assert response.status_code == 200
 
     # Query with group_depth=1 (should use GROUPING SETS optimization)
@@ -2591,7 +2591,7 @@ async def test_grouping_sets_matches_recursive_baseline_depth_0(
     )
 
     for entry in test_data:
-        response = await _create_log(client, project_name, params={}, entries=entry)
+        response = await _create_log(client, project_name, entries=entry)
         assert response.status_code == 200
 
     # Run 1: GROUPING SETS path (normal operation)
@@ -2708,7 +2708,7 @@ async def test_grouping_sets_matches_recursive_baseline_depth_1(
             test_data.append({"status": status, "priority": priority, "value": i})
 
     for entry in test_data:
-        response = await _create_log(client, project_name, params={}, entries=entry)
+        response = await _create_log(client, project_name, entries=entry)
         assert response.status_code == 200
 
     # Run 1: GROUPING SETS path (normal operation)

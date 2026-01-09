@@ -40,7 +40,6 @@ async def test_batch_create_partial_success_with_failed_logs(
             {"name": "bad", "age": "thirty"},  # invalid
             {"name": "ok-2", "age": 25},  # valid
         ],
-        "params": {},
     }
 
     response = await client.post("/v0/logs", json=payload, headers=HEADERS)
@@ -80,20 +79,26 @@ async def test_create_logs(client: AsyncClient, use_jsonb_mode):
 
     # Test batch log creation with multiple entries
     batch_entries = [
-        {"a/b/c/input": "Batch input 1", "a/b/c/numeric_input": 1.5},
-        {"a/b/c/input": "Batch input 2", "a/b/c/numeric_input": 2.5},
-        {"a/b/c/input": "Batch input 3", "a/b/c/numeric_input": 3.5},
-    ]
-    batch_params = [
-        {"a/b/param1": "test"},
-        {"a/b/param2": "test"},
-        {"a/b/param3": "test"},
+        {
+            "a/b/c/input": "Batch input 1",
+            "a/b/c/numeric_input": 1.5,
+            "a/b/param1": "test",
+        },
+        {
+            "a/b/c/input": "Batch input 2",
+            "a/b/c/numeric_input": 2.5,
+            "a/b/param2": "test",
+        },
+        {
+            "a/b/c/input": "Batch input 3",
+            "a/b/c/numeric_input": 3.5,
+            "a/b/param3": "test",
+        },
     ]
     response = await client.post(
         "/v0/logs",
         json={
             "project_name": project_name,
-            "params": batch_params,
             "entries": batch_entries,
         },
         headers=HEADERS,
@@ -330,23 +335,23 @@ async def test_create_logs_autoincrement_version(client: AsyncClient, use_jsonb_
     # This should work fine
     response = await client.post(
         "/v0/logs",
-        json={"project_name": project_name, "params": {"p1": "test"}},
+        json={"project_name": project_name, "entries": {"p1": "test"}},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
 
-    # same version and value
+    # same value
     response = await client.post(
         "/v0/logs",
-        json={"project_name": project_name, "params": {"p1": "test"}},
+        json={"project_name": project_name, "entries": {"p1": "test"}},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()
 
-    # same version and different value -> autoincrement
+    # different value
     response = await client.post(
         "/v0/logs",
-        json={"project_name": project_name, "params": {"p1": "test_v1"}},
+        json={"project_name": project_name, "entries": {"p1": "test_v1"}},
         headers=HEADERS,
     )
     assert response.status_code == 200, response.json()

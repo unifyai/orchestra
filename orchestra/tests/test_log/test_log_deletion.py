@@ -53,11 +53,11 @@ async def test_delete_logs(client: AsyncClient, use_jsonb_mode):
     # Verify logs were deleted
     response = await _get_log(client, project_name, log_id1)
     assert response.status_code == 200, response.json()
-    assert response.json() == {"params": {}, "logs": [], "count": 0}
+    assert response.json() == {"logs": [], "count": 0}
 
     response = await _get_log(client, project_name, log_id2)
     assert response.status_code == 200, response.json()
-    assert response.json() == {"params": {}, "logs": [], "count": 0}
+    assert response.json() == {"logs": [], "count": 0}
 
 
 @pytest.mark.anyio
@@ -286,7 +286,6 @@ async def test_delete_log_fields_from_logs(client: AsyncClient, use_jsonb_mode):
         {
             "id": 2,
             "entries": {"a/b/c/numeric_input": 4.5},
-            "params": {},
             "derived_entries": {},
             "versions": {},
             "clipped_fields": [],
