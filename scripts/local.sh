@@ -210,32 +210,15 @@ start_db_container() {
     return 0
   fi
 
-  if is_compatible_db_running; then
-    return 0
-  fi
-
   if is_db_container_exists; then
     log_info "Removing stopped container..."
     docker rm "$ORCHESTRA_DB_CONTAINER" >/dev/null 2>&1 || true
   fi
 
-  # Check if port is already in use
+  # Check if port is already in use by something else
   if lsof -i ":${ORCHESTRA_DB_PORT}" -sTCP:LISTEN &>/dev/null; then
-    log_warn "Port $ORCHESTRA_DB_PORT is already in use"
-
-    if docker run --rm --network host pgvector/pgvector:pg15 \
-         pg_isready -h localhost -p "$ORCHESTRA_DB_PORT" -U orchestra &>/dev/null 2>&1; then
-      log_success "PostgreSQL already available on port $ORCHESTRA_DB_PORT"
-      return 0
-    fi
-
-    if PGPASSWORD=orchestra psql -h localhost -p "$ORCHESTRA_DB_PORT" -U orchestra -d orchestra -c "SELECT 1" &>/dev/null 2>&1; then
-      log_success "PostgreSQL with orchestra database available on port $ORCHESTRA_DB_PORT"
-      return 0
-    fi
-
-    log_error "Port $ORCHESTRA_DB_PORT is in use but not by a compatible PostgreSQL"
-    log_info "Try: docker stop <container> or use ORCHESTRA_DB_PORT=5433"
+    log_error "Port $ORCHESTRA_DB_PORT is already in use by another process"
+    log_info "Stop the conflicting service or use ORCHESTRA_DB_PORT=5433"
     return 1
   fi
 
@@ -453,14 +436,13 @@ start_orchestra_server() {
   export ORCHESTRA_RELOAD=false
   export ORCHESTRA_WORKERS_COUNT=1
 
-  # GCP credentials for BucketService
-  if [[ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]]; then
-    export ORCHESTRA_VERTEXAI_SERVICE_ACC_JSON="$GOOGLE_APPLICATION_CREDENTIALS"
-  fi
-
   # API keys for embedding and LLM operations
+  # Orchestra Python code uses get_env() which checks ORCHESTRA_* prefix first, then
+  # falls back to standard names (OPENAI_API_KEY, ANTHROPIC_API_KEY).
+  # litellm uses the standard names directly, so we export them if set.
   [[ -n "${OPENAI_API_KEY:-}" ]] && export OPENAI_API_KEY
   [[ -n "${ANTHROPIC_API_KEY:-}" ]] && export ANTHROPIC_API_KEY
+  [[ -n "${GOOGLE_APPLICATION_CREDENTIALS:-}" ]] && export GOOGLE_APPLICATION_CREDENTIALS
 
   # Optional logging directories
   if [[ -n "${ORCHESTRA_LOG_DIR:-}" ]]; then
