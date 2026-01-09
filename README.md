@@ -61,7 +61,6 @@ pre-commit install
 
 ## Secrets / Environment Variables
 
-TODO: Lorem ipsum
 TODO: Tool to fetch them from GCP
 
 VSCode will load the .env file by default, but take into account that you might need to configure your IDE to load the variables.
