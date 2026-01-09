@@ -401,10 +401,10 @@ async def test_add_log_to_context(client: AsyncClient):
         "/v0/logs",
         json={
             "project_name": project_name,
-            "params": {"a/b/param1": "test"},
             "entries": {
                 "metric": 0.95,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
+                "a/b/param1": "test",
             },
         },
         headers=HEADERS,
@@ -437,10 +437,10 @@ async def test_implicit_context_creation(client: AsyncClient):
         "/v0/logs",
         json={
             "project_name": project_name,
-            "params": {"param1": "test"},
             "entries": {
                 "metric": 0.95,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
+                "param1": "test",
             },
         },
         headers=HEADERS,
@@ -488,10 +488,10 @@ async def test_get_logs_by_context(client: AsyncClient):
         "/v0/logs",
         json={
             "project_name": project_name,
-            "params": {"a/b/param1": "test"},
             "entries": {
                 "metric": 0.95,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
+                "a/b/param1": "test",
             },
         },
         headers=HEADERS,
@@ -502,10 +502,10 @@ async def test_get_logs_by_context(client: AsyncClient):
         "/v0/logs",
         json={
             "project_name": project_name,
-            "params": {"a/b/param1": "test"},
             "entries": {
                 "metric": 1.5,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
+                "a/b/param1": "test",
             },
             "context": {
                 "name": "different-context",
@@ -553,10 +553,10 @@ async def test_context_as_string(client: AsyncClient):
         "/v0/logs",
         json={
             "project_name": project_name,
-            "params": {"param1": "test"},
             "entries": {
                 "metric": 0.95,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
+                "param1": "test",
             },
             "context": context_name,  # Provide context as string
         },
@@ -597,10 +597,10 @@ async def test_get_logs_no_context(client: AsyncClient):
         "/v0/logs",
         json={
             "project_name": project_name,
-            "params": {"a/b/param1": "test"},
             "entries": {
                 "metric": 0.95,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
+                "a/b/param1": "test",
             },
             "context": {
                 "name": context_name,
@@ -642,10 +642,10 @@ async def test_get_fields_no_context(client: AsyncClient):
         "/v0/logs",
         json={
             "project_name": project_name,
-            "params": {"a/b/param1": "test"},
             "entries": {
                 "metric": 0.95,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
+                "a/b/param1": "test",
             },
             "context": {
                 "name": context_name,
@@ -699,10 +699,10 @@ async def test_add_log_to_multiple_contexts(client: AsyncClient):
         "/v0/logs",
         json={
             "project_name": project_name,
-            "params": {"a/b/param1": "test"},
             "entries": {
                 "metric": 0.95,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
+                "a/b/param1": "test",
             },
         },
         headers=HEADERS,
@@ -845,7 +845,6 @@ async def test_implicit_field_creation(client: AsyncClient):
     log_response = await _create_log(
         client,
         project_name,
-        params={},
         entries={
             "metric1": 0.95,
             "metric2": 1.5,
@@ -887,7 +886,6 @@ async def test_implicit_field_creation(client: AsyncClient):
     log_response = await _create_log(
         client,
         project_name,
-        params={},
         entries={
             "metric1": 0.85,  # Existing field
             "metric3": 2.5,  # New field
@@ -1085,11 +1083,12 @@ async def test_context_allow_duplicates(client: AsyncClient):
     # Create a log with specific entries in the no-duplicates context
     log_data = {
         "project_name": project_name,
-        "params": {"model": "gpt-4", "temperature": 0.7},
         "entries": {
             "accuracy": 0.95,
             "latency": 120,
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+            "temperature": 0.7,
         },
         "context": no_duplicates_context,
     }
@@ -1144,13 +1143,17 @@ async def test_context_allow_duplicates(client: AsyncClient):
     )
     assert response.status_code == 200
 
-    # Test with different params but same entries - should be accepted
-    different_params_log = log_data.copy()
-    different_params_log["params"] = {"model": "gpt-3.5", "temperature": 0.5}
+    # Test with different model/temperature but same other entries - should be accepted
+    different_entries_log = log_data.copy()
+    different_entries_log["entries"] = {
+        **log_data["entries"],
+        "model": "gpt-3.5",
+        "temperature": 0.5,
+    }
 
     response = await client.post(
         "/v0/logs",
-        json=different_params_log,
+        json=different_entries_log,
         headers=HEADERS,
     )
     assert response.status_code == 200
@@ -1192,22 +1195,24 @@ async def test_context_duplicate_updates(client: AsyncClient):
     # Create two logs with different values in the no-duplicates context
     log_data_1 = {
         "project_name": project_name,
-        "params": {"model": "gpt-4", "temperature": 0.7},
         "entries": {
             "accuracy": 0.95,
             "latency": 120,
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+            "temperature": 0.7,
         },
         "context": no_duplicates_context,
     }
 
     log_data_2 = {
         "project_name": project_name,
-        "params": {"model": "gpt-4", "temperature": 0.7},
         "entries": {
             "accuracy": 0.85,
             "latency": 150,
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-4",
+            "temperature": 0.7,
         },
         "context": no_duplicates_context,
     }
@@ -1216,7 +1221,6 @@ async def test_context_duplicate_updates(client: AsyncClient):
     response = await _create_log(
         client,
         project_name,
-        params=log_data_1["params"],
         entries=log_data_1["entries"],
         context=log_data_1["context"],
     )
@@ -1227,7 +1231,6 @@ async def test_context_duplicate_updates(client: AsyncClient):
     response = await _create_log(
         client,
         project_name,
-        params=log_data_2["params"],
         entries=log_data_2["entries"],
         context=log_data_2["context"],
     )
@@ -1248,22 +1251,24 @@ async def test_context_duplicate_updates(client: AsyncClient):
     # Create two logs with different values in the default context
     log_data_3 = {
         "project_name": project_name,
-        "params": {"model": "gpt-3.5", "temperature": 0.5},
         "entries": {
             "accuracy": 0.90,
             "latency": 100,
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-3.5",
+            "temperature": 0.5,
         },
         "context": default_context,
     }
 
     log_data_4 = {
         "project_name": project_name,
-        "params": {"model": "gpt-3.5", "temperature": 0.5},
         "entries": {
             "accuracy": 0.80,
             "latency": 130,
             "timestamp": datetime.now(timezone.utc).isoformat(),
+            "model": "gpt-3.5",
+            "temperature": 0.5,
         },
         "context": default_context,
     }
@@ -1272,7 +1277,6 @@ async def test_context_duplicate_updates(client: AsyncClient):
     response = await _create_log(
         client,
         project_name,
-        params=log_data_3["params"],
         entries=log_data_3["entries"],
         context=log_data_3["context"],
     )
@@ -1283,7 +1287,6 @@ async def test_context_duplicate_updates(client: AsyncClient):
     response = await _create_log(
         client,
         project_name,
-        params=log_data_4["params"],
         entries=log_data_4["entries"],
         context=log_data_4["context"],
     )
@@ -1325,10 +1328,10 @@ async def test_add_logs_with_copy_false(client: AsyncClient):
         "/v0/logs",
         json={
             "project_name": project_name,
-            "params": {"model": "test-model"},
             "entries": {
                 "metric": 0.95,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
+                "model": "test-model",
             },
         },
         headers=HEADERS,
@@ -1453,10 +1456,10 @@ async def test_add_logs_via_arguments(client: AsyncClient):
             "/v0/logs",
             json={
                 "project_name": project_name,
-                "params": {"model": "test-model"},
                 "entries": {
                     "metric": metric_value,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "model": "test-model",
                 },
             },
             headers=HEADERS,
@@ -1512,10 +1515,10 @@ async def test_add_logs_via_arguments_with_copy(client: AsyncClient):
             "/v0/logs",
             json={
                 "project_name": project_name,
-                "params": {"model": "test-model"},
                 "entries": {
                     "metric": metric_value,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "model": "test-model",
                 },
             },
             headers=HEADERS,
@@ -1731,7 +1734,6 @@ async def test_nested_ids_non_existent_parent_fails(client: AsyncClient):
         project_name,
         context=context_name,
         entries={"user": 999},  # This user has not been created
-        params={},
     )
     assert log_response.status_code == 400  # Or appropriate error code
 
@@ -1759,14 +1761,14 @@ async def test_nested_unique_ids_increment(client: AsyncClient):
     )
 
     # 1. Create first user
-    res = await _create_log(client, project_name, context=context_name, params={})
+    res = await _create_log(client, project_name, context=context_name)
     assert res.status_code == 200, res.text
     row_ids_data = res.json()["row_ids"]
     assert row_ids_data["names"] == unique_id_names
     assert row_ids_data["ids"] == [[0, 0, 0]]
 
     # 2. Create second user
-    res = await _create_log(client, project_name, context=context_name, params={})
+    res = await _create_log(client, project_name, context=context_name)
     assert res.status_code == 200, res.text
     row_ids_data = res.json()["row_ids"]
     assert row_ids_data["names"] == unique_id_names
@@ -1778,7 +1780,6 @@ async def test_nested_unique_ids_increment(client: AsyncClient):
         project_name,
         context=context_name,
         entries={"user": 0},
-        params={},
     )
     assert res.status_code == 200, res.text
     row_ids_data = res.json()["row_ids"]
@@ -1791,7 +1792,6 @@ async def test_nested_unique_ids_increment(client: AsyncClient):
         project_name,
         context=context_name,
         entries={"user": 0, "session": 1},
-        params={},
     )
     assert res.status_code == 200, res.text
     row_ids_data = res.json()["row_ids"]
@@ -1804,7 +1804,6 @@ async def test_nested_unique_ids_increment(client: AsyncClient):
         project_name,
         context=context_name,
         entries={"user": 0},
-        params={},
     )
     assert res.status_code == 200, res.text
     row_ids_data = res.json()["row_ids"]
@@ -1847,7 +1846,7 @@ async def test_nested_ids_batch_creation(client: AsyncClient):
     )
 
     # First, create the parent run_id=0. This will also create step_id=0.
-    res = await _create_log(client, project_name, context=context_name, params={})
+    res = await _create_log(client, project_name, context=context_name)
     assert res.status_code == 200
     row_ids_data = res.json()["row_ids"]
     assert row_ids_data["names"] == unique_id_names

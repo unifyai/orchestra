@@ -2239,16 +2239,16 @@ async def test_filtering_and_sorting_base_and_derived_logs(
                 "alpha/num": 100,
                 "alpha/str": "hello",
                 "common_field": True,
+                "p/param1": "base1-param",
             },
-            "params": {"p/param1": "base1-param"},
         },
         {
             "entries": {
                 "beta/num": 5,
                 "beta/str": "world",
                 "common_field": False,
+                "p/param1": "base2-param",
             },
-            "params": {"p/param1": "base2-param"},
         },
     ]
 
@@ -2261,7 +2261,6 @@ async def test_filtering_and_sorting_base_and_derived_logs(
             json={
                 "project_name": project_name,
                 "entries": data["entries"],
-                "params": data["params"],
             },
         )
         assert resp.status_code == 200, resp.json()
@@ -2878,7 +2877,7 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
         assert response.status_code == 200, response.json()
         result = response.json()
         assert len(result["logs"]) == 1
-        assert result["logs"][0]["params"]["a/b/param1"] == "1"
+        assert result["logs"][0]["entries"]["a/b/param1"] == "1"
 
     # check is <val>
     response = await client.get(

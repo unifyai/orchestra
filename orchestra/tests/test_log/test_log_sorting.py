@@ -191,11 +191,11 @@ async def test_get_logs_w_timestamp_sorting(client: AsyncClient, use_jsonb_mode)
         # Use copy to avoid mutating shared log_data
         entries = dict(data[i])
         entries["_/timestamp"] = ts
+        entries["a/b/param1"] = f"test_{i}"
         response = await client.post(
             "/v0/logs",
             json={
                 "project_name": project_name,
-                "params": {"a/b/param1": f"test_{i}"},
                 "entries": entries,
             },
             headers=HEADERS,
@@ -270,11 +270,11 @@ async def test_get_logs_w_date_sorting(client: AsyncClient, use_jsonb_mode):
         # Use copy to avoid mutating shared log_data
         entries = dict(data[i])
         entries["_/timestamp"] = date
+        entries["a/b/param1"] = f"test_{i}"
         response = await client.post(
             "/v0/logs",
             json={
                 "project_name": project_name,
-                "params": {"a/b/param1": f"test_{i}"},
                 "entries": entries,
             },
             headers=HEADERS,

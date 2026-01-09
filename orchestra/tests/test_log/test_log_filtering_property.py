@@ -122,7 +122,7 @@ async def setup_test_data(client):
     project_name = "test_prop_based"
     # Create the project
     _ = await _create_project(client, project_name)
-    r = await _create_log(client, project_name, entries=SAMPLE_DATA, params={})
+    r = await _create_log(client, project_name, entries=SAMPLE_DATA)
     assert r.status_code == 200
     log_ids = r.json()
     return project_name, log_ids
