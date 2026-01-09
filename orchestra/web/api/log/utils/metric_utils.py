@@ -745,13 +745,13 @@ def _compute_metric_for_key_grouped(
     else:
         group_by_fields = group_by
 
-    # Parse group_by fields (params prefix is no longer supported, all fields are entries)
+    # Parse group_by fields to determine if they're params
     group_by_info = []
     for field in group_by_fields:
-        # Remove legacy "params/" prefix if present
-        if field.startswith("params/"):
-            field = field[7:]  # Remove "params/" prefix
-        group_by_info.append(field)
+        parts = field.split("/", 1)
+        is_param = len(parts) > 1 and parts[0] == "params"
+        actual_field = parts[-1]  # Last part is the actual field name
+        group_by_info.append((actual_field, is_param))
 
     # 1) Build initial query to find matching LogEvent IDs (scoped to context when provided)
     query = session.query(LogEvent.id).filter(LogEvent.project_id == project_obj.id)
@@ -832,38 +832,55 @@ def _compute_metric_for_key_grouped(
     # Union them for the aggregator key
     agg_logs_subq = agg_log_q.union_all(agg_derived_q).subquery("agg_logs")
 
-    # 3) For each group_by field, build a subquery (union base logs and derived logs)
+    # 3) For each group_by field, build a subquery
     group_subqueries = []
 
-    for idx, group_field in enumerate(group_by_info):
-        group_log_q = (
-            session.query(
-                LogEventLog.log_event_id.label("log_event_id"),
-                Log.value.label("value"),
-                Log.inferred_type.label("inferred_type"),
+    for idx, (group_field, is_param) in enumerate(group_by_info):
+        if is_param:
+            # For parameters, use only base logs with version
+            group_q = (
+                session.query(
+                    LogEventLog.log_event_id.label("log_event_id"),
+                    Log.param_version.label("value"),
+                    literal("int").label("inferred_type"),
+                )
+                .join(LogEventLog, LogEventLog.log_id == Log.id)
+                .filter(Log.key == group_field)
+                .join(LogEvent, LogEventLog.log_event_id == LogEvent.id)
+                .filter(LogEvent.project_id == project_obj.id)
             )
-            .join(LogEventLog, LogEventLog.log_id == Log.id)
-            .filter(Log.key == group_field)
-            .join(LogEvent, LogEventLog.log_event_id == LogEvent.id)
-            .filter(LogEvent.project_id == project_obj.id)
-        )
+            group_subq = group_q.subquery(f"group_{idx}")
+        else:
+            # For non-parameters, union base logs and derived logs
+            group_log_q = (
+                session.query(
+                    LogEventLog.log_event_id.label("log_event_id"),
+                    Log.value.label("value"),
+                    Log.inferred_type.label("inferred_type"),
+                )
+                .join(LogEventLog, LogEventLog.log_id == Log.id)
+                .filter(Log.key == group_field)
+                .join(LogEvent, LogEventLog.log_event_id == LogEvent.id)
+                .filter(LogEvent.project_id == project_obj.id)
+            )
 
-        group_derived_q = (
-            session.query(
-                LogEventDerivedLog.log_event_id.label("log_event_id"),
-                DerivedLog.value.label("value"),
-                DerivedLog.inferred_type.label("inferred_type"),
+            group_derived_q = (
+                session.query(
+                    LogEventDerivedLog.log_event_id.label("log_event_id"),
+                    DerivedLog.value.label("value"),
+                    DerivedLog.inferred_type.label("inferred_type"),
+                )
+                .join(
+                    LogEventDerivedLog,
+                    LogEventDerivedLog.derived_log_id == DerivedLog.id,
+                )
+                .filter(DerivedLog.key == group_field)
+                .join(LogEvent, LogEventDerivedLog.log_event_id == LogEvent.id)
+                .filter(LogEvent.project_id == project_obj.id)
             )
-            .join(
-                LogEventDerivedLog,
-                LogEventDerivedLog.derived_log_id == DerivedLog.id,
-            )
-            .filter(DerivedLog.key == group_field)
-            .join(LogEvent, LogEventDerivedLog.log_event_id == LogEvent.id)
-            .filter(LogEvent.project_id == project_obj.id)
-        )
 
-        group_subq = group_log_q.union_all(group_derived_q).subquery(f"group_{idx}")
+            group_subq = group_log_q.union_all(group_derived_q).subquery(f"group_{idx}")
+
         group_subqueries.append((group_field, group_subq))
 
     # 4) Build the reduction methods dictionary
