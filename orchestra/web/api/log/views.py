@@ -87,7 +87,6 @@ from .utils import (
     _get_log_event_ids_for_group_value,
     _get_logs_query,
     _get_logs_query_jsonb,
-    _get_params_for_log_events,
     _join_logs,
     _resolve_key_specific_filters,
     apply_group_threshold,
@@ -4748,7 +4747,7 @@ def get_logs(
                 )
 
                 # Format JSONB results
-                logs_out, params_out = _format_jsonb_logs(
+                logs_out, _ = _format_jsonb_logs(
                     rows=rows,
                     field_types=field_types,
                     value_limit=value_limit,
@@ -4773,7 +4772,6 @@ def get_logs(
                 )
 
                 response = {
-                    "params": params_out,
                     "logs": logs_out,
                     "count": actual_count,
                 }
@@ -4827,7 +4825,7 @@ def get_logs(
                     project_id,
                     context_id=context_id,
                 )
-                logs_out, params_out = _format_flat_logs(
+                logs_out, _ = _format_flat_logs(
                     all_rows,
                     context_len,
                     value_limit,
@@ -4843,7 +4841,6 @@ def get_logs(
                     )
 
                 response = {
-                    "params": params_out,
                     "logs": logs_out,
                     "count": total_count,
                 }
@@ -4898,11 +4895,6 @@ def get_logs(
             return list(dict.fromkeys(event_ids))
 
         # -----------------------------------------------------------
-        # Stage 3: Get Parameter Versions for the Log Events
-        # -----------------------------------------------------------
-        params_out = _get_params_for_log_events(event_ids_subq, session)
-
-        # -----------------------------------------------------------
         # Stage 4: Build Grouped Structure
         # -----------------------------------------------------------
         if nested_groups:
@@ -4935,7 +4927,6 @@ def get_logs(
             )
 
             final_result = {
-                "params": params_out,
                 "logs": grouped_result,
                 "count": total_count,
             }
@@ -4978,12 +4969,12 @@ def get_logs(
 
             for group_field in group_by:
                 prefix, raw_key = parse_group_key(group_field)
-                is_param = prefix == "params"
+                # Note: params prefix is no longer used, all fields are entries now
                 distinct_values = _get_distinct_group_values(
                     log_event_ids=event_ids_subq,
                     group_key=raw_key,
                     session=session,
-                    is_param=is_param,
+                    is_param=False,
                 )
                 value_to_ids = {}
                 used_ids = set()
@@ -4993,7 +4984,7 @@ def get_logs(
                         group_key=raw_key,
                         group_value=val,
                         session=session,
-                        is_param=is_param,
+                        is_param=False,
                     )
                     value_to_ids[val] = subset_ids
                     used_ids.update(subset_ids)
@@ -5021,7 +5012,6 @@ def get_logs(
                 }
 
             final_result = {
-                "params": params_out,
                 "groups": groups,
                 "logs": logs_out,
                 "count": total_count,
@@ -5164,7 +5154,6 @@ def query_logs_post(
             # Handle return_ids_only mode
             if body.return_ids_only:
                 return {
-                    "params": {},
                     "logs": [row[0] for row in rows],
                     "count": total_count,
                 }
@@ -5181,7 +5170,7 @@ def query_logs_post(
             )
 
             # Format JSONB results
-            logs_out, params_out = _format_jsonb_logs(
+            logs_out, _ = _format_jsonb_logs(
                 rows=rows,
                 field_types=field_types,
                 value_limit=body.value_limit,
@@ -5203,7 +5192,6 @@ def query_logs_post(
             )
 
             return {
-                "params": params_out,
                 "logs": logs_out,
                 "count": actual_count,
             }
@@ -5237,7 +5225,7 @@ def query_logs_post(
             )
 
             # Format logs
-            logs_out, params_out = _format_flat_logs(
+            logs_out, _ = _format_flat_logs(
                 all_rows,
                 context_len,
                 body.value_limit,
@@ -5249,7 +5237,6 @@ def query_logs_post(
                 logs_out = apply_group_threshold(logs_out, body.group_threshold)
 
             response = {
-                "params": params_out,
                 "logs": logs_out,
                 "count": total_count,
             }
@@ -5863,12 +5850,10 @@ def get_log_groups(
             # row is (id, data_dict, key_order, created_at)
             data_dict = row[1]
 
-            # Try entries first, then params, then top-level
+            # Try entries first, then top-level
             value = None
             if "entries" in data_dict and key in data_dict["entries"]:
                 value = data_dict["entries"][key]
-            elif "params" in data_dict and key in data_dict["params"]:
-                value = data_dict["params"][key]
             elif key in data_dict:
                 value = data_dict[key]
 
