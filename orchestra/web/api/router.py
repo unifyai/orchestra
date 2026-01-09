@@ -10,13 +10,11 @@ from orchestra.web.api import (  # noqa: WPS235
     context,
     credits,
     interface,
-    llm_queries,
     log,
     organization,
     project,
     roles,
     storage,
-    supported_endpoints,
     teams,
     users,
 )
@@ -92,25 +90,10 @@ api_router.include_router(
 )
 # API_KEY_AUTH endpoints
 
-# Universal API
-
-api_router.include_router(
-    supported_endpoints.router,
-    tags=["Supported Endpoints"],
-    include_in_schema=True,
-    dependencies=API_KEY_AUTH,
-)
-api_router.include_router(
-    llm_queries.router,
-    tags=["LLM Queries"],
-    dependencies=API_KEY_AUTH,
-)
 api_router.include_router(
     assistant_router,
     dependencies=API_KEY_AUTH,
 )
-
-# Benchmarking)
 api_router.include_router(
     context.router,
     tags=["Contexts"],
