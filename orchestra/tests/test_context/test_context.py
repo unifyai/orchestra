@@ -664,7 +664,8 @@ async def test_get_fields_no_context(client: AsyncClient):
     assert response.status_code == 200, response.json()
     fields = response.json()
     assert len(fields) == 3
-    assert list(fields.keys()) == ["a/b/param1", "metric", "timestamp"]
+    # Fields are returned in creation order: metric, timestamp, then a/b/param1
+    assert list(fields.keys()) == ["metric", "timestamp", "a/b/param1"]
 
     # Get fields without context (should return 0 fields)
     response = await client.get(
