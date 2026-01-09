@@ -1,0 +1,202 @@
+import datetime
+from typing import List, Optional
+
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from orchestra.db.models.orchestra_models import (
+    BenchmarkRun,
+    Datapoint,
+    Endpoint,
+    Provider,
+)
+
+
+class BenchmarkRunDAO:
+    """Class for accessing benchmark_run table."""
+
+    def __init__(self, session: Session):
+        self.session = session
+
+    def create_benchmark_run(  # noqa: WPS211
+        self,
+        endpoint_id: int,
+        regime: str,
+        region: str,
+        seq_len: str,
+        measured_at: datetime.datetime,
+    ) -> None:
+        """
+        Add single benchmark_run to session.
+
+        :param endpoint_id: endpoint_id of a benchmark_run.
+        :param regime: regime of a benchmark_run.
+        :param region: region of a benchmark_run.
+        :param seq_len: seq_len of a benchmark_run.
+        :param measured_at: measured_at of a benchmark_run.
+        """
+        self.session.add(
+            BenchmarkRun(
+                endpoint_id=endpoint_id,
+                regime=regime,
+                region=region,
+                seq_len=seq_len,
+                measured_at=measured_at,
+            ),
+        )
+
+    def get_all_benchmark_runs(
+        self,
+        limit: int,
+        offset: int,
+    ) -> List[BenchmarkRun]:
+        """
+        Get all benchmark_run models with limit/offset pagination.
+
+        :param limit: limit of benchmark_runs.
+        :param offset: offset of benchmark_runs.
+        :return: stream of benchmark_runs.
+        """
+        raw_benchmark_runs = self.session.execute(
+            select(BenchmarkRun).limit(limit).offset(offset),
+        )
+
+        return list(raw_benchmark_runs.scalars().fetchall())
+
+    def filter(  # noqa: WPS211, C901
+        self,
+        id: Optional[int] = None,  # noqa: WPS125
+        endpoint_id: Optional[int] = None,
+        regime: Optional[str] = None,
+        region: Optional[str] = None,
+        seq_len: Optional[str] = None,
+        measured_at: Optional[datetime.datetime] = None,
+    ) -> List[BenchmarkRun]:
+        """
+        Filter benchmark_run models by given parameters.
+
+        :param id: id of a benchmark_run.
+        :param endpoint_id: endpoint_id of a benchmark_run.
+        :param regime: regime of a benchmark_run.
+        :param region: region of a benchmark_run.
+        :param seq_len: seq_len of a benchmark_run.
+        :param measured_at: measured_at of a benchmark_run.
+        :return: benchmark_runs.
+        """
+        query = select(BenchmarkRun)
+        if id:
+            query = query.where(BenchmarkRun.id == id)
+        if endpoint_id:
+            query = query.where(BenchmarkRun.endpoint_id == endpoint_id)
+        if regime:
+            query = query.where(BenchmarkRun.regime == regime)
+        if region:
+            query = query.where(BenchmarkRun.region == region)
+        if seq_len:
+            query = query.where(BenchmarkRun.seq_len == seq_len)
+        if measured_at:
+            query = query.where(BenchmarkRun.measured_at == measured_at)
+        rows = self.session.execute(query)
+        return list(rows.scalars().fetchall())
+
+    def get_model_benchmark_datapoints(self, model_id):
+        """
+        Gets the latest benchmark run for each provider for a given model.
+        """
+        subquery = (
+            select(
+                BenchmarkRun.endpoint_id,
+                func.max(BenchmarkRun.id).label("latest_benchmark_id"),
+            )
+            .join(Endpoint, BenchmarkRun.endpoint_id == Endpoint.id)
+            .where(Endpoint.mdl_id == model_id)
+            .where(BenchmarkRun.regime == "concurrent-1")
+            .where(BenchmarkRun.region == "Belgium")
+            .where(BenchmarkRun.seq_len == "short")
+            .group_by(BenchmarkRun.endpoint_id)
+            .alias("latest_benchmark_runs")
+        )
+
+        # Main query to select benchmark runs for the latest benchmark run IDs
+        query = (
+            select(BenchmarkRun, Provider, Datapoint)
+            .join(subquery, BenchmarkRun.id == subquery.c.latest_benchmark_id)
+            .join(Endpoint, BenchmarkRun.endpoint_id == Endpoint.id)
+            .join(Provider, Endpoint.provider_id == Provider.id)
+            .join(Datapoint, Datapoint.benchmark_run_id == BenchmarkRun.id)
+        )
+        return self.session.execute(query).all()
+
+    def update_benchmark_run(  # noqa: WPS211, WPS213, WPS231, C901
+        self,
+        id: int,  # noqa: WPS125
+        endpoint_id: Optional[int] = None,
+        regime: Optional[str] = None,
+        region: Optional[str] = None,
+        seq_len: Optional[str] = None,
+        measured_at: Optional[datetime.datetime] = None,
+    ) -> None:
+        """
+        Update specific benchmark_run model.
+
+        :param id: id of benchmark_run instance.
+        :param endpoint_id: endpoint_id of benchmark_run instance.
+        :param regime: regime of benchmark_run instance.
+        :param region: region of benchmark_run instance.
+        :param seq_len: seq_len of benchmark_run instance.
+        :param measured_at: measured_at of benchmark_run instance.
+        """
+        query = select(BenchmarkRun)
+        query = query.where(BenchmarkRun.id == id)
+        raw_benchmark_run = self.session.execute(query)
+        benchmark_run = raw_benchmark_run.scalars().first()
+        if benchmark_run is not None:
+            if endpoint_id:
+                setattr(benchmark_run, "endpoint_id", endpoint_id)  # noqa: B010
+            if regime:
+                setattr(benchmark_run, "regime", regime)  # noqa: B010
+            if region:
+                setattr(benchmark_run, "region", region)  # noqa: B010
+            if seq_len:
+                setattr(benchmark_run, "seq_len", seq_len)  # noqa: B010
+            if measured_at:
+                setattr(benchmark_run, "measured_at", measured_at)  # noqa: B010
+
+    def benchmarks_between(
+        self,
+        endpoint_id,
+        start_time,
+        end_time,
+        regime,
+        region,
+        seq_len,
+    ):
+        query = (
+            select(Datapoint)
+            .join(BenchmarkRun, BenchmarkRun.id == Datapoint.benchmark_run_id)
+            .where(BenchmarkRun.endpoint_id == endpoint_id)
+            .where(BenchmarkRun.regime == regime)
+            .where(BenchmarkRun.region == region)
+            .where(BenchmarkRun.seq_len == seq_len)
+            .filter(
+                BenchmarkRun.measured_at >= start_time,
+                BenchmarkRun.measured_at <= end_time,
+            )
+        )
+
+        rows = self.session.execute(query)
+        db_data = list(rows.scalars().fetchall())
+        run_id_to_data = {}
+        for entry in db_data:
+            entry = entry.__dict__
+            br_id = entry["benchmark_run_id"]
+            if br_id not in run_id_to_data:
+                run_id_to_data[br_id] = {"timestamp": entry["measured_at"]}
+            run_id_to_data[br_id][entry["metric_name"]] = str(round(entry["value"], 2))
+
+        ret = []
+        for br_id in run_id_to_data.keys():
+            tmp = run_id_to_data[br_id]
+            ret.append(tmp)
+
+        return ret
