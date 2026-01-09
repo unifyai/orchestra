@@ -598,7 +598,7 @@ class FieldTypeDAO:
             self.session.commit()
 
     # Valid field categories for validation
-    VALID_FIELD_CATEGORIES = {"entry", "param", "derived_entry"}
+    VALID_FIELD_CATEGORIES = {"entry", "derived_entry"}
 
     def bulk_create_field_types(
         self,
@@ -616,7 +616,6 @@ class FieldTypeDAO:
                 - mutable: Optional, defaults to False
                 - field_category: Optional, defaults to "entry". Valid values are:
                     - "entry": Regular entry fields
-                    - "param": Parameter fields
                     - "derived_entry": Derived field values
                 - unique: Optional, defaults to False
                 - field_type: Optional, the explicit type for this field
