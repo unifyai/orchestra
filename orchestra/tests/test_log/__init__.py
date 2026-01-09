@@ -491,12 +491,10 @@ async def _create_several_logs(
 ):
     data = log_data["logs_for_various"]
     if batched:
-        # Add param field to each entry
-        entries_with_param = [{**d, "a/b/param1": "test"} for d in data]
         response = await _create_log(
             client,
             project_name,
-            entries=entries_with_param,
+            entries=data,
             context=(
                 {"name": context_name, "description": "test context"}
                 if context_name
@@ -509,7 +507,7 @@ async def _create_several_logs(
             response = await _create_log(
                 client,
                 project_name,
-                entries={**data[i], "a/b/param1": f"test_{i}"},
+                entries=data[i],
             )
             assert response.status_code == 200, response.json()
 

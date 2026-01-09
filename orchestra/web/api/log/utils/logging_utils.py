@@ -1336,20 +1336,11 @@ def _get_logs_query(
     filtered_logs_q = session.query(unified_logs_limited).filter(True)
 
     context_len = 0
-    exclude_params = False
-    exclude_entries = False
     if column_context is not None:
         split_context = column_context.split("/")
-        exclude_params = "entries" in split_context
-        exclude_entries = "params" in split_context
-        if exclude_params and exclude_entries:
-            raise HTTPException(
-                status_code=400,
-                detail="'entries' and 'params' cannot both be specified in column_context.",
-            )
-        column_context = "/".join(
-            [substr for substr in split_context if substr not in ("params", "entries")],
-        )
+        # Remove legacy "params" and "entries" keywords from column context
+        split_context = [s for s in split_context if s not in ("params", "entries")]
+        column_context = "/".join(split_context)
         if column_context and column_context[-1] != "/":
             column_context += "/"
         context_len = len(column_context or "")
@@ -1363,8 +1354,8 @@ def _get_logs_query(
         unified_logs_limited,
         from_ids=None,  # Already applied to log_event_query
         exclude_ids=None,  # Already applied to log_event_query
-        exclude_params=exclude_params,
-        exclude_entries=exclude_entries,
+        exclude_params=False,  # No longer used
+        exclude_entries=False,  # No longer used
         from_fields=from_fields,  # Still need to filter the actual fields returned
         exclude_fields=exclude_fields,  # Still need to filter the actual fields returned
     )
@@ -3284,8 +3275,8 @@ def _format_flat_logs(rows, context_len, value_limit, field_order_map):
 
         is_derived = row_source_type == "derived"
 
-        # Apply context_len slicing to the key
-        key = row_key
+        # Apply context_len slicing to the key to strip the context prefix
+        key = row_key[context_len:] if context_len else row_key
 
         def _limit_value(value: any, inferred_type: str) -> tuple:
             """Limit the size of a value based on its type and the value_limit parameter.
@@ -3351,23 +3342,9 @@ def _format_flat_logs(rows, context_len, value_limit, field_order_map):
 
     # Now build final JSON
     logs_out = []
-    params_out = {}
     for event_id, data in formatted.items():
-        entries = {}
-        params = {}
-        for k, v in data["entries"].items():
-            if k in data["versions"]:
-                # It's param-based
-                params[k] = v  # v is the str(ver)
-                # Also store in params_out if needed
-                if k not in params_out:
-                    params_out[k] = {}
-                # We might have multiple versions for the same param
-                for ver_num, ver_val in data["versions"][k].items():
-                    params_out[k][ver_num] = ver_val
-            else:
-                # It's a normal base entry
-                entries[k] = v
+        # All fields go into entries now (no separate params)
+        entries = dict(data["entries"])
 
         # derived_entries
         derived_entries = data["derived_entries"]
@@ -3376,12 +3353,6 @@ def _format_flat_logs(rows, context_len, value_limit, field_order_map):
         sorted_entries = dict(
             sorted(
                 entries.items(),
-                key=lambda x: field_order_map.get(x[0], float("inf")),
-            ),
-        )
-        sorted_params = dict(
-            sorted(
-                params.items(),
                 key=lambda x: field_order_map.get(x[0], float("inf")),
             ),
         )
@@ -3401,14 +3372,13 @@ def _format_flat_logs(rows, context_len, value_limit, field_order_map):
                 "id": event_id,
                 "ts": data["ts"],
                 "entries": sorted_entries,
-                "params": sorted_params,
                 "derived_entries": sorted_derived,
                 "versions": sorted_context_versions,
                 "clipped_fields": data.get("clipped_fields", []),
             },
         )
 
-    return logs_out, params_out
+    return logs_out, {}
 
 
 def _format_jsonb_logs(
@@ -3448,26 +3418,16 @@ def _format_jsonb_logs(
         key_order is used to preserve nested dict key ordering since PostgreSQL JSONB
         alphabetizes keys. If key_order is None (legacy data), alphabetical order is used.
     """
-    # Parse column_context to extract prefix and exclusion flags
+    # Parse column_context to extract prefix
     context_prefix = ""
-    exclude_params = False
-    exclude_entries = False
 
     if column_context is not None:
         split_context = column_context.split("/")
-        exclude_params = "entries" in split_context
-        exclude_entries = "params" in split_context
+        # Remove legacy "params" and "entries" keywords from column context
+        split_context = [s for s in split_context if s not in ("params", "entries")]
 
-        if exclude_params and exclude_entries:
-            raise HTTPException(
-                status_code=400,
-                detail="'entries' and 'params' cannot both be specified in column_context.",
-            )
-
-        # Remove keywords from context string
-        context_prefix = "/".join(
-            [substr for substr in split_context if substr not in ("params", "entries")],
-        )
+        # Build context prefix from remaining parts
+        context_prefix = "/".join(split_context)
         # Ensure trailing "/" if non-empty for prefix matching
         if context_prefix and context_prefix[-1] != "/":
             context_prefix += "/"
@@ -3521,7 +3481,6 @@ def _format_jsonb_logs(
 
     # Process rows into formatted structure
     formatted = {}
-    params_out = {}
 
     for row in rows:
         # Unpack row - handle both old format (id, data, created_at) and new format (id, data, key_order, created_at)
@@ -3537,7 +3496,6 @@ def _format_jsonb_logs(
                 "ts": created_at.isoformat() if created_at else None,
                 "clipped_fields": [],
                 "entries": {},
-                "params": {},
                 "derived_entries": {},
             }
 
@@ -3554,6 +3512,9 @@ def _format_jsonb_logs(
             if context_prefix and not key.startswith(context_prefix):
                 continue
 
+            # Strip context_prefix from key if present
+            display_key = key[len(context_prefix) :] if context_prefix else key
+
             # Apply from_fields / exclude_fields filters
             if allowed_fields_set and key not in allowed_fields_set:
                 continue
@@ -3565,31 +3526,18 @@ def _format_jsonb_logs(
             field_type = field_meta.get("field_type", "str")
             field_category = field_meta.get("field_category", "entry")
 
-            # Apply exclusion filters based on category
-            if exclude_params and field_category == "param":
-                continue
-            if exclude_entries and field_category == "entry":
-                continue
-
             # Apply value limiting
             limited_val, is_clipped = _limit_value(value, field_type)
             if is_clipped:
-                formatted[event_id]["clipped_fields"].append(key)
+                formatted[event_id]["clipped_fields"].append(display_key)
 
             # Categorize field based on field_category
-            if field_category == "param":
-                # Params: store as {"key": "0"} (version string)
-                # and add to global params_out as {"key": {"0": value}}
-                formatted[event_id]["params"][key] = "0"
-                if key not in params_out:
-                    params_out[key] = {}
-                params_out[key]["0"] = limited_val
-            elif field_category == "derived_entry":
+            if field_category == "derived_entry":
                 # Derived entries
-                formatted[event_id]["derived_entries"][key] = limited_val
+                formatted[event_id]["derived_entries"][display_key] = limited_val
             else:
-                # Default: regular entries
-                formatted[event_id]["entries"][key] = limited_val
+                # All other fields (entry and former param) go to entries
+                formatted[event_id]["entries"][display_key] = limited_val
 
     # Build final JSON output with sorted fields
     logs_out = []
@@ -3598,12 +3546,6 @@ def _format_jsonb_logs(
         sorted_entries = dict(
             sorted(
                 data["entries"].items(),
-                key=lambda x: field_order_map.get(x[0], float("inf")),
-            ),
-        )
-        sorted_params = dict(
-            sorted(
-                data["params"].items(),
                 key=lambda x: field_order_map.get(x[0], float("inf")),
             ),
         )
@@ -3617,7 +3559,7 @@ def _format_jsonb_logs(
         # Skip logs with no data when field filters are applied
         # This matches EAV behavior where logs without any matching fields don't appear
         if (allowed_fields_set or excluded_fields_set or context_prefix) and not (
-            sorted_entries or sorted_params or sorted_derived
+            sorted_entries or sorted_derived
         ):
             continue
 
@@ -3626,13 +3568,12 @@ def _format_jsonb_logs(
                 "id": event_id,
                 "ts": data["ts"],
                 "entries": sorted_entries,
-                "params": sorted_params,
                 "derived_entries": sorted_derived,
                 "versions": {},  # JSONB mode doesn't support context versions, but include empty for API compatibility
                 "clipped_fields": data.get("clipped_fields", []),
             },
         )
-    return logs_out, params_out
+    return logs_out, {}
 
 
 def _get_final_logs(session, filtered_logs_subq, paginated_ids_subq):
