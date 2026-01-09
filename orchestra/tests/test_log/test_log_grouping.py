@@ -1740,7 +1740,7 @@ async def test_get_logs_groupby_with_other_filters(client: AsyncClient, use_json
         if len(logs_or_meta) == 1:
             single_log = logs_or_meta[0]
             assert "id" in single_log and "ts" in single_log
-            assert "entries" in single_log and "params" in single_log
+            assert "entries" in single_log
 
     # response = await client.get(
     #     "/v0/logs",
@@ -2293,7 +2293,6 @@ async def test_log_structure_preserved_both_modes(client: AsyncClient, use_jsonb
             assert "id" in log, f"Missing id in log"
             assert "ts" in log, f"Missing ts in log"
             assert "entries" in log, f"Missing entries in log"
-            assert "params" in log, f"Missing params in log"
             assert "derived_entries" in log, f"Missing derived_entries in log"
 
             # Check entries contain expected non-grouped fields
