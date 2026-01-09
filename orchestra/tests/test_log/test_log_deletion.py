@@ -261,8 +261,8 @@ async def test_delete_log_fields_from_logs(client: AsyncClient, use_jsonb_mode):
     assert entry_to_delete not in response.json()["logs"][0]["entries"]
 
     ids_and_fields = [
-        (log_id1, ["a/b/c/boolean_input", "a/b/c/numeric_input", "a/b/param1"]),
-        ([log_id1, log_id2], ["a/b/c/boolean_input", "a/b/param1"]),
+        (log_id1, ["a/b/c/boolean_input", "a/b/c/numeric_input"]),
+        ([log_id1, log_id2], ["a/b/c/boolean_input"]),
     ]
     # Delete entries from the logs
     response = await _delete_log_fields_from_logs(

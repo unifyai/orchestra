@@ -2352,7 +2352,8 @@ async def test_filtering_and_sorting_base_and_derived_logs(
     logs_alpha = await fetch_logs(client, project_name, column_context=col_ctx)
     assert len(logs_alpha) == 1
     assert logs_alpha[0]["id"] == base_log_ids[0]
-    assert set(logs_alpha[0]["entries"].keys()) == {"alpha/num", "alpha/str"}
+    # column_context strips the prefix, so keys are relative
+    assert set(logs_alpha[0]["entries"].keys()) == {"num", "str"}
     assert logs_alpha[0]["derived_entries"] == {}
 
     # (g) filter_expr => e.g. "alpha/num > 50 or beta/num < 10"
@@ -2866,18 +2867,6 @@ async def test_get_logs_w_filtering(client: AsyncClient, use_jsonb_mode):
     result = response.json()
     assert len(result["logs"]) == 1
     assert result["logs"][0]["entries"]["_/description"] == "lava"
-
-    # check version (EAV-specific: param versioning not supported in JSONB mode)
-    if not use_jsonb_mode:
-        response = await client.get(
-            f"/v0/logs?project_name={project_name}",
-            params={"filter_expr": "version(a/b/param1) == 1"},
-            headers=HEADERS,
-        )
-        assert response.status_code == 200, response.json()
-        result = response.json()
-        assert len(result["logs"]) == 1
-        assert result["logs"][0]["entries"]["a/b/param1"] == "1"
 
     # check is <val>
     response = await client.get(

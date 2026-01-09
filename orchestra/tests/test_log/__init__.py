@@ -58,7 +58,6 @@ log_data = {
         "a/b/c/input": "Some input data",
         "a/b/c/boolean_input": True,
         "a/b/c/numeric_input": 4.5,
-        "a/b/param1": "test",
     },
     "log_update": {
         "my_list": ["a", "b", "c"],

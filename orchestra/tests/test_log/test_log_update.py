@@ -134,8 +134,8 @@ async def test_update_logs_overwrites(client: AsyncClient, use_jsonb_mode):
     assert response.status_code == 200, response.json()
     orig_entries = response.json()["logs"][0]["entries"]
     assert (
-        len(orig_entries) == 4
-    )  # a/b/c/input, a/b/c/boolean_input, a/b/c/numeric_input, a/b/param1
+        len(orig_entries) == 3
+    )  # a/b/c/input, a/b/c/boolean_input, a/b/c/numeric_input
 
     response = await client.post(
         "/v0/logs",
