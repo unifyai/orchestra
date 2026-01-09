@@ -1,4 +1,6 @@
 import json
+import logging
+import os
 import uuid
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, time, timedelta, timezone
@@ -7,6 +9,94 @@ from enum import Enum
 from pathlib import Path
 
 import numpy as np
+import stripe
+
+from orchestra.db.models.orchestra_models import Recharge, RechargeStatus
+from orchestra.lib.time import month_end_utc
+
+
+def recharge_and_generate_invoice(user, users_dao):
+    try:
+        # Configure Stripe API key
+        stripe_key = os.environ.get("STRIPE_SECRET_KEY")
+        if not stripe_key:
+            logging.error("STRIPE_SECRET_KEY environment variable not set")
+            return None
+
+        stripe.api_key = stripe_key
+        customer_id = user.stripe_customer_id
+        customer = stripe.Customer.retrieve(customer_id)
+        if not customer.invoice_settings.default_payment_method:
+            logging.warning("Customer does not have a default payment method set.")
+            return
+
+        # Create an invoice with metadata at creation time
+        invoice = stripe.Invoice.create(
+            customer=customer_id,
+            auto_advance=False,
+            metadata={
+                "user_id": user.id,
+                "credits_purchased": user.autorecharge_qty,
+            },
+        )
+
+        # Add an invoice item
+        stripe.InvoiceItem.create(
+            customer=customer_id,
+            amount=int(user.autorecharge_qty * 100),  # stripe takes amount in cents
+            currency="usd",
+            description="Unify Credits",
+            invoice=invoice.id,
+        )
+
+        # Finalize the invoice, which will automatically create a PaymentIntent if needed
+        finalized_invoice = stripe.Invoice.finalize_invoice(invoice.id)
+        payment_intent_id = finalized_invoice.payment_intent
+
+        if payment_intent_id:
+            stripe.PaymentIntent.modify(
+                payment_intent_id,
+                metadata={
+                    "user_id": user.id,
+                    "credits_purchased": user.autorecharge_qty,
+                },
+            )
+        logging.info(f"Finalized invoice: {finalized_invoice}")
+
+        # Pay the invoice
+        pay_invoice = stripe.Invoice.pay(invoice.id)
+
+        if pay_invoice.status == "paid":
+            logging.info(
+                f"Invoice {finalized_invoice.number} has been paid. Recording paid recharge.",
+            )
+
+            # Record the paid transaction in the Recharge table
+            # Since we paid immediately, mark it as PAID and add credits immediately
+            recharge = Recharge(
+                user_id=user.id,
+                quantity=user.autorecharge_qty,
+                amount_usd=Decimal(user.autorecharge_qty),  # 1 credit = $1
+                invoice_group=month_end_utc(date.today()),
+                type="invoice",
+                transaction_id=finalized_invoice.id,
+                status=RechargeStatus.PAID,  # Mark as PAID since we paid immediately
+                stripe_invoice_id=finalized_invoice.id,
+            )
+            users_dao.session.add(recharge)
+
+            # Add credits immediately since payment succeeded
+            users_dao.recharge_credit(user.id, int(user.autorecharge_qty))
+            users_dao.session.commit()
+        else:
+            logging.warning(
+                f"Invoice {finalized_invoice.number} did not pay as expected. Status: {pay_invoice.status}",
+            )
+            return
+
+    except Exception as e:
+        logging.error(f"An error occurred while generating the invoice: {str(e)}")
+        return None
 
 
 class CustomEncoder(json.JSONEncoder):
