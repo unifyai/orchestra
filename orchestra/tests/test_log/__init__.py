@@ -534,3 +534,142 @@ def _create_project(client, project_name, user=1):
     url = "/v0/project"
     project_data = {"name": project_name}
     return client.post(url, json=project_data, headers=_headers)
+
+
+async def wait_for_gcs_images(
+    client: AsyncClient,
+    project_name: str,
+    context_name: str,
+    image_col_name: str = "img",
+    max_retries: int = 12,
+    base_delay: float = 1.0,
+    max_delay: float = 10.0,
+) -> None:
+    """
+    Wait for GCS images to become available after upload.
+
+    GCS has eventual consistency, so images may not be immediately readable
+    after upload. This helper polls until all images are accessible.
+
+    Args:
+        client: The test client
+        project_name: Project containing the logs
+        context_name: Context containing the logs
+        image_col_name: Name of the image column (default: "img")
+        max_retries: Maximum number of retry attempts (default: 12)
+        base_delay: Initial delay in seconds (default: 1.0)
+        max_delay: Maximum delay cap in seconds (default: 10.0)
+
+    Raises:
+        AssertionError: If images are not available after all retries,
+                       includes diagnostic info for debugging.
+    """
+    import asyncio
+    import logging
+
+    from orchestra.services.bucket_service import BucketService
+
+    bucket_service = BucketService()
+
+    # Fetch all logs to get image URLs
+    response = await client.get(
+        f"/v0/logs?project_name={project_name}&context={context_name}",
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+    all_logs = response.json()["logs"]
+
+    # Track diagnostic info for debugging intermittent failures
+    diagnostic_info: dict[str, dict] = {}
+    total_wait_time = 0.0
+
+    for attempt in range(max_retries):
+        unavailable_images = []
+        for log in all_logs:
+            log_name = log["entries"].get("name", f"log_{log.get('id', 'unknown')}")
+            image_value = log["entries"].get(image_col_name)
+
+            # Collect diagnostic info on first attempt
+            if attempt == 0:
+                if image_value is None:
+                    diagnostic_info[log_name] = {
+                        "status": "no_img_field",
+                        "value_preview": None,
+                    }
+                elif image_value.startswith("data:"):
+                    diagnostic_info[log_name] = {
+                        "status": "base64_data_uri",
+                        "value_preview": image_value[:80] + "...",
+                    }
+                elif (
+                    image_value.startswith("gs://")
+                    or "storage.googleapis.com" in image_value
+                ):
+                    diagnostic_info[log_name] = {
+                        "status": "gcs_url",
+                        "full_url": image_value,
+                        "extracted_filename": image_value.split("/")[-1],
+                    }
+                else:
+                    diagnostic_info[log_name] = {
+                        "status": "unknown_format",
+                        "value_preview": (
+                            image_value[:80] + "..."
+                            if len(image_value) > 80
+                            else image_value
+                        ),
+                    }
+
+            if image_value:
+                # Check if this is a GCS URL
+                if (
+                    image_value.startswith("gs://")
+                    or "storage.googleapis.com" in image_value
+                ):
+                    filename = image_value.split("/")[-1]
+                    try:
+                        result = bucket_service.get_media(filename)
+                        if result is None:
+                            unavailable_images.append(log_name)
+                            if attempt == 0:
+                                diagnostic_info[log_name][
+                                    "error"
+                                ] = "get_media returned None (NotFound)"
+                    except Exception as e:
+                        unavailable_images.append(log_name)
+                        if attempt == 0:
+                            diagnostic_info[log_name][
+                                "error"
+                            ] = f"Exception: {type(e).__name__}: {e}"
+                # else: it's inline Base64 data, no GCS fetch needed
+
+        if not unavailable_images:
+            logging.info(
+                f"All {len(all_logs)} images available in GCS after {attempt + 1} "
+                f"attempts ({total_wait_time}s total wait)",
+            )
+            return
+
+        if attempt < max_retries - 1:
+            delay = min(base_delay * (2**attempt), max_delay)
+            total_wait_time += delay
+            logging.warning(
+                f"GCS pre-flight check: {len(unavailable_images)} images not yet "
+                f"available ({unavailable_images}), retrying in {delay}s "
+                f"(attempt {attempt + 1}/{max_retries})",
+            )
+            await asyncio.sleep(delay)
+        else:
+            # Build detailed diagnostic message
+            diag_str = json.dumps(diagnostic_info, indent=2)
+            raise AssertionError(
+                f"GCS pre-flight check failed: Images {unavailable_images} not "
+                f"available after {max_retries} attempts "
+                f"({total_wait_time}s total wait time).\n\n"
+                f"=== DIAGNOSTIC INFO ===\n{diag_str}\n"
+                f"=== END DIAGNOSTIC INFO ===\n\n"
+                f"This will help debug whether the issue is:\n"
+                f"- GCS URLs not being stored (check 'status' field)\n"
+                f"- Wrong filename extraction (check 'extracted_filename')\n"
+                f"- GCS read failures (check 'error' field)",
+            )

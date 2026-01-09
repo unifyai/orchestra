@@ -1,8 +1,11 @@
 import hashlib
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -3496,6 +3499,7 @@ class ContextDAO:
 
     def delete(self, id: int) -> None:
         from orchestra.db.dao.log_dao import LogDAO
+        from orchestra.db.dao.plot_dao import PlotDAO
         from orchestra.db.dao.sibling_context_cleanup import (
             get_assistants_sibling_context_info,
             remove_logs_from_sibling_contexts,
@@ -3504,6 +3508,19 @@ class ContextDAO:
         try:
             context = self.session.query(Context).filter_by(id=id).one()
             project = context.project
+
+            # Delete plots that reference this context
+            # Plots store context as a string in project_config JSONB, not as a FK
+            plot_dao = PlotDAO(self.session)
+            deleted_plots = plot_dao.delete_by_project(
+                project_id=project.id,
+                context=context.name,
+            )
+            if deleted_plots > 0:
+                logger.info(
+                    f"Deleted {deleted_plots} plots for context '{context.name}' "
+                    f"in project {project.id}",
+                )
 
             # For Assistants/UnityTests projects, clean up sibling contexts first
             # This must happen BEFORE deleting the context while associations exist
