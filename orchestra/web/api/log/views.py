@@ -1931,14 +1931,6 @@ def update_logs(
                     if isinstance(entry, dict):
                         columns_being_updated.update(entry.keys())
 
-        if body.params:
-            if isinstance(body.params, dict):
-                columns_being_updated.update(body.params.keys())
-            elif isinstance(body.params, list) and body.params:
-                for param in body.params:
-                    if isinstance(param, dict):
-                        columns_being_updated.update(param.keys())
-
         # Remove metadata keys
         columns_being_updated.discard("explicit_types")
 
@@ -2023,130 +2015,64 @@ def update_logs(
         dict
     ] = []  # Collect per-log failures without aborting the batch
 
-    # Process both params and entries
-    for data_type in ("params", "entries"):
-        data = getattr(body, data_type)
+    # Process entries
+    data = body.entries
 
-        for i, log_id in enumerate(ids_to_update):
-            # Extract the data for this log. Support both dict and list formats.
-            try:
-                this_data = data if isinstance(data, dict) else data[i]
-            except IndexError:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"Mismatch between number of log ids ({len(ids_to_update)}) and length of "
-                        f"{data_type} (got {len(data)}) at log id {log_id}."
-                    ),
-                )
+    for i, log_id in enumerate(ids_to_update):
+        # Extract the data for this log. Support both dict and list formats.
+        try:
+            this_data = data if isinstance(data, dict) else data[i]
+        except IndexError:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Mismatch between number of log ids ({len(ids_to_update)}) and length of "
+                    f"entries (got {len(data)}) at log id {log_id}."
+                ),
+            )
 
-            # Remove explicit types if provided, which override inferred types.
-            explicit_types = this_data.pop("explicit_types", {})
+        # Remove explicit types if provided, which override inferred types.
+        explicit_types = this_data.pop("explicit_types", {})
 
-            # Track this log for context versioning
-            updates_by_log_id[log_id] = updates_by_log_id.get(log_id, 0) + 1
+        # Track this log for context versioning
+        updates_by_log_id[log_id] = updates_by_log_id.get(log_id, 0) + 1
 
-            # If only explicit_types are provided, update mutability.
-            if not this_data:
-                for k, v in explicit_types.items():
-                    mutable_setting = v.get("mutable", False)
-                    try:
-                        field_type_dao.update_field_mutability(
-                            project_id,
-                            k,
-                            mutable=mutable_setting,
-                            context_id=ctx_id,
-                        )
-                    except Exception as e:
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"Failed to update mutability for field '{k}' in log id {log_id}: {e}",
-                        )
-
-            # Process each field in the provided data.
-            flat_data = {}
-
-            # First pass: separate nested updates from flat updates
-            for k, v in this_data.items():
-                # Check if this is a nested path (contains dots or brackets)
-                if "." in k or "[" in k:
-                    # Extract base key and path segments
-                    parts = k.split(".", 1) if "." in k else k.split("[", 1)
-                    base_key = parts[0]
-                    path_segments = k[len(base_key) :]  # Everything after the base key
-
-                    # Process nested field update with type enforcement
-                    try:
-                        field_result = log_dao.check_field_update(
-                            field_key=base_key,
-                            field_types=field_types,
-                            explicit_types_dict=explicit_types,
-                            is_nested=True,
-                        )
-                    except ValueError as e:
-                        failed_updates.append(
-                            {
-                                "log_event_id": log_id,
-                                "error": f"{str(e)} (in batch entry {i})",
-                            },
-                        )
-                        continue
-
-                    # ToDo: Need to `enforce_types` here by merging the partial update with the
-                    # existing value and then enforcing/checking if the full updated value satsifies
-                    # the type constraints or not
-
-                    # If field doesn't exist, create it
-                    if not field_result["exists"]:
-                        category = "entry" if data_type == "entries" else "param"
-                        new_field_types.append(
-                            {
-                                "project_id": project_id,
-                                "field_name": base_key,
-                                "value": v,
-                                "mutable": field_result["mutable"],
-                                "unique": field_result["unique"],
-                                "field_category": category,
-                                "context_id": ctx_id,
-                                "field_type": field_result["field_type"],
-                                "enum_values": field_result["enum_values"],
-                                "enum_restrict": field_result["enum_restrict"],
-                            },
-                        )
-
-                    # Add to nested updates
-                    all_nested_updates.append(
-                        {
-                            "log_event_id": log_id,
-                            "base_key": base_key,
-                            "path_segments": path_segments,
-                            "new_value": v,
-                            "context_id": ctx_id if "ctx_ids" not in locals() else None,
-                            "context_ids": ctx_ids if "ctx_ids" in locals() else None,
-                            "overwrite": body.overwrite,
-                            "explicit_types": explicit_types,
-                        },
+        # If only explicit_types are provided, update mutability.
+        if not this_data:
+            for k, v in explicit_types.items():
+                mutable_setting = v.get("mutable", False)
+                try:
+                    field_type_dao.update_field_mutability(
+                        project_id,
+                        k,
+                        mutable=mutable_setting,
+                        context_id=ctx_id,
+                    )
+                except Exception as e:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Failed to update mutability for field '{k}' in log id {log_id}: {e}",
                     )
 
-                    # Track this update for context versioning
-                    updated_ids.add((base_key, log_id))
-                    if data_type == "entries":
-                        updated_entry_keys.add(base_key)
-                else:
-                    # This is a flat update, keep it for normal processing
-                    flat_data[k] = v
-                    if data_type == "entries":
-                        updated_entry_keys.add(k)
+        # Process each field in the provided data.
+        flat_data = {}
 
-            # Process flat updates normally
-            for k, v in flat_data.items():
-                # Process flat field update with type enforcement
+        # First pass: separate nested updates from flat updates
+        for k, v in this_data.items():
+            # Check if this is a nested path (contains dots or brackets)
+            if "." in k or "[" in k:
+                # Extract base key and path segments
+                parts = k.split(".", 1) if "." in k else k.split("[", 1)
+                base_key = parts[0]
+                path_segments = k[len(base_key) :]  # Everything after the base key
+
+                # Process nested field update with type enforcement
                 try:
                     field_result = log_dao.check_field_update(
-                        field_key=k,
+                        field_key=base_key,
                         field_types=field_types,
                         explicit_types_dict=explicit_types,
-                        is_nested=False,
+                        is_nested=True,
                     )
                 except ValueError as e:
                     failed_updates.append(
@@ -2157,43 +2083,20 @@ def update_logs(
                     )
                     continue
 
-                # Enforce types if field exists
-                if field_result["exists"]:
-                    from orchestra.web.api.log.utils.logging_utils import enforce_types
-
-                    try:
-                        enforce_types(
-                            k,
-                            v,
-                            field_types=field_types,
-                            field_type_dao=field_type_dao,
-                            context_dao=context_dao,
-                            project_id=project_id,
-                            batch_index=i,
-                            explicit_types=explicit_types,
-                            context_id=ctx_id,
-                            is_param=(data_type == "params"),
-                        )
-                    except HTTPException as e:
-                        failed_updates.append(
-                            {
-                                "log_event_id": log_id,
-                                "error": getattr(e, "detail", str(e)),
-                            },
-                        )
-                        continue
+                # ToDo: Need to `enforce_types` here by merging the partial update with the
+                # existing value and then enforcing/checking if the full updated value satsifies
+                # the type constraints or not
 
                 # If field doesn't exist, create it
                 if not field_result["exists"]:
-                    category = "entry" if data_type == "entries" else "param"
                     new_field_types.append(
                         {
                             "project_id": project_id,
-                            "field_name": k,
+                            "field_name": base_key,
                             "value": v,
                             "mutable": field_result["mutable"],
                             "unique": field_result["unique"],
-                            "field_category": category,
+                            "field_category": "entry",
                             "context_id": ctx_id,
                             "field_type": field_result["field_type"],
                             "enum_values": field_result["enum_values"],
@@ -2201,41 +2104,97 @@ def update_logs(
                         },
                     )
 
-                # Compute the version based on whether we're handling params or entries.
-                param_version = None
-                if data_type == "params":
-                    existing = log_dao.filter(
-                        key=k,
-                        value=json.dumps(v),
-                        project_id=project_id,
-                    )
-                    if existing:
-                        param_version = existing[0][0].param_version
-                    else:
-                        param_version = log_dao.get_next_param_version(
-                            project_id,
-                            ctx_id,
-                            k,
-                        )
+                # Add to nested updates
+                all_nested_updates.append(
+                    {
+                        "log_event_id": log_id,
+                        "base_key": base_key,
+                        "path_segments": path_segments,
+                        "new_value": v,
+                        "context_id": ctx_id if "ctx_ids" not in locals() else None,
+                        "context_ids": ctx_ids if "ctx_ids" in locals() else None,
+                        "overwrite": body.overwrite,
+                        "explicit_types": explicit_types,
+                    },
+                )
 
-                # Add to the batch update list
-                # If we have multiple contexts, create an update for each context
-                if "ctx_ids" in locals() and ctx_ids:
-                    for context_id in ctx_ids:
-                        all_flat_updates.append(
-                            {
-                                "log_event_id": log_id,
-                                "key": k,
-                                "value": v,
-                                "param_version": param_version,
-                                "explicit_types": explicit_types,
-                                "field_types": field_types,
-                                "context_id": context_id,
-                                "project_id": project_id,
-                                "overwrite": body.overwrite,
-                            },
-                        )
-                else:
+                # Track this update for context versioning
+                updated_ids.add((base_key, log_id))
+                updated_entry_keys.add(base_key)
+            else:
+                # This is a flat update, keep it for normal processing
+                flat_data[k] = v
+                updated_entry_keys.add(k)
+
+        # Process flat updates normally
+        for k, v in flat_data.items():
+            # Process flat field update with type enforcement
+            try:
+                field_result = log_dao.check_field_update(
+                    field_key=k,
+                    field_types=field_types,
+                    explicit_types_dict=explicit_types,
+                    is_nested=False,
+                )
+            except ValueError as e:
+                failed_updates.append(
+                    {
+                        "log_event_id": log_id,
+                        "error": f"{str(e)} (in batch entry {i})",
+                    },
+                )
+                continue
+
+            # Enforce types if field exists
+            if field_result["exists"]:
+                from orchestra.web.api.log.utils.logging_utils import enforce_types
+
+                try:
+                    enforce_types(
+                        k,
+                        v,
+                        field_types=field_types,
+                        field_type_dao=field_type_dao,
+                        context_dao=context_dao,
+                        project_id=project_id,
+                        batch_index=i,
+                        explicit_types=explicit_types,
+                        context_id=ctx_id,
+                        is_param=False,
+                    )
+                except HTTPException as e:
+                    failed_updates.append(
+                        {
+                            "log_event_id": log_id,
+                            "error": getattr(e, "detail", str(e)),
+                        },
+                    )
+                    continue
+
+            # If field doesn't exist, create it
+            if not field_result["exists"]:
+                new_field_types.append(
+                    {
+                        "project_id": project_id,
+                        "field_name": k,
+                        "value": v,
+                        "mutable": field_result["mutable"],
+                        "unique": field_result["unique"],
+                        "field_category": "entry",
+                        "context_id": ctx_id,
+                        "field_type": field_result["field_type"],
+                        "enum_values": field_result["enum_values"],
+                        "enum_restrict": field_result["enum_restrict"],
+                    },
+                )
+
+            # All updates are entries now (no params)
+            param_version = None
+
+            # Add to the batch update list
+            # If we have multiple contexts, create an update for each context
+            if "ctx_ids" in locals() and ctx_ids:
+                for context_id in ctx_ids:
                     all_flat_updates.append(
                         {
                             "log_event_id": log_id,
@@ -2244,12 +2203,26 @@ def update_logs(
                             "param_version": param_version,
                             "explicit_types": explicit_types,
                             "field_types": field_types,
-                            "context_id": ctx_id,
+                            "context_id": context_id,
                             "project_id": project_id,
                             "overwrite": body.overwrite,
                         },
                     )
-                updated_ids.add((k, log_id))
+            else:
+                all_flat_updates.append(
+                    {
+                        "log_event_id": log_id,
+                        "key": k,
+                        "value": v,
+                        "param_version": param_version,
+                        "explicit_types": explicit_types,
+                        "field_types": field_types,
+                        "context_id": ctx_id,
+                        "project_id": project_id,
+                        "overwrite": body.overwrite,
+                    },
+                )
+            updated_ids.add((k, log_id))
 
     # Bulk create any new field types
     if new_field_types:
@@ -2740,122 +2713,61 @@ def _update_logs_jsonb(
     failed_updates: List[Dict] = []  # Collect per-log failures
     pending_mutability_updates: Dict[str, bool] = {}  # Batch mutability changes
 
-    # Process both params and entries
-    for data_type in ("params", "entries"):
-        data = getattr(body, data_type)
+    # Process entries
+    data = body.entries
 
-        for i, log_id in enumerate(ids_to_update):
-            # Extract the data for this log. Support both dict and list formats.
-            try:
-                this_data = data if isinstance(data, dict) else data[i]
-            except (IndexError, TypeError):
-                if data is None:
-                    this_data = {}
-                else:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=(
-                            f"Mismatch between number of log ids ({len(ids_to_update)}) and length of "
-                            f"{data_type} (got {len(data)}) at log id {log_id}."
-                        ),
-                    )
+    for i, log_id in enumerate(ids_to_update):
+        # Extract the data for this log. Support both dict and list formats.
+        try:
+            this_data = data if isinstance(data, dict) else data[i]
+        except (IndexError, TypeError):
+            if data is None:
+                this_data = {}
+            else:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Mismatch between number of log ids ({len(ids_to_update)}) and length of "
+                        f"entries (got {len(data)}) at log id {log_id}."
+                    ),
+                )
 
-            if not this_data:
-                continue
+        if not this_data:
+            continue
 
-            # Remove explicit types if provided, which override inferred types.
-            this_data = dict(this_data)  # Make a copy to avoid modifying original
-            explicit_types = this_data.pop("explicit_types", {})
+        # Remove explicit types if provided, which override inferred types.
+        this_data = dict(this_data)  # Make a copy to avoid modifying original
+        explicit_types = this_data.pop("explicit_types", {})
 
-            # Track this log for context versioning
-            updates_by_log_id[log_id] = updates_by_log_id.get(log_id, 0) + 1
+        # Track this log for context versioning
+        updates_by_log_id[log_id] = updates_by_log_id.get(log_id, 0) + 1
 
-            # If only explicit_types are provided, collect mutability updates for batch
-            if not this_data:
-                for k, v in explicit_types.items():
-                    mutable_setting = v.get("mutable", False)
-                    # Accumulate for batch update (will be executed after loop)
-                    pending_mutability_updates[k] = mutable_setting
+        # If only explicit_types are provided, collect mutability updates for batch
+        if not this_data:
+            for k, v in explicit_types.items():
+                mutable_setting = v.get("mutable", False)
+                # Accumulate for batch update (will be executed after loop)
+                pending_mutability_updates[k] = mutable_setting
 
-            # Process each field in the provided data.
-            flat_data = {}
+        # Process each field in the provided data.
+        flat_data = {}
 
-            # First pass: separate nested updates from flat updates
-            for k, v in this_data.items():
-                # Check if this is a nested path (contains dots or brackets)
-                if "." in k or "[" in k:
-                    # Extract base key and path segments
-                    parts = k.split(".", 1) if "." in k else k.split("[", 1)
-                    base_key = parts[0]
-                    path_segments = k[len(base_key) :]  # Everything after the base key
+        # First pass: separate nested updates from flat updates
+        for k, v in this_data.items():
+            # Check if this is a nested path (contains dots or brackets)
+            if "." in k or "[" in k:
+                # Extract base key and path segments
+                parts = k.split(".", 1) if "." in k else k.split("[", 1)
+                base_key = parts[0]
+                path_segments = k[len(base_key) :]  # Everything after the base key
 
-                    # Process nested field update with type enforcement
-                    try:
-                        field_result = log_dao.check_field_update(
-                            field_key=base_key,
-                            field_types=field_types,
-                            explicit_types_dict=explicit_types,
-                            is_nested=True,
-                        )
-                    except ValueError as e:
-                        failed_updates.append(
-                            {
-                                "log_event_id": log_id,
-                                "error": f"{str(e)} (in batch entry {i})",
-                            },
-                        )
-                        continue
-
-                    # If field doesn't exist, create it
-                    if not field_result["exists"]:
-                        category = "entry" if data_type == "entries" else "param"
-                        new_field_types.append(
-                            {
-                                "project_id": project_id,
-                                "field_name": base_key,
-                                "value": v,
-                                "mutable": field_result["mutable"],
-                                "unique": field_result["unique"],
-                                "field_category": category,
-                                "context_id": ctx_id,
-                                "field_type": field_result["field_type"],
-                                "enum_values": field_result["enum_values"],
-                                "enum_restrict": field_result["enum_restrict"],
-                            },
-                        )
-
-                    # Add to nested updates
-                    all_nested_updates.append(
-                        {
-                            "log_event_id": log_id,
-                            "base_key": base_key,
-                            "path_segments": path_segments,
-                            "new_value": v,
-                            "context_id": ctx_id,
-                            "overwrite": body.overwrite,
-                            "explicit_types": explicit_types,
-                        },
-                    )
-
-                    # Track this update for context versioning
-                    updated_ids.add((base_key, log_id))
-                    if data_type == "entries":
-                        updated_entry_keys.add(base_key)
-                else:
-                    # This is a flat update, keep it for normal processing
-                    flat_data[k] = v
-                    if data_type == "entries":
-                        updated_entry_keys.add(k)
-
-            # Process flat updates
-            for k, v in flat_data.items():
-                # Process flat field update with type enforcement
+                # Process nested field update with type enforcement
                 try:
                     field_result = log_dao.check_field_update(
-                        field_key=k,
+                        field_key=base_key,
                         field_types=field_types,
                         explicit_types_dict=explicit_types,
-                        is_nested=False,
+                        is_nested=True,
                     )
                 except ValueError as e:
                     failed_updates.append(
@@ -2866,41 +2778,16 @@ def _update_logs_jsonb(
                     )
                     continue
 
-                # Enforce types if field exists
-                if field_result["exists"]:
-                    try:
-                        enforce_types(
-                            k,
-                            v,
-                            field_types=field_types,
-                            field_type_dao=field_type_dao,
-                            context_dao=context_dao,
-                            project_id=project_id,
-                            batch_index=i,
-                            explicit_types=explicit_types,
-                            context_id=ctx_id,
-                            is_param=(data_type == "params"),
-                        )
-                    except HTTPException as e:
-                        failed_updates.append(
-                            {
-                                "log_event_id": log_id,
-                                "error": getattr(e, "detail", str(e)),
-                            },
-                        )
-                        continue
-
                 # If field doesn't exist, create it
                 if not field_result["exists"]:
-                    category = "entry" if data_type == "entries" else "param"
                     new_field_types.append(
                         {
                             "project_id": project_id,
-                            "field_name": k,
+                            "field_name": base_key,
                             "value": v,
                             "mutable": field_result["mutable"],
                             "unique": field_result["unique"],
-                            "field_category": category,
+                            "field_category": "entry",
                             "context_id": ctx_id,
                             "field_type": field_result["field_type"],
                             "enum_values": field_result["enum_values"],
@@ -2908,21 +2795,102 @@ def _update_logs_jsonb(
                         },
                     )
 
-                # JSONB mode: No param versioning - skip get_next_param_version() calls
-                # Add to the batch update list
-                all_flat_updates.append(
+                # Add to nested updates
+                all_nested_updates.append(
                     {
                         "log_event_id": log_id,
-                        "key": k,
-                        "value": v,
-                        "explicit_types": explicit_types,
-                        "field_types": field_types,
+                        "base_key": base_key,
+                        "path_segments": path_segments,
+                        "new_value": v,
                         "context_id": ctx_id,
-                        "project_id": project_id,
                         "overwrite": body.overwrite,
+                        "explicit_types": explicit_types,
                     },
                 )
-                updated_ids.add((k, log_id))
+
+                # Track this update for context versioning
+                updated_ids.add((base_key, log_id))
+                updated_entry_keys.add(base_key)
+            else:
+                # This is a flat update, keep it for normal processing
+                flat_data[k] = v
+                updated_entry_keys.add(k)
+
+        # Process flat updates
+        for k, v in flat_data.items():
+            # Process flat field update with type enforcement
+            try:
+                field_result = log_dao.check_field_update(
+                    field_key=k,
+                    field_types=field_types,
+                    explicit_types_dict=explicit_types,
+                    is_nested=False,
+                )
+            except ValueError as e:
+                failed_updates.append(
+                    {
+                        "log_event_id": log_id,
+                        "error": f"{str(e)} (in batch entry {i})",
+                    },
+                )
+                continue
+
+            # Enforce types if field exists
+            if field_result["exists"]:
+                try:
+                    enforce_types(
+                        k,
+                        v,
+                        field_types=field_types,
+                        field_type_dao=field_type_dao,
+                        context_dao=context_dao,
+                        project_id=project_id,
+                        batch_index=i,
+                        explicit_types=explicit_types,
+                        context_id=ctx_id,
+                        is_param=False,
+                    )
+                except HTTPException as e:
+                    failed_updates.append(
+                        {
+                            "log_event_id": log_id,
+                            "error": getattr(e, "detail", str(e)),
+                        },
+                    )
+                    continue
+
+            # If field doesn't exist, create it
+            if not field_result["exists"]:
+                new_field_types.append(
+                    {
+                        "project_id": project_id,
+                        "field_name": k,
+                        "value": v,
+                        "mutable": field_result["mutable"],
+                        "unique": field_result["unique"],
+                        "field_category": "entry",
+                        "context_id": ctx_id,
+                        "field_type": field_result["field_type"],
+                        "enum_values": field_result["enum_values"],
+                        "enum_restrict": field_result["enum_restrict"],
+                    },
+                )
+
+            # JSONB mode: No param versioning - skip get_next_param_version() calls
+            # Add to the batch update list
+            all_flat_updates.append(
+                {
+                    "log_event_id": log_id,
+                    "key": k,
+                    "value": v,
+                    "explicit_types": explicit_types,
+                    "field_types": field_types,
+                    "context_id": ctx_id,
+                    "project_id": project_id,
+                    "overwrite": body.overwrite,
+                },
+            )
+            updated_ids.add((k, log_id))
 
     # Bulk create any new field types
     if new_field_types:

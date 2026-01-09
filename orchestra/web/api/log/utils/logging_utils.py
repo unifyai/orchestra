@@ -2208,9 +2208,7 @@ def _get_logs_query_jsonb(
 
 def _create_logs_internal_jsonb(
     entries_list: list,
-    params_list: list,
     entries_len: int,
-    params_len: int,
     total_logs: int,
     project_id: int,
     context_id: int,
@@ -2223,23 +2221,18 @@ def _create_logs_internal_jsonb(
     """
     JSONB-based log creation implementation.
 
-    This function stores all log data (entries, params, auto-counting fields) in a single
+    This function stores all log data (entries, auto-counting fields) in a single
     LogEvent.data JSONB column instead of the EAV model with separate Log, LogEventLog,
     and DerivedLog tables.
 
     Key differences from EAV path:
-    - No param versioning: Params are stored directly in the JSONB payload
-      (flat storage, overwrites existing values). ParamVersion table is unused.
-      Versioning queries rejected at query time via params/ prefix validation.
     - No Log table creation: All data is in LogEvent.data
     - No LogEventLog associations: Not needed with JSONB storage
-    - Single JSON object: All fields (entries, params, auto-counting) are stored flat
+    - Single JSON object: All fields (entries, auto-counting) are stored flat
 
     Args:
         entries_list: List of entry dictionaries
-        params_list: List of param dictionaries
         entries_len: Length of entries_list
-        params_len: Length of params_list
         total_logs: Total number of logs to create
         project_id: The project ID
         context_id: The context ID
@@ -2260,14 +2253,10 @@ def _create_logs_internal_jsonb(
         unique_keys = context_obj.unique_keys or {}
         auto_counting = context_obj.auto_counting or {}
 
-        # 1. Extract and validate composite key values from entries/params
+        # 1. Extract and validate composite key values from entries
         all_composite_values = []
         for i in range(total_logs):
             current_entries = entries_list[min(i, len(entries_list) - 1)] or {}
-            current_params = params_list[min(i, len(params_list) - 1)] or {}
-
-            # Merge entries and params to check for unique key columns
-            current_data = {**current_entries, **current_params}
 
             # Extract values for composite key columns
             composite_values = {}
@@ -2277,21 +2266,21 @@ def _create_logs_internal_jsonb(
             for col_name, col_type in unique_keys.items():
                 if col_name in auto_counting:
                     # For auto-counting columns, check if user provided a value
-                    if col_name in current_data:
-                        provided_counting_values[col_name] = current_data[col_name]
+                    if col_name in current_entries:
+                        provided_counting_values[col_name] = current_entries[col_name]
                 else:
                     # Non-auto-counting columns must be provided
-                    if col_name not in current_data:
+                    if col_name not in current_entries:
                         raise HTTPException(
                             status_code=400,
                             detail=f"Must provide value for composite key column '{col_name}' (type: {col_type}).",
                         )
-                    composite_values[col_name] = current_data[col_name]
+                    composite_values[col_name] = current_entries[col_name]
 
             # Then process auto-counting columns that are NOT in unique keys
             for col_name, parent_col in auto_counting.items():
-                if col_name not in unique_keys and col_name in current_data:
-                    provided_counting_values[col_name] = current_data[col_name]
+                if col_name not in unique_keys and col_name in current_entries:
+                    provided_counting_values[col_name] = current_entries[col_name]
 
             # Validate auto-counting columns follow rules
             if auto_counting and provided_counting_values:
@@ -2314,19 +2303,15 @@ def _create_logs_internal_jsonb(
 
             all_composite_values.append(composite_values)
 
-        # 2. Pop composite key columns from original entries/params to prevent duplication
+        # 2. Pop composite key columns from original entries to prevent duplication
         for i in range(total_logs):
             current_entries = entries_list[min(i, len(entries_list) - 1)]
-            current_params = params_list[min(i, len(params_list) - 1)]
             composite_values = all_composite_values[i]
 
-            # Remove composite key columns from entries and params
+            # Remove composite key columns from entries
             if current_entries:
                 for key in unique_keys.keys():
                     current_entries.pop(key, None)
-            if current_params:
-                for key in unique_keys.keys():
-                    current_params.pop(key, None)
 
         # 3. Construct the `provided_unique_ids` list for the DAO
         provided_unique_ids = all_composite_values
@@ -2353,9 +2338,8 @@ def _create_logs_internal_jsonb(
         # Per-log staging to isolate failures
         perlog_field_types = []
 
-        # Get current entries and params (clone to avoid in-place mutations leaking)
+        # Get current entries (clone to avoid in-place mutations leaking)
         current_entries = dict(entries_list[min(i, entries_len - 1)] or {})
-        current_params = dict(params_list[min(i, params_len - 1)] or {})
 
         try:
             # Add auto-incremented values from row_ids that are not in unique_keys back to entries
@@ -2375,115 +2359,19 @@ def _create_logs_internal_jsonb(
                         col_name in context_obj.auto_counting
                         and col_name not in unique_keys
                     ):
-                        if (
-                            col_name not in current_entries
-                            and col_name not in current_params
-                        ):
+                        if col_name not in current_entries:
                             # Add to entries
                             current_entries[col_name] = col_value
 
-            # Extract explicit types - NOTE: This mutates entries/params dicts in-place
+            # Extract explicit types - NOTE: This mutates entries dict in-place
             entries_explicit_types = (
                 current_entries.pop("explicit_types", {})
                 if isinstance(current_entries, dict)
                 else None
             )
-            params_explicit_types = (
-                current_params.pop("explicit_types", {})
-                if isinstance(current_params, dict)
-                else None
-            )
 
-            # Merge explicit types from both entries and params
-            merged_explicit_types = {}
-            if params_explicit_types:
-                merged_explicit_types.update(params_explicit_types)
-            if entries_explicit_types:
-                merged_explicit_types.update(entries_explicit_types)
-
-            # JSONB MODE: Params stored flat in data JSONB (no versioning).
-            # Overwrites existing param keys. Versioning rejected in grouping/metrics.
-            for k, v in current_params.items():
-                # Check if field needs to be created
-                if k not in field_types:
-                    mutable = (
-                        params_explicit_types.get(k, {}).get("mutable", False)
-                        if params_explicit_types
-                        else False
-                    )
-                    unique = (
-                        params_explicit_types.get(k, {}).get("unique", False)
-                        if params_explicit_types
-                        else False
-                    )
-                    # If in a versioned context, force mutable=True
-                    if context_obj and context_obj.is_versioned:
-                        mutable = True
-
-                    # Check for explicit type
-                    field_type = None
-                    enum_values = None
-                    enum_restrict = False
-                    if params_explicit_types and k in params_explicit_types:
-                        field_spec = params_explicit_types[k]
-                        if isinstance(field_spec, dict):
-                            field_type = field_spec.get("type")
-                            enum_values = field_spec.get("values")
-                            enum_restrict = field_spec.get("restrict", False)
-                        elif isinstance(field_spec, str):
-                            field_type = field_spec
-
-                    # Validate value against Pydantic schema BEFORE creating the field
-                    if field_type is not None:
-                        from orchestra.web.api.log.utils.type_utils import (
-                            is_pydantic_schema,
-                            normalize_pydantic_schema,
-                            validate_value_against_pydantic_schema,
-                        )
-
-                        if is_pydantic_schema(field_type):
-                            try:
-                                schema = normalize_pydantic_schema(field_type)
-                                ok, err = validate_value_against_pydantic_schema(
-                                    v,
-                                    schema,
-                                )
-                            except Exception as e:
-                                ok, err = (False, str(e))
-                            if not ok:
-                                raise HTTPException(
-                                    status_code=400,
-                                    detail=f"Type validation against explicit schema failed for '{k}' (in batch entry {i}): {err}",
-                                )
-
-                    perlog_field_types.append(
-                        {
-                            "project_id": project_id,
-                            "field_name": k,
-                            "value": v,
-                            "mutable": mutable,
-                            "unique": unique,
-                            "field_category": "param",
-                            "context_id": context_id,
-                            "field_type": field_type,
-                            "enum_values": enum_values,
-                            "enum_restrict": enum_restrict,
-                        },
-                    )
-                else:
-                    # Field exists - enforce types (cannot modify existing field types)
-                    enforce_types(
-                        k,
-                        v,
-                        field_types=field_types,
-                        field_type_dao=field_type_dao,
-                        context_dao=context_dao,
-                        project_id=project_id,
-                        batch_index=i,
-                        explicit_types=params_explicit_types,
-                        context_id=context_id,
-                        is_param=True,
-                    )
+            # Use entries explicit types
+            merged_explicit_types = entries_explicit_types or {}
 
             # Process entries - create new fields if they don't exist
             for k, v in current_entries.items():
@@ -2568,12 +2456,8 @@ def _create_logs_internal_jsonb(
                         is_param=False,
                     )
 
-            # Flatten entries and params into a single log_data dictionary
+            # Build log_data dictionary from entries
             log_data = {}
-
-            # Add params first (entries will override if there are conflicts)
-            for k, v in current_params.items():
-                log_data[k] = v
 
             # Add entries
             for k, v in current_entries.items():
@@ -2864,45 +2748,10 @@ def create_logs_internal(
     Raises:
         HTTPException: If validation fails or duplicate logs are detected
     """
-    # Convert single entries/params to list format for uniform processing
+    # Convert single entries to list format for uniform processing
     entries_list = (
         request.entries if isinstance(request.entries, list) else [request.entries]
     )
-    params_list = (
-        request.params if isinstance(request.params, list) else [request.params]
-    )
-
-    # Validate and normalize params and entries
-    if isinstance(request.entries, list) and isinstance(request.params, list):
-        # Case 1: Both are lists - they should have equal lengths
-        if len(request.entries) != len(request.params):
-            raise HTTPException(
-                status_code=400,
-                detail=f"When both 'params' and 'entries' are provided as lists, they must have equal lengths. "
-                f"Got params length: {len(request.params)}, entries length: {len(request.entries)}",
-            )
-    elif isinstance(request.entries, list) and (
-        request.params is None or request.params == {}
-    ):
-        # Case 2: Entries is a list, params is None/empty - this is allowed
-        params_list = [{}] * len(request.entries)
-    elif isinstance(request.params, list) and (
-        request.entries is None or request.entries == {}
-    ):
-        # Case 2: Params is a list, entries is None/empty - this is allowed
-        entries_list = [{}] * len(request.params)
-    elif isinstance(request.entries, list) and isinstance(request.params, dict):
-        # Case 3: Entries is a list, params is a dict - convert params to a list of the same dict
-        params_list = [
-            {k: v for k, v in request.params.items()}
-            for _ in range(len(request.entries))
-        ]
-    elif isinstance(request.params, list) and isinstance(request.entries, dict):
-        # Case 3: Params is a list, entries is a dict - convert entries to a list of the same dict
-        entries_list = [
-            {k: v for k, v in request.entries.items()}
-            for _ in range(len(request.params))
-        ]
 
     # Get field types once for all operations
     field_types = field_type_dao.get_field_types(
@@ -2913,16 +2762,13 @@ def create_logs_internal(
 
     # Bulk create all log events at once
     entries_len = len(entries_list)
-    params_len = len(params_list)
-    total_logs = max(entries_len, params_len)
+    total_logs = entries_len
 
     # JSONB Mode: When use_jsonb_queries is enabled, use the new JSONB-based log creation
     if settings.use_jsonb_queries:
         return _create_logs_internal_jsonb(
             entries_list=entries_list,
-            params_list=params_list,
             entries_len=entries_len,
-            params_len=params_len,
             total_logs=total_logs,
             project_id=project_id,
             context_id=context_id,
@@ -2939,14 +2785,10 @@ def create_logs_internal(
         unique_keys = context_obj.unique_keys or {}
         auto_counting = context_obj.auto_counting or {}
 
-        # 1. Extract and validate composite key values from entries/params
+        # 1. Extract and validate composite key values from entries
         all_composite_values = []
         for i in range(total_logs):
             current_entries = entries_list[min(i, len(entries_list) - 1)] or {}
-            current_params = params_list[min(i, len(params_list) - 1)] or {}
-
-            # Merge entries and params to check for unique key columns
-            current_data = {**current_entries, **current_params}
 
             # Extract values for composite key columns
             composite_values = {}
@@ -2956,21 +2798,21 @@ def create_logs_internal(
             for col_name, col_type in unique_keys.items():
                 if col_name in auto_counting:
                     # For auto-counting columns, check if user provided a value
-                    if col_name in current_data:
-                        provided_counting_values[col_name] = current_data[col_name]
+                    if col_name in current_entries:
+                        provided_counting_values[col_name] = current_entries[col_name]
                 else:
                     # Non-auto-counting columns must be provided
-                    if col_name not in current_data:
+                    if col_name not in current_entries:
                         raise HTTPException(
                             status_code=400,
                             detail=f"Must provide value for composite key column '{col_name}' (type: {col_type}).",
                         )
-                    composite_values[col_name] = current_data[col_name]
+                    composite_values[col_name] = current_entries[col_name]
 
             # Then process auto-counting columns that are NOT in unique keys
             for col_name, parent_col in auto_counting.items():
-                if col_name not in unique_keys and col_name in current_data:
-                    provided_counting_values[col_name] = current_data[col_name]
+                if col_name not in unique_keys and col_name in current_entries:
+                    provided_counting_values[col_name] = current_entries[col_name]
 
             # Validate auto-counting columns follow rules
             if auto_counting and provided_counting_values:
@@ -2993,19 +2835,15 @@ def create_logs_internal(
 
             all_composite_values.append(composite_values)
 
-        # 2. Pop composite key columns from original entries/params to prevent them from becoming log fields
+        # 2. Pop composite key columns from original entries to prevent them from becoming log fields
         for i in range(total_logs):
             current_entries = entries_list[min(i, len(entries_list) - 1)]
-            current_params = params_list[min(i, len(params_list) - 1)]
             composite_values = all_composite_values[i]
 
-            # Remove composite key columns from entries and params
+            # Remove composite key columns from entries
             if current_entries:
                 for key in unique_keys.keys():
                     current_entries.pop(key, None)
-            if current_params:
-                for key in unique_keys.keys():
-                    current_params.pop(key, None)
 
         # 3. Construct the `provided_unique_ids` list for the DAO
         provided_unique_ids = all_composite_values
@@ -3026,11 +2864,9 @@ def create_logs_internal(
     successful_indices = []
 
     # OPTIMIZATION: Batch FK validation - validate all logs at once before processing
-    # Merge entries and params for each log to prepare for batch validation
     batch_merged_data = []
     for i in range(total_logs):
         current_entries = dict(entries_list[min(i, entries_len - 1)] or {})
-        current_params = dict(params_list[min(i, params_len - 1)] or {})
 
         # Add auto-incremented values if applicable
         if context_obj and context_obj.auto_counting and row_ids and i < len(row_ids):
@@ -3042,14 +2878,10 @@ def create_logs_internal(
                     col_name in context_obj.auto_counting
                     and col_name not in unique_keys
                 ):
-                    if (
-                        col_name not in current_entries
-                        and col_name not in current_params
-                    ):
+                    if col_name not in current_entries:
                         current_entries[col_name] = col_value
 
-        merged_data = {**current_params, **current_entries}
-        batch_merged_data.append(merged_data)
+        batch_merged_data.append(current_entries)
 
     # FK validation disabled - allows creating logs with any FK values
     failed_fk_validations = {}
@@ -3072,9 +2904,8 @@ def create_logs_internal(
             )
             continue
 
-        # Get current entries and params (clone to avoid in-place mutations leaking)
+        # Get current entries (clone to avoid in-place mutations leaking)
         current_entries = dict(entries_list[min(i, entries_len - 1)] or {})
-        current_params = dict(params_list[min(i, params_len - 1)] or {})
         try:
             # Add auto-incremented values from row_ids that are not in unique_keys back to entries
             if (
@@ -3093,109 +2924,17 @@ def create_logs_internal(
                         col_name in context_obj.auto_counting
                         and col_name not in unique_keys
                     ):
-                        if (
-                            col_name not in current_entries
-                            and col_name not in current_params
-                        ):
+                        if col_name not in current_entries:
                             # Add to entries
                             current_entries[col_name] = col_value
 
-            # Extract explicit types - NOTE: This mutates entries/params dicts in-place
+            # Extract explicit types - NOTE: This mutates entries dict in-place
             # Callers should pass fresh copies if they need to reuse the original dicts
             entries_explicit_types = (
                 current_entries.pop("explicit_types", {})
                 if isinstance(current_entries, dict)
                 else None
             )
-            params_explicit_types = (
-                current_params.pop("explicit_types", {})
-                if isinstance(current_params, dict)
-                else None
-            )
-
-            # Process params - create new fields if they don't exist
-            for k, v in current_params.items():
-                # Check if field needs to be created
-                if k not in field_types:
-                    mutable = (
-                        params_explicit_types.get(k, {}).get("mutable", False)
-                        if params_explicit_types
-                        else False
-                    )
-                    unique = (
-                        params_explicit_types.get(k, {}).get("unique", False)
-                        if params_explicit_types
-                        else False
-                    )
-                    # If in a versioned context, force mutable=True
-                    if context_obj and context_obj.is_versioned:
-                        mutable = True
-
-                    # Check for explicit type
-                    field_type = None
-                    enum_values = None
-                    enum_restrict = False
-                    if params_explicit_types and k in params_explicit_types:
-                        field_spec = params_explicit_types[k]
-                        if isinstance(field_spec, dict):
-                            field_type = field_spec.get("type")
-                            enum_values = field_spec.get("values")
-                            enum_restrict = field_spec.get("restrict", False)
-                        elif isinstance(field_spec, str):
-                            field_type = field_spec
-
-                    perlog_field_types.append(
-                        {
-                            "project_id": project_id,
-                            "field_name": k,
-                            "value": v,
-                            "mutable": mutable,
-                            "unique": unique,
-                            "field_category": "param",
-                            "context_id": context_id,
-                            "field_type": field_type,
-                            "enum_values": enum_values,
-                            "enum_restrict": enum_restrict,
-                        },
-                    )
-                else:
-                    # Field exists - enforce types (cannot modify existing field types)
-                    enforce_types(
-                        k,
-                        v,
-                        field_types=field_types,
-                        field_type_dao=field_type_dao,
-                        context_dao=context_dao,
-                        project_id=project_id,
-                        batch_index=i,
-                        explicit_types=params_explicit_types,
-                        context_id=context_id,
-                        is_param=True,
-                    )
-
-                # Determine version for parameter
-                existing_param = log_dao.filter(
-                    key=k,
-                    value=json.dumps(v),
-                    project_id=project_id,
-                )
-                if existing_param:
-                    version = existing_param[0][0].param_version
-                else:
-                    version = log_dao.get_next_param_version(project_id, context_id, k)
-
-                # Add to records for bulk creation
-                perlog_records.append(
-                    {
-                        "project_id": project_id,
-                        "log_event_id": log_event_id,
-                        "key": k,
-                        "value": v,
-                        "param_version": version,
-                        "explicit_types": params_explicit_types,
-                        "context_id": context_id,
-                    },
-                )
 
             # Process entries - create new fields if they don't exist
             for k, v in current_entries.items():

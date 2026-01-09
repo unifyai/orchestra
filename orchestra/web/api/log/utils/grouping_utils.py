@@ -986,10 +986,10 @@ def parse_group_key(key: str) -> Tuple[str, str]:
     Parse a group key into prefix and raw key components.
 
     Args:
-        key: The full group key (e.g., "entries/score", "params/temperature")
+        key: The full group key (e.g., "entries/score", "derived_entries/computed")
 
     Returns:
-        Tuple of (prefix, raw_key) where prefix is one of ["entries", "params", "derived_entries"]
+        Tuple of (prefix, raw_key) where prefix is one of ["entries", "derived_entries"]
         and raw_key is the actual field name stored in the database.
     """
     parts = key.split("/", 1)
