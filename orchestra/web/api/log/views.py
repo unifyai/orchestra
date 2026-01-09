@@ -4491,7 +4491,6 @@ def delete_logs(
             "content": {
                 "application/json": {
                     "example": {
-                        "params": {},
                         "logs": [
                             {
                                 "id": "0",
@@ -4501,7 +4500,6 @@ def delete_logs(
                                     "key2": 1.0,
                                 },
                                 "derived_entries": {},
-                                "params": {},
                             },
                             {
                                 "id": "1",
@@ -4511,7 +4509,6 @@ def delete_logs(
                                     "key2": 2.0,
                                 },
                                 "derived_entries": {},
-                                "params": {},
                             },
                         ],
                         "count": 2,
@@ -5045,7 +5042,6 @@ def get_logs(
             "content": {
                 "application/json": {
                     "example": {
-                        "params": {},
                         "logs": [
                             {
                                 "id": "0",
@@ -5055,7 +5051,6 @@ def get_logs(
                                     "key2": 1.0,
                                 },
                                 "derived_entries": {},
-                                "params": {},
                             },
                         ],
                         "count": 1,
@@ -5311,7 +5306,6 @@ def query_logs_post(
             "content": {
                 "application/json": {
                     "example": {
-                        "params": {},
                         "logs": [
                             {
                                 "id": "0",
@@ -5320,7 +5314,6 @@ def query_logs_post(
                                     "key1": "a",
                                     "key2": 1.0,
                                 },
-                                "params": {},
                             },
                             {
                                 "id": "1",
@@ -5329,7 +5322,6 @@ def query_logs_post(
                                     "key1": "b",
                                     "key2": 2.0,
                                 },
-                                "params": {},
                             },
                         ],
                         "count": 2,
