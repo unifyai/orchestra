@@ -16,8 +16,11 @@ async def test_create_log_weakly_typed(client: AsyncClient, use_jsonb_mode):
     response = await _create_log(
         client,
         project_name,
-        params={"a/b/param1": "test"},
-        entries={"score": 10, "logged_at": datetime.now(timezone.utc).isoformat()},
+        entries={
+            "score": 10,
+            "logged_at": datetime.now(timezone.utc).isoformat(),
+            "a/b/param1": "test",
+        },
     )
 
     assert response.status_code == 200, response.json()
@@ -34,7 +37,7 @@ async def test_create_log_weakly_typed(client: AsyncClient, use_jsonb_mode):
     assert "a/b/param1" in field_types
     param1_type = field_types["a/b/param1"]
     assert param1_type["data_type"] == "str"  # Type inferred from value
-    assert param1_type["field_type"] == "param"
+    assert param1_type["field_type"] == "entry"  # All fields are entries now
     assert param1_type["mutable"] is True
     assert param1_type["artifacts"] == ""
     assert "created_at" in param1_type
@@ -83,10 +86,10 @@ async def test_create_log_type_mismatch(client: AsyncClient, use_jsonb_mode):
         "/v0/logs",
         json={
             "project_name": project_name,
-            "params": {"a/b/param1": "test"},
             "entries": {
                 "score": 10,
                 "response": "hello",
+                "a/b/param1": "test",
             },
         },
         headers=HEADERS,
@@ -121,10 +124,10 @@ async def test_create_log_type_mismatch(client: AsyncClient, use_jsonb_mode):
         "/v0/logs",
         json={
             "project_name": project_name,
-            "params": {"a/b/param1": True},  # bool, but expects str
             "entries": {
                 "score": "not_an_int",  # str, but expects int
                 "response": "hello",
+                "a/b/param1": True,  # bool, but expects str
             },
         },
         headers=HEADERS,
@@ -1145,12 +1148,12 @@ async def test_nested_explicit_type_case_insensitive(
 
 
 @pytest.mark.anyio
-async def test_explicit_type_with_params(client: AsyncClient, use_jsonb_mode):
-    """Test explicit types work with params as well as entries."""
-    project_name = f"test_params_explicit_type-{'jsonb' if use_jsonb_mode else 'eav'}"
+async def test_explicit_type_with_entries(client: AsyncClient, use_jsonb_mode):
+    """Test explicit types work with entries."""
+    project_name = f"test_entries_explicit_type-{'jsonb' if use_jsonb_mode else 'eav'}"
     _ = await _create_project(client, project_name)
 
-    # Create fields via POST /logs/fields for both params and entries
+    # Create fields via POST /logs/fields
     response = await client.post(
         "/v0/logs/fields",
         json={
@@ -1164,18 +1167,15 @@ async def test_explicit_type_with_params(client: AsyncClient, use_jsonb_mode):
     )
     assert response.status_code == 200, response.json()
 
-    # Create a log with these nested types (both as entries)
-    # Don't use "config" as a param since it was created as an entry field
+    # Create a log with these nested types
     response = await client.post(
         "/v0/logs",
         json={
             "project_name": project_name,
-            "params": {
-                "model": "gpt-4",  # Implicit param with type "Any"
-            },
             "entries": {
                 "config": {"lr": 0.001, "epochs": 100.0},
                 "result": [0.9, 0.95, 0.98],
+                "model": "gpt-4",  # Implicit entry with type inferred
             },
         },
         headers=HEADERS,
@@ -1197,7 +1197,7 @@ async def test_explicit_type_with_params(client: AsyncClient, use_jsonb_mode):
     assert field_types["result"]["data_type"] == "List[float]"
     assert field_types["result"]["field_type"] == "entry"
     assert field_types["model"]["data_type"] == "str"  # Type inferred from value
-    assert field_types["model"]["field_type"] == "param"
+    assert field_types["model"]["field_type"] == "entry"  # All fields are entries now
 
 
 @pytest.mark.anyio

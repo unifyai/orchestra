@@ -58,6 +58,7 @@ log_data = {
         "a/b/c/input": "Some input data",
         "a/b/c/boolean_input": True,
         "a/b/c/numeric_input": 4.5,
+        "a/b/param1": "test",
     },
     "log_update": {
         "my_list": ["a", "b", "c"],
@@ -438,28 +439,28 @@ async def _create_logs_for_grouping(client, project_name, user=1):
     _headers = HEADERS if user == 1 else HEADERS_2
     data = log_data["logs_for_grouping"]
     for i in range(len(data)):
-        # Split into params and entries
+        # Build entries dict
         entries = {}
         if "a/input" in data[i]:
             entries["a/input"] = data[i]["a/input"]
         elif "input" in data[i]:
             entries["a/input"] = data[i]["input"]
 
+        entries["system_prompt"] = data[i]["system_prompt"]
         response = await _create_log(
             client,
             project_name,
-            params={"system_prompt": data[i]["system_prompt"]},
             entries=entries,
         )
         assert response.status_code == 200, response.json()
 
 
 async def _create_logs_for_grouping_entries(client, project_name, user=1):
-    """Entry-based version for dual-mode testing (no params)."""
+    """Entry-based version for dual-mode testing."""
     _headers = HEADERS if user == 1 else HEADERS_2
     data = log_data["logs_for_grouping"]
     for i in range(len(data)):
-        # Put system_prompt in entries instead of params
+        # Put all fields in entries
         entries = {"system_prompt": data[i]["system_prompt"]}
         if "a/input" in data[i]:
             entries["a/input"] = data[i]["a/input"]
@@ -469,7 +470,6 @@ async def _create_logs_for_grouping_entries(client, project_name, user=1):
         response = await _create_log(
             client,
             project_name,
-            params={},
             entries=entries,
         )
         assert response.status_code == 200, response.json()
@@ -491,11 +491,12 @@ async def _create_several_logs(
 ):
     data = log_data["logs_for_various"]
     if batched:
+        # Add param field to each entry
+        entries_with_param = [{**d, "a/b/param1": "test"} for d in data]
         response = await _create_log(
             client,
             project_name,
-            params={"a/b/param1": "test"},
-            entries=data,
+            entries=entries_with_param,
             context=(
                 {"name": context_name, "description": "test context"}
                 if context_name
@@ -508,8 +509,7 @@ async def _create_several_logs(
             response = await _create_log(
                 client,
                 project_name,
-                entries=data[i],
-                params={"a/b/param1": f"test_{i}"},
+                entries={**data[i], "a/b/param1": f"test_{i}"},
             )
             assert response.status_code == 200, response.json()
 

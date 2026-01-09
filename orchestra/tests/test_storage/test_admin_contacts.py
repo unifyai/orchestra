@@ -49,7 +49,6 @@ async def test_admin_list_contacts_basic(client: AsyncClient, use_jsonb_mode):
     payload = {
         "project_name": project_name,
         "context": "Contacts",
-        "params": {},
         "entries": [contact1, contact2],
     }
     create_logs_resp = await client.post(
@@ -118,7 +117,6 @@ async def test_admin_list_contacts_across_contexts(client: AsyncClient, use_json
     payload1 = {
         "project_name": project_name,
         "context": "Contacts",
-        "params": {},
         "entries": [contact1],
     }
     resp1 = await client.post(
@@ -132,7 +130,6 @@ async def test_admin_list_contacts_across_contexts(client: AsyncClient, use_json
     payload2 = {
         "project_name": project_name,
         "context": "Friend/Contacts",
-        "params": {},
         "entries": [contact2],
     }
     resp2 = await client.post(
@@ -193,7 +190,6 @@ async def test_admin_list_contacts_multiple_users(client: AsyncClient, use_jsonb
     payload1 = {
         "project_name": project1,
         "context": "Contacts",
-        "params": {},
         "entries": [contact1],
     }
     resp1 = await client.post(
@@ -207,7 +203,6 @@ async def test_admin_list_contacts_multiple_users(client: AsyncClient, use_jsonb
     payload2 = {
         "project_name": project2,
         "context": "Contacts",
-        "params": {},
         "entries": [contact2],
     }
     resp2 = await client.post(
