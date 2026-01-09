@@ -32,7 +32,7 @@ async def test_get_log(client: AsyncClient, use_jsonb_mode):
     assert "logs" in response.json()
     assert len(response.json()["logs"]) == 1
     assert isinstance(response.json()["logs"][0]["ts"], str)
-    assert isinstance(response.json()["logs"][0]["entries"]["a/b/param1"], str)
+    assert isinstance(response.json()["logs"][0]["entries"]["a/b/c/input"], str)
 
 
 @pytest.mark.anyio
@@ -62,12 +62,11 @@ async def test_get_logs(client: AsyncClient, use_jsonb_mode):
         response.json()["logs"][0]["entries"]["a/b/c/numeric_input"],
         float,
     )
-    assert isinstance(response.json()["logs"][0]["entries"]["a/b/param1"], str)
 
     # assert the field ordering is correct
     assert (
         json.dumps([list(lg["entries"].keys()) for lg in response.json()["logs"]])
-        == '[["a/b/c/input", "a/b/c/boolean_input", "a/b/c/numeric_input", "a/b/param1"]]'
+        == '[["a/b/c/input", "a/b/c/boolean_input", "a/b/c/numeric_input"]]'
     )
 
     # fetch entries for the empty project
@@ -238,7 +237,6 @@ async def test_get_logs_excluding_fields(client: AsyncClient, use_jsonb_mode):
                     "_/state",
                     "_/_data",
                     "_/timestamp",
-                    "a/b/param1",
                 ],
             ),
         },
@@ -286,7 +284,6 @@ async def test_get_logs_w_column_context(client: AsyncClient, use_jsonb_mode):
                     "a/b/c/input": "Some input data",
                     "a/b/c/boolean_input": True,
                     "a/b/c/numeric_input": 4.5,
-                    "a/b/param1": "test",
                 },
                 "derived_entries": {},
                 "versions": {},
@@ -314,7 +311,6 @@ async def test_get_logs_w_column_context(client: AsyncClient, use_jsonb_mode):
                     "b/c/input": "Some input data",
                     "b/c/boolean_input": True,
                     "b/c/numeric_input": 4.5,
-                    "b/param1": "test",
                 },
                 "derived_entries": {},
                 "versions": {},
@@ -342,7 +338,6 @@ async def test_get_logs_w_column_context(client: AsyncClient, use_jsonb_mode):
                     "c/input": "Some input data",
                     "c/boolean_input": True,
                     "c/numeric_input": 4.5,
-                    "param1": "test",
                 },
                 "derived_entries": {},
                 "versions": {},

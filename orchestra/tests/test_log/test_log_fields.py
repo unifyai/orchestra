@@ -830,7 +830,6 @@ async def test_delete_all_fields_preserves_empty_log_events(
     assert (
         logs[0]["entries"] == {}
     ), "Log should have empty entries after all fields are deleted"
-    assert "params" in logs[0]
     assert "derived_entries" in logs[0]
 
 
