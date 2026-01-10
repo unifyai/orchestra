@@ -313,7 +313,7 @@ def enforce_types(
         # New policy: We CAN create new fields, but we CANNOT modify existing fields
         field_spec = explicit_types.get(field_name, {}) if explicit_types else {}
         mutable = (
-            field_spec.get("mutable", False) if isinstance(field_spec, dict) else False
+            field_spec.get("mutable", True) if isinstance(field_spec, dict) else True
         )
         unique = (
             field_spec.get("unique", False) if isinstance(field_spec, dict) else False
@@ -2369,9 +2369,9 @@ def _create_logs_internal_jsonb(
                 # Check if field needs to be created
                 if k not in field_types:
                     mutable = (
-                        entries_explicit_types.get(k, {}).get("mutable", False)
+                        entries_explicit_types.get(k, {}).get("mutable", True)
                         if entries_explicit_types
-                        else False
+                        else True
                     )
                     unique = (
                         entries_explicit_types.get(k, {}).get("unique", False)
@@ -2932,9 +2932,9 @@ def create_logs_internal(
                 # Check if field needs to be created
                 if k not in field_types:
                     mutable = (
-                        entries_explicit_types.get(k, {}).get("mutable", False)
+                        entries_explicit_types.get(k, {}).get("mutable", True)
                         if entries_explicit_types
-                        else False
+                        else True
                     )
                     unique = (
                         entries_explicit_types.get(k, {}).get("unique", False)
