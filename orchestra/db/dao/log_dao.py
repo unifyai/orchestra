@@ -107,9 +107,9 @@ class LogDAO:
         else:
             # Field doesn't exist - prepare metadata for creation
             mutable = (
-                explicit_types_dict.get(field_key, {}).get("mutable", False)
+                explicit_types_dict.get(field_key, {}).get("mutable", True)
                 if explicit_types_dict
-                else False
+                else True
             )
             unique = (
                 explicit_types_dict.get(field_key, {}).get("unique", False)
@@ -2090,7 +2090,7 @@ class LogDAO:
                         # Check if field is immutable
                         if key in field_types and context_id is not None:
                             field_info = field_types.get(key)
-                            if field_info and not field_info.get("mutable", False):
+                            if field_info and not field_info.get("mutable", True):
                                 raise ImmutableFieldError
 
                         # Update existing log
@@ -2598,7 +2598,7 @@ class LogDAO:
 
                 # Check mutability
                 ft_info = field_types.get(base_key)
-                if ft_info and not ft_info.get("mutable", False):
+                if ft_info and not ft_info.get("mutable", True):
                     raise ImmutableFieldError(f"Field '{base_key}' is immutable")
 
                 # Determine versioned context
@@ -3126,7 +3126,7 @@ class LogDAO:
                     # Check field mutability
                     if key in field_types and context_id is not None:
                         field_info = field_types.get(key)
-                        if field_info and not field_info.get("mutable", False):
+                        if field_info and not field_info.get("mutable", True):
                             if field_exists_in_data:
                                 raise ImmutableFieldError(
                                     f"Field '{key}' is immutable",
@@ -3342,7 +3342,7 @@ class LogDAO:
 
                     # Check mutability
                     ft_info = field_types.get(base_key)
-                    if ft_info and not ft_info.get("mutable", False):
+                    if ft_info and not ft_info.get("mutable", True):
                         raise ImmutableFieldError(f"Field '{base_key}' is immutable")
 
                     # Get current data from LogEvent

@@ -532,12 +532,12 @@ async def test_create_log_with_mutable_fields(client: AsyncClient, use_jsonb_mod
 
 
 @pytest.mark.anyio
-async def test_create_log_default_immutable(client: AsyncClient, use_jsonb_mode):
-    """Test that implicitly created fields default to immutable."""
-    project_name = f"test_default_immutable-{'jsonb' if use_jsonb_mode else 'eav'}"
+async def test_create_log_default_mutable(client: AsyncClient, use_jsonb_mode):
+    """Test that implicitly created fields default to mutable."""
+    project_name = f"test_default_mutable-{'jsonb' if use_jsonb_mode else 'eav'}"
     _ = await _create_project(client, project_name)
 
-    # Create a log without specifying mutability (should default to immutable)
+    # Create a log without specifying mutability (should default to mutable)
     response = await client.post(
         "/v0/logs",
         json={
@@ -551,32 +551,41 @@ async def test_create_log_default_immutable(client: AsyncClient, use_jsonb_mode)
     assert response.status_code == 200
     log_id = response.json()["log_event_ids"][0]
 
-    # Verify field is immutable by default and has type inferred from value
+    # Verify field is mutable by default and has type inferred from value
     field_types_response = await client.get(
         f"/v0/logs/fields?project_name={project_name}",
         headers=HEADERS,
     )
     assert field_types_response.status_code == 200
     field_types = field_types_response.json()
-    assert field_types["default_field"]["mutable"] is False
+    assert field_types["default_field"]["mutable"] is True
     assert (
         field_types["default_field"]["data_type"] == "str"
     )  # Type inferred from value
 
-    # Attempt to update the default immutable field (should fail)
+    # Update the default mutable field (should succeed)
     response = await client.put(
         "/v0/logs",
         json={
             "logs": [log_id],
             "entries": {
-                "default_field": "attempted update",
+                "default_field": "updated value",
             },
             "overwrite": True,
         },
         headers=HEADERS,
     )
-    assert response.status_code == 400
-    assert "Field is immutable and cannot be modified" in response.json()["detail"]
+    assert response.status_code == 200
+
+    # Verify the update was applied
+    logs_response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_response.status_code == 200
+    logs = logs_response.json()["logs"]
+    assert len(logs) == 1
+    assert logs[0]["entries"]["default_field"] == "updated value"
 
 
 @pytest.mark.anyio
