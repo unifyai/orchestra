@@ -16,6 +16,7 @@ from starlette.routing import Match
 from starlette.status import HTTP_500_INTERNAL_SERVER_ERROR
 from starlette.types import ASGIApp
 
+from orchestra.web.api.utils.inactivity_shutdown import record_activity
 from orchestra.web.api.utils.observability import clear_user_context, set_request_id
 
 INFO = Gauge(
@@ -124,6 +125,12 @@ class PrometheusMiddleware(BaseHTTPMiddleware):
         if not is_handled_path:
             # If it's not matched by a known route, skip metrics
             return await call_next(request)
+
+        # Record API activity for inactivity timeout (exclude internal endpoints)
+        if not path.endswith(
+            ("/metrics", "/health", "/docs", "/redoc", "/openapi.json"),
+        ):
+            record_activity()
 
         # Pre-request metrics
         REQUESTS_IN_PROGRESS.labels(
