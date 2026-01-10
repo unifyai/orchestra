@@ -1257,3 +1257,217 @@ async def test_nested_type_persists_across_logs(client: AsyncClient, use_jsonb_m
     field_types = field_types_response.json()
 
     assert field_types["data"]["data_type"] == "List[int]"
+
+
+# =============================================================================
+# Empty container type compatibility tests
+#
+# These tests verify that empty containers ([], {}) are correctly accepted
+# for strictly-typed parameterized fields like List[str], List[int], Dict[str, int].
+#
+# An empty list [] is a valid List[str] - it's a list of strings with zero elements.
+# Type inference from values cannot determine the element type of an empty container,
+# but validation should recognize that [] is structurally compatible with any List[T].
+# =============================================================================
+
+
+@pytest.mark.anyio
+async def test_empty_list_compatible_with_list_str(client: AsyncClient, use_jsonb_mode):
+    """Test that an empty list [] is accepted for a List[str] typed field.
+
+    An empty list is a valid List[str] - it contains zero strings, which
+    trivially satisfies the constraint that all elements must be strings.
+
+    This currently fails because the backend infers List[Any] from [] and
+    compares it against the strict List[str] type, instead of checking
+    structural compatibility.
+    """
+    project_name = f"test_empty_list_str-{'jsonb' if use_jsonb_mode else 'eav'}"
+    _ = await _create_project(client, project_name)
+
+    # Create field with strict List[str] type
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "tags": {"type": "List[str]", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Verify field type
+    field_types_response = await client.get(
+        f"/v0/logs/fields?project_name={project_name}",
+        headers=HEADERS,
+    )
+    assert field_types_response.status_code == 200
+    assert field_types_response.json()["tags"]["data_type"] == "List[str]"
+
+    # Log an empty list - this SHOULD succeed ([] is a valid List[str])
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {"tags": []},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, (
+        f"Empty list should be accepted for List[str] field. "
+        f"Got {response.status_code}: {response.json()}"
+    )
+
+    # Also verify non-empty list works
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {"tags": ["a", "b", "c"]},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+
+@pytest.mark.anyio
+async def test_empty_list_compatible_with_list_int(client: AsyncClient, use_jsonb_mode):
+    """Test that an empty list [] is accepted for a List[int] typed field."""
+    project_name = f"test_empty_list_int-{'jsonb' if use_jsonb_mode else 'eav'}"
+    _ = await _create_project(client, project_name)
+
+    # Create field with strict List[int] type
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "scores": {"type": "List[int]", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Log an empty list - this SHOULD succeed
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {"scores": []},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, (
+        f"Empty list should be accepted for List[int] field. "
+        f"Got {response.status_code}: {response.json()}"
+    )
+
+    # Also verify non-empty list works
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {"scores": [1, 2, 3]},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+
+@pytest.mark.anyio
+async def test_empty_dict_compatible_with_dict_str_int(
+    client: AsyncClient,
+    use_jsonb_mode,
+):
+    """Test that an empty dict {} is accepted for a Dict[str, int] typed field."""
+    project_name = f"test_empty_dict-{'jsonb' if use_jsonb_mode else 'eav'}"
+    _ = await _create_project(client, project_name)
+
+    # Create field with strict Dict[str, int] type
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "counts": {"type": "Dict[str, int]", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Log an empty dict - this SHOULD succeed
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {"counts": {}},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, (
+        f"Empty dict should be accepted for Dict[str, int] field. "
+        f"Got {response.status_code}: {response.json()}"
+    )
+
+    # Also verify non-empty dict works
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": {"counts": {"a": 1, "b": 2}},
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+
+@pytest.mark.anyio
+async def test_empty_list_in_batch_create(client: AsyncClient, use_jsonb_mode):
+    """Test that empty lists work correctly in batch log creation."""
+    project_name = f"test_empty_list_batch-{'jsonb' if use_jsonb_mode else 'eav'}"
+    _ = await _create_project(client, project_name)
+
+    # Create field with strict List[str] type
+    response = await client.post(
+        "/v0/logs/fields",
+        json={
+            "project_name": project_name,
+            "fields": {
+                "tags": {"type": "List[str]", "mutable": True},
+                "name": {"type": "str", "mutable": True},
+            },
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, response.json()
+
+    # Batch create with mix of empty and non-empty lists
+    response = await client.post(
+        "/v0/logs",
+        json={
+            "project_name": project_name,
+            "entries": [
+                {"name": "first", "tags": []},
+                {"name": "second", "tags": ["x", "y"]},
+                {"name": "third", "tags": []},
+            ],
+        },
+        headers=HEADERS,
+    )
+    assert response.status_code == 200, (
+        f"Batch create with empty lists should succeed. "
+        f"Got {response.status_code}: {response.json()}"
+    )
+
+    # Verify all logs were created
+    logs_response = await client.get(
+        f"/v0/logs?project_name={project_name}",
+        headers=HEADERS,
+    )
+    assert logs_response.status_code == 200
+    logs = logs_response.json()["logs"]
+    assert len(logs) == 3
