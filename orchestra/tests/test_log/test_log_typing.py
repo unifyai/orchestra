@@ -1271,7 +1271,7 @@ async def test_nested_type_persists_across_logs(client: AsyncClient):
 
 
 @pytest.mark.anyio
-async def test_empty_list_compatible_with_list_str(client: AsyncClient, use_jsonb_mode):
+async def test_empty_list_compatible_with_list_str(client: AsyncClient):
     """Test that an empty list [] is accepted for a List[str] typed field.
 
     An empty list is a valid List[str] - it contains zero strings, which
@@ -1281,7 +1281,7 @@ async def test_empty_list_compatible_with_list_str(client: AsyncClient, use_json
     compares it against the strict List[str] type, instead of checking
     structural compatibility.
     """
-    project_name = f"test_empty_list_str-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_empty_list_str"
     _ = await _create_project(client, project_name)
 
     # Create field with strict List[str] type
@@ -1332,9 +1332,9 @@ async def test_empty_list_compatible_with_list_str(client: AsyncClient, use_json
 
 
 @pytest.mark.anyio
-async def test_empty_list_compatible_with_list_int(client: AsyncClient, use_jsonb_mode):
+async def test_empty_list_compatible_with_list_int(client: AsyncClient):
     """Test that an empty list [] is accepted for a List[int] typed field."""
-    project_name = f"test_empty_list_int-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_empty_list_int"
     _ = await _create_project(client, project_name)
 
     # Create field with strict List[int] type
@@ -1379,10 +1379,9 @@ async def test_empty_list_compatible_with_list_int(client: AsyncClient, use_json
 @pytest.mark.anyio
 async def test_empty_dict_compatible_with_dict_str_int(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test that an empty dict {} is accepted for a Dict[str, int] typed field."""
-    project_name = f"test_empty_dict-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_empty_dict"
     _ = await _create_project(client, project_name)
 
     # Create field with strict Dict[str, int] type
@@ -1425,9 +1424,9 @@ async def test_empty_dict_compatible_with_dict_str_int(
 
 
 @pytest.mark.anyio
-async def test_empty_list_in_batch_create(client: AsyncClient, use_jsonb_mode):
+async def test_empty_list_in_batch_create(client: AsyncClient):
     """Test that empty lists work correctly in batch log creation."""
-    project_name = f"test_empty_list_batch-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_empty_list_batch"
     _ = await _create_project(client, project_name)
 
     # Create field with strict List[str] type
@@ -1484,7 +1483,6 @@ async def test_empty_list_in_batch_create(client: AsyncClient, use_jsonb_mode):
 @pytest.mark.anyio
 async def test_nested_empty_list_in_list_of_lists(
     client: AsyncClient,
-    use_jsonb_mode,
 ):
     """Test that [[]] is accepted for List[List[str]] typed field.
 
@@ -1495,7 +1493,7 @@ async def test_nested_empty_list_in_list_of_lists(
 
     This requires recursive type comparison with Any-as-wildcard.
     """
-    project_name = f"test_nested_list_list-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_nested_list_list"
     _ = await _create_project(client, project_name)
 
     # Create field with nested List[List[str]] type
@@ -1538,7 +1536,7 @@ async def test_nested_empty_list_in_list_of_lists(
 
 
 @pytest.mark.anyio
-async def test_empty_list_in_dict_value(client: AsyncClient, use_jsonb_mode):
+async def test_empty_list_in_dict_value(client: AsyncClient):
     """Test that {"key": []} is accepted for Dict[str, List[int]] typed field.
 
     The value has a dict with string key and empty list value.
@@ -1548,7 +1546,7 @@ async def test_empty_list_in_dict_value(client: AsyncClient, use_jsonb_mode):
 
     This requires recursive type comparison into dict value types.
     """
-    project_name = f"test_dict_with_empty_list-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_dict_with_empty_list"
     _ = await _create_project(client, project_name)
 
     # Create field with Dict[str, List[int]] type
@@ -1591,7 +1589,7 @@ async def test_empty_list_in_dict_value(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_empty_dict_in_list(client: AsyncClient, use_jsonb_mode):
+async def test_empty_dict_in_list(client: AsyncClient):
     """Test that [{}] is accepted for List[Dict[str, int]] typed field.
 
     The value is a list containing one empty dict.
@@ -1601,7 +1599,7 @@ async def test_empty_dict_in_list(client: AsyncClient, use_jsonb_mode):
 
     This requires recursive type comparison into list element types.
     """
-    project_name = f"test_list_with_empty_dict-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_list_with_empty_dict"
     _ = await _create_project(client, project_name)
 
     # Create field with List[Dict[str, int]] type
@@ -1644,7 +1642,7 @@ async def test_empty_dict_in_list(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_deeply_nested_empty_list(client: AsyncClient, use_jsonb_mode):
+async def test_deeply_nested_empty_list(client: AsyncClient):
     """Test that [[[]]] is accepted for List[List[List[str]]] typed field.
 
     Three levels of nesting with empty list at the deepest level.
@@ -1653,7 +1651,7 @@ async def test_deeply_nested_empty_list(client: AsyncClient, use_jsonb_mode):
 
     This tests that the recursive comparison works at arbitrary depth.
     """
-    project_name = f"test_deep_nested-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_deep_nested"
     _ = await _create_project(client, project_name)
 
     # Create field with deeply nested type
@@ -1696,7 +1694,7 @@ async def test_deeply_nested_empty_list(client: AsyncClient, use_jsonb_mode):
 
 
 @pytest.mark.anyio
-async def test_mixed_empty_and_populated_nested(client: AsyncClient, use_jsonb_mode):
+async def test_mixed_empty_and_populated_nested(client: AsyncClient):
     """Test mixed empty and populated containers in nested structures.
 
     Value: [[], ["a", "b"], []]
@@ -1704,7 +1702,7 @@ async def test_mixed_empty_and_populated_nested(client: AsyncClient, use_jsonb_m
 
     Some inner lists are empty, some are populated. All should be accepted.
     """
-    project_name = f"test_mixed_nested-{'jsonb' if use_jsonb_mode else 'eav'}"
+    project_name = "test_mixed_nested"
     _ = await _create_project(client, project_name)
 
     # Create field with List[List[str]] type

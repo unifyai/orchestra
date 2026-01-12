@@ -65,7 +65,7 @@ __all__ = [
     "_build_unified_logs_subquery",
     "_flatten_fields",
     "_format_flat_logs",
-    "_format_jsonb_logs",
+    "_format_logs",
     "_get_final_logs",
     "is_image_field",
     "is_audio_field",
@@ -1084,7 +1084,7 @@ def _get_logs_query(
         or_conditions.append(embedding_exists)
         query = query.filter(or_(*or_conditions))
     # Note: exclude_fields is NOT applied at the query level in JSONB mode.
-    # It's applied at the formatting level in _format_jsonb_logs to filter
+    # It's applied at the formatting level in _format_logs to filter
     # which fields are returned, not which log events are returned.
     # This matches EAV behavior where exclude_fields filters keys, not log events.
 
@@ -1563,7 +1563,7 @@ def _get_logs_query(
     return (rows, total_count)
 
 
-def _create_logs_internal_jsonb(
+def _create_logs_internal(
     entries_list: list,
     entries_len: int,
     total_logs: int,
@@ -2007,7 +2007,7 @@ def _create_logs_internal_jsonb(
     # =========================================================================
     if context_obj and not context_obj.allow_duplicates and created_event_ids:
         # Use JSONB-aware batch duplicate checking (single SQL query)
-        duplicate_ids = context_dao.check_for_duplicates_jsonb_batch(
+        duplicate_ids = context_dao.check_for_duplicates_batch(
             context_obj.id,
             created_event_ids,
         )
@@ -2122,7 +2122,7 @@ def create_logs_internal(
     total_logs = entries_len
 
     # JSONB mode - all log data is stored in LogEvent.data
-    return _create_logs_internal_jsonb(
+    return _create_logs_internal(
         entries_list=entries_list,
         entries_len=entries_len,
         total_logs=total_logs,
@@ -2394,7 +2394,7 @@ def _format_flat_logs(rows, context_len, value_limit, field_order_map):
     return logs_out, {}
 
 
-def _format_jsonb_logs(
+def _format_logs(
     rows: list,
     field_types: dict,
     value_limit: Optional[int],
@@ -2843,7 +2843,7 @@ def _build_log_subquery(
     return final_query.subquery(alias), field_names_dict
 
 
-def _build_log_subquery_jsonb(
+def _build_log_subquery(
     args: Dict[str, Any],
     project_name: str,
     project_id: int,
@@ -3097,7 +3097,7 @@ def _construct_join_query(
     return joined_query
 
 
-def _construct_join_query_jsonb(
+def _construct_join_query(
     subq_a,
     subq_b,
     join_expr: str,
@@ -3229,7 +3229,7 @@ def _construct_join_query_jsonb(
 
             # Skip embedding (vector) columns - they are stored in the Embedding table,
             # not in LogEvent.data. They will be copied separately via the Embedding
-            # table copy logic in _create_logs_from_joined_rows_jsonb.
+            # table copy logic in _create_logs_from_joined_rows.
             field_type = fields.get(actual_col) if fields else None
             if field_type == "vector":
                 continue
@@ -3744,7 +3744,7 @@ def _create_logs_from_joined_rows(
     return new_log_ids
 
 
-def _create_logs_from_joined_rows_jsonb(
+def _create_logs_from_joined_rows(
     result_rows,
     project_id: int,
     context_id: int,
@@ -4189,7 +4189,7 @@ def _join_logs(
             "JSONB stores data inline, so all joins create independent copies. "
             "Please set copy=True.",
         )
-    return _join_logs_jsonb(
+    return _join_logs_internal(
         project_id=project_id,
         project_name=project_name,
         pair_of_args=pair_of_args,
@@ -4205,7 +4205,7 @@ def _join_logs(
     )
 
 
-def _join_logs_jsonb(
+def _join_logs_internal(
     project_id: int,
     project_name: str,
     pair_of_args: List[Dict[str, Any]],
@@ -4293,7 +4293,7 @@ def _join_logs_jsonb(
                 )
 
         # Build JSONB subqueries for both contexts
-        subq_a, fields_a = _build_log_subquery_jsonb(
+        subq_a, fields_a = _build_log_subquery(
             args=pair_of_args[0],
             project_name=project_name,
             project_id=project_id,
@@ -4304,7 +4304,7 @@ def _join_logs_jsonb(
             session=session,
             alias="A",
         )
-        subq_b, fields_b = _build_log_subquery_jsonb(
+        subq_b, fields_b = _build_log_subquery(
             args=pair_of_args[1],
             project_name=project_name,
             project_id=project_id,
@@ -4317,7 +4317,7 @@ def _join_logs_jsonb(
         )
 
         # Construct the JSONB join query
-        joined_query = _construct_join_query_jsonb(
+        joined_query = _construct_join_query(
             subq_a=subq_a,
             subq_b=subq_b,
             join_expr=join_expr,
@@ -4344,7 +4344,7 @@ def _join_logs_jsonb(
         source_contexts["B"] = context_b_id
 
         # Create new log entries from the joined results using JSONB merge
-        new_log_ids = _create_logs_from_joined_rows_jsonb(
+        new_log_ids = _create_logs_from_joined_rows(
             result_rows=result_rows,
             project_id=project_id,
             context_id=context_id,

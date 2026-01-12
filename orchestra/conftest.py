@@ -334,56 +334,6 @@ async def client(
 # They can be removed once all tests are updated to not use them.
 
 
-@pytest.fixture
-def use_jsonb_mode():
-    """
-    Backward compatibility fixture. Always returns True since EAV mode is removed.
-
-    Tests using this fixture will continue to work but always run in JSONB mode.
-    """
-    return True
-
-
-@pytest.fixture
-def enable_jsonb_mode():
-    """
-    Backward compatibility fixture. Always returns True since EAV mode is removed.
-    """
-    return True
-
-
-@pytest.fixture
-def enable_eav_mode():
-    """
-    Backward compatibility fixture. Raises an error since EAV mode is removed.
-    """
-    pytest.skip("EAV mode has been removed. This test should be updated or deleted.")
-
-
-def requires_eav_mode(func):
-    """
-    Decorator that skips tests marked with @requires_eav_mode since EAV mode is removed.
-    """
-    import asyncio
-    import functools
-
-    @functools.wraps(func)
-    def wrapper(*args, **kwargs):
-        pytest.skip(
-            "EAV mode has been removed. This test should be updated or deleted.",
-        )
-
-    @functools.wraps(func)
-    async def async_wrapper(*args, **kwargs):
-        pytest.skip(
-            "EAV mode has been removed. This test should be updated or deleted.",
-        )
-
-    if asyncio.iscoroutinefunction(func):
-        return async_wrapper
-    return wrapper
-
-
 # ============================================================================
 # Test Results Tracking
 # ============================================================================
@@ -856,34 +806,6 @@ def _make_repairs_value(key: str, id: int, rng: random.Random):
 
     # Default fallback
     return f"{key}_value_{id}"
-
-
-async def toggle_jsonb_mode(
-    client: AsyncClient,
-    enabled: bool,
-    headers: dict = None,
-) -> dict:
-    """
-    Switch storage mode at runtime via debug endpoint.
-
-    Useful for tests that need to verify behavior across storage modes.
-
-    :param client: AsyncClient instance for making HTTP requests
-    :param enabled: Storage mode flag
-    :param headers: Optional headers dict (must include Authorization)
-    :return: Response JSON from the debug endpoint
-
-    Usage:
-        from . import HEADERS
-        await toggle_jsonb_mode(client, enabled=True, headers=HEADERS)
-    """
-    response = await client.post(
-        "/v0/_debug/jsonb_mode",
-        params={"enabled": enabled},
-        headers=headers,
-    )
-    assert response.status_code == 200, f"Failed to toggle JSONB mode: {response.text}"
-    return response.json()
 
 
 @pytest.fixture(scope="session")

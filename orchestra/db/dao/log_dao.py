@@ -554,7 +554,7 @@ class LogDAO:
                             f"Failed to delete file from GCS for log {log.id}: {str(e)}",
                         )
 
-    def _bulk_delete_gcs_media_jsonb(
+    def _bulk_delete_gcs_media(
         self,
         log_event_ids: List[int],
         project_id: int,
@@ -1990,149 +1990,6 @@ class LogDAO:
 
         return doc
 
-    def apply_jsonb_patch(
-        self,
-        patches: List[Dict[str, Any]],
-        overwrite: bool = False,
-        field_types: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """
-        Apply JSONB patches to nested paths within Log.value and JSONLog.value.
-        This allows partial updates to nested JSON objects in a single database transaction.
-        """
-        if not patches:
-            return
-
-        field_types = field_types or {}
-
-        try:
-            now = datetime.now(timezone.utc)
-            # Group patches by (log_event_id, base_key)
-            grouped = {}
-            for patch in patches:
-                le_id = patch.get("log_event_id")
-                base_key = patch.get("base_key")
-                if not le_id or not base_key:
-                    continue
-                grouped.setdefault((le_id, base_key), []).append(patch)
-
-            for (le_id, base_key), group in grouped.items():
-                # Lock the Log row for update
-                log_entry = (
-                    self.session.query(Log)
-                    .join(LogEventLog, LogEventLog.log_id == Log.id)
-                    .filter(LogEventLog.log_event_id == le_id, Log.key == base_key)
-                    .first()
-                )
-                if not log_entry:
-                    raise ValueError(
-                        f"Log entry not found for log_event_id={le_id}, key='{base_key}'",
-                    )
-
-                # Check mutability
-                ft_info = field_types.get(base_key)
-                if ft_info and not ft_info.get("mutable", True):
-                    raise ImmutableFieldError(f"Field '{base_key}' is immutable")
-
-                # Determine versioned context
-                context_id = group[0].get("context_id")
-                context = None
-                is_versioned = False
-                if context_id is not None:
-                    context = (
-                        self.session.query(Context).filter_by(id=context_id).first()
-                    )
-                    is_versioned = bool(context and context.is_versioned)
-
-                # Get the corresponding JSONLog if it exists via LogEventJSONLog association
-                json_log = (
-                    self.session.query(JSONLog)
-                    .join(LogEventJSONLog, LogEventJSONLog.json_log_id == JSONLog.id)
-                    .filter(
-                        LogEventJSONLog.log_event_id == le_id,
-                        JSONLog.key == base_key,
-                    )
-                    .first()
-                )
-
-                # Get current document value
-                current_doc = copy.deepcopy(log_entry.value)
-
-                # Handle versioned history before any modifications if needed
-                if is_versioned:
-                    self._handle_versioned_history(
-                        context_id=context_id,
-                        log_event_id=le_id,
-                        key=base_key,
-                        value=current_doc,
-                        inferred_type=log_entry.inferred_type,
-                        description=f"Patched nested JSON document",
-                        json_value=current_doc,
-                    )
-
-                for patch in group:
-                    path_str = patch.get("path_segments", "")
-                    new_value = patch.get("new_value")
-                    patch_overwrite = patch.get("overwrite", overwrite)
-
-                    # Parse path_segments into list of keys and indices
-                    segments = []
-                    s = path_str
-                    i = 0
-                    while i < len(s):
-                        if s[i] == ".":
-                            j = i + 1
-                            token = ""
-                            while j < len(s) and s[j] not in ".[":
-                                token += s[j]
-                                j += 1
-                            segments.append(token)
-                            i = j
-                        elif s[i] == "[":
-                            j = i + 1
-                            token = ""
-                            while j < len(s) and s[j] != "]":
-                                token += s[j]
-                                j += 1
-                            segments.append(token)
-                            i = j + 1
-                        else:
-                            j = i
-                            token = ""
-                            while j < len(s) and s[j] not in ".[":
-                                token += s[j]
-                                j += 1
-                            segments.append(token)
-                            i = j
-
-                    # Apply the patch to the document
-                    try:
-                        current_doc = self._apply_patch_to_doc(
-                            current_doc,
-                            segments,
-                            new_value,
-                            patch_overwrite,
-                        )
-                    except Exception as e:
-                        raise e
-
-                # Update the Log entry with the modified document
-                log_entry.value = current_doc
-                log_entry.updated_at = now
-
-                # Update the JSONLog entry if it exists
-                if json_log:
-                    json_log.value = current_doc
-
-            self.session.commit()
-
-        except (OverwriteError, ImmutableFieldError):
-            self.session.rollback()
-            raise
-        except Exception as e:
-            self.session.rollback()
-            raise ValueError(f"Failed to apply JSONB patch: {str(e)}")
-
     def bulk_update(
         self,
         updates: List[Dict[str, Any]],
@@ -2673,7 +2530,7 @@ class LogDAO:
         self.session.commit()
         return update_result
 
-    def apply_jsonb_patch_jsonb(
+    def apply_jsonb_patch(
         self,
         patches: List[Dict[str, Any]],
         overwrite: bool = False,

@@ -80,7 +80,7 @@ from .utils import (
     _fetch_logs_for_event_ids,
     _flatten_fields,
     _format_flat_logs,
-    _format_jsonb_logs,
+    _format_logs,
     _get_all_filtered_log_event_ids,
     _get_distinct_group_values,
     _get_log_event_ids_for_group_value,
@@ -1088,7 +1088,7 @@ def update_derived_log(
 
             if log_ids:
                 try:
-                    count = derived_log_dao.recompute_derived_logs_jsonb(
+                    count = derived_log_dao.recompute_derived_logs(
                         template=template,
                         log_ids=log_ids,
                         json_encoder=CustomEncoder,
@@ -1723,9 +1723,9 @@ def _update_logs(
 
     # Then, handle nested updates if any exist using JSONB method
     if all_nested_updates:
-        # Call apply_jsonb_patch_jsonb once with all patches - O(1) SELECT/UPDATE
+        # Call apply_jsonb_patch once with all patches - O(1) SELECT/UPDATE
         # The method now handles grouping internally and returns results
-        nested_result = log_dao.apply_jsonb_patch_jsonb(
+        nested_result = log_dao.apply_jsonb_patch(
             all_nested_updates,
             field_types=field_types,
         )
@@ -1817,7 +1817,7 @@ def _update_logs(
 
                         # Recompute derived values for affected logs
                         try:
-                            derived_log_dao.recompute_derived_logs_jsonb(
+                            derived_log_dao.recompute_derived_logs(
                                 template=template,
                                 log_ids=event_ids,
                                 json_encoder=CustomEncoder,
@@ -1986,7 +1986,7 @@ def _delete_logs(
             )
 
         # Delete GCS files BEFORE any DB operations
-        log_dao._bulk_delete_gcs_media_jsonb(
+        log_dao._bulk_delete_gcs_media(
             log_event_ids=context_log_ids,
             project_id=project_id,
             field_names=fields,
@@ -2047,7 +2047,7 @@ def _delete_logs(
         )
 
         # Delete GCS files for entire log deletions
-        log_dao._bulk_delete_gcs_media_jsonb(
+        log_dao._bulk_delete_gcs_media(
             log_event_ids=entire_log_deletions,
             project_id=project_id,
             field_names=None,  # Check all media fields
@@ -2244,7 +2244,7 @@ def _delete_logs(
                 )
 
             # Delete GCS files BEFORE any DB operations - SINGLE BULK CALL
-            log_dao._bulk_delete_gcs_media_jsonb(
+            log_dao._bulk_delete_gcs_media(
                 log_event_ids=potential_empty_logs,
                 project_id=project_id,
                 field_names=list(all_partial_fields),
@@ -2791,7 +2791,7 @@ def get_logs(
             )
 
             # Format JSONB results
-            logs_out, _ = _format_jsonb_logs(
+            logs_out, _ = _format_logs(
                 rows=rows,
                 field_types=field_types,
                 value_limit=value_limit,
@@ -3140,7 +3140,7 @@ def query_logs_post(
         )
 
         # Format JSONB results
-        logs_out, _ = _format_jsonb_logs(
+        logs_out, _ = _format_logs(
             rows=rows,
             field_types=field_types,
             value_limit=body.value_limit,
@@ -4870,7 +4870,7 @@ def update_active_derived_logs(
                     continue
 
                 # Recompute derived values for these log events
-                count = derived_log_dao.recompute_derived_logs_jsonb(
+                count = derived_log_dao.recompute_derived_logs(
                     template=template,
                     log_ids=matching_log_event_ids,
                     json_encoder=CustomEncoder,

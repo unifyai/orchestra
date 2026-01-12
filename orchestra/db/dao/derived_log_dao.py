@@ -239,7 +239,7 @@ class DerivedLogDAO:
         except Exception as e:
             raise e
 
-    def recompute_derived_logs_jsonb(
+    def recompute_derived_logs(
         self,
         template: ActiveDerivedLog,
         log_ids: List[int],
@@ -345,7 +345,7 @@ class DerivedLogDAO:
 
         except Exception as e:
             self.session.rollback()
-            logger.error(f"Error in recompute_derived_logs_jsonb: {e}")
+            logger.error(f"Error in recompute_derived_logs: {e}")
             raise e
 
     def update(
