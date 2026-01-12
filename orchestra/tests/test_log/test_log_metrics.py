@@ -167,8 +167,7 @@ async def test_get_logs_metric(
     metric: str,
     from_ids: Optional[List[int]],
 ):
-    mode_suffix = "jsonb"
-    project_name = f"eval-project-{mode_suffix}"
+    project_name = "eval-project"
     _ = await _create_project(client, project_name)
     _ = await _create_several_logs(client, project_name)
     data = log_data["logs_for_various"]
@@ -247,8 +246,7 @@ async def test_get_logs_metric(
 async def test_get_logs_metric_batch(client: AsyncClient):
     """Test the batch processing functionality of the get_logs_metric endpoint."""
     # 1. Create a test project and insert logs
-    mode_suffix = "jsonb"
-    project_name = f"eval-project-batch-{mode_suffix}"
+    project_name = "eval-project-batch"
     _ = await _create_project(client, project_name)
     _ = await _create_several_logs(client, project_name)
     data = log_data["logs_for_various"]
@@ -397,8 +395,7 @@ async def test_get_logs_metric_batch(client: AsyncClient):
 @pytest.mark.anyio
 async def test_get_logs_metric_grouped(client: AsyncClient):
     """Test the get_logs_metric endpoint with group_by parameter."""
-    mode_suffix = "jsonb"
-    project_name = f"test-metric-grouping-{mode_suffix}"
+    project_name = "test-metric-grouping"
     _ = await _create_project(client, project_name)
 
     # Create test data
@@ -593,8 +590,7 @@ async def test_get_logs_metric_batched_with_grouping(
     client: AsyncClient,
 ):
     """Test the get_logs_metric endpoint with batched metrics and grouping."""
-    mode_suffix = "jsonb"
-    project_name = f"test-metric-batched-grouping-{mode_suffix}"
+    project_name = "test-metric-batched-grouping"
     _ = await _create_project(client, project_name)
 
     # Create test data
@@ -819,8 +815,7 @@ async def test_get_logs_metric_shared_value_reduction(
     When all values for a given key within a group are identical, the endpoint
     should return that shared value directly without performing any metric reduction.
     """
-    mode_suffix = "jsonb"
-    project_name = f"test-shared-value-reduction-{mode_suffix}"
+    project_name = "test-shared-value-reduction"
     _ = await _create_project(client, project_name)
 
     # Create logs with different groups
@@ -1120,8 +1115,7 @@ async def test_get_logs_metric_time_date_timedelta(client: AsyncClient):
     This test creates logs with time, date, and timedelta fields and verifies that
     the endpoint correctly processes and formats these special data types.
     """
-    mode_suffix = "jsonb"
-    project_name = f"test-time-date-timedelta-{mode_suffix}"
+    project_name = "test-time-date-timedelta"
     _ = await _create_project(client, project_name)
 
     # Create logs with time, date, and timedelta values
@@ -1301,8 +1295,7 @@ async def test_get_logs_metric_with_mixed_null_float_derived_column(
     2. Calls the metrics endpoint with all field names including the derived column
     3. Ensures no exceptions are thrown and the call succeeds
     """
-    mode_suffix = "jsonb"
-    project_name = f"test-mixed-null-float-derived-{mode_suffix}"
+    project_name = "test-mixed-null-float-derived"
     await _create_project(client, project_name)
 
     # Create logs with mixed temperature values - some null, some valid
@@ -1444,8 +1437,7 @@ async def test_get_logs_metric_grouped_with_mixed_null_float_derived_column(
     2. Calls the metrics endpoint with group_by and multiple keys including the derived column
     3. Ensures no exceptions are thrown and the call succeeds
     """
-    mode_suffix = "jsonb"
-    project_name = f"test-grouped-mixed-null-float-derived-{mode_suffix}"
+    project_name = "test-grouped-mixed-null-float-derived"
     await _create_project(client, project_name)
 
     # Create logs with mixed temperature values and grouping categories
@@ -1586,8 +1578,7 @@ async def test_get_logs_metric_key_specific_filters_with_mixed_null_float_derive
     2. Calls the metrics endpoint with key-specific filter expressions and multiple keys
     3. Ensures no exceptions are thrown and the call succeeds
     """
-    mode_suffix = "jsonb"
-    project_name = f"test-key-filters-mixed-null-float-derived-{mode_suffix}"
+    project_name = "test-key-filters-mixed-null-float-derived"
     await _create_project(client, project_name)
 
     # Create logs with mixed temperature values and varying humidity levels
@@ -1750,8 +1741,7 @@ async def test_metrics_count_matches_rows_and_resets_on_context_delete(
       5) Delete the context and recreate it.
       6) Verify metric count resets to 0 for the recreated context.
     """
-    mode_suffix = "jsonb"
-    project_name = f"metrics-count-{mode_suffix}-{uuid.uuid4().hex[:8]}"
+    project_name = f"metrics-count-{uuid.uuid4().hex[:8]}"
     ctx = f"tests/local_storage/metrics/{uuid.uuid4().hex}"
 
     def _as_int0(v):
@@ -1915,8 +1905,7 @@ async def test_metrics_max_matches_row_ids_and_resets_on_context_delete(
       4) Verify get_logs_metric("max", key="row_id") equals that computed max.
       5) Delete the context and recreate; verify max resets to 0.
     """
-    mode_suffix = "jsonb"
-    project_name = f"metrics-max-{mode_suffix}-{uuid.uuid4().hex[:8]}"
+    project_name = f"metrics-max-{uuid.uuid4().hex[:8]}"
     ctx = f"tests/local_storage/metrics_max/{uuid.uuid4().hex}"
 
     def _as_int0(v):

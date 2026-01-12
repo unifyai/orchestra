@@ -19,8 +19,7 @@ from . import (
 
 @pytest.mark.anyio
 async def test_create_derived_entry_with_list(client: AsyncClient):
-    mode_suffix = "jsonb"
-    project_name = f"test_project_list_{mode_suffix}"
+    project_name = "test_project_list"
     await _create_project(client, project_name, user=1)
 
     # Create base logs
@@ -46,8 +45,7 @@ async def test_create_derived_entry_with_list(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_derived_over_nested_containers(client: AsyncClient):
-    mode_suffix = "jsonb"
-    project = f"test_nested_containers_{mode_suffix}"
+    project = "test_nested_containers"
     await _create_project(client, project, user=1)
 
     # lod = list of dicts
@@ -86,8 +84,7 @@ async def test_derived_creation_batched_counts_not_cumulative(
     Create logs in batches and immediately create derived logs for each batch's IDs.
     Verify each create-derived call reports only the count for that batch (not cumulative).
     """
-    mode_suffix = "jsonb"
-    project_name = f"test_derived_batched_counts_{mode_suffix}"
+    project_name = "test_derived_batched_counts"
     await _create_project(client, project_name, user=1)
 
     key = "text_embed"
@@ -127,8 +124,7 @@ async def test_derived_creation_batched_counts_not_cumulative(
 async def test_create_derived_entry_with_filter_expr(
     client: AsyncClient,
 ):
-    mode_suffix = "jsonb"
-    project_name = f"test_project_filter_{mode_suffix}"
+    project_name = "test_project_filter"
     await _create_project(client, project_name, user=1)
 
     # Create base logs
@@ -156,8 +152,7 @@ async def test_create_derived_entry_with_filter_expr(
 async def test_update_derived_entry_with_referenced_logs(
     client: AsyncClient,
 ):
-    mode_suffix = "jsonb"
-    project_name = f"test_update_derived_refs_{mode_suffix}"
+    project_name = "test_update_derived_refs"
     await _create_project(client, project_name)
 
     # 1. Create base logs with temperature values
@@ -243,8 +238,7 @@ async def test_update_derived_entry_with_referenced_logs(
 
 @pytest.mark.anyio
 async def test_update_derived_entry_with_filter(client: AsyncClient):
-    mode_suffix = "jsonb"
-    project_name = f"test_update_derived_filter_{mode_suffix}"
+    project_name = "test_update_derived_filter"
     await _create_project(client, project_name)
 
     # 1) Create a few base logs
@@ -331,8 +325,7 @@ async def test_update_derived_entry_with_filter(client: AsyncClient):
 
 @pytest.mark.anyio
 async def test_get_logs_including_derived(client: AsyncClient):
-    mode_suffix = "jsonb"
-    project_name = f"test_derived_logs_{mode_suffix}"
+    project_name = "test_derived_logs"
     user_id = 1
 
     # 1) Create a new project
@@ -502,8 +495,7 @@ async def test_get_logs_including_derived(client: AsyncClient):
 async def test_update_logs_and_derived_logs_are_updated(
     client: AsyncClient,
 ):
-    mode_suffix = "jsonb"
-    project_name = f"test_project_update_logs_{mode_suffix}"
+    project_name = "test_project_update_logs"
     await _create_project(client, project_name, user=1)
 
     # Create base logs
@@ -558,8 +550,7 @@ async def test_update_logs_and_derived_logs_are_updated(
 
 @pytest.mark.anyio
 async def test_delete_derived_logs(client: AsyncClient):
-    mode_suffix = "jsonb"
-    project_name = f"test_delete_derived_{mode_suffix}"
+    project_name = "test_delete_derived"
     await _create_project(client, project_name)
 
     # Create base logs
@@ -655,8 +646,7 @@ async def test_derived_entry_datetime_arithmetic(client: AsyncClient):
     6. Work with fractional seconds
     7. Perform complex chained datetime operations
     """
-    mode_suffix = "jsonb"
-    project_name = f"test_derived_datetime_arithmetic_{mode_suffix}"
+    project_name = "test_derived_datetime_arithmetic"
     await _create_project(client, project_name)
 
     # Create logs with various datetime values
@@ -931,8 +921,7 @@ async def test_active_derived_logs_processing(client: AsyncClient):
     import os
 
     # Set up project and create base logs
-    mode_suffix = "jsonb"
-    project_name = f"test_admin_derived_processing_{mode_suffix}"
+    project_name = "test_admin_derived_processing"
     await _create_project(client, project_name, user=1)
     # Create base logs with different scores
     log_ids = []
@@ -1102,8 +1091,7 @@ async def test_advanced_comprehensions_and_conditionals(
     client: AsyncClient,
     test_case,
 ):
-    mode_suffix = "jsonb"
-    project = f"advanced-test_{mode_suffix}"
+    project = "advanced-test"
     await _create_project(client, project)
 
     entries = []
@@ -1152,8 +1140,7 @@ async def test_create_static_entries_with_flag(client: AsyncClient):
     the computed values are stored directly in the base logs' entries rather than in derived_entries.
     """
     # 1. Create a project
-    mode_suffix = "jsonb"
-    project_name = f"test_static_entries_{mode_suffix}"
+    project_name = "test_static_entries"
     await _create_project(client, project_name, user=1)
 
     # 2. Create base logs
@@ -1212,8 +1199,7 @@ async def test_division_by_zero_safeguarding_all_operators(
     This test verifies that when the denominator contains zero values, the operations
     return NULL instead of throwing division by zero errors.
     """
-    mode_suffix = "jsonb"
-    project_name = f"test_division_by_zero_safeguarding_{mode_suffix}"
+    project_name = "test_division_by_zero_safeguarding"
     await _create_project(client, project_name, user=1)
 
     # Create logs with various numerator and denominator values, including zeros
@@ -1412,8 +1398,7 @@ async def test_derived_embedding_and_filtering(client: AsyncClient):
     """
     Create an 'embedding' derived column once, then reuse it from filters.
     """
-    mode_suffix = "jsonb"
-    project = f"derived_embed_demo_{mode_suffix}"
+    project = "derived_embed_demo"
     await _create_project(client, project)
 
     # 1) Create base logs with 'cat','dog','chair' descriptions
@@ -1481,8 +1466,7 @@ async def test_derived_image_embedding_and_filtering(
 
     Note: Marked with xdist_group to run serially due to GCS eventual consistency issues.
     """
-    mode_suffix = "jsonb"
-    project = f"derived_image_embed_demo_{mode_suffix}"
+    project = "derived_image_embed_demo"
     context = "image_test"
     await _create_project(client, project)
 
@@ -1640,8 +1624,7 @@ async def test_create_derived_entry_with_partial_null_values(
     This verifies that the derived entry creation succeeds even when some
     referenced values are missing or null.
     """
-    mode_suffix = "jsonb"
-    project_name = f"test_partial_null_derived_{mode_suffix}"
+    project_name = "test_partial_null_derived"
     await _create_project(client, project_name, user=1)
 
     # Create base logs with mixed presence of the target field
@@ -1760,8 +1743,7 @@ async def test_create_static_entries_with_correct_id_alignment(
     Verifies that create_from_logs with derived=False correctly maps
     computed values to the right source logs, preventing ID misalignment.
     """
-    mode_suffix = "jsonb"
-    project_name = f"test_static_id_alignment_{mode_suffix}"
+    project_name = "test_static_id_alignment"
     await _create_project(client, project_name, user=1)
 
     # 1. Create several logs with distinct values
@@ -1826,8 +1808,7 @@ async def test_derived_embedding_and_filtering_with_partial_null_values(
     values for the field being embedded. This verifies that embedding operations handle
     partial null values gracefully and filtering still works correctly.
     """
-    mode_suffix = "jsonb"
-    project = f"embed_partial_null_demo_{mode_suffix}"
+    project = "embed_partial_null_demo"
     await _create_project(client, project)
 
     # Create base logs with mixed description values
@@ -2033,9 +2014,8 @@ async def test_visual_semantic_cache_e2e(client: AsyncClient):
 
     Note: Marked with xdist_group to run serially due to GCS eventual consistency issues.
     """
-    mode_suffix = "jsonb"
-    project_name = f"visual_cache_sorting_project_{mode_suffix}"
-    context_name = f"visual_cache_sorting_context_{mode_suffix}"
+    project_name = "visual_cache_sorting_project"
+    context_name = "visual_cache_sorting_context"
     user_id = 1
 
     await _create_project(client, project_name, user=user_id)
@@ -2155,7 +2135,7 @@ async def test_derived_field_category_jsonb(client: AsyncClient):
     This test verifies that when creating derived logs in either mode,
     the field type is properly marked as 'derived_entry'.
     """
-    project_name = f"test_field_category_jsonb"
+    project_name = "test_field_category"
     await _create_project(client, project_name, user=1)
 
     # Create base logs
@@ -2204,7 +2184,7 @@ async def test_no_derived_log_rows_jsonb(client: AsyncClient, monkeypatch):
     """
     # JSONB mode is now always enabled - EAV mode has been removed
 
-    project_name = "test_no_derived_rows_jsonb"
+    project_name = "test_no_derived_rows"
     await _create_project(client, project_name, user=1)
 
     # Create base logs
@@ -2257,51 +2237,44 @@ async def test_referenced_keys_populated_on_template_creation(
     """Verify that referenced_keys is populated when creating derived log templates."""
     from orchestra.db.models.orchestra_models import ActiveDerivedLog
 
-    # JSONB mode is now always enabled - EAV mode has been removed
-    # Run test once (previously tested both modes)
-    for mode_suffix in ["jsonb"]:
-        project_name = f"test_referenced_keys_{mode_suffix}"
-        await _create_project(client, project_name, user=1)
+    project_name = "test_referenced_keys"
+    await _create_project(client, project_name, user=1)
 
-        # Create base logs
-        response = await _create_log(
-            client,
-            project_name,
-            entries={"score": 0.8, "accuracy": 0.9},
-        )
-        assert response.status_code == 200
-        log_id = response.json()["log_event_ids"][0]
+    # Create base logs
+    response = await _create_log(
+        client,
+        project_name,
+        entries={"score": 0.8, "accuracy": 0.9},
+    )
+    assert response.status_code == 200
+    log_id = response.json()["log_event_ids"][0]
 
-        # Create derived log with equation referencing both fields
-        equation = "{log0:score} + {log0:accuracy}"
-        response = await _create_derived_entry(
-            client,
-            project_name,
-            key="total",
-            equation=equation,
-            referenced_logs={"log0": {"filter_expr": "True"}},
-        )
-        assert response.status_code == 200
+    # Create derived log with equation referencing both fields
+    equation = "{log0:score} + {log0:accuracy}"
+    response = await _create_derived_entry(
+        client,
+        project_name,
+        key="total",
+        equation=equation,
+        referenced_logs={"log0": {"filter_expr": "True"}},
+    )
+    assert response.status_code == 200
 
-        # Verify referenced_keys was populated
-        dbsession.expire_all()  # Clear cache to get fresh data
-        template = (
-            dbsession.query(ActiveDerivedLog)
-            .filter(ActiveDerivedLog.key == "total")
-            .order_by(ActiveDerivedLog.id.desc())
-            .first()
-        )
+    # Verify referenced_keys was populated
+    dbsession.expire_all()  # Clear cache to get fresh data
+    template = (
+        dbsession.query(ActiveDerivedLog)
+        .filter(ActiveDerivedLog.key == "total")
+        .order_by(ActiveDerivedLog.id.desc())
+        .first()
+    )
 
-        assert (
-            template is not None
-        ), f"ActiveDerivedLog template should exist in {mode_suffix} mode"
-        assert (
-            template.referenced_keys is not None
-        ), f"referenced_keys should be populated in {mode_suffix} mode"
-        assert set(template.referenced_keys) == {"score", "accuracy"}, (
-            f"referenced_keys should contain ['score', 'accuracy'], "
-            f"got {template.referenced_keys} in {mode_suffix} mode"
-        )
+    assert template is not None, "ActiveDerivedLog template should exist"
+    assert template.referenced_keys is not None, "referenced_keys should be populated"
+    assert set(template.referenced_keys) == {"score", "accuracy"}, (
+        f"referenced_keys should contain ['score', 'accuracy'], "
+        f"got {template.referenced_keys}"
+    )
 
 
 @pytest.mark.anyio
@@ -2410,7 +2383,7 @@ async def test_ripple_effect_jsonb(client: AsyncClient, monkeypatch):
     """
     # JSONB mode is now always enabled - EAV mode has been removed
 
-    project_name = "test_ripple_effect_jsonb"
+    project_name = "test_ripple_effect"
     await _create_project(client, project_name, user=1)
 
     # Create base logs
@@ -2509,7 +2482,7 @@ async def test_active_derived_log_materialization_jsonb(
     """
     # JSONB mode is now always enabled - EAV mode has been removed
 
-    project_name = "test_admin_materialization_jsonb"
+    project_name = "test_admin_materialization"
     await _create_project(client, project_name, user=1)
 
     # Create initial base logs
@@ -2625,7 +2598,7 @@ async def test_derived_embedding_filtering_and_sorting_jsonb(
     """
     # JSONB mode is now always enabled - EAV mode has been removed
 
-    project_name = "test_embed_filter_sort_jsonb"
+    project_name = "test_embed_filter_sort"
     await _create_project(client, project_name, user=1)
 
     # 1) Create base logs with various text descriptions
@@ -2788,8 +2761,7 @@ async def test_create_derived_entry_both_modes(client: AsyncClient):
 
     This parametrized test ensures feature parity between modes.
     """
-    mode_suffix = "jsonb"
-    project_name = f"test_derived_both_modes_{mode_suffix}"
+    project_name = "test_derived_both_modes"
     await _create_project(client, project_name, user=1)
 
     # Create base logs
@@ -2838,8 +2810,7 @@ async def test_update_derived_entry_both_modes(client: AsyncClient):
 
     This parametrized test ensures feature parity between modes.
     """
-    mode_suffix = "jsonb"
-    project_name = f"test_update_derived_both_{mode_suffix}"
+    project_name = "test_update_derived_both"
     await _create_project(client, project_name, user=1)
 
     # Create base logs
