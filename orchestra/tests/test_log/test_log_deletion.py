@@ -1,8 +1,6 @@
 import pytest
 from httpx import AsyncClient
 
-from orchestra.conftest import assert_mode_specific
-
 from . import (
     HEADERS,
     _create_log,
@@ -2031,8 +2029,6 @@ async def test_delete_logs_source_type_derived_rejected_in_jsonb(
 
     assert response.status_code == 400, response.json()
     detail = response.json()["detail"]
-    assert_mode_specific(
-        eav_condition="Cannot delete derived logs without specifying fields" in detail,
-        jsonb_condition="JSONB mode does not distinguish" in detail,
-        message="source_type='derived' rejection messages differ by mode",
-    )
+    assert (
+        "JSONB mode does not distinguish" in detail
+    ), f"Expected JSONB mode error message, got: {detail}"
